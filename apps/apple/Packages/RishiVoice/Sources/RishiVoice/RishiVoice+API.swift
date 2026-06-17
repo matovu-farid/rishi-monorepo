@@ -18,7 +18,9 @@
 //                                Shows status badge + transcript + mic button.
 // VoiceStatusBadge            — `UI/VoiceStatusBadge.swift`. Pill view that reflects
 //                                VoiceSessionStatus (connecting, listening, speaking, ...).
-// VoiceErrorView              — `UI/VoiceErrorView.swift`. Inline error state with retry.
+// VoiceFailureAlert           — `UI/VoiceFailureAlert.swift`. Pure value mapping a
+//                                VoiceSessionFailureReason to native-`.alert` title/message/
+//                                primary action. The app layer presents it as a `.alert`.
 // VoicePermissionPrompt       — `UI/VoicePermissionPrompt.swift`. Pre-permission card asking
 //                                the user to grant mic access before the system prompt.
 

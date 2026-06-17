@@ -51,29 +51,35 @@ struct VoiceSessionHost: View {
                     showTextChat = true
                 }
             }
+            // Async/live failures (mic denial, key fetch, connect, reconnect
+            // exhaustion) are applied to `state.status` by the session actor
+            // while this cover is on screen. Convert that terminal transition
+            // into the presenter's `failure` value — which flips `isPresenting`
+            // off, unmounting this cover so `SignedInView` can surface the
+            // native `.alert`. `enterFailure` is idempotent. Synchronous
+            // start() failures call `enterFailure` directly.
+            .onChange(of: presenter.state.status, initial: true) { _, status in
+                if case .failed(let reason) = status {
+                    presenter.enterFailure(reason: reason)
+                }
+            }
     }
 
-    /// Branches the body between the live session UI and the failure surface,
-    /// mirroring the previous `ChatPanelHost.voiceContent`. The failure branch
-    /// retains the same `presenter` so Retry / Dismiss wire back to a single
-    /// source of truth.
+    /// Renders the live session UI. The failure surface is no longer hosted
+    /// here: on `.failed` the presenter flips `isPresenting` to `false`, which
+    /// unmounts this whole cover, and `SignedInView` presents a native
+    /// `.alert` (bound to `presenter.failure`) on the library/reader
+    /// underneath. The terminal `.failed` / `.ended` cases fall through to a
+    /// minimal empty placeholder so the switch stays exhaustive during the
+    /// brief window before the cover unmounts.
     @ViewBuilder
     private var voiceContent: some View {
         let state = presenter.state
         switch state.status {
-        case .failed(let reason):
-            VoiceErrorView(
-                reason: reason,
-                message: state.lastError,
-                onRetry: {
-                    // KEEP: presenter.retry() is @MainActor; the
-                    // .fullScreenCover binding mutates on main. UI-bound.
-                    // retry() preserves the book context + prefilled quote so
-                    // the retried session is not degraded to bookId-only.
-                    Task { await presenter.retry() }
-                },
-                onDismiss: { presenter.dismissFailure() }
-            )
+        case .failed, .ended:
+            // Cover is on its way out (isPresenting just flipped false); render
+            // nothing rather than the deleted VoiceErrorView.
+            Color.clear
         default:
             VoiceSessionView(
                 state: state,

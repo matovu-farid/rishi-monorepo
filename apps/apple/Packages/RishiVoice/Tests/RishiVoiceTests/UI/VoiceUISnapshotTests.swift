@@ -145,38 +145,8 @@ struct VoiceUISnapshotTests {
         _ = view.body
     }
 
-    // MARK: VoiceErrorView
-
-    @Test("VoiceErrorView constructs for every failure reason")
-    func errorViewForEveryReason() {
-        let reasons: [VoiceSessionFailureReason] = [
-            .micDenied,
-            .keyFetch(.unauthorized),
-            .keyFetch(.subscriptionRequired),
-            .keyFetch(.serviceUnavailable),
-            .keyFetch(.network),
-            .keyFetch(.unknown("realtime fault")),
-            .keyFetch(.unknown("")),
-            .connect,
-            .networkLost,
-            .audioSession,
-            .unknown("realtime client fault"),
-            .unknown(""),
-        ]
-        for reason in reasons {
-            let view = VoiceErrorView(reason: reason, onRetry: {}, onDismiss: {})
-            _ = view.body
-        }
-    }
-
-    @Test("VoiceErrorView honors caller-supplied message override")
-    func errorViewMessageOverride() {
-        let view = VoiceErrorView(
-            reason: .connect,
-            message: "Custom override",
-            onRetry: {},
-            onDismiss: {}
-        )
-        _ = view.body
-    }
+    // Failure-surface coverage now lives in VoiceFailureAlertTests: the
+    // custom VoiceErrorView was replaced by a native `.alert` bound to the
+    // pure `VoiceFailureAlert` value, so there is no failure View to
+    // construction-smoke here anymore.
 }

@@ -22,6 +22,10 @@ import RishiReader
 import RishiSettings
 import RishiSync
 import RishiUIKit
+import RishiVoice
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct SignedInView: View {
 
@@ -103,12 +107,54 @@ struct SignedInView: View {
                     Task { await services.voicePresenter.end() }
                 }
             }
-        )) {
+        ), onDismiss: {
+            // The cover has finished dismissing. If it came down because the
+            // session failed, publish the pending failure NOW so the native
+            // `.alert` presents on a view with no in-flight cover transition
+            // (presenting it while the cover was still dismissing dropped it).
+            // No-op for a normal session end.
+            services.voicePresenter.promotePendingFailure()
+        }) {
             VoiceSessionHost(
                 presenter: services.voicePresenter,
                 services: services,
                 userId: user.id
             )
+        }
+        // Voice-session failure surface. Replaces the deleted full-screen
+        // `VoiceErrorView`: on `.failed` the presenter unmounts the cover and
+        // publishes `failure`, which this native `.alert` renders ON the
+        // library/reader underneath. Dismiss / Try again / Open Settings route
+        // back through the single presenter.
+        .alert(
+            voiceFailureTitle,
+            isPresented: Binding(
+                get: { services.voicePresenter.failure != nil },
+                set: { presented in
+                    if presented == false { services.voicePresenter.clearFailure() }
+                }
+            ),
+            presenting: services.voicePresenter.failure
+        ) { failure in
+            switch failure.primaryAction {
+            case .openSettings:
+                Button("Open Settings") {
+                    Self.openSettings()
+                    services.voicePresenter.clearFailure()
+                }
+            case .retry:
+                Button("Try again") {
+                    // KEEP: presenter.retry() is @MainActor; preserves the book
+                    // context + prefilled quote so the retried session is not
+                    // degraded to bookId-only.
+                    Task { await services.voicePresenter.retry() }
+                }
+            }
+            Button("Dismiss", role: .cancel) {
+                services.voicePresenter.clearFailure()
+            }
+        } message: { failure in
+            Text(failure.message)
         }
         // BILL-04 — paywall sheet.
         .sheet(item: $model.paywallFeature) { feature in
@@ -136,6 +182,36 @@ struct SignedInView: View {
             tabRaw: $selectedTabRaw,
             openBookIdRaw: $openBookIdRaw
         )
+    }
+
+    // MARK: - Voice failure alert helpers
+
+    /// Title for the voice-failure `.alert`. The `presenting:` form passes the
+    /// `VoiceFailureAlert` only to the actions/message closures, not the title,
+    /// so the title is resolved here from the same published value (empty when
+    /// no failure is active, which is fine — the alert is hidden then).
+    private var voiceFailureTitle: String {
+        services.voicePresenter.failure?.title ?? ""
+    }
+
+    /// Deep-link to the OS privacy settings for the `.micDenied` affordance.
+    /// Lives in the app target (which can import UIKit) because
+    /// `VoiceFailureAlert` is kept pure.
+    ///
+    /// iOS opens the app's own Settings page via `openSettingsURLString`. macOS
+    /// (Mac Catalyst) has NO per-app Settings bundle, so that iOS URL
+    /// (`app-settings:`) is a silent no-op there — instead deep-link to System
+    /// Settings -> Privacy & Security -> Microphone.
+    private static func openSettings() {
+        #if targetEnvironment(macCatalyst)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            UIApplication.shared.open(url)
+        }
+        #elseif canImport(UIKit) && os(iOS)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #endif
     }
 
 }

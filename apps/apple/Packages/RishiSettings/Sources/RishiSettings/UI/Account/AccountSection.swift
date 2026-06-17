@@ -3,8 +3,9 @@ import RishiUIKit
 import RishiCore
 
 /// SET-01 Account section. Shows the signed-in user's email + display name,
-/// a Sign Out button, and a navigation row to the destructive
-/// DeleteAccountFlow.
+/// a Sign Out button, and a destructive "Delete Account" row. Tapping the row
+/// calls `onShowDeleteFlow`, which the parent screen wires to a native
+/// destructive confirmation `.alert`.
 ///
 /// The section takes both callbacks (`onSignOut`, `onShowDeleteFlow`) so
 /// the parent screen owns navigation + auth wiring; this view stays a pure

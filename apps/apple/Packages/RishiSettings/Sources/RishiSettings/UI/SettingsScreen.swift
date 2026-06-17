@@ -56,7 +56,8 @@ public struct SettingsScreen: View {
     /// `ReaderAppEntitlementFlag.isGranted`); tests override.
     public let billingEntitlement: ReaderAppEntitlementFlag.Resolver
 
-    @State private var showDeleteFlow = false
+    @State private var showDeleteConfirm = false
+    @State private var deleteModel: DeleteAccountModel?
 
     public init(
         user: User,
@@ -104,7 +105,19 @@ public struct SettingsScreen: View {
                 AccountSection(
                     user: user,
                     onSignOut: onSignOut,
-                    onShowDeleteFlow: { showDeleteFlow = true }
+                    onShowDeleteFlow: {
+                        // Lazily build the model the first time the row is
+                        // tapped, capturing the injected closures. Native
+                        // destructive alert below is the deliberate
+                        // confirmation — no separate two-step "arm".
+                        if deleteModel == nil {
+                            deleteModel = DeleteAccountModel(
+                                onDelete: onDelete,
+                                onDeleted: onDeleted
+                            )
+                        }
+                        showDeleteConfirm = true
+                    }
                 )
                 // Phase 13: BillingSection no longer takes an `onManage`
                 // closure — `ManageSubscriptionRow` reads
@@ -141,15 +154,29 @@ public struct SettingsScreen: View {
                         .accessibilityIdentifier("settings-done")
                 }
             }
-            .sheet(isPresented: $showDeleteFlow) {
-                DeleteAccountFlow(
-                    onDelete: onDelete,
-                    onDeleted: {
-                        showDeleteFlow = false
-                        onDeleted()
-                    },
-                    onCancel: { showDeleteFlow = false }
+            .alert(
+                "Delete Account?",
+                isPresented: $showDeleteConfirm
+            ) {
+                Button("Delete", role: .destructive) {
+                    Task { await deleteModel?.runDelete() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete your account, your library, your highlights, and your conversations. Your Rishi subscription will be cancelled on the next billing cycle from rishi.fidexa.org. This cannot be undone.")
+            }
+            .alert(
+                "Couldn't delete your account",
+                isPresented: Binding(
+                    get: { deleteModel?.deleteError != nil },
+                    set: { isPresented in
+                        if !isPresented { deleteModel?.deleteError = nil }
+                    }
                 )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(deleteModel?.deleteError ?? "")
             }
         }
     }

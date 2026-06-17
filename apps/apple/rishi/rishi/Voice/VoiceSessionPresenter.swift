@@ -44,27 +44,48 @@ final class VoiceSessionPresenter {
     /// Drives the `.fullScreenCover(isPresented:)` binding on `SignedInView`
     /// that mounts `VoiceSessionHost`.
     /// Flipped to `true` by `start(bookId:)` once a conversation is resolved;
-    /// flipped to `false` by `end()` or `dismissFailure()`.
+    /// flipped to `false` by `end()`, `enterFailure(reason:)`, or
+    /// `clearFailure()`.
     private(set) var isPresenting: Bool = false
+
+    /// The active failure surface, if any. Non-nil drives a native `.alert`
+    /// on `SignedInView` (presented on the library/reader UNDERNEATH the now
+    /// dismissed voice cover) instead of the deleted full-screen
+    /// `VoiceErrorView`. Published ONLY once the voice cover has finished
+    /// dismissing (see `pendingFailure` / `promotePendingFailure()`); cleared
+    /// by `clearFailure()` (Dismiss) or `retry()` (Try again).
+    private(set) var failure: VoiceFailureAlert?
+
+    /// A failure that has been recorded but is waiting for the voice cover to
+    /// finish dismissing before it can be shown as an `.alert`.
+    ///
+    /// An `.alert` and the `.fullScreenCover` are presented from the SAME view
+    /// (`SignedInView`); SwiftUI/Catalyst cannot present the alert while the
+    /// cover is mid-dismiss, so publishing `failure` in the same transaction
+    /// that flips `isPresenting` to `false` silently drops the alert. Instead
+    /// `enterFailure` stashes here and flips the cover off; the cover's
+    /// `onDismiss` calls `promotePendingFailure()` to publish `failure` once
+    /// the cover is gone and the alert can present without contention.
+    private(set) var pendingFailure: VoiceFailureAlert?
 
     /// The in-flight session, if any. `nil` outside of a presenting window.
     private(set) var session: RealtimeVoiceSession?
 
     /// The book context the current presentation is bound to. Set at the top
-    /// of `start`, cleared by `end()` / `dismissFailure()`. The
+    /// of `start`, cleared by `end()` / `clearFailure()`. The
     /// `VoiceSessionHost` reads this to resolve the text-chat conversation
     /// when the user opens the in-voice text sheet.
     private(set) var currentBookId: BookID?
 
     /// The quote forwarded from the reader's "Ask about this" affordance, if
-    /// any. Set at the top of `start`, cleared by `end()` / `dismissFailure()`.
+    /// any. Set at the top of `start`, cleared by `end()` / `clearFailure()`.
     /// Non-nil means the host should auto-open the text-chat sheet prefilled
     /// with this quote.
     private(set) var pendingInitialQuote: String?
 
     /// The reader's book-context snapshot (title/author/page/active paragraph)
     /// the current presentation was started with, if any. Set at the top of
-    /// `start`, cleared by `end()` / `dismissFailure()`. Retained so `retry()`
+    /// `start`, cleared by `end()` / `clearFailure()`. Retained so `retry()`
     /// can restart a failed session with the SAME context instead of a
     /// degraded bookId-only session.
     private(set) var currentBookContext: BookContextSnapshot?
@@ -155,13 +176,18 @@ final class VoiceSessionPresenter {
         // await, makes the guard reentrancy-safe: at most one live session.
         guard !isPresenting else { return }
         isPresenting = true
+        // Re-arm the failure surface so a prior failed attempt whose alert was
+        // never dismissed (e.g. it was dropped by a presentation collision)
+        // cannot wedge this one via `enterFailure`'s idempotency guard.
+        failure = nil
+        pendingFailure = nil
         currentBookId = bookId
         pendingInitialQuote = initialQuote
         currentBookContext = bookContext
 
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
-            state.apply(status: .failed(reason: .unknown("Sign in required")))
+            enterFailure(reason: .unknown("Sign in required"))
             return
         }
 
@@ -180,7 +206,7 @@ final class VoiceSessionPresenter {
                 "error": String(describing: error),
             ])
             state.recordError(String(describing: error))
-            state.apply(status: .failed(reason: .unknown(String(describing: error))))
+            enterFailure(reason: .unknown(String(describing: error)))
             return
         }
 
@@ -258,6 +284,19 @@ final class VoiceSessionPresenter {
             outline: bookContext?.outline,
             activeParagraphText: bookContext?.activeParagraphText
         )
+
+        // `session.start()` applies a terminal `.failed` synchronously for
+        // startup failures (e.g. `.micDenied` when permission is already
+        // denied — `micGate.request()` returns instantly without a system
+        // prompt). That can happen BEFORE the cover renders a frame, so the
+        // `VoiceSessionHost` `.onChange(of: status)` would miss it and the
+        // cover would linger on an empty state. Route it here, imperatively,
+        // so the alert surfaces regardless of view timing. Live failures that
+        // occur later (network loss mid-session) are caught by the host's
+        // onChange while the cover is on screen.
+        if case .failed(let reason) = state.status {
+            enterFailure(reason: reason)
+        }
     }
 
     /// Terminate the active session. Idempotent — calls into
@@ -277,22 +316,25 @@ final class VoiceSessionPresenter {
 
     /// Restart a failed session with the SAME context it was started with.
     /// Captures the book id, prefilled quote, and book-context snapshot BEFORE
-    /// `dismissFailure()` clears them, then restarts with all three — so Retry
+    /// `clearFailure()` clears them, then restarts with all three — so Retry
     /// reproduces the original (book-aware, possibly quote-prefilled) session
     /// rather than degrading to a bookId-only one.
     func retry() async {
         let bookId = currentBookId
         let quote = pendingInitialQuote
         let context = currentBookContext
-        dismissFailure()
+        clearFailure()
         await start(bookId: bookId, initialQuote: quote, bookContext: context)
     }
 
-    /// Reset to idle without starting a new session — used by the failure
-    /// surface's Dismiss button. Cancels the bridge, drops the session, and
-    /// clears the observable state so a subsequent `start(bookId:)` begins
-    /// from `.idle`.
-    func dismissFailure() {
+    /// Clear the failure surface and reset to idle without starting a new
+    /// session — backs the native `.alert`'s Dismiss button (and is called by
+    /// `retry()` before restarting). Drops the `failure` value, cancels the
+    /// bridge, releases the session, and clears the observable state so a
+    /// subsequent `start(bookId:)` begins from `.idle`.
+    func clearFailure() {
+        failure = nil
+        pendingFailure = nil
         bridgeTask?.cancel()
         bridgeTask = nil
         session = nil
@@ -301,5 +343,42 @@ final class VoiceSessionPresenter {
         pendingInitialQuote = nil
         currentBookContext = nil
         state.reset()
+    }
+
+    // MARK: - Failure routing
+
+    /// Single entry point for every `.failed(reason:)` transition. Builds the
+    /// `VoiceFailureAlert` (caller copy from `state.lastError` wins over the
+    /// reason's default body), then dismisses the voice cover by flipping
+    /// `isPresenting` to `false`. The alert itself is published only after the
+    /// cover finishes dismissing — see `pendingFailure` — so it does not
+    /// collide with the cover's dismissal on the same view. Keeps
+    /// `state.status` as `.failed(reason:)`.
+    ///
+    /// Idempotent: re-entry while a failure is already recorded is a no-op, so
+    /// the `VoiceSessionHost` `.onChange(of:)` that drives the async/live
+    /// failure paths can fire without double-handling.
+    func enterFailure(reason: VoiceSessionFailureReason) {
+        guard failure == nil, pendingFailure == nil else { return }
+        state.apply(status: .failed(reason: reason))
+        let alert = VoiceFailureAlert(reason: reason, message: state.lastError)
+        if isPresenting {
+            // Cover is on screen: stash, dismiss it, and publish the alert from
+            // the cover's `onDismiss` (via `promotePendingFailure`).
+            pendingFailure = alert
+            isPresenting = false
+        } else {
+            // No cover to dismiss — present the alert immediately.
+            failure = alert
+        }
+    }
+
+    /// Publish a `pendingFailure` as the live `failure` once the voice cover
+    /// has finished dismissing. Wired to the cover's `onDismiss`. A no-op when
+    /// nothing is pending (e.g. a normal session end).
+    func promotePendingFailure() {
+        guard let pending = pendingFailure else { return }
+        pendingFailure = nil
+        failure = pending
     }
 }
