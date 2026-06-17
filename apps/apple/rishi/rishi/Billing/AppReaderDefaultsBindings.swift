@@ -24,6 +24,11 @@ final class AppReaderDefaults {
 
     private static let themeKey = "reader.defaults.theme"
     private static let fontKey  = "reader.defaults.fontFamily"
+    // Phase 31 plan 31-04 — Mac-only PDF view-mode preference. The Settings
+    // picker (RishiSettings.PDFViewModeSection) writes this; PDFReaderScreen
+    // (via PDFReaderDestination) reads the live @Observable value so a change
+    // applies to an open PDF without reopening. Default `.automatic` (LOCKED).
+    private static let pdfViewModeKey = "reader.defaults.pdfViewMode"
 
     private let defaults: UserDefaults
 
@@ -47,5 +52,18 @@ final class AppReaderDefaults {
             return font
         }
         set { defaults.set(newValue.rawValue, forKey: Self.fontKey) }
+    }
+
+    /// Mac-only PDF view-mode preference. Mirrors `theme`: persisted as a
+    /// UserDefaults rawValue, falling back to `.automatic` when the key is
+    /// absent (first run). No first-run write needed — the get default IS
+    /// `.automatic` (LOCKED). The iOS reader never consults this value.
+    var pdfViewMode: PDFViewModeSetting {
+        get {
+            guard let raw = defaults.string(forKey: Self.pdfViewModeKey),
+                  let mode = PDFViewModeSetting(rawValue: raw) else { return .automatic }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Self.pdfViewModeKey) }
     }
 }
