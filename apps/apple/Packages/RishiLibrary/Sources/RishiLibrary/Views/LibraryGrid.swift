@@ -30,7 +30,7 @@ struct LibraryGrid: View {
     /// uneven-row problem came from per-tile *text labels*; tiles are now pure
     /// fixed 2:3 cover art, so adaptive packing keeps rows uniform.
     private let columns: [GridItem] = [
-        GridItem(.adaptive(minimum: coverWidth, maximum: coverWidth), spacing: RishiSpacing.m)
+        GridItem(.adaptive(minimum: coverWidth, maximum: coverWidth), spacing: RishiSpacing.xl)
     ]
 
     public init(books: [Book],
@@ -47,13 +47,13 @@ struct LibraryGrid: View {
 
     public var body: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: RishiSpacing.l) {
+            LazyVGrid(columns: columns, spacing: RishiSpacing.xl) {
                 ForEach(books) { book in
                     cell(for: book)
                 }
             }
-            .padding(.horizontal, RishiSpacing.l)
-            .padding(.vertical, RishiSpacing.m)
+            .padding(.horizontal, RishiSpacing.xl)
+            .padding(.vertical, RishiSpacing.l)
         }
         .background(RishiColor.background)
         .alert(
