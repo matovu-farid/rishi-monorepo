@@ -1,5 +1,4 @@
 import Foundation
-import ReadiumZIPFoundation
 import RishiCore
 import RishiLogging
 
@@ -19,11 +18,15 @@ import RishiLogging
 /// unpack failure it falls back to the legacy ZIP-asset path so the
 /// reader never breaks on cache failures.
 ///
-/// **ZIP backend:** Readium 3.9 transitively ships a fork of
-/// `ZIPFoundation` (module `ReadiumZIPFoundation`) via `ReadiumShared`.
-/// Importing it directly avoids adding a new top-level SwiftPM
-/// dependency, satisfying the apps/apple CLAUDE.md durable constraint
-/// against engine swaps + new deps.
+/// ## Responsibility split (Phase 34 Plan 34-05)
+///
+/// This actor owns the cache **policy**: the freshness decision (mtime
+/// comparison + tolerance), in-flight coalescing, the two cancellation
+/// gates around `unpackIfNeeded`/`clear`, and the unpack orchestration.
+/// All raw filesystem + ZIP IO (URL/key derivation, sidecar codec, mkdir,
+/// remove, unzip, mtime reads) lives behind the ``EPUBUnpackedFileStore``
+/// seam, defaulting to ``EPUBUnpackedFileSystemStore``. The persisted
+/// layout, sidecar format, and behaviour are unchanged.
 public actor EPUBUnpackedCache {
 
     public struct Configuration: Sendable {
@@ -37,8 +40,7 @@ public actor EPUBUnpackedCache {
         }
     }
 
-    private let config: Configuration
-    private let fileManager: FileManager
+    private let store: EPUBUnpackedFileStore
     /// Test-only counter: number of physical unpack operations performed.
     /// Exposed as actor-isolated so concurrent reads from the parallel-
     /// unpack tests see a coherent value.
@@ -47,12 +49,18 @@ public actor EPUBUnpackedCache {
     /// so two parallel `unpackIfNeeded` calls do one unzip, not two.
     private var inflight: [BookID: Task<URL?, Never>] = [:]
 
+    /// Entry-point init kept stable for call sites outside this file
+    /// (`EPUBPublicationLoader`, prewarmer, tests). The filesystem/ZIP IO is
+    /// injected via a defaulted ``EPUBUnpackedFileStore`` derived from the
+    /// configuration, so existing `EPUBUnpackedCache(configuration:)` and
+    /// `EPUBUnpackedCache()` call sites are unchanged.
     public init(
         configuration: Configuration = Configuration(),
-        fileManager: FileManager = .default
+        store: EPUBUnpackedFileStore? = nil
     ) {
-        self.config = configuration
-        self.fileManager = fileManager
+        self.store = store ?? EPUBUnpackedFileSystemStore(
+            rootDirectory: configuration.rootDirectory
+        )
     }
 
     // MARK: - Nonisolated fast path
@@ -63,20 +71,18 @@ public actor EPUBUnpackedCache {
     /// stat-only path that callers (here: `EPUBPublicationLoader.open`)
     /// take before paying the actor hop for `unpackIfNeeded`.
     ///
-    /// Safe to call from any isolation domain; uses only `FileManager.default`
-    /// (documented thread-safe) and read-only configuration captured at init.
+    /// Safe to call from any isolation domain; the store uses only
+    /// `FileManager.default` (documented thread-safe) and read-only
+    /// configuration captured at init.
     public nonisolated func unpackedDirectoryIfFresh(
         for bookId: BookID,
         sourceFileURL: URL
     ) -> URL? {
-        let dir = unpackedDirectoryURL(for: bookId)
-        let sidecar = mtimeSidecarURL(for: bookId)
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: dir.path, isDirectory: &isDir),
-              isDir.boolValue,
-              let cachedMtime = Self.readMtimeNonisolated(at: sidecar),
-              let currentMtime = Self.sourceMtimeNonisolated(at: sourceFileURL, fileManager: fm),
+        let dir = store.unpackedDirectoryURL(for: bookId)
+        let sidecar = store.mtimeSidecarURL(for: bookId)
+        guard store.directoryExists(at: dir),
+              let cachedMtime = store.readSidecarMtime(at: sidecar),
+              let currentMtime = store.sourceMtime(at: sourceFileURL),
               Self.mtimesAreEqual(cachedMtime, currentMtime)
         else { return nil }
         return dir
@@ -119,39 +125,36 @@ public actor EPUBUnpackedCache {
     /// book is removed from the library or when a phase-level invalidate
     /// hook fires.
     ///
-    /// Reentrancy: `performUnpack` suspends across
-    /// `await FileManager.default.unzipItem(...)`. The actor unlocks at
-    /// that suspend point, so a concurrent `clear(for:)` could otherwise
-    /// race the unzip and delete the destination mid-write, leaving a
-    /// half-unpacked tree with a stale mtime sidecar. To close the
-    /// window we cancel the in-flight task first, await its completion
-    /// (which will observe the cancellation between the mkdir and the
-    /// unzip), and only then remove files. The unpack task itself
-    /// cleans up its partial directory on its own cancellation/error
-    /// branches, so the subsequent removeItem calls are idempotent.
+    /// Reentrancy: `performUnpack` suspends across the store's `unzip(...)`.
+    /// The actor unlocks at that suspend point, so a concurrent
+    /// `clear(for:)` could otherwise race the unzip and delete the
+    /// destination mid-write, leaving a half-unpacked tree with a stale
+    /// mtime sidecar. To close the window we cancel the in-flight task
+    /// first, await its completion (which will observe the cancellation
+    /// between the mkdir and the unzip), and only then remove files. The
+    /// unpack task itself cleans up its partial directory on its own
+    /// cancellation/error branches, so the subsequent removeItem calls are
+    /// idempotent.
     public func clear(for bookId: BookID) async {
         if let task = inflight[bookId] {
             task.cancel()
             inflight[bookId] = nil
             _ = await task.value
         }
-        let dir = unpackedDirectoryURL(for: bookId)
-        let sidecar = mtimeSidecarURL(for: bookId)
-        try? fileManager.removeItem(at: dir)
-        try? fileManager.removeItem(at: sidecar)
+        store.removeItem(at: store.unpackedDirectoryURL(for: bookId))
+        store.removeItem(at: store.mtimeSidecarURL(for: bookId))
     }
 
     // MARK: - Internals
 
     private func performUnpack(bookId: BookID, sourceFileURL: URL) async -> URL? {
-        let dir = unpackedDirectoryURL(for: bookId)
+        let dir = store.unpackedDirectoryURL(for: bookId)
 
-        // Ensure the root directory (parent of <bookId>/) exists.
+        // Ensure the root directory (parent of <bookId>/) exists. Creating the
+        // <bookId>/ dir with intermediates also creates the root, matching the
+        // original "mkdir root, then unzip into <bookId>/" sequence.
         do {
-            try fileManager.createDirectory(
-                at: config.rootDirectory,
-                withIntermediateDirectories: true
-            )
+            try store.createDirectory(at: dir.deletingLastPathComponent())
         } catch {
             Log.reader.error(
                 "EPUBUnpackedCache mkdir root failed: \(error.localizedDescription, privacy: .public)"
@@ -163,7 +166,7 @@ public actor EPUBUnpackedCache {
         // trees would otherwise be presented to Readium as a "warm" cache
         // and break the open. unzipItem demands the destination not exist
         // (or be empty); a previous failed unpack would have left junk.
-        try? fileManager.removeItem(at: dir)
+        store.removeItem(at: dir)
 
         // Cooperative cancellation gate between mkdir and the multi-second
         // unzip — a concurrent `clear(for:)` cancels this task, and we
@@ -172,19 +175,14 @@ public actor EPUBUnpackedCache {
         if Task.isCancelled { return nil }
 
         do {
-            // ReadiumZIPFoundation's unzipItem is an `async throws` extension
-            // on FileManager. We invoke it on FileManager.default (documented
-            // Sendable) instead of `self.fileManager` so Swift 6 strict
-            // concurrency does not flag sending the actor-isolated stored
-            // FileManager across the nonisolated async boundary.
-            try await FileManager.default.unzipItem(at: sourceFileURL, to: dir)
+            try await store.unzip(sourceFileURL: sourceFileURL, to: dir)
         } catch {
             Log.reader.error(
                 "EPUBUnpackedCache unzip failed: \(error.localizedDescription, privacy: .public)"
             )
             // Clean up partial output so the next attempt starts from a
             // known-empty state.
-            try? fileManager.removeItem(at: dir)
+            store.removeItem(at: dir)
             return nil
         }
 
@@ -195,49 +193,23 @@ public actor EPUBUnpackedCache {
         // AND sidecar both exist (warm hit) or both are missing (cold),
         // never sidecar-without-directory.
         if Task.isCancelled {
-            try? fileManager.removeItem(at: dir)
+            store.removeItem(at: dir)
             return nil
         }
 
         // Write mtime sidecar — read the source mtime AFTER unpack so we
         // can't accidentally race a writer that's still touching the file.
-        if let mtime = sourceMtime(at: sourceFileURL) {
-            let text = String(mtime.timeIntervalSince1970)
-            try? Data(text.utf8).write(to: mtimeSidecarURL(for: bookId), options: .atomic)
+        if let mtime = store.sourceMtime(at: sourceFileURL) {
+            store.writeSidecarMtime(mtime, to: store.mtimeSidecarURL(for: bookId))
         }
         didUnpackCount &+= 1
         return dir
     }
 
-    private nonisolated func unpackedDirectoryURL(for bookId: BookID) -> URL {
-        config.rootDirectory.appendingPathComponent(bookId.uuidString, isDirectory: true)
-    }
-
-    private nonisolated func mtimeSidecarURL(for bookId: BookID) -> URL {
-        config.rootDirectory.appendingPathComponent("\(bookId.uuidString).mtime")
-    }
-
-    private static func readMtimeNonisolated(at url: URL) -> Date? {
-        guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8),
-              let interval = TimeInterval(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        else { return nil }
-        return Date(timeIntervalSince1970: interval)
-    }
-
-    private static func sourceMtimeNonisolated(at url: URL, fileManager: FileManager) -> Date? {
-        let attrs = try? fileManager.attributesOfItem(atPath: url.path)
-        return attrs?[.modificationDate] as? Date
-    }
-
-    private func sourceMtime(at url: URL) -> Date? {
-        let attrs = try? fileManager.attributesOfItem(atPath: url.path)
-        return attrs?[.modificationDate] as? Date
-    }
-
     /// 1ms tolerance for Date round-trip drift via `String(timeIntervalSince1970)`,
     /// matching `CoverCache.mtimesAreEqual` so behaviour is consistent across
-    /// the two on-disk caches.
+    /// the two on-disk caches. This is a **policy** decision (what counts as
+    /// "fresh"), so it stays on the cache, not the IO store.
     private static func mtimesAreEqual(_ a: Date, _ b: Date) -> Bool {
         abs(a.timeIntervalSince(b)) < 0.001
     }
