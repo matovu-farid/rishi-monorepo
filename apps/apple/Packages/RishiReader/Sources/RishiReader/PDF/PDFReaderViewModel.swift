@@ -4,26 +4,6 @@ import Observation
 import RishiCore
 import RishiLogging
 
-/// Encodes/decodes the per-page locator stored in `Position.locator` for PDFs.
-///
-/// Wire format: `"pdf-v1:page:N"` where `N` is the zero-based page index.
-/// The `pdf-v1` prefix lets Phase 7 sync identify the schema; a future
-/// `pdf-v2` decoder will fall back to `pdf-v1` for backward compat.
-public enum PDFPositionEncoder {
-    public static let format = "pdf-v1"
-
-    public static func encode(page: Int) -> String { "\(format):page:\(page)" }
-
-    public static func decode(_ locator: String) -> Int? {
-        let parts = locator.split(separator: ":")
-        guard parts.count == 3,
-              parts[0] == Substring(format),
-              parts[1] == "page",
-              let page = Int(parts[2]) else { return nil }
-        return page
-    }
-}
-
 /// Owns the page state, position-debounce task, outline, and theme for one
 /// open PDF.
 ///
@@ -207,22 +187,15 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// there. The page-turn mutation runs on the MainActor because ``pageIndex``
     /// drives the @Observable SwiftUI surface and must not be written from a
     /// background thread.
+    ///
+    /// The page-scan itself is delegated to ``PDFReadAloudCursor``; this method
+    /// owns only the explicit position application (the `seek`) so the live-page
+    /// mutation is visible here rather than hidden in the scan.
     public func paragraphsForFollowingPage() async -> [String] {
-        guard let document else { return [] }
-        let count = document.pageCount
         let current = await MainActor.run { self.pageIndex }
-        var next = current + 1
-        while next < count {
-            if let page = document.page(at: next) {
-                let paragraphs = PDFReadAloudParagraphs.paragraphs(from: page)
-                if !paragraphs.isEmpty {
-                    await MainActor.run { self.seek(toPage: next) }
-                    return paragraphs
-                }
-            }
-            next += 1
-        }
-        return []
+        guard let result = readAloudCursor.following(currentPage: current) else { return [] }
+        await MainActor.run { self.seek(toPage: result.pageIndex) }
+        return result.paragraphs
     }
 
     /// Paragraphs for the PREVIOUS page with selectable text before the page
@@ -236,20 +209,18 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// document (no earlier non-empty page), which the read-aloud bridge treats
     /// as "stay put".
     public func paragraphsForPrecedingPage() async -> [String] {
-        guard let document else { return [] }
         let current = await MainActor.run { self.pageIndex }
-        var prev = current - 1
-        while prev >= 0 {
-            if let page = document.page(at: prev) {
-                let paragraphs = PDFReadAloudParagraphs.paragraphs(from: page)
-                if !paragraphs.isEmpty {
-                    await MainActor.run { self.seek(toPage: prev) }
-                    return paragraphs
-                }
-            }
-            prev -= 1
-        }
-        return []
+        guard let result = readAloudCursor.preceding(currentPage: current) else { return [] }
+        await MainActor.run { self.seek(toPage: result.pageIndex) }
+        return result.paragraphs
+    }
+
+    /// Read-aloud page-continuation collaborator built over the current
+    /// document. Rebuilt per access so it always reflects the latest loaded
+    /// `document` (the cursor is a cheap value-like wrapper holding only the
+    /// document reference and no mutable state).
+    private var readAloudCursor: PDFReadAloudCursor {
+        PDFReadAloudCursor(document: document)
     }
 
     /// Flushes any pending debounced write immediately. Call on view dismiss.
@@ -274,8 +245,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// per-page text extraction is cheap relative to the document parse, so
     /// this is safe to call from the synchronous toolbar voice action.
     public var currentPageText: String? {
-        guard let page = document?.page(at: pageIndex) else { return nil }
-        let paragraphs = PDFReadAloudParagraphs.paragraphs(from: page)
+        let paragraphs = readAloudCursor.paragraphs(atPage: pageIndex)
         guard !paragraphs.isEmpty else { return nil }
         return paragraphs.joined(separator: "\n\n")
     }

@@ -94,7 +94,7 @@
 //                                PDFView selection lifecycle.
 // PDFOutlineExtractor         — `PDF/PDFOutlineExtractor.swift`. Reads a PDFDocument outline
 //                                into a [PDFOutlineNode].
-// PDFPositionEncoder          — `PDF/PDFReaderViewModel.swift`. Encodes/decodes PDF positions
+// PDFPositionEncoder          — `Model/PDFPositionEncoder.swift`. Encodes/decodes PDF positions
 //                                to/from the JSON string stored in Position.locator.
 // EPUBSelectionCoordinator    — `EPUB/EPUBSelectionCoordinator.swift`. Same role on the EPUB side.
 // EPUBPreferencesBridge       — `EPUB/EPUBPreferencesBridge.swift`. Translates RishiReader
