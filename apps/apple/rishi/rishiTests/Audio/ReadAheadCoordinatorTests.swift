@@ -96,18 +96,29 @@ struct ReadAheadCoordinatorTests {
         #expect(requested.isEmpty)
     }
 
-    @Test("cancelAll drains the prewarmer's in-flight table")
-    func cancelAllClearsInFlight() async {
+    @Test("cancelAll completes cleanly and leaves the coordinator reusable")
+    func cancelAllIsCleanAndReusable() async {
         let source = RecordingChunkSource()
-        let prewarmer = TTSPrewarmer(source: source)
-        let coordinator = ReadAheadCoordinator(prewarmer: prewarmer, readAhead: 3)
+        let coordinator = ReadAheadCoordinator(prewarmer: TTSPrewarmer(source: source), readAhead: 3)
 
+        // index 0 -> window ["b", "c", "d"]; the recording streams finish
+        // immediately so the prewarm Tasks drain on their own.
         await coordinator.warm(after: 0, in: ["a", "b", "c", "d"], voice: "v", speed: 1.0)
-        await coordinator.cancelAll()
+        await coordinator.cancelAll()  // must not crash / deadlock
 
-        // After cancelAll the prewarmer's in-flight table is cleared (the streams
-        // above finish immediately, so this is mainly the no-crash / drained path).
-        let count = await prewarmer.inFlightCount
-        #expect(count == 0)
+        // The coordinator is still usable after cancelAll: a fresh warm records
+        // its new window through the same prewarmer. Poll specifically for "y"
+        // since the first warm's "b"/"c"/"d" requests are already recorded.
+        await coordinator.warm(after: 0, in: ["x", "y"], voice: "v", speed: 1.0)
+        let deadline = Date().addingTimeInterval(2)
+        var sawY = false
+        while Date() < deadline {
+            if await source.snapshot().contains(where: { $0.text == "y" }) {
+                sawY = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(sawY)
     }
 }

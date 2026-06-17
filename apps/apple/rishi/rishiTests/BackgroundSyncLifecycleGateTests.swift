@@ -17,6 +17,7 @@ import Testing
 @testable import rishi
 
 @Suite("BackgroundSyncLifecycle Auto-Sync gate")
+@MainActor
 struct BackgroundSyncLifecycleGateTests {
 
     @Test("BGTask wave runs when Auto-Sync is ON")
