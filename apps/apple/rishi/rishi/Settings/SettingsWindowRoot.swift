@@ -23,6 +23,7 @@
 
 import SwiftUI
 import RishiCore
+import RishiBilling
 
 struct SettingsWindowRoot: View {
 
@@ -45,6 +46,13 @@ struct SettingsWindowRoot: View {
                         dismissWindow(id: "settings")
                     }
                 )
+                // Re-inject the object-typed env `SettingsScreen`'s
+                // `ManageSubscriptionRow` reads. Mirrors RootView.swift:75 but
+                // done HERE inside the `services != nil` guard so the
+                // force-unwrapping `deps.manageSubscriptionPresenter`
+                // (AppDependencies+Billing.swift:8) is only touched once
+                // services exist (Pitfall 3).
+                .environment(services.manageSubscriptionPresenter)
                 .onAppear {
                     deps.settingsWindowPresenter.markOpened()
                     SettingsMacWindowSizing.apply()

@@ -57,6 +57,39 @@ struct rishiApp: App {
         .commands {
             RishiMenuCommands(router: deps.macCommandRouter)
         }
+
+        // Phase 32 Plan 32-03 — dedicated, separate native Settings WINDOW
+        // (Option A from RESEARCH: a second `WindowGroup(id:)` opened via
+        // `@Environment(\.openWindow)` from the Cmd+, dispatcher). Mac-only:
+        // iOS keeps the in-app gear + sheet (no second scene there).
+        //
+        // Re-injects the SAME object-typed environments RootView installs at
+        // RootView.swift:75 (Pitfall 3 — the #1 wiring pitfall): the shared
+        // `deps`, the `macCommandRouter`, and `deps.manageSubscriptionPresenter`
+        // (read by `ManageSubscriptionRow` from `SettingsScreen`). The scene
+        // shares the SINGLE `deps`, so `SettingsWindowRoot` reads `deps.services`
+        // lazily through its own nil-guard — no second bootstrap.
+        //
+        // NOTE: `deps.manageSubscriptionPresenter` force-unwraps `services!`
+        // (AppDependencies+Billing.swift:8), so — exactly like RootView.swift:75
+        // which only touches it inside its `services != nil` guard — that
+        // object env is re-injected INSIDE `SettingsWindowRoot`'s guarded body,
+        // NOT at this scene-declaration site (which can be evaluated before
+        // bootstrap on a cold scene restore). Here we only inject the
+        // always-safe `deps` + `macCommandRouter`.
+        //
+        // CONTINGENCY (flagged, NOT built): if a Mac Catalyst hardware pass
+        // shows `openWindow(id:)` duplicating on repeated Cmd+, or not yielding
+        // a genuinely separate window, switch to RESEARCH Option B (UIKit
+        // `requestSceneSessionActivation` with a stored UISceneSession).
+        #if targetEnvironment(macCatalyst)
+        WindowGroup(id: "settings") {
+            SettingsWindowRoot()
+                .environment(\.appDependencies, deps)
+                .environment(\.macCommandRouter, deps.macCommandRouter)
+        }
+        .defaultSize(width: 720, height: 640)
+        #endif
     }
 }
 
