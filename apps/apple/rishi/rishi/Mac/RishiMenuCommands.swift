@@ -6,7 +6,8 @@
 //  `rishiApp` via:
 //
 //      WindowGroup { RootView()... }
-//          .commands { RishiMenuCommands(router: deps.macCommandRouter) }
+//          .commands { RishiMenuCommands(router: deps.macCommandRouter,
+//                                         account: deps.macAccountMenu) }
 //
 //  Every command also carries a ⌘ shortcut (sourced from
 //  `RishiKeyboardShortcut`) so the keyboard surface and the menu surface
@@ -23,9 +24,11 @@ import RishiAudio    // explicit import — VoiceCatalog (voice picker rows)
 struct RishiMenuCommands: Commands {
 
     let router: MacCommandRouter
+    let account: MacAccountMenuModel
 
-    init(router: MacCommandRouter) {
+    init(router: MacCommandRouter, account: MacAccountMenuModel) {
         self.router = router
+        self.account = account
     }
 
     var body: some Commands {
@@ -38,7 +41,7 @@ struct RishiMenuCommands: Commands {
         #if targetEnvironment(macCatalyst)
         CommandGroup(after: .appInfo) {
             Menu("Account") {
-                AccountMenuItems()
+                AccountMenuItems(account: account)
             }
         }
         #endif
@@ -229,31 +232,37 @@ private struct SyncMenuItems: View {
 
 /// One lightweight Account entry point: a disabled email line, a disabled
 /// About version line, then Manage Subscription / Sign Out / Privacy / Terms
-/// commands routed through the focused reader-prefs model (RESEARCH §D). No
-/// custom window or sheet — Manage Subscription drives StoreKit's system sheet
-/// via the existing presenter, legal links open externally, Sign Out reuses the
-/// existing auth flow. The focused value is `nil` until the live SignedInView
-/// mounts, which disables every command before bootstrap with no extra guard.
+/// commands routed through the app-level `MacAccountMenuModel` (RESEARCH §D). The
+/// account/legal/auth payload is app-GLOBAL, so it is read from this
+/// focus-independent model rather than `@FocusedValue` — a focused value
+/// resolves to nil whenever the publishing scene loses focus (e.g. when the
+/// menu bar opens), which greyed-out the whole submenu and showed "Not signed
+/// in" even while signed in. No custom window or sheet — Manage Subscription
+/// drives StoreKit's system sheet via the existing presenter, legal links open
+/// externally, Sign Out reuses the existing auth flow. The payload is `nil`
+/// until the live SignedInView mounts (and after sign-out), which disables every
+/// command before bootstrap with no extra guard.
 private struct AccountMenuItems: View {
-    @FocusedValue(\.readerPrefsMenu) private var prefs
+    let account: MacAccountMenuModel
     var body: some View {
+        let payload = account.payload
         // Disabled info: signed-in email (resolved in SignedInView, not via the
         // async currentUser) + the bundle version (Catalyst has no AppKit about
         // panel, so About is a disabled line mirroring AboutSection.swift:39-43).
-        Text(prefs?.userEmail ?? "Not signed in")
+        Text(payload?.userEmail ?? "Not signed in")
             .disabled(true)
         Text(Self.aboutLine)
             .disabled(true)
         Divider()
-        Button("Manage Subscription…") { prefs?.onManageSubscription() }
-            .disabled(prefs == nil)
-        Button("Sign Out") { prefs?.onSignOut() }
-            .disabled(prefs == nil)
+        Button("Manage Subscription…") { payload?.onManageSubscription() }
+            .disabled(payload == nil)
+        Button("Sign Out") { payload?.onSignOut() }
+            .disabled(payload == nil)
         Divider()
-        Button("Privacy Policy") { prefs?.onOpenPrivacy() }
-            .disabled(prefs == nil)
-        Button("Terms of Use") { prefs?.onOpenTerms() }
-            .disabled(prefs == nil)
+        Button("Privacy Policy") { payload?.onOpenPrivacy() }
+            .disabled(payload == nil)
+        Button("Terms of Use") { payload?.onOpenTerms() }
+            .disabled(payload == nil)
     }
 
     /// "rishi X.Y (build)" from Bundle.main — mirrors AboutSection's version

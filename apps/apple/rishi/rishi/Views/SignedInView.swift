@@ -43,6 +43,7 @@ struct SignedInView: View {
     let onCacheUserId: (UserID) -> Void
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.appDependencies) private var appDependencies
 
     init(
         services: BootstrappedServices,
@@ -173,7 +174,7 @@ struct SignedInView: View {
         // `audioPrefs` holder; the focused value is `nil` until this live view
         // mounts, which disables the menu items pre-bootstrap for free.
         // Catalyst-only: iOS keeps the in-app gear + settings sheet untouched.
-        .readerPrefsMenuPublisher(services: services, user: user, audioPrefs: macAudioPrefs, onSignedOut: onSignedOut)
+        .readerPrefsMenuPublisher(services: services, user: user, audioPrefs: macAudioPrefs, onSignedOut: onSignedOut, account: appDependencies?.macAccountMenu)
         // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader cover,
         // and persist the latest scene state on every visible path change.
         .sceneRestoration(
@@ -242,11 +243,12 @@ extension View {
         services: BootstrappedServices,
         user: User,
         audioPrefs: AudioMenuPrefs,
-        onSignedOut: @escaping () -> Void
+        onSignedOut: @escaping () -> Void,
+        account: MacAccountMenuModel?
     ) -> some View {
         #if targetEnvironment(macCatalyst)
         self.modifier(
-            ReaderPrefsMenuPublisher(services: services, user: user, audioPrefs: audioPrefs, onSignedOut: onSignedOut)
+            ReaderPrefsMenuPublisher(services: services, user: user, audioPrefs: audioPrefs, onSignedOut: onSignedOut, account: account)
         )
         #else
         self
@@ -256,10 +258,14 @@ extension View {
 
 #if targetEnvironment(macCatalyst)
 
-/// Catalyst-only modifier that builds + publishes the `ReaderPrefsMenuModel`
-/// focused scene value from the post-bootstrap services and the live audio
-/// holder. Account/legal closures are no-op placeholders this wave (Plan 04
-/// wires them). `userEmail` is resolved from the in-scope `user` (no async
+/// Catalyst-only modifier that builds + publishes the scene-scoped
+/// `ReaderPrefsMenuModel` focused value (theme/font/pdf/voice/speed/sync) from
+/// the post-bootstrap services and the live audio holder, AND pushes the
+/// app-GLOBAL account/legal/auth payload into the focus-independent
+/// `MacAccountMenuModel`. The account payload deliberately does NOT ride the
+/// focused value: it resolved to nil when the menu bar opened (focus left the
+/// content view), greyed out the Account submenu and showed "Not signed in"
+/// while signed in. `userEmail` is resolved from the in-scope `user` (no async
 /// `currentUser` call — Pitfall 3).
 private struct ReaderPrefsMenuPublisher: ViewModifier {
 
@@ -267,12 +273,14 @@ private struct ReaderPrefsMenuPublisher: ViewModifier {
     let user: User
     @Bindable var audioPrefs: AudioMenuPrefs
     let onSignedOut: () -> Void
+    let account: MacAccountMenuModel?
 
-    init(services: BootstrappedServices, user: User, audioPrefs: AudioMenuPrefs, onSignedOut: @escaping () -> Void) {
+    init(services: BootstrappedServices, user: User, audioPrefs: AudioMenuPrefs, onSignedOut: @escaping () -> Void, account: MacAccountMenuModel?) {
         self.services = services
         self.user = user
         self.audioPrefs = audioPrefs
         self.onSignedOut = onSignedOut
+        self.account = account
     }
 
     func body(content: Content) -> some View {
@@ -284,6 +292,11 @@ private struct ReaderPrefsMenuPublisher: ViewModifier {
                 audioPrefs.speed = loaded.speed
                 audioPrefs.isSeeded = true
             }
+            // App-GLOBAL account payload: pushed into the focus-independent
+            // model while the signed-in view is present, cleared on disappear
+            // (sign-out / teardown) so the submenu disables itself.
+            .onAppear { account?.update(makeAccountPayload()) }
+            .onDisappear { account?.clear() }
     }
 
     private func makeModel() -> ReaderPrefsMenuModel {
@@ -322,10 +335,18 @@ private struct ReaderPrefsMenuPublisher: ViewModifier {
             // KEEP: syncEngine.syncNow() is an actor await; mirrors
             // SettingsContent.swift:71. Manual sync ignores the autoSync flag.
             onSyncNow: { Task { await services.syncEngine.syncNow() } },
-            syncStatus: services.syncStatus,
+            syncStatus: services.syncStatus
+        )
+    }
+
+    /// Build the app-GLOBAL account payload for `MacAccountMenuModel`. The
+    /// account/legal/auth actions are app-level (not scene-scoped), so they live
+    /// here rather than on the focused `ReaderPrefsMenuModel`. Each is routed to
+    /// an existing service/URL with no custom window or sheet (§D). `userEmail`
+    /// is resolved from the in-scope `user` (no async `currentUser` — Pitfall 3).
+    private func makeAccountPayload() -> MacAccountMenuModel.Payload {
+        MacAccountMenuModel.Payload(
             userEmail: user.email.isEmpty ? nil : user.email,
-            // Plan 04 (Wave 4) — real account/legal actions, each routed to an
-            // existing service/URL with no custom window or sheet (§D).
             // Manage Subscription drives StoreKit's system sheet via the
             // existing presenter (mirrors SettingsContent.swift:88-95);
             // explicit @MainActor matches that surface's isolation.

@@ -55,7 +55,7 @@ struct rishiApp: App {
         // Universal (not Catalyst-gated) so iPad hardware-keyboard users
         // get the same ⌘ chords.
         .commands {
-            RishiMenuCommands(router: deps.macCommandRouter)
+            RishiMenuCommands(router: deps.macCommandRouter, account: deps.macAccountMenu)
         }
     }
 }

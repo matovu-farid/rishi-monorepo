@@ -111,6 +111,11 @@ final class AppDependencies {
     /// from the SwiftUI environment that `RootView` reads.
     let macCommandRouter = MacCommandRouter()
 
+    /// App-level source for the Mac menu-bar Account submenu. Lives here (like
+    /// `macCommandRouter`) so `WindowGroup.commands` reads a focus-independent
+    /// instance — the Account submenu must not depend on scene focus.
+    let macAccountMenu = MacAccountMenuModel()
+
     /// Cached user id pumped in by SignedInView after the auth session resolves.
     /// `RishiChatService` and the voice presenter read this synchronously from
     /// their `currentUserId` closures so they do not need to hop into the auth actor.

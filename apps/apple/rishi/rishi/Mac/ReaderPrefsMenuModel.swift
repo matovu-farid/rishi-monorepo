@@ -50,11 +50,6 @@ struct ReaderPrefsMenuModel {
     var autoSync: Binding<Bool>
     var onSyncNow: () -> Void
     var syncStatus: SyncStatus
-    var userEmail: String?
-    var onManageSubscription: () -> Void
-    var onSignOut: () -> Void
-    var onOpenPrivacy: () -> Void
-    var onOpenTerms: () -> Void
 }
 
 private struct ReaderPrefsMenuKey: FocusedValueKey {

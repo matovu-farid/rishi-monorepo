@@ -22,7 +22,7 @@ struct RishiMenuCommandsTests {
     @Test("Commands body builds without crashing")
     func commandsBodyBuilds() {
         let router = MacCommandRouter()
-        let commands = RishiMenuCommands(router: router)
+        let commands = RishiMenuCommands(router: router, account: MacAccountMenuModel())
         _ = commands.body  // touch the property to force the result builder
         #expect(router.pendingIntent == nil)
     }
@@ -30,7 +30,7 @@ struct RishiMenuCommandsTests {
     @Test("Router is held by reference (menu taps reach the same instance)")
     func routerHeldByReference() {
         let router = MacCommandRouter()
-        let commands = RishiMenuCommands(router: router)
+        let commands = RishiMenuCommands(router: router, account: MacAccountMenuModel())
         // Mutating the router via its public API must be visible to anything
         // that captured it (the menu builder retains it as a stored property).
         router.send(.focusSearch)
