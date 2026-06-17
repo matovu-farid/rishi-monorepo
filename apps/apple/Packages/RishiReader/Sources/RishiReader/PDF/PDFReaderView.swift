@@ -22,6 +22,60 @@ import UIKit
 ///   - `onPDFViewReady` fires once with the live `PDFView` so the screen
 ///     can build a `mapRect` closure
 ///     (`pdfView.convert(_:to: pdfView.currentPage)`) for the overlay.
+/// `PDFView` subclass that keeps the Mac Continuous (Mode A) page fit to the
+/// viewport WIDTH across live window resize / full-screen toggles.
+///
+/// PDFKit has no built-in fit-WIDTH: `autoScales`/`scaleFactorForSizeToFit`
+/// fit the WHOLE page (so it never overflows and there is nothing to scroll,
+/// which would defeat the Phase 30 overscroll-to-turn). Mode A instead pins
+/// `scaleFactor = availableWidth / pageWidth` so the page fills the width and
+/// overflows vertically. `configureMacLayout` only runs in `makeUIView`
+/// (bounds may still be 0) and on mode changes — not on every resize — so the
+/// scale must be re-derived from the live bounds here in `layoutSubviews`.
+///
+/// The recompute fires ONLY when `fitsWidthToSinglePage` is true, set ONLY in
+/// the `.singleFitWidth` branch. On iOS and in the `.singlePage` /
+/// `.twoUpSpread` branches the flag stays false, so this subclass behaves
+/// exactly like a plain `PDFView` (no scale override) and iOS/EPUB are
+/// byte-identical.
+final class FitWidthPDFView: PDFView {
+    /// When true, `layoutSubviews` re-pins `scaleFactor` to the fit-width value
+    /// derived from the current bounds + `currentPage`. Default false so every
+    /// other path (iOS, Single Page, Two Page) is untouched.
+    var fitsWidthToSinglePage: Bool = false
+
+    #if targetEnvironment(macCatalyst)
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        applyFitWidthIfNeeded()
+    }
+
+    /// Recomputes and applies the fit-width scale from the live bounds and the
+    /// current page width. No-op unless `fitsWidthToSinglePage` is true and the
+    /// bounds + page width are usable. Idempotent — skips reassigning when the
+    /// scale already matches so PDFKit's own layout pass does not thrash.
+    func applyFitWidthIfNeeded() {
+        guard fitsWidthToSinglePage else { return }
+        guard let page = currentPage else { return }
+        let pageWidth = page.bounds(for: displayBox).width
+        let availableWidth = bounds.width
+        let target = PDFReaderLayoutResolver.fitWidthScaleFactor(
+            pageWidth: pageWidth,
+            availableWidth: availableWidth
+        )
+        guard target > 0 else { return }
+        // Keep the user able to pinch-zoom but default to fit-width: the min
+        // floor is the fit-to-page (whole page visible) scale, the max is 4x.
+        let fitPage = scaleFactorForSizeToFit
+        minScaleFactor = min(fitPage, target)
+        maxScaleFactor = 4.0
+        if abs(scaleFactor - target) > 0.001 {
+            scaleFactor = target
+        }
+    }
+    #endif
+}
+
 public struct PDFReaderView: UIViewRepresentable {
 
     public let viewModel: PDFReaderViewModel
@@ -72,13 +126,22 @@ public struct PDFReaderView: UIViewRepresentable {
     }
 
     public func makeUIView(context: Context) -> PDFView {
-        let pdfView = PDFView()
+        // FitWidthPDFView is a plain PDFView unless its `fitsWidthToSinglePage`
+        // flag is set (only the Mac `.singleFitWidth` branch sets it), so iOS
+        // behavior is byte-identical to using a bare PDFView.
+        let pdfView = FitWidthPDFView()
         #if targetEnvironment(macCatalyst)
-        // Phase 30 — Mac uses the two-mode layout system (Mode A single
-        // fit-to-width vertical scroll; Mode B two-up spread). CRITICAL:
-        // Mac NEVER calls usePageViewController — it forces single-page
-        // continuous and ignores displayMode (RESEARCH Pitfall 1/7), which
-        // both breaks fit-to-width and prevents `.twoUp` from rendering.
+        // Phase 30/31 — Mac has THREE layout modes, all selected by
+        // `configureMacLayout` from the resolved `layoutMode`:
+        //   - Single Page (`.singlePage`): one page, horizontal page-turns;
+        //     this is the ONLY Mac mode that calls usePageViewController.
+        //   - Continuous (`.singleFitWidth`): ONE page fit to WIDTH (page
+        //     overflows vertically), scroll within the page, overscroll past
+        //     the edge turns to the next/prev page. Uses `displayMode =
+        //     .singlePage` + a computed fit-width `scaleFactor` (NOT PDFKit
+        //     continuous mode, which would flow all pages together and break
+        //     the per-page overscroll-to-turn).
+        //   - Two Page (`.twoUpSpread`): two-up height-fit spread.
         configureMacLayout(pdfView, mode: layoutMode)
         #else
         // iOS path — UNCHANGED, byte-identical to the prior block.
@@ -138,16 +201,23 @@ public struct PDFReaderView: UIViewRepresentable {
     }
 
     #if targetEnvironment(macCatalyst)
-    /// Mac-only per-mode `PDFView` configuration. The fit-to-width (Mode A)
-    /// and two-up (Mode B) cases NEVER call `usePageViewController` (RESEARCH
+    /// Mac-only per-mode `PDFView` configuration. The Continuous (Mode A) and
+    /// two-up (Mode B) cases NEVER call `usePageViewController` (RESEARCH
     /// Pitfall 1/7: it ignores `displayMode` and disables fit). Phase 31's
     /// Single Page case DOES call it (it restores the pre-Phase-30 horizontal
     /// page-turn config) — because that toggle is sticky, transitions
     /// into/out of Single Page rebuild the `PDFView` rather than reconfigure
-    /// in place (see updateUIView). Mode A = single fit-to-width with vertical
-    /// scrolling; Mode B = two-up height-fit spread; Single Page = one page,
+    /// in place (see updateUIView). Mode A = ONE page fit to WIDTH with vertical
+    /// scroll-within-page + overscroll-to-turn (`displayMode = .singlePage`,
+    /// `autoScales = false`, computed fit-width `scaleFactor`; NOT PDFKit
+    /// `.singlePageContinuous`, which flows all pages and breaks per-page
+    /// overscroll); Mode B = two-up height-fit spread; Single Page = one page,
     /// horizontal page-turn.
     private func configureMacLayout(_ pdfView: PDFView, mode: PDFReaderLayoutMode) {
+        // The live-resize fit-width flag lives on the FitWidthPDFView subclass
+        // (makeUIView always creates one). Set it ONLY for Continuous; clear it
+        // for every other mode so they keep PDFKit's native scaling untouched.
+        let fitWidthView = pdfView as? FitWidthPDFView
         switch mode {
         case .singlePage:
             // Phase 31 — restore the pre-Phase-30 Mac config (it IS the iOS
@@ -156,6 +226,7 @@ public struct PDFReaderView: UIViewRepresentable {
             // sticky one-way scroller swap (Pitfall 1) — switching into/out of
             // this mode on a live PDFView is handled by the rebuild path in
             // updateUIView, NOT an in-place reconfigure.
+            fitWidthView?.fitsWidthToSinglePage = false
             pdfView.usePageViewController(true, withViewOptions: nil)
             pdfView.displayMode = .singlePage
             pdfView.displayDirection = .horizontal
@@ -163,12 +234,31 @@ public struct PDFReaderView: UIViewRepresentable {
             pdfView.minScaleFactor = 0.5
             pdfView.maxScaleFactor = 4.0
         case .singleFitWidth:
-            pdfView.displayMode = .singlePageContinuous
+            // Continuous = ONE page (NOT PDFKit continuous, which would flow
+            // all pages together and break per-page overscroll-to-turn), fit to
+            // WIDTH so the page overflows vertically and the user scrolls within
+            // it; overscroll past the edge turns the page (Phase 30 observer).
+            // PDFKit has no fit-WIDTH, so autoScales is OFF and `scaleFactor` is
+            // pinned to availableWidth/pageWidth — re-derived on every resize by
+            // FitWidthPDFView.layoutSubviews while `fitsWidthToSinglePage` is on.
+            pdfView.displayMode = .singlePage
             pdfView.displayDirection = .vertical
-            pdfView.autoScales = true
-            pdfView.minScaleFactor = pdfView.scaleFactorForSizeToFit
+            pdfView.autoScales = false
+            let pageWidth = pdfView.currentPage?.bounds(for: pdfView.displayBox).width ?? 0
+            let target = PDFReaderLayoutResolver.fitWidthScaleFactor(
+                pageWidth: pageWidth,
+                availableWidth: pdfView.bounds.width
+            )
+            let fitPage = pdfView.scaleFactorForSizeToFit
+            pdfView.minScaleFactor = min(fitPage > 0 ? fitPage : target, target)
             pdfView.maxScaleFactor = 4.0
+            pdfView.scaleFactor = target
+            // Turn on live-resize fit-width LAST so the first layout pass after
+            // this reconfigure re-pins the scale from the realized bounds (in
+            // makeUIView the bounds are often still 0 at this point).
+            fitWidthView?.fitsWidthToSinglePage = true
         case .twoUpSpread:
+            fitWidthView?.fitsWidthToSinglePage = false
             pdfView.displayMode = .twoUp
             pdfView.displaysAsBook = true
             pdfView.displayDirection = .horizontal
