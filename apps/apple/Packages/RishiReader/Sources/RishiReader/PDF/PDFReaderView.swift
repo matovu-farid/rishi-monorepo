@@ -25,6 +25,14 @@ import UIKit
 public struct PDFReaderView: UIViewRepresentable {
 
     public let viewModel: PDFReaderViewModel
+    /// Phase 30 — resolved Mac layout mode driven by
+    /// ``PDFReaderLayoutResolver`` from ``PDFReaderScreen``'s live
+    /// `readerAreaSize`. It only changes behavior inside the
+    /// `#if targetEnvironment(macCatalyst)` branches below — the iOS path
+    /// never reads it, so iOS rendering is byte-identical regardless of the
+    /// value. Defaults to `.singleFitWidth` so any non-Mac caller compiles
+    /// unchanged.
+    public var layoutMode: PDFReaderLayoutMode
     public var onSelectionChange: (PDFSelection?) -> Void
     public var onPDFViewReady: (PDFView) -> Void
     /// Phase 21 — single-tap callback driven by a UIKit
@@ -43,11 +51,13 @@ public struct PDFReaderView: UIViewRepresentable {
 
     public init(
         viewModel: PDFReaderViewModel,
+        layoutMode: PDFReaderLayoutMode = .singleFitWidth,
         onSelectionChange: @escaping (PDFSelection?) -> Void = { _ in },
         onPDFViewReady: @escaping (PDFView) -> Void = { _ in },
         onTap: @escaping (CGPoint) -> Void = { _ in }
     ) {
         self.viewModel = viewModel
+        self.layoutMode = layoutMode
         self.onSelectionChange = onSelectionChange
         self.onPDFViewReady = onPDFViewReady
         self.onTap = onTap
@@ -63,6 +73,15 @@ public struct PDFReaderView: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
+        #if targetEnvironment(macCatalyst)
+        // Phase 30 — Mac uses the two-mode layout system (Mode A single
+        // fit-to-width vertical scroll; Mode B two-up spread). CRITICAL:
+        // Mac NEVER calls usePageViewController — it forces single-page
+        // continuous and ignores displayMode (RESEARCH Pitfall 1/7), which
+        // both breaks fit-to-width and prevents `.twoUp` from rendering.
+        configureMacLayout(pdfView, mode: layoutMode)
+        #else
+        // iOS path — UNCHANGED, byte-identical to the prior block.
         // MUST be first: switches PDFView's internal scroller to a UIPageViewController.
         pdfView.usePageViewController(true, withViewOptions: nil)
         pdfView.displayMode = .singlePage
@@ -70,6 +89,7 @@ public struct PDFReaderView: UIViewRepresentable {
         pdfView.autoScales = true
         pdfView.minScaleFactor = 0.5
         pdfView.maxScaleFactor = 4.0
+        #endif
         pdfView.backgroundColor = .clear
         pdfView.delegate = context.coordinator
         NotificationCenter.default.addObserver(
@@ -107,6 +127,30 @@ public struct PDFReaderView: UIViewRepresentable {
         return pdfView
     }
 
+    #if targetEnvironment(macCatalyst)
+    /// Mac-only per-mode `PDFView` configuration. NEVER calls
+    /// `usePageViewController` (RESEARCH Pitfall 1/7: it ignores
+    /// `displayMode` and disables fit). Mode A = single fit-to-width with
+    /// vertical scrolling; Mode B = two-up height-fit spread.
+    private func configureMacLayout(_ pdfView: PDFView, mode: PDFReaderLayoutMode) {
+        switch mode {
+        case .singleFitWidth:
+            pdfView.displayMode = .singlePageContinuous
+            pdfView.displayDirection = .vertical
+            pdfView.autoScales = true
+            pdfView.minScaleFactor = pdfView.scaleFactorForSizeToFit
+            pdfView.maxScaleFactor = 4.0
+        case .twoUpSpread:
+            pdfView.displayMode = .twoUp
+            pdfView.displaysAsBook = true
+            pdfView.displayDirection = .horizontal
+            pdfView.autoScales = true
+            pdfView.minScaleFactor = pdfView.scaleFactorForSizeToFit
+            pdfView.maxScaleFactor = 4.0
+        }
+    }
+    #endif
+
     public func updateUIView(_ uiView: PDFView, context: Context) {
         // Keep the coordinator's closure reference in sync with SwiftUI
         // state diffing — the parent may pass a new closure across re-renders.
@@ -124,6 +168,29 @@ public struct PDFReaderView: UIViewRepresentable {
             uiView.go(to: target)
         }
         uiView.backgroundColor = themeBackground(viewModel.theme)
+
+        #if targetEnvironment(macCatalyst)
+        // Re-apply layout if the resolved mode changed across a re-render
+        // (live resize / full-screen). `appliedLayoutMode` starts nil so the
+        // first updateUIView after makeUIView re-asserts the mode once and
+        // re-seeks to the model's page (RESEARCH Pitfall 8: a display-mode
+        // change can reset the visible page to 1).
+        if context.coordinator.appliedLayoutMode != layoutMode {
+            configureMacLayout(uiView, mode: layoutMode)
+            context.coordinator.appliedLayoutMode = layoutMode
+            if let doc = viewModel.document {
+                let landingIndex: Int = (layoutMode == .twoUpSpread)
+                    ? PDFReaderLayoutResolver.spreadLeftPage(
+                        forPageIndex: viewModel.pageIndex,
+                        displaysAsBook: uiView.displaysAsBook
+                    )
+                    : viewModel.pageIndex
+                if let target = doc.page(at: landingIndex) {
+                    uiView.go(to: target)
+                }
+            }
+        }
+        #endif
     }
 
     private func themeBackground(_ theme: ReaderTheme) -> UIColor {
@@ -139,6 +206,11 @@ public struct PDFReaderView: UIViewRepresentable {
         let viewModel: PDFReaderViewModel
         var onSelectionChange: (PDFSelection?) -> Void
         var onTap: (CGPoint) -> Void
+        /// Phase 30 — last Mac layout mode applied to the live `PDFView`.
+        /// Starts nil so the first `updateUIView` asserts the resolved mode
+        /// once; thereafter only a live-resize mode change re-triggers the
+        /// reconfigure + re-seek. Harmless on iOS (never read there).
+        var appliedLayoutMode: PDFReaderLayoutMode?
 
         init(
             viewModel: PDFReaderViewModel,
