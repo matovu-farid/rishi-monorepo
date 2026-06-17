@@ -83,6 +83,9 @@ struct EPUBReaderDestination: View {
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph
         )
+        // TTS errors surface as a native alert (not gated to showControls) so
+        // they reach the user even when the control bar is hidden.
+        .ttsErrorAlert(state: services.ttsState)
         .task {
             // Stop read-aloud on user-initiated chapter navigation (Bug-4 complement:
             // cross-chapter continuation is handled inside ReadAloudController.startEPUB;

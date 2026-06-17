@@ -39,6 +39,31 @@ struct ReadAloudControlsViewTests {
         #expect(state.error == "Network down")
     }
 
+    @MainActor
+    @Test("TTSFailureAlert.clear resets error and moves status off .error")
+    func ttsErrorAlertClear() {
+        let state = TTSPlaybackState()
+        state.status = .error
+        state.error = "Network down"
+
+        TTSFailureAlert.clear(state)
+
+        #expect(state.error == nil)
+        #expect(state.status != .error)
+    }
+
+    @MainActor
+    @Test("TTSFailureAlert.message falls back when state.error is nil")
+    func ttsErrorAlertMessageFallback() {
+        let state = TTSPlaybackState()
+        state.status = .error
+        state.error = nil
+        #expect(TTSFailureAlert.message(for: state) == TTSFailureAlert.defaultMessage)
+
+        state.error = "Network down"
+        #expect(TTSFailureAlert.message(for: state) == "Network down")
+    }
+
     @Test("VoiceCatalog.all is the 6 OpenAI voice ids")
     func voiceCatalog() {
         #expect(VoiceCatalog.all == ["alloy", "echo", "fable", "onyx", "nova", "shimmer"])

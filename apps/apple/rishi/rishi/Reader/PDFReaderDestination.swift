@@ -90,6 +90,9 @@ struct PDFReaderDestination: View {
             // VM preserves reading position.
             pdfViewMode: services.readerDefaults.pdfViewMode
         )
+        // TTS errors surface as a native alert (not gated to showControls) so
+        // they reach the user even when the control bar is hidden.
+        .ttsErrorAlert(state: services.ttsState)
         .task {
             syncBinding = PDFReaderPositionSyncBinding(
                 viewModel: vm,

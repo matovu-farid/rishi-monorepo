@@ -37,76 +37,123 @@ public struct ReadAloudControlsView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: RishiSpacing.m) {
-            statusLabel
+        HStack(spacing: RishiSpacing.s) {
+            // Centered transport cluster; the play/pause button is the larger
+            // central anchor. Reading order: prev · repeat · play/pause · stop ·
+            // next. Spacers either side keep the cluster centered while the
+            // settings button sits at the trailing edge.
+            Spacer(minLength: 0)
 
-            HStack(spacing: RishiSpacing.s) {
-                Button(action: onPlayPause) {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.accent)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityIdentifier(isPlaying ? "tts-pause" : "tts-play")
-                .accessibilityLabel(isPlaying ? "Pause" : "Play")
-                .disabled(state.status == .loading)
+            transportCluster
 
-                Button(action: onStop) {
-                    Image(systemName: "stop.fill")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityIdentifier("tts-stop")
-                .accessibilityLabel("Stop")
-                .disabled(state.status == .idle || state.status == .stopped)
+            Spacer(minLength: 0)
 
-                Button(action: onPreviousParagraph) {
-                    Image(systemName: "backward.end.fill")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityIdentifier("tts-prev-paragraph")
-                .accessibilityLabel("Previous paragraph")
-                .disabled(navigationDisabled)
-
-                Button(action: onRepeatParagraph) {
-                    Image(systemName: "repeat")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityIdentifier("tts-repeat-paragraph")
-                .accessibilityLabel("Repeat paragraph")
-                .disabled(navigationDisabled)
-
-                Button(action: onNextParagraph) {
-                    Image(systemName: "forward.end.fill")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityIdentifier("tts-next-paragraph")
-                .accessibilityLabel("Next paragraph")
-                .disabled(navigationDisabled)
-
-                Spacer()
-
-                Button(action: onOpenPicker) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.accent)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityIdentifier("tts-open-picker")
-                .accessibilityLabel("Voice and Speed")
+            Button(action: onOpenPicker) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(RishiTypography.titleM)
+                    .foregroundStyle(RishiColor.accent)
+                    .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier("tts-open-picker")
+            .accessibilityLabel("Voice and Speed")
         }
         .padding(RishiSpacing.l)
         // No opaque fill here: the host (RootView) supplies the card surface —
         // an iOS 26 Liquid Glass effect, or `.regularMaterial` on iOS 18 — so
         // the panel reads as a translucent floating control over the page.
+    }
+
+    @ViewBuilder
+    private var transportCluster: some View {
+        let cluster = HStack(spacing: RishiSpacing.s) {
+            secondaryButton(
+                systemName: "backward.end.fill",
+                id: "tts-prev-paragraph",
+                label: "Previous paragraph",
+                action: onPreviousParagraph,
+                disabled: navigationDisabled
+            )
+
+            secondaryButton(
+                systemName: "repeat",
+                id: "tts-repeat-paragraph",
+                label: "Repeat paragraph",
+                action: onRepeatParagraph,
+                disabled: navigationDisabled
+            )
+
+            playPauseButton
+
+            secondaryButton(
+                systemName: "stop.fill",
+                id: "tts-stop",
+                label: "Stop",
+                action: onStop,
+                disabled: state.status == .idle || state.status == .stopped
+            )
+
+            secondaryButton(
+                systemName: "forward.end.fill",
+                id: "tts-next-paragraph",
+                label: "Next paragraph",
+                action: onNextParagraph,
+                disabled: navigationDisabled
+            )
+        }
+
+        // iOS 26 blends/morphs the prominent play/pause glass against the
+        // surrounding glyphs when they share a container. iOS 18 just renders
+        // the plain HStack.
+        if #available(iOS 26.0, macOS 26.0, *) {
+            GlassEffectContainer { cluster }
+        } else {
+            cluster
+        }
+    }
+
+    @ViewBuilder
+    private var playPauseButton: some View {
+        Button(action: onPlayPause) {
+            playPauseBody
+                .frame(width: 56, height: 56)
+        }
+        .accessibilityIdentifier(isPlaying ? "tts-pause" : "tts-play")
+        .accessibilityLabel(isPlaying ? "Pause" : "Play")
+        .disabled(state.status == .loading)
+        .modifier(PrimaryGlassButtonStyle())
+    }
+
+    @ViewBuilder
+    private var playPauseBody: some View {
+        if state.status == .loading {
+            // Loading keeps the `tts-play` identifier (set above) and stays
+            // disabled; only the visual swaps to a spinner. XCUITests rely on
+            // this exact toggle.
+            ProgressView()
+        } else {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                .font(RishiTypography.titleL)
+                .foregroundStyle(RishiColor.accent)
+        }
+    }
+
+    @ViewBuilder
+    private func secondaryButton(
+        systemName: String,
+        id: String,
+        label: String,
+        action: @escaping () -> Void,
+        disabled: Bool
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(RishiTypography.titleM)
+                .foregroundStyle(RishiColor.textSecondary)
+                .frame(width: 44, height: 44)
+        }
+        .accessibilityIdentifier(id)
+        .accessibilityLabel(label)
+        .disabled(disabled)
     }
 
     private var isPlaying: Bool { state.status == .playing }
@@ -115,39 +162,18 @@ public struct ReadAloudControlsView: View {
     private var navigationDisabled: Bool {
         state.status == .idle || state.status == .stopped
     }
+}
 
-    @ViewBuilder
-    private var statusLabel: some View {
-        statusText
-            // UI tests read this label's value ("Playing" / "Loading…" /
-            // "Ready" / "Paused" / error) to assert playback state. The
-            // visible text is unchanged — only an identifier is added.
-            .accessibilityIdentifier("tts-status")
-    }
-
-    @ViewBuilder
-    private var statusText: some View {
-        switch state.status {
-        case .idle, .stopped:
-            Text("Ready")
-                .font(RishiTypography.caption)
-                .foregroundStyle(RishiColor.textSecondary)
-        case .loading:
-            Text("Loading…")
-                .font(RishiTypography.caption)
-                .foregroundStyle(RishiColor.textSecondary)
-        case .playing:
-            Text("Playing")
-                .font(RishiTypography.bodyEmphasized)
-                .foregroundStyle(RishiColor.textPrimary)
-        case .paused:
-            Text("Paused")
-                .font(RishiTypography.body)
-                .foregroundStyle(RishiColor.textSecondary)
-        case .error:
-            Text(state.error ?? "Error")
-                .font(RishiTypography.caption)
-                .foregroundStyle(RishiColor.danger)
+/// Prominent native Liquid Glass treatment for the central play/pause button on
+/// iOS 26; iOS 18 keeps the plain accent glyph the button body already renders.
+/// Kept separate so the gating lives in one place and secondary buttons stay
+/// plain glyphs over the card glass (no glass-on-glass nesting).
+private struct PrimaryGlassButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            content
         }
     }
 }
