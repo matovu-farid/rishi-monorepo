@@ -2,17 +2,6 @@ import Foundation
 import RealtimeAPI
 import RishiLogging
 
-// WebRTC's `RTCAudioSession` (LiveKit-prefixed `LKRTCAudioSession`) wraps
-// `AVAudioSession` and exists ONLY on iOS / macCatalyst — the macOS slice of
-// the LiveKitWebRTC xcframework ships neither the header nor the class. Plain
-// macOS voice chat is not a shipping path (the app targets iPhone), so gate the
-// manual-audio control to the platforms where the symbol is real. Without this
-// guard `swift build` on a macOS host (which picks the macos-* slice) fails
-// with "cannot find 'LKRTCAudioSession' in scope".
-#if !os(macOS) || targetEnvironment(macCatalyst)
-import LiveKitWebRTC
-#endif
-
 /// Production impl of `RealtimeClientAPI` backed by `swift-realtime-openai`'s
 /// `Conversation` type.
 ///
@@ -23,15 +12,20 @@ import LiveKitWebRTC
 /// from off-main contexts; the stored value is only read on `@MainActor` and
 /// reset under the lock during disconnect.
 ///
+/// SRP decomposition (plan 34-13): the adapter is now a thin `RealtimeClientAPI`
+/// conformer that holds the `Conversation` + stream continuations under the lock
+/// and delegates to four INTERNAL collaborators it constructs itself (so the
+/// public `init()` signature is unchanged and AppDependencies is untouched):
+///   - `WebRTCAudioUnitController` — process-global WebRTC audio-unit control.
+///   - `RealtimeSessionConfigBuilder` — OpenAI session/audio config.
+///   - `RealtimeEventPump` — the three SDK→stream polling loops + dedupe.
+///   - `RealtimeToolCallDispatcher` — tool-call readiness + result encoding.
+///
 /// Transcript pump path (per Plan 10-02 note): the pinned SDK exposes finalized
 /// transcripts via `Conversation.entries: [Item]` where `case .message(Item.Message)`
 /// carries `[Item.Message.Content]` whose `.text` accessor unifies text +
-/// audio-transcript content. The adapter snapshots `entries.count` between
-/// SDK ticks and emits a transcript event for each NEW entry. If a future
-/// iteration of the SDK switches finalized transcripts back into the
-/// `events` stream (`response.audio_transcript.done`, etc.), the snapshot
-/// path stays correct because `entries` is the source of truth that the
-/// SDK's own `event-handler` writes into.
+/// audio-transcript content. The pump snapshots `entries.count` between
+/// SDK ticks and emits a transcript event for each NEW entry.
 public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     private let lock = NSLock()
@@ -44,69 +38,51 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
     private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
 
-    // `internal` (not `private`) so the white-box teardown test can assign
-    // sentinel pumps and assert they are cancelled + niled, mirroring how
-    // `isArgumentsReady` is `internal` for `@testable` tests.
-    internal var errorPump: Task<Void, Never>?
-    internal var transcriptPump: Task<Void, Never>?
-    internal var toolCallPump: Task<Void, Never>?
-
-    /// Tool-call dedupe: tracks which `callId`s have already been emitted to
-    /// the tool-call stream this connection. Cleared on `disconnect()`.
-    /// Lock-guarded (mutated from the toolCallPump task).
-    private var emittedCallIds: Set<String> = []
+    // Internal collaborators — constructed here so the public `init()` is
+    // unchanged. `let` (stateless / handle-holding); behavior identical.
+    private let audioUnit = WebRTCAudioUnitController()
+    private let configBuilder = RealtimeSessionConfigBuilder()
+    private let toolDispatcher = RealtimeToolCallDispatcher()
+    private let pump = RealtimeEventPump()
 
     public init() {}
 
-    /// One-time, process-global enable of WebRTC's MANUAL audio mode.
-    ///
-    /// WebRTC's audio I/O unit lives in the process-global `LKRTCAudioSession`
-    /// singleton (the LiveKit-prefixed `RTCAudioSession`). In WebRTC's default
-    /// AUTOMATIC mode the VoIP audio unit is initialized once when the first
-    /// peer's audio track is ready; when session 1's peer closes WebRTC tears
-    /// the unit down, and session 2's fresh peer does NOT re-initialize it —
-    /// so session 2 reaches `.live` with dead mic + playout (user speaks, no
-    /// reply). Switching to MANUAL mode hands us deterministic control: WebRTC
-    /// will only (re)initialize the audio unit when we flip `isAudioEnabled`
-    /// true, which we do on every `connect()` (and false on full `disconnect()`).
-    ///
-    /// `useManualAudio` is a plain settable `BOOL` property; per the header it
-    /// does NOT require `lockForConfiguration` (that lock guards only
-    /// `setConfiguration:`/`setActive:`). A `static let` runs its initializer
-    /// exactly once and is thread-safe, giving the idempotent one-time set.
-    private static let _enableManualAudioOnce: Void = {
-        #if !os(macOS) || targetEnvironment(macCatalyst)
-        LKRTCAudioSession.sharedInstance().useManualAudio = true
-        #endif
-    }()
+    // MARK: - White-box test seams (preserved)
+    //
+    // These forward to the pump / config builder / dispatcher so the existing
+    // `@testable` tests (`RealtimeAPIAdapterTeardownTests`,
+    // `RealtimeAPIAdapterAudioFormatTests`, `RealtimeAPIAdapterToolCallTests`)
+    // keep pointing at the same symbols after the decomposition.
 
-    /// PCM 24kHz audio format used for BOTH input and output.
-    ///
-    /// The OpenAI Realtime API requires the MIME-style type `"audio/pcm"`; a
-    /// bare `"pcm"` is rejected at session-update time ("Invalid value: 'pcm'.
-    /// Supported values are: 'audio/pcm', 'audio/pcmu', and 'audio/pcma'."),
-    /// which leaves the session non-functional and triggers an endless
-    /// reconnect loop. `Session.AudioFormat` has only an internal memberwise
-    /// init, so we round-trip JSON to build it from outside the SDK module.
-    /// `internal` (not `private`) for white-box testing.
-    static func makePCM24kFormat() -> Session.AudioFormat {
-        let data = try! JSONSerialization.data(withJSONObject: [
-            "rate": 24000,
-            "type": "audio/pcm",
-        ])
-        return try! JSONDecoder().decode(Session.AudioFormat.self, from: data)
+    /// Test seam: the error pump handle now lives on `RealtimeEventPump`.
+    internal var errorPump: Task<Void, Never>? {
+        get { pump.errorPump }
+        set { pump.errorPump = newValue }
+    }
+    /// Test seam: the transcript pump handle now lives on `RealtimeEventPump`.
+    internal var transcriptPump: Task<Void, Never>? {
+        get { pump.transcriptPump }
+        set { pump.transcriptPump = newValue }
+    }
+    /// Test seam: the tool-call pump handle now lives on `RealtimeEventPump`.
+    internal var toolCallPump: Task<Void, Never>? {
+        get { pump.toolCallPump }
+        set { pump.toolCallPump = newValue }
     }
 
-    /// OpenAI server-side input noise reduction, on top of the device-side
-    /// WebRTC/AVAudioSession processing. near-field suits a held phone or a
-    /// headset (mobile); far-field suits a laptop/desktop built-in mic used
-    /// hands-free.
+    /// Test seam: PCM 24kHz format (delegates to the config builder).
+    static func makePCM24kFormat() -> Session.AudioFormat {
+        RealtimeSessionConfigBuilder.makePCM24kFormat()
+    }
+
+    /// Test seam: per-platform input noise reduction (delegates to the builder).
     static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
-        #if targetEnvironment(macCatalyst) || os(macOS)
-        return .farField
-        #else
-        return .nearField
-        #endif
+        RealtimeSessionConfigBuilder.inputNoiseReduction
+    }
+
+    /// Test seam: tool-call readiness gate (delegates to the dispatcher).
+    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
+        toolDispatcher.isArgumentsReady(fc: fc)
     }
 
     // MARK: - RealtimeClientAPI
@@ -115,39 +91,19 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // Single-peer invariant: opening a new peer always closes the old one
         // first. On RECONNECT the session re-calls `connect()` WITHOUT a
         // preceding `disconnect()` (so transcript/tool/error streams stay
-        // alive). Without this teardown, the prior `startPumps` Tasks keep
-        // polling the OLD `Conversation`, retaining its WebRTC peer + audio —
-        // producing two concurrent voices. Tearing down here cancels those
-        // pumps and drops the old `Conversation` so its `deinit` closes the
-        // peer, without touching the stream continuations.
+        // alive). Without this teardown, the prior pump Tasks keep polling the
+        // OLD `Conversation`, retaining its WebRTC peer + audio — producing two
+        // concurrent voices. Tearing down here cancels those pumps and drops the
+        // old `Conversation` so its `deinit` closes the peer, without touching
+        // the stream continuations.
         // Ensure WebRTC manual-audio mode is on exactly once (process-global,
-        // idempotent), BEFORE any WebRTC audio init. See `_enableManualAudioOnce`.
-        _ = Self._enableManualAudioOnce
+        // idempotent), BEFORE any WebRTC audio init.
+        audioUnit.enableManualModeOnce()
         await teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info)
         let convo = await MainActor.run { () -> Conversation in
-            Conversation(debug: false) { session in
-                // Voice + VAD parity with electron / Spike B (INTEGRATIONS.md:44):
-                // server VAD threshold 0.7, silence 700ms, prefix padding 300ms,
-                // voice=alloy, PCM 24kHz.
-                //
-                let pcm24k = RealtimeAPIAdapter.makePCM24kFormat()
-                let input = Session.Audio.Input(
-                    format: pcm24k,
-                    noiseReduction: RealtimeAPIAdapter.inputNoiseReduction,
-                    transcription: nil,
-                    turnDetection: .serverVad(
-                        prefixPaddingMs: 300,
-                        silenceDurationMs: 700,
-                        threshold: 0.7
-                    )
-                )
-                let output = Session.Audio.Output(
-                    voice: .alloy,
-                    speed: 1.0,
-                    format: pcm24k
-                )
-                session.audio = Session.Audio(input: input, output: output)
+            Conversation(debug: false) { [configBuilder] session in
+                session.audio = configBuilder.makeSessionAudio()
             }
         }
         lock.withLock { self.conversation = convo }
@@ -159,8 +115,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // would make the session's status observer read `.disconnected`, treat
         // it as a lost connection, and reconnect — spawning a second overlapping
         // peer (the "two voices" echo) in an endless loop. Wait for the channel
-        // to actually open so "connected" is honest (matches the contract the
-        // FakeRealtimeClient encodes and the SDK's own `waitForConnection()`).
+        // to actually open so "connected" is honest.
         try await Self.waitUntilConnected { [convo] in
             await MainActor.run {
                 if case .connected = convo.status { return true }
@@ -170,14 +125,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         Log.event("voice.adapter.connected", level: .info)
         // Permit WebRTC to (re)initialize the VoIP audio unit now that the peer
         // is connected. In manual mode this is what actually starts mic capture
-        // + playout — and it re-runs on EVERY connect, fixing the dead-audio on
-        // session 2+ where the auto-mode unit had been torn down and never
-        // re-created. The AVAudioSession is already active here (the session
+        // + playout — and it re-runs on EVERY connect, fixing dead-audio on
+        // session 2+. The AVAudioSession is already active here (the session
         // calls coordinator.requestActiveMode(.voice) before client.connect()).
-        #if !os(macOS) || targetEnvironment(macCatalyst)
-        LKRTCAudioSession.sharedInstance().isAudioEnabled = true
-        Log.event("voice.audio.unit.enabled", level: .info, data: ["enabled": "true"])
-        #endif
+        audioUnit.enableAudioUnit()
         startPumps(for: convo)
     }
 
@@ -216,9 +167,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// `Conversation.disconnect()` (cancel task + close peer + finish streams)
     /// on the main actor before niling.
     internal func teardownActiveConversation() async {
-        errorPump?.cancel(); errorPump = nil
-        transcriptPump?.cancel(); transcriptPump = nil
-        toolCallPump?.cancel(); toolCallPump = nil
+        pump.cancel()
         let convo: Conversation? = lock.withLock { self.conversation }
         if let convo {
             await MainActor.run { convo.disconnect() }
@@ -238,9 +187,9 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             let e = errorContinuation; errorContinuation = nil
             let t = transcriptContinuation; transcriptContinuation = nil
             let tc = toolCallContinuation; toolCallContinuation = nil
-            emittedCallIds.removeAll()
             return (e, t, tc)
         }
+        pump.reset()
         errCont?.finish()
         txCont?.finish()
         tcCont?.finish()
@@ -252,10 +201,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // kill a live reconnect. Only full disconnect() flips it false. The
         // AVAudioSession is still active here (the session calls
         // coordinator.releaseActiveMode(.voice) AFTER client.disconnect()).
-        #if !os(macOS) || targetEnvironment(macCatalyst)
-        LKRTCAudioSession.sharedInstance().isAudioEnabled = false
-        Log.event("voice.audio.unit.enabled", level: .info, data: ["enabled": "false"])
-        #endif
+        audioUnit.disableAudioUnit()
 
         Log.event("voice.adapter.disconnected", level: .info)
     }
@@ -300,149 +246,27 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
                 message: "Cannot send tool result: not connected"
             )
         }
-        let outputId = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        do {
-            try await MainActor.run {
-                try convo.send(result: Item.FunctionCallOutput(
-                    id: outputId,
-                    callId: callId,
-                    output: payload
-                ))
-                // The Realtime API does NOT auto-continue from a function
-                // output — server-VAD only auto-creates a response on user
-                // speech-stop. Without an explicit response.create here the
-                // model never speaks the answer and the turn hangs forever.
-                try convo.send(event: .createResponse())
-            }
-        } catch {
-            throw RealtimeClientError(
-                code: "send_failed",
-                message: String(describing: error)
-            )
-        }
-        Log.event("voice.tool.result.sent", level: .info, data: [
-            "callId": callId,
-            "payloadBytes": String(payload.utf8.count),
-        ])
-    }
-
-    // MARK: - Readiness gate (RESEARCH OQ-Q11-7)
-
-    /// Returns true when an inbound `Item.FunctionCall` is ready to dispatch.
-    /// The pinned SDK does NOT explicitly flip `status` to `.completed` when
-    /// `responseFunctionCallArgumentsDone` fires (verified by reading the SDK
-    /// at `~/Library/.../swift-realtime-openai/Sources/UI/Conversation.swift`).
-    /// We accept either signal: explicit `.completed` status OR `arguments`
-    /// parses as a valid JSON object.
-    ///
-    /// `internal` (not `public`) so the white-box test target can drive it
-    /// via `@testable import RishiVoice` without exposing it to consumers.
-    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
-        // Robust to SDK enum case-rename (no direct comparison to .completed
-        // because the SDK module is imported lazily by callers).
-        if String(describing: fc.status) == "completed" { return true }
-        guard let data = fc.arguments.data(using: .utf8) else { return false }
-        return (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
+        try await toolDispatcher.sendResult(callId: callId, payload: payload, on: convo)
     }
 
     // MARK: - Internal pumps
 
-    /// Forward the SDK's server errors + transcript entries into our streams.
-    /// Both pumps cancel on `disconnect()`.
+    /// Start the SDK→stream polling pumps for the connected `Conversation`.
+    /// Delegates to `RealtimeEventPump`, passing lock-guarded accessors so each
+    /// yield reads the adapter's CURRENT continuation under the adapter's lock —
+    /// identical to the prior inline pump code.
     private func startPumps(for convo: Conversation) {
-        // Error pump — direct forward from the SDK's AsyncStream<ServerError>.
-        // KEEP: nonisolated adapter actor; the explicit MainActor.run hops are
-        // required to read the SDK's @MainActor @Observable `convo.errors` /
-        // `convo.entries`. Pump loops run on the adapter's executor (off main).
-        errorPump = Task { [weak self] in
-            let errors = await MainActor.run { convo.errors }
-            for await error in errors {
-                guard let self else { return }
-                let mapped = RealtimeClientError(
-                    code: "server_error",
-                    message: String(describing: error)
-                )
-                let cont = self.lock.withLock { self.errorContinuation }
-                cont?.yield(mapped)
-                if Task.isCancelled { return }
+        pump.start(
+            for: convo,
+            errorContinuation: { [weak self] in
+                self?.lock.withLock { self?.errorContinuation }
+            },
+            transcriptContinuation: { [weak self] in
+                self?.lock.withLock { self?.transcriptContinuation }
+            },
+            toolCallContinuation: { [weak self] in
+                self?.lock.withLock { self?.toolCallContinuation }
             }
-        }
-
-        // Transcript pump — `entries` is `@MainActor` `@Observable`. The SDK
-        // doesn't surface a delta-stream, so we poll `entries.count` at ~5Hz
-        // and emit a transcript event for each new finalized message. This is
-        // the same shape Spike B used (1Hz status polling) — voice chat tail
-        // latency tolerates 200ms cadence.
-        // KEEP: transcript pump runs on the adapter actor's executor; the
-        // 200ms cadence + MainActor.run reads are intentional (Spike B pattern).
-        // Observation push refactor deferred to v1.1 ADR backlog (plan 19-12).
-        transcriptPump = Task { [weak self] in
-            var lastSeenIndex = 0
-            while !Task.isCancelled {
-                let snapshot: [Item] = await MainActor.run { convo.entries }
-                if snapshot.count > lastSeenIndex {
-                    for item in snapshot[lastSeenIndex..<snapshot.count] {
-                        guard case let .message(msg) = item else { continue }
-                        let role: TranscriptRole = (msg.role == .assistant)
-                            ? .assistant : .user
-                        // Concatenate all .text accessors across content parts.
-                        // `.text` unifies `.text`, `.inputText`, and
-                        // `.audio(_).transcript` — exactly the surface we need.
-                        let text = msg.content
-                            .compactMap { $0.text }
-                            .joined(separator: "")
-                        guard !text.isEmpty else { continue }
-                        let isFinal = (msg.status == .completed)
-                        let event = RealtimeTranscriptEvent(
-                            role: role,
-                            content: text,
-                            isFinal: isFinal
-                        )
-                        guard let self else { return }
-                        let cont = self.lock.withLock { self.transcriptContinuation }
-                        cont?.yield(event)
-                    }
-                    lastSeenIndex = snapshot.count
-                }
-                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-            }
-        }
-
-        // Tool-call pump — mirrors transcript pump shape but filters `entries`
-        // for `case .functionCall(let fc)`. Per RESEARCH Q3, the SDK ingests
-        // tool calls into `entries` via `conversationItemCreated` (which
-        // appends a not-yet-ready FunctionCall) then mutates the same slot via
-        // `responseFunctionCallArgumentsDelta` / `…Done`. We therefore re-scan
-        // the FULL entries array each tick (not just newly-appended items) so
-        // we catch status flips / argument completion on previously-seen
-        // entries. Per-call dedupe via `emittedCallIds` ensures we emit each
-        // call exactly once.
-        //
-        // Cost: O(entries) per tick; entries are bounded per session and the
-        // .functionCall guard short-circuits non-call items. 200ms cadence
-        // matches transcript pump — voice users tolerate the tail latency.
-        toolCallPump = Task { [weak self] in
-            while !Task.isCancelled {
-                let snapshot: [Item] = await MainActor.run { convo.entries }
-                for item in snapshot {
-                    guard case let .functionCall(fc) = item else { continue }
-                    guard let self else { return }
-                    let alreadyEmitted: Bool = self.lock.withLock {
-                        self.emittedCallIds.contains(fc.callId)
-                    }
-                    if alreadyEmitted { continue }
-                    guard self.isArgumentsReady(fc: fc) else { continue }
-                    self.lock.withLock { _ = self.emittedCallIds.insert(fc.callId) }
-                    let event = RealtimeToolCallEvent(
-                        callId: fc.callId,
-                        name: fc.name,
-                        argumentsJSON: fc.arguments
-                    )
-                    let cont = self.lock.withLock { self.toolCallContinuation }
-                    cont?.yield(event)
-                }
-                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-            }
-        }
+        )
     }
 }

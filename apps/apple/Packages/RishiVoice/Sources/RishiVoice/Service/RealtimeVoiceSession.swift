@@ -53,8 +53,12 @@ public actor RealtimeVoiceSession {
     /// Delay between confirming polls during `confirmDisconnect()`.
     private let confirmationInterval: Duration
 
-    private var reconnectTask: Task<Void, Never>?
-    private var statusObservationTask: Task<Void, Never>?
+    /// The reconnect engine (plan 34-13). Owns the 10Hz status poll, the
+    /// multi-sample disconnect debounce, and the backoff reconnect ladder.
+    /// Constructed lazily in `start()` (it needs `self` in its callbacks) so the
+    /// session's public `init` stays unchanged. The four reconnect knobs are
+    /// stored above and forwarded when the controller is built.
+    private var reconnect: ReconnectController?
     /// Responder consume() loop spawned at start when bookId is non-nil. Lives
     /// for the life of the session; cancelled in `end()` BEFORE `client.disconnect()`
     /// so any in-flight tool-call processing stops cleanly before the stream
@@ -198,16 +202,13 @@ public actor RealtimeVoiceSession {
         Log.event("voice.session.live", level: .info, data: [
             "bookId": bookId?.uuidString ?? "<none>",
         ])
-        startStatusObservation()
+        await reconnectController().startStatusObservation()
     }
 
     public func end() async {
         isEnding = true
         await update(.ending)
-        statusObservationTask?.cancel()
-        statusObservationTask = nil
-        reconnectTask?.cancel()
-        reconnectTask = nil
+        await reconnect?.cancel()
         // Phase 25 (Plan 25-10) — cancel the Responder BEFORE client.disconnect()
         // so any in-flight tool-call processing sees Task.isCancelled and
         // skips its sendToolResult. Disconnect would also finish the stream
@@ -222,79 +223,49 @@ public actor RealtimeVoiceSession {
 
     // MARK: - Reconnect
 
-    private func startStatusObservation() {
-        statusObservationTask?.cancel()
-        // KEEP: session is an actor; status poll runs on the actor's executor
-        // at 10Hz to detect reconnect-eligible disconnects. Observation push
-        // refactor deferred to v1.1 ADR backlog (plan 19-12) — Realtime SDK
-        // does not expose a status stream today.
-        statusObservationTask = Task { [weak self] in
-            guard let self else { return }
-            // Poll client status at 10Hz — Spike B confirmed status is a
-            // property, not a stream. Higher cadence keeps reconnect tests
-            // fast without affecting production behavior.
-            while !Task.isCancelled {
-                let status = await self.client.currentStatus()
-                if status == .disconnected, await self.confirmDisconnect() {
-                    await self.handleTransientDisconnect()
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(100))
+    /// Lazily build the `ReconnectController`, forwarding the four reconnect
+    /// knobs + wiring the callbacks back into this session's FSM. Built once and
+    /// reused — `startStatusObservation()` is idempotent (re-arms the poll).
+    private func reconnectController() -> ReconnectController {
+        if let reconnect { return reconnect }
+        let callbacks = ReconnectController.Callbacks(
+            isEnding: { [weak self] in await self?.readIsEnding() ?? true },
+            onReconnecting: { [weak self] attempt in
+                await self?.update(.reconnecting(attempt: attempt))
+            },
+            onReconnected: { [weak self] _ in
+                guard let self else { return }
+                await self.update(.live)
+                // Re-arm the status poll after a successful reconnect.
+                await self.reconnectController().startStatusObservation()
+            },
+            onExhausted: { [weak self] in
+                guard let self else { return }
+                // All reconnect attempts failed — release the audio session.
+                await self.coordinator.releaseActiveMode(.voice)
+                await self.fail(
+                    reason: .networkLost,
+                    message: "Reconnect exhausted after \(self.maxReconnects) attempts"
+                )
             }
-        }
+        )
+        let controller = ReconnectController(
+            client: client,
+            keyFetcher: keyFetcher,
+            backoff: backoff,
+            maxReconnects: maxReconnects,
+            disconnectConfirmations: disconnectConfirmations,
+            confirmationInterval: confirmationInterval,
+            callbacks: callbacks
+        )
+        reconnect = controller
+        return controller
     }
 
-    /// Re-polls the client status to confirm a `.disconnected` reading is a
-    /// real, sustained drop rather than a single transient sample. Returns
-    /// `true` only if every confirming poll ALSO reads `.disconnected`; a
-    /// single recovery to `.connected`/`.connecting` aborts (returns `false`)
-    /// so a healthy session is never torn down and reconnected. This is the
-    /// guard against "eager reconnect" — the realtime peer can momentarily
-    /// report disconnected without the session actually being lost.
-    private func confirmDisconnect() async -> Bool {
-        for _ in 0..<disconnectConfirmations {
-            if isEnding { return false }
-            try? await Task.sleep(for: confirmationInterval)
-            if isEnding { return false }
-            if await client.currentStatus() != .disconnected { return false }
-        }
-        return true
-    }
-
-    private func handleTransientDisconnect() async {
-        // If end() is already in flight, ignore the disconnect — the
-        // explicit teardown owns the termination path.
-        if isEnding { return }
-        Log.event("voice.session.disconnect.transient", level: .warning)
-        for attempt in 1...maxReconnects {
-            if isEnding { return }
-            await update(.reconnecting(attempt: attempt))
-            try? await Task.sleep(for: backoff(attempt))
-            if isEnding { return }
-            // Refresh the ephemeral key — secrets are short-lived. If the
-            // key fetch fails on reconnect, count it as a failed attempt.
-            let newKey: EphemeralKey
-            do {
-                newKey = try await keyFetcher.fetch(language: "en")
-            } catch {
-                continue
-            }
-            do {
-                try await client.connect(ephemeralKey: newKey.secret)
-                await update(.live)
-                startStatusObservation()
-                Log.event("voice.session.reconnected", level: .info, data: [
-                    "attempt": String(attempt),
-                ])
-                return
-            } catch {
-                continue
-            }
-        }
-        // All reconnect attempts failed — release the audio session.
-        await coordinator.releaseActiveMode(.voice)
-        await fail(reason: .networkLost, message: "Reconnect exhausted after \(maxReconnects) attempts")
-    }
+    /// Probe for the `isEnding` race guard, read on the session actor so the
+    /// `ReconnectController` (a separate actor) never touches the FSM flag
+    /// directly. Returns `true` if the session is gone (treat as ending).
+    private func readIsEnding() -> Bool { isEnding }
 
     // MARK: - Helpers
 
