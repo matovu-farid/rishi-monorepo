@@ -750,59 +750,6 @@ public struct EPUBReaderScreen: View {
 }
 
 #if canImport(UIKit)
-/// In-memory fallback used by the typography + theme pickers when no
-/// `ReaderSettingsStore` is injected (previews / tests). Writes are
-/// no-ops; reads always return `.default`. Mirrors the same fallback in
-/// `PDFReaderScreen` (kept fileprivate per file so swapping wiring in
-/// `AppDependencies` doesn't accidentally leak into production code paths).
-private final class EphemeralReaderSettingsStore: ReaderSettingsStore, Sendable {
-    func theme(for bookId: BookID) async -> ReaderTheme { .default }
-    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
-    func typography(for bookId: BookID) async -> ReaderTypography { .default }
-    func setTypography(_ typography: ReaderTypography, for bookId: BookID) async { /* no-op */ }
-}
-#endif
-
-#if !canImport(UIKit)
-/// Compile-only `AccessibilityProviding` for the macOS dev-host branch.
-/// See `PDFReaderScreen.swift` for rationale.
-@MainActor
-private final class PreviewAccessibility: AccessibilityProviding {
-    var isVoiceOverRunning: Bool { false }
-}
-#endif
-
-/// Phase 21 Plan 21-03 — native SwiftUI overlay shown while the reader
-/// view-model's `load()` is still resolving the publication. Uses stock
-/// `ProgressView` per the Phase 18 native-UI rule; the book title is
-/// the only customisation. SwiftUI gates the spinner on Reduce Motion
-/// automatically — no manual handling required. File-private mirror of
-/// the same struct in `PDFReaderScreen.swift` — both screens own their
-/// own copy so each remains a single self-contained file.
-private struct ReaderColdOpenOverlay: View {
-    let bookTitle: String
-    var body: some View {
-        ZStack {
-            RishiColor.background.opacity(0.95).ignoresSafeArea()
-            VStack(spacing: RishiSpacing.m) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .scaleEffect(1.2)
-                Text("Opening \(bookTitle)")
-                    .font(RishiTypography.bodyEmphasized)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, RishiSpacing.l)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Opening \(bookTitle)")
-    }
-}
-
-#if canImport(UIKit)
 /// In-flight selection awaiting a color pick. `Identifiable` so SwiftUI
 /// `.overlay` / `.sheet` can identify it.
 struct SelectionContext: Identifiable {

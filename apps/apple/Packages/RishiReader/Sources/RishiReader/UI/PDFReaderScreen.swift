@@ -835,53 +835,6 @@ extension PDFView {
 }
 #endif
 
-/// In-memory fallback used by the theme picker when no `ReaderSettingsStore`
-/// is injected (previews / tests). Writes are no-ops; reads always return
-/// `.default`. Keeps the picker's contract trivially satisfiable without
-/// dragging UserDefaults into preview environments.
-private final class EphemeralReaderSettingsStore: ReaderSettingsStore, Sendable {
-    func theme(for bookId: BookID) async -> ReaderTheme { .default }
-    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
-}
-
-#if !canImport(UIKit)
-/// Compile-only `AccessibilityProviding` for the non-UIKit (macOS dev host)
-/// branch. `UIAccessibility` is unavailable outside iOS / Catalyst so we
-/// hand back a fixed `false` — preview content never has VoiceOver running.
-@MainActor
-private final class PreviewAccessibility: AccessibilityProviding {
-    var isVoiceOverRunning: Bool { false }
-}
-#endif
-
-/// Phase 21 Plan 21-03 — native SwiftUI overlay shown while the reader
-/// view-model's `load()` is still resolving the document. Uses stock
-/// `ProgressView` per the Phase 18 native-UI rule; the book title is
-/// the only customisation. SwiftUI gates the spinner on Reduce Motion
-/// automatically — no manual handling required.
-private struct ReaderColdOpenOverlay: View {
-    let bookTitle: String
-    var body: some View {
-        ZStack {
-            RishiColor.background.opacity(0.95).ignoresSafeArea()
-            VStack(spacing: RishiSpacing.m) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .scaleEffect(1.2)
-                Text("Opening \(bookTitle)")
-                    .font(RishiTypography.bodyEmphasized)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, RishiSpacing.l)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Opening \(bookTitle)")
-    }
-}
-
 private actor PDFPreviewPositionStore: PositionStore {
     func position(for bookId: BookID) async throws -> Position? { nil }
     func upsert(_ position: Position) async throws { }
