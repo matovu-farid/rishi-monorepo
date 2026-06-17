@@ -4,6 +4,17 @@ import RishiCore
 import RishiTesting
 @testable import RishiLibrary
 
+/// Test-only `MetadataExtractor` that returns fixed metadata regardless of the
+/// source file — lets us drive the deterministic-id path from distinct fixtures.
+private struct StubMetadataExtractor: MetadataExtractor {
+    let title: String?
+    let author: String?
+
+    func extractMetadata(from fileURL: URL) async -> BookMetadata {
+        BookMetadata(title: title, author: author)
+    }
+}
+
 @Suite(.serialized)
 struct BookFileStorageTests {
 
@@ -145,6 +156,64 @@ struct BookFileStorageTests {
         #expect(!FileManager.default.fileExists(atPath: absoluteFileURL.path))
         let stored = try await store.book(book.id)
         #expect(stored == nil)
+    }
+
+    /// Core dedup guarantee: two source files with the SAME embedded
+    /// title+author+format but DIFFERENT filenames must produce the SAME
+    /// `Book.id` so they collapse to one library entry after sync upsert.
+    @Test
+    func importSameMetadataDifferentFilenames_yieldsEqualBookIds() async throws {
+        let root = makeTempRoot("dedup-id")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("dedup-id-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+
+        let srcA = srcDir.appendingPathComponent("alice_v1.pdf")
+        let srcB = srcDir.appendingPathComponent("9876543_alice.pdf")
+        try FixtureBuilders.writeTinyPDF(to: srcA)
+        try FixtureBuilders.writeTinyPDF(to: srcB)
+
+        let store = InMemoryBookStore()
+        let storage = BookFileStorage(
+            rootURL: root,
+            bookStore: store,
+            coverExtractors: [:],
+            metadataExtractors: [
+                "pdf": StubMetadataExtractor(title: "Alice in Wonderland", author: "Lewis Carroll")
+            ]
+        )
+
+        let userId = UUID()
+        let bookA = try await storage.importBook(from: srcA, ownerId: userId)
+        let bookB = try await storage.importBook(from: srcB, ownerId: userId)
+
+        #expect(bookA.id == bookB.id)
+    }
+
+    /// A book with NO embedded title falls back to a random UUID id — import
+    /// must still succeed and produce a usable (non-nil) row.
+    @Test
+    func importWithNoEmbeddedTitle_fallsBackToRandomIdAndSucceeds() async throws {
+        let root = makeTempRoot("no-title-fallback")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("no-title-fallback-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let srcPDF = srcDir.appendingPathComponent("untitled.pdf")
+        try FixtureBuilders.writeTinyPDF(to: srcPDF)
+
+        let store = InMemoryBookStore()
+        let storage = BookFileStorage(
+            rootURL: root,
+            bookStore: store,
+            coverExtractors: [:],
+            metadataExtractors: [
+                "pdf": StubMetadataExtractor(title: nil, author: nil)
+            ]
+        )
+
+        let book = try await storage.importBook(from: srcPDF, ownerId: UUID())
+        let stored = try await store.book(book.id)
+        #expect(stored?.id == book.id)
     }
 
     @Test

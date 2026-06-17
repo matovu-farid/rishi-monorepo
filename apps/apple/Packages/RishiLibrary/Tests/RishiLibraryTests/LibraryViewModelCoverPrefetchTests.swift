@@ -100,7 +100,8 @@ struct LibraryViewModelCoverPrefetchTests {
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { userId }
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
 
@@ -128,7 +129,8 @@ struct LibraryViewModelCoverPrefetchTests {
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { userId }
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
 
@@ -145,7 +147,8 @@ struct LibraryViewModelCoverPrefetchTests {
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { nil }
+            currentUserId: { nil },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { nil })
         )
         await vm.refresh()
         #expect(vm.coverURLs.isEmpty)
@@ -170,7 +173,8 @@ struct LibraryViewModelCoverPrefetchTests {
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { userId }
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
 

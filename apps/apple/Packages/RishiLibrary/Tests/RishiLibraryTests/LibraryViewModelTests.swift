@@ -17,7 +17,8 @@ struct LibraryViewModelTests {
         let storage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
         let userId = UUID()
         let vm = LibraryViewModel(bookStore: bookStore, positionStore: positionStore,
-                                  storage: storage, currentUserId: { userId })
+                                  storage: storage, currentUserId: { userId },
+                                  importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId }))
         return (vm, bookStore, positionStore, userId, root)
     }
 
@@ -90,7 +91,8 @@ struct LibraryViewModelTests {
         let positionStore = InMemoryPositionStore()
         let storage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
         let vm = LibraryViewModel(bookStore: bookStore, positionStore: positionStore,
-                                  storage: storage, currentUserId: { nil })
+                                  storage: storage, currentUserId: { nil },
+                                  importCoordinator: ImportCoordinator(storage: storage, currentUserId: { nil }))
         await vm.refresh()
         #expect(vm.books.isEmpty)
         #expect(vm.readingNow.isEmpty)

@@ -30,4 +30,20 @@ final class SignedInViewModel {
     func requestSettings() { showSettings = true }
     func hint(_ book: Book) { bookHints[book.id] = book }
     func hint(for id: BookID) -> Book? { bookHints[id] }
+
+    /// Drives the initial library sync when the signed-in shell appears
+    /// (fresh sign-in, cold launch with an existing session, or account
+    /// switch). The sync engine's `runOnce()` is otherwise only triggered by
+    /// BGTask / silent push / manual "Sync Now", so without this a fresh
+    /// device would show an empty library until a background wave happened to
+    /// fire. Shows cached rows first (instant), pulls the remote library, then
+    /// re-reads the local store so freshly-synced books appear.
+    func performInitialLibrarySync(
+        refresh: () async -> Void,
+        sync: () async -> Void
+    ) async {
+        await refresh()
+        await sync()
+        await refresh()
+    }
 }

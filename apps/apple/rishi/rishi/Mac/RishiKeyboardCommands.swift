@@ -15,7 +15,7 @@ import Foundation
 /// Centralised Cmd-key chord table. Adding a new shortcut here once keeps
 /// the menu bar, in-app toolbars, and unit tests aligned.
 enum RishiKeyboardShortcut {
-    case importBook        // ⌘O
+    case importBook        // ⌘I (NOT ⌘O: collides with the system File > Open)
     case find              // ⌘F
     case fontIncrease      // ⌘+
     case fontDecrease      // ⌘-
@@ -24,7 +24,7 @@ enum RishiKeyboardShortcut {
 
     var key: KeyEquivalent {
         switch self {
-        case .importBook:   return "o"
+        case .importBook:   return "i"
         case .find:         return "f"
         case .fontIncrease: return "+"
         case .fontDecrease: return "-"

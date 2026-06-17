@@ -82,28 +82,43 @@ public actor BookFileStorage {
             throw StorageError.unsupportedFormat(ext: ext)
         }
 
-        let bookId = UUID()
+        // Best-effort metadata extraction (never throws). The fields default
+        // to "filename-derived title + nil author"; whenever the embedded
+        // metadata is present and non-empty it overrides the filename. This
+        // is what makes the search bar actually match the user's "Alice in
+        // Wonderland" mental model instead of the `1751655…_alice.epub`
+        // filename hash. Extracted from `sourceURL` BEFORE the id is minted so
+        // the id can be derived from the metadata.
+        var metadata = BookMetadata()
+        if let extractor = metadataExtractors[ext] {
+            metadata = await extractor.extractMetadata(from: sourceURL)
+        }
+
+        // Deterministic id from normalized title+author+format so the same
+        // book imported on two devices (or under a different filename)
+        // collapses to one id and dedupes through the sync upsert. Untitled
+        // books fall back to a random UUID so they don't all collapse together.
+        let bookId = DeterministicBookID.make(
+            title: metadata.title,
+            author: metadata.author,
+            format: format
+        ) ?? UUID()
         let bookDir = booksDirURL.appendingPathComponent(bookId.uuidString, isDirectory: true)
         try fileManager.createDirectory(at: bookDir, withIntermediateDirectories: true)
 
         let filename = sourceURL.lastPathComponent
         let destURL = bookDir.appendingPathComponent(filename)
 
+        // The id is deterministic, so re-importing the same book locally
+        // reuses the same `Books/<id>/` dir and the copy can hit an existing
+        // file — make it idempotent.
+        if fileManager.fileExists(atPath: destURL.path) {
+            try? fileManager.removeItem(at: destURL)
+        }
         do {
             try fileManager.copyItem(at: sourceURL, to: destURL)
         } catch {
             throw StorageError.copyFailed(underlying: error)
-        }
-
-        // Best-effort metadata extraction (never throws). The fields default
-        // to "filename-derived title + nil author"; whenever the embedded
-        // metadata is present and non-empty it overrides the filename. This
-        // is what makes the search bar actually match the user's "Alice in
-        // Wonderland" mental model instead of the `1751655…_alice.epub`
-        // filename hash.
-        var metadata = BookMetadata()
-        if let extractor = metadataExtractors[ext] {
-            metadata = await extractor.extractMetadata(from: destURL)
         }
 
         // Best-effort cover extraction (never throws).

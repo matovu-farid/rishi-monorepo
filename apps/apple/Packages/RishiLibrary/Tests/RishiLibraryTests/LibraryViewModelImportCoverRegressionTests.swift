@@ -63,7 +63,8 @@ struct LibraryViewModelImportCoverRegressionTests {
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { userId }
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
 
@@ -120,7 +121,8 @@ struct LibraryViewModelImportCoverRegressionTests {
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { userId }
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
 

@@ -46,6 +46,17 @@ public final class LibraryViewModel {
         didSet { scheduleSearchDebounce(oldValue: oldValue) }
     }
 
+    /// User-visible import failure. An `.alert` in `LibraryRootView` binds to
+    /// this so a batch that imported nothing is never silent (Mac Catalyst
+    /// picker-delegate-drop regression).
+    public struct ImportFailure: Identifiable, Sendable {
+        public let id = UUID()
+        public let message: String
+        public init(message: String) { self.message = message }
+    }
+
+    public var importError: ImportFailure? = nil
+
     /// 150 ms by default per LIB-09. Test-only override to shrink the wait
     /// inside debounce-coalescing tests.
     public var debounceDuration: Duration = .milliseconds(150)
@@ -54,17 +65,36 @@ public final class LibraryViewModel {
     private let positionStore: any PositionStore
     private let storage: BookFileStorage
     private let currentUserId: @MainActor () -> UserID?
+    private let importCoordinator: ImportCoordinator
 
     private var searchTask: Task<Void, Never>? = nil
 
     public init(bookStore: any BookStore,
                 positionStore: any PositionStore,
                 storage: BookFileStorage,
-                currentUserId: @escaping @MainActor () -> UserID?) {
+                currentUserId: @escaping @MainActor () -> UserID?,
+                importCoordinator: ImportCoordinator) {
         self.bookStore = bookStore
         self.positionStore = positionStore
         self.storage = storage
         self.currentUserId = currentUserId
+        self.importCoordinator = importCoordinator
+    }
+
+    /// Imports picker-vended URLs through `ImportCoordinator` (security-scoped
+    /// resource dance + sync `onBookImported` hook), refreshes the library, and
+    /// surfaces a user-visible error when nothing imported so the failure is
+    /// never silent. Routed off the view so it is unit-testable.
+    @discardableResult
+    public func importPicked(_ urls: [URL]) async -> [ImportCoordinator.ImportOutcome] {
+        importError = nil
+        guard !urls.isEmpty else { return [] }
+        let outcomes = await importCoordinator.importBooks(urls)
+        await refresh()
+        if outcomes.compactMap(\.book).isEmpty {
+            importError = ImportFailure(message: "Couldn't import the selected file. Please choose a valid EPUB or PDF.")
+        }
+        return outcomes
     }
 
     /// Reloads books for the current user and re-derives readingNow + filteredBooks.

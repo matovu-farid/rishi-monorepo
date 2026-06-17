@@ -38,4 +38,27 @@ struct RishiMenuCommandsTests {
         commands.router.consume()
         #expect(router.pendingIntent == nil)
     }
+
+    // BUG REPRO (Mac import refuses): macOS auto-adds a system "Open…" command
+    // bound to ⌘O for any app that declares document types (CFBundleDocumentTypes).
+    // Binding our own "Import Book…" command to the SAME ⌘O makes UIKit drop /
+    // merge one of the two — it logs `_UIMenuBuilderError ... undefined behavior`
+    // — and the survivor is the system Open, which dead-ends in an NSOpenPanel
+    // with no backing NSDocument. The user's File menu then offers only a
+    // non-functional "Open…", so the in-app document picker is never reached
+    // (the runtime log shows NSOpenPanel, never UIDocumentPickerViewController).
+    // Import must therefore avoid the system-reserved ⌘O chord.
+    @Test("Import Book shortcut avoids the system-reserved File > Open (Cmd+O)")
+    func importShortcutAvoidsSystemOpenCollision() {
+        let shortcut = RishiKeyboardShortcut.importBook
+        let collidesWithSystemOpen =
+            shortcut.key.character == "o" && shortcut.modifiers == .command
+        #expect(
+            collidesWithSystemOpen == false,
+            "Import Book must not use ⌘O — it collides with the system File > Open command on Mac"
+        )
+        // Lock the chosen replacement chord (⌘I = Import).
+        #expect(shortcut.key.character == "i")
+        #expect(shortcut.modifiers == .command)
+    }
 }

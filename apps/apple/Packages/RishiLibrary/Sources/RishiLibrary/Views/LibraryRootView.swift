@@ -2,6 +2,7 @@ import SwiftUI
 import RishiCore
 import RishiUIKit
 import Foundation
+import UniformTypeIdentifiers
 import os.signpost
 
 /// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
@@ -140,27 +141,34 @@ public struct LibraryRootView: View {
                 onImported?(outcomes)
             }
         }
-        #if canImport(UIKit)
-        .sheet(isPresented: $showDocumentPicker) {
-            DocumentPickerView { urls in
-                showDocumentPicker = false
-                guard !urls.isEmpty else { return }
-                // Phase 21 Plan 21-01 — `vm.refresh()` owns the cover-URL
-                // fan-out, so the prior `reloadCovers()` follow-up is gone.
-                // KEEP: closure runs on @MainActor (DocumentPickerView's
-                // onPicked is MainActor-isolated). importBooks is an actor
-                // method (ImportCoordinator actor) so the heavy file copy +
-                // cover extract + DB write runs on the actor's executor;
-                // vm.refresh re-enters MainActor only to commit the
-                // @Observable writes.
+        // SwiftUI-native importer — on Mac Catalyst SwiftUI manages the
+        // out-of-process NSOpenPanel and keeps its own completion alive, so the
+        // picked URLs are always delivered. The prior `.sheet`+DocumentPickerView
+        // path lost its UIDocumentPickerDelegate when Catalyst floated the panel
+        // as a separate window, so imports failed silently on Mac.
+        .fileImporter(
+            isPresented: $showDocumentPicker,
+            allowedContentTypes: [.epub, .pdf],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                // importPicked routes through ImportCoordinator (security-scoped
+                // resource dance + sync dirty-marking), refreshes, then surfaces
+                // an error if nothing imported.
                 Task {
-                    let outcomes = await importCoordinator.importBooks(urls)
-                    await vm.refresh()
+                    let outcomes = await vm.importPicked(urls)
                     onImported?(outcomes)
                 }
+            case .failure(let error):
+                vm.importError = .init(message: "Couldn't open the selected file. \(error.localizedDescription)")
             }
         }
-        #endif
+        .alert(item: $vm.importError) { failure in
+            Alert(title: Text("Import Failed"),
+                  message: Text(failure.message),
+                  dismissButton: .default(Text("OK")))
+        }
         .task {
             // Phase 19 Plan 19-08 (F-P2-04) — wrap the first-paint hot path
             // so Instruments captures the cost of viewModel.refresh, which
@@ -222,7 +230,9 @@ public struct LibraryRootView: View {
                 } label: {
                     Label("Import", systemImage: "plus")
                 }
-                .keyboardShortcut("o", modifiers: .command)
+                // No inline .keyboardShortcut("o"): the universal "Import Book…"
+                // menu command owns Cmd+O. A second claimant here collides with
+                // it (and previously with AppKit's system Open) on Mac.
             }
             if let onShowSettings {
                 ToolbarItem(placement: .secondaryAction) {
@@ -319,11 +329,13 @@ private enum LibraryRootPreviewFixtures {
             bookStore: bookStore,
             coverExtractors: [:]
         )
+        let capturedUserId = userId
         let vm = LibraryViewModel(
             bookStore: bookStore,
             positionStore: positionStore,
             storage: storage,
-            currentUserId: { userId }
+            currentUserId: { userId },
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { capturedUserId })
         )
         return vm
     }

@@ -50,4 +50,23 @@ struct SignedInViewModelTests {
         model.present(conversation: convo)
         #expect(model.selectedConversation?.id == convo.id)
     }
+
+    // SYNC: on signed-in shell appearance we must show cached rows first,
+    // then pull the remote library, then re-read the local store so freshly
+    // synced books appear. Locks the refresh -> sync -> refresh ordering.
+    @Test("performInitialLibrarySync refreshes, syncs, then refreshes again")
+    func initialLibrarySyncOrder() async {
+        let model = SignedInViewModel()
+        let recorder = EventRecorder()
+        await model.performInitialLibrarySync(
+            refresh: { await recorder.record("refresh") },
+            sync: { await recorder.record("sync") }
+        )
+        #expect(await recorder.events == ["refresh", "sync", "refresh"])
+    }
+}
+
+private actor EventRecorder {
+    private(set) var events: [String] = []
+    func record(_ event: String) { events.append(event) }
 }
