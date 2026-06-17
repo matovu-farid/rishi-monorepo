@@ -23,6 +23,7 @@
 
 import SwiftUI
 import RishiCore
+import RishiAuth
 import RishiBilling
 
 struct SettingsWindowRoot: View {

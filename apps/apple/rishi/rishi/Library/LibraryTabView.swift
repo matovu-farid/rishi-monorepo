@@ -45,6 +45,17 @@ struct LibraryTabView: View {
         _libraryVM = State(initialValue: LibraryViewModel.make(services: services, user: user))
     }
 
+    /// Settings gear handler for `LibraryRootView`. On Mac the in-app gear is
+    /// removed (Settings is the native menu-bar window, Cmd+,), so this is nil
+    /// and the gear is not rendered. iOS/iPadOS keep the gear -> sheet flow.
+    private var macSettingsHandler: (() -> Void)? {
+        #if targetEnvironment(macCatalyst)
+        return nil
+        #else
+        return { model.requestSettings() }
+        #endif
+    }
+
     var body: some View {
         let bindableRouter = Bindable(router)
         NavigationStack(path: bindableRouter.path) {
@@ -61,11 +72,9 @@ struct LibraryTabView: View {
                 // 32-03, so the in-app gear is gone. LibraryRootView renders the
                 // gear only `if let onShowSettings`, so passing nil hides it
                 // (no RishiLibrary edit). iOS/iPadOS keep the gear + sheet.
-                #if targetEnvironment(macCatalyst)
-                onShowSettings: nil,
-                #else
-                onShowSettings: { model.requestSettings() },
-                #endif
+                // (`#if` cannot conditionalize a single call argument inline, so
+                // the platform choice lives in `macSettingsHandler`.)
+                onShowSettings: macSettingsHandler,
                 onShowChats: onShowChats,
                 onImported: { outcomes in
                     let successes = outcomes.compactMap(\.book)
