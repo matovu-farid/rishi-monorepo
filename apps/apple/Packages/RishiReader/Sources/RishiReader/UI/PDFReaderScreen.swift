@@ -369,6 +369,15 @@ public struct PDFReaderScreen: View {
                 viewModel.theme = await settings.theme(for: viewModel.book.id)
             }
         }
+        // Phase 30 plan 30-05 — Mac Catalyst window minimum-width clamp. Scoped
+        // to the reader (RESEARCH recommendation: PDFReaderScreen.onAppear, not
+        // global). minWidth defaults to PDFReaderLayoutMetrics.minPageWidth so it
+        // can never desync from the resolver's breakpoint. No-op on iOS.
+        .onAppear {
+            #if targetEnvironment(macCatalyst)
+            PDFMacWindowSizing.applyMinWindowWidth()
+            #endif
+        }
         #if canImport(UIKit)
         // Read-aloud inline highlight: follow the spoken passage as the TTS
         // bridge advances (paragraph text changes) and re-resolve it after a
