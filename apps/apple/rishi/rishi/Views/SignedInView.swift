@@ -244,12 +244,40 @@ private struct ReaderPrefsMenuPublisher: ViewModifier {
             onSyncNow: { Task { await services.syncEngine.syncNow() } },
             syncStatus: services.syncStatus,
             userEmail: user.email.isEmpty ? nil : user.email,
-            // Plan 04 (Wave 4) replaces these account/legal placeholders.
-            onManageSubscription: {},
-            onSignOut: {},
-            onOpenPrivacy: {},
-            onOpenTerms: {}
+            // Plan 04 (Wave 4) — real account/legal actions, each routed to an
+            // existing service/URL with no custom window or sheet (§D).
+            // Manage Subscription drives StoreKit's system sheet via the
+            // existing presenter (mirrors SettingsContent.swift:88-95);
+            // explicit @MainActor matches that surface's isolation.
+            onManageSubscription: {
+                Task { @MainActor in
+                    await services.manageSubscriptionPresenter.present()
+                }
+            },
+            // Sign Out reuses the same auth flow + `onSignedOut` closure already
+            // threaded into SettingsContent (flips the app back to signed-out).
+            onSignOut: {
+                let auth = services.authService
+                let signedOut = onSignedOut
+                Task { @MainActor in
+                    try? await auth.signOut()
+                    signedOut()
+                }
+            },
+            // Privacy / Terms open the public LegalLinksSection.LegalLink URLs in
+            // external Safari (no presenting surface needed from a menu command).
+            onOpenPrivacy: { Self.open(LegalLinksSection.LegalLink.privacyPolicy) },
+            onOpenTerms: { Self.open(LegalLinksSection.LegalLink.termsOfUse) }
         )
+    }
+
+    /// Open a legal link's canonical URL in external Safari. The `LegalLink`
+    /// rawValue is the URL string; `UIApplication.open` needs no presenting
+    /// view, which is why it suits a menu command (RESEARCH §D).
+    private static func open(_ link: LegalLinksSection.LegalLink) {
+        if let url = URL(string: link.rawValue) {
+            UIApplication.shared.open(url)
+        }
     }
 
     /// Persist the current voice/speed back through the store. Skips writes
