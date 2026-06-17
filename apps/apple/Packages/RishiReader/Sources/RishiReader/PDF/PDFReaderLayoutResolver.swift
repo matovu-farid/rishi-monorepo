@@ -78,6 +78,17 @@ public enum PDFReaderLayoutResolver {
         screenSize.width - sceneSize.width <= tolerance
     }
 
+    /// Fit-to-WIDTH scale factor for a single PDF page: the multiplier that
+    /// makes the page exactly fill the available viewport width (so the page
+    /// overflows vertically and the user scrolls within it). PDFKit has no
+    /// built-in fit-width, so the Mac Continuous (Mode A) path computes it here.
+    /// Guarded: a non-positive `pageWidth` or `availableWidth` returns 1 so the
+    /// caller never applies a zero/NaN scale (no crash, no collapsed page).
+    public static func fitWidthScaleFactor(pageWidth: CGFloat, availableWidth: CGFloat) -> CGFloat {
+        guard pageWidth > 0, availableWidth > 0 else { return 1 }
+        return availableWidth / pageWidth
+    }
+
     /// Maps a single pageIndex to the LEFT page index of the spread it belongs
     /// to, used to preserve reading position when switching single <-> two-up
     /// (RESEARCH Pitfall 8). With `displaysAsBook`, page 1 (index 0) is a lone

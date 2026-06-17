@@ -155,6 +155,44 @@ struct PDFReaderLayoutResolverTests {
         )
     }
 
+    // MARK: - fitWidthScaleFactor
+
+    @Test("fit-width: 612pt page in 900pt viewport is ~1.47")
+    func fitWidthNormalCase() {
+        let factor = PDFReaderLayoutResolver.fitWidthScaleFactor(
+            pageWidth: 612,
+            availableWidth: 900
+        )
+        #expect(abs(factor - (900.0 / 612.0)) < 0.0001)
+    }
+
+    @Test("fit-width: zero page width returns 1 (no crash, no zero)")
+    func fitWidthZeroPageWidth() {
+        #expect(PDFReaderLayoutResolver.fitWidthScaleFactor(pageWidth: 0, availableWidth: 900) == 1)
+    }
+
+    @Test("fit-width: negative page width returns 1")
+    func fitWidthNegativePageWidth() {
+        #expect(PDFReaderLayoutResolver.fitWidthScaleFactor(pageWidth: -10, availableWidth: 900) == 1)
+    }
+
+    @Test("fit-width: zero available width returns 1")
+    func fitWidthZeroAvailableWidth() {
+        #expect(PDFReaderLayoutResolver.fitWidthScaleFactor(pageWidth: 612, availableWidth: 0) == 1)
+    }
+
+    @Test("fit-width: negative available width returns 1")
+    func fitWidthNegativeAvailableWidth() {
+        #expect(PDFReaderLayoutResolver.fitWidthScaleFactor(pageWidth: 612, availableWidth: -5) == 1)
+    }
+
+    @Test("fit-width: a wider viewport yields a larger factor for the same page")
+    func fitWidthWiderViewportLargerFactor() {
+        let narrow = PDFReaderLayoutResolver.fitWidthScaleFactor(pageWidth: 612, availableWidth: 700)
+        let wide = PDFReaderLayoutResolver.fitWidthScaleFactor(pageWidth: 612, availableWidth: 1200)
+        #expect(wide > narrow)
+    }
+
     // MARK: - isFullScreen size-proxy (Phase 31)
 
     @Test("scene width equal to screen width is full-screen")
