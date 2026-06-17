@@ -14,6 +14,11 @@
 //
 
 import SwiftUI
+#if targetEnvironment(macCatalyst)
+import RishiReader   // explicit import — ReaderTheme/ReaderFontFamily/PDFViewModeSetting
+import RishiSync     // explicit import — SyncStatus (read in SyncMenuItems)
+import RishiAudio    // explicit import — VoiceCatalog (voice picker rows)
+#endif
 
 struct RishiMenuCommands: Commands {
 
@@ -63,13 +68,21 @@ struct RishiMenuCommands: Commands {
         // "View" menus on Mac. Placing these items after `.sidebar` lands them
         // in the same system View menu — exactly one "View" now appears.
         CommandGroup(after: .sidebar) {
-            Button("Light Theme")  { router.send(.selectTheme(.light)) }
-                .keyboardShortcut("l", modifiers: [.command, .option])
-            Button("Sepia Theme")  { router.send(.selectTheme(.sepia)) }
-                .keyboardShortcut("s", modifiers: [.command, .option])
-            Button("Dark Theme")   { router.send(.selectTheme(.dark)) }
-                .keyboardShortcut("d", modifiers: [.command, .option])
+            #if targetEnvironment(macCatalyst)
+            // Phase 33 Plan 33-03 (Wave 3) — LIVE-checkmarked reader prefs.
+            // These helper Views read the `readerPrefsMenu` focused value
+            // (published by SignedInView) so SwiftUI renders + updates native
+            // checkmarks; reading the @Observable directly in the Commands body
+            // would freeze the checkmark at launch (Pitfall 1). Theme is now an
+            // inline Picker bound straight to AppReaderDefaults.theme (replaces
+            // the old router-driven theme Buttons — RESEARCH §C Option 2).
+            ThemeMenuItems()
+            PDFViewModeMenuItems()
+            AudioMenuItems()
             Divider()
+            #endif
+            // Font size stays on the router: there is no app-scope "current
+            // size" to checkmark, so these remain stateless commands (§C).
             Button("Increase Font Size") { router.send(.fontIncrease) }
                 .keyboardShortcut(RishiKeyboardShortcut.fontIncrease.key,
                                   modifiers: RishiKeyboardShortcut.fontIncrease.modifiers)
@@ -77,6 +90,10 @@ struct RishiMenuCommands: Commands {
                 .keyboardShortcut(RishiKeyboardShortcut.fontDecrease.key,
                                   modifiers: RishiKeyboardShortcut.fontDecrease.modifiers)
             Divider()
+            #if targetEnvironment(macCatalyst)
+            SyncMenuItems()
+            Divider()
+            #endif
             Button("Library") { router.send(.selectTab(.library)) }
                 .keyboardShortcut(RishiKeyboardShortcut.libraryTab.key,
                                   modifiers: RishiKeyboardShortcut.libraryTab.modifiers)
@@ -92,3 +109,120 @@ struct RishiMenuCommands: Commands {
         }
     }
 }
+
+#if targetEnvironment(macCatalyst)
+
+// MARK: - Reader-preference menu items (Phase 33 Plan 33-03, Wave 3)
+//
+// Each helper View reads the `readerPrefsMenu` focused value published by the
+// live SignedInView. Hosting the observation inside a View (not the Commands
+// body) is what makes the native checkmarks update live (RESEARCH §A2,
+// Pitfall 1). The focused value is `nil` until the live view mounts, so every
+// item disables itself before bootstrap with no extra guard.
+
+/// Theme as an inline Picker bound directly to `AppReaderDefaults.theme`
+/// (RESEARCH §C Option 2). Replaces the old router-driven theme Buttons; the
+/// theme router intent is now unused but left in place (Plan 05 decides
+/// removal).
+private struct ThemeMenuItems: View {
+    @FocusedValue(\.readerPrefsMenu) private var prefs
+    var body: some View {
+        Picker("Theme", selection: prefs?.theme ?? .constant(.light)) {
+            Text("Light").tag(ReaderTheme.light)
+            Text("Sepia").tag(ReaderTheme.sepia)
+            Text("Dark").tag(ReaderTheme.dark)
+        }
+        .pickerStyle(.inline)
+        .disabled(prefs == nil)
+    }
+}
+
+/// PDF View Mode as an inline Picker over the four `PDFViewModeSetting` cases,
+/// bound to `AppReaderDefaults.pdfViewMode` (current case gets the checkmark).
+private struct PDFViewModeMenuItems: View {
+    @FocusedValue(\.readerPrefsMenu) private var prefs
+    var body: some View {
+        Picker("PDF View Mode", selection: prefs?.pdfViewMode ?? .constant(.automatic)) {
+            ForEach(PDFViewModeSetting.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .pickerStyle(.inline)
+        .disabled(prefs == nil)
+    }
+}
+
+/// Audio voice + speed as inline Pickers grouped under an "Audio" submenu.
+/// Speed is a discrete Picker (a Slider is not menu-native — RESEARCH §B5),
+/// both bound through the focused model's live audio holder.
+private struct AudioMenuItems: View {
+    /// Discrete speed steps surfaced as menu rows (matches the worker speed
+    /// range; a continuous Slider has no native menu checkmark).
+    private static let speedSteps: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
+
+    @FocusedValue(\.readerPrefsMenu) private var prefs
+    var body: some View {
+        Menu("Audio") {
+            Picker("Voice", selection: prefs?.voice ?? .constant(VoiceCatalog.all[0])) {
+                ForEach(VoiceCatalog.all, id: \.self) { voice in
+                    Text(VoiceCatalog.displayName(for: voice)).tag(voice)
+                }
+            }
+            .pickerStyle(.inline)
+            Picker("Speed", selection: prefs?.speed ?? .constant(1.0)) {
+                ForEach(Self.speedSteps, id: \.self) { step in
+                    Text(Self.speedLabel(step)).tag(step)
+                }
+            }
+            .pickerStyle(.inline)
+        }
+        .disabled(prefs == nil)
+    }
+
+    private static func speedLabel(_ value: Double) -> String {
+        String(format: "%gx", value)
+    }
+}
+
+/// Sync submenu: an Auto Sync Toggle (live checkmark) bound to
+/// `AppReaderDefaults.autoSync`, a "Sync Now" Button reusing
+/// `syncEngine.syncNow()` (manual path — ignores the autoSync flag), and a
+/// disabled status line reading the live `SyncStatus`.
+private struct SyncMenuItems: View {
+    @FocusedValue(\.readerPrefsMenu) private var prefs
+    var body: some View {
+        Menu("Sync") {
+            Toggle("Auto Sync", isOn: prefs?.autoSync ?? .constant(true))
+                .disabled(prefs == nil)
+            Button("Sync Now") { prefs?.onSyncNow() }
+                .disabled(prefs == nil)
+            Divider()
+            Text(Self.statusLine(prefs?.syncStatus))
+                .disabled(true)
+        }
+        .disabled(prefs == nil)
+    }
+
+    /// Human-readable status from the live `SyncStatus`. Read inside the View
+    /// so it updates live as the engine applies snapshots after every wave.
+    private static func statusLine(_ status: SyncStatus?) -> String {
+        guard let status else { return "Not synced" }
+        if status.isRunning { return "Syncing…" }
+        if let error = status.lastError, !error.isEmpty {
+            return "Sync error: \(error)"
+        }
+        if let last = status.lastSyncedAt {
+            let formatted = last.formatted(date: .abbreviated, time: .shortened)
+            if status.pendingCount > 0 {
+                return "Last synced \(formatted) · \(status.pendingCount) pending"
+            }
+            return "Last synced \(formatted)"
+        }
+        if status.pendingCount > 0 {
+            return "\(status.pendingCount) pending"
+        }
+        return "Not synced yet"
+    }
+}
+
+#endif
