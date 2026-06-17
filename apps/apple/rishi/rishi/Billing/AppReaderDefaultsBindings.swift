@@ -29,6 +29,10 @@ final class AppReaderDefaults {
     // (via PDFReaderDestination) reads the live @Observable value so a change
     // applies to an open PDF without reopening. Default `.automatic` (LOCKED).
     private static let pdfViewModeKey = "reader.defaults.pdfViewMode"
+    // Phase 33 plan 33-01 — NEW persisted Auto Sync flag. Gates the automatic
+    // sync triggers (BGTask, silent push, shell-appearance kick); the manual
+    // "Sync Now" path ignores it. Default ON (see `autoSync` below).
+    private static let autoSyncKey = "reader.defaults.autoSync"
 
     private let defaults: UserDefaults
 
@@ -65,5 +69,18 @@ final class AppReaderDefaults {
             return mode
         }
         set { defaults.set(newValue.rawValue, forKey: Self.pdfViewModeKey) }
+    }
+
+    /// Phase 33 — gates automatic/background sync (BGTask, silent push,
+    /// shell-appearance kick). Manual "Sync Now" ignores this flag. Default ON
+    /// so existing users keep syncing on upgrade: an absent key means
+    /// `object(forKey:)` is nil, so we return `true`. Using `bool(forKey:)`
+    /// directly would wrongly default OFF for the absent case (Pitfall 4).
+    var autoSync: Bool {
+        get {
+            guard defaults.object(forKey: Self.autoSyncKey) != nil else { return true }
+            return defaults.bool(forKey: Self.autoSyncKey)
+        }
+        set { defaults.set(newValue, forKey: Self.autoSyncKey) }
     }
 }
