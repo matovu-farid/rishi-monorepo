@@ -17,6 +17,12 @@ struct MacCommandDispatchModifier: ViewModifier {
 
     @Environment(AppRouter.self) private var router
     @Environment(\.macCommandRouter) private var commandRouter
+    // Phase 32 Plan 32-03 — `openWindow` is environment-only (cannot live in a
+    // Commands body), so the Settings… menu item routes `.showSettings` here
+    // and this ViewModifier (already mounted on SignedInView) opens the window.
+    // `deps` reaches the shared `settingsWindowPresenter` single-instance flag.
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.appDependencies) private var deps
 
     func body(content: Content) -> some View {
         content
@@ -63,6 +69,18 @@ struct MacCommandDispatchModifier: ViewModifier {
             case .library: router.showLibraryRoot()
             case .chats:   router.showConversations()
             }
+
+        case .showSettings:
+            // Phase 32 Plan 32-03 — open the dedicated Settings window only
+            // when it is not already open (single-instance backstop, Pitfall
+            // 2). The presenter flag is flipped by SettingsWindowRoot's
+            // onAppear/onDisappear, so a second Cmd+, while open is a no-op
+            // here (and the OS keeps the existing window focused). Mac-only.
+            #if targetEnvironment(macCatalyst)
+            if deps?.settingsWindowPresenter.shouldOpen ?? true {
+                openWindow(id: "settings")
+            }
+            #endif
 
         case .pageForward:
             NotificationCenter.default.post(name: RishiCommand.pageForward, object: nil)

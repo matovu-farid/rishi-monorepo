@@ -24,6 +24,20 @@ struct RishiMenuCommands: Commands {
     }
 
     var body: some Commands {
+        // Phase 32 Plan 32-03 — native rishi ▸ Settings… (Cmd+,) under the
+        // app menu (after the "About" item). Mac-only: iOS/iPadOS keep the
+        // in-app gear + sheet (no app menu there). Routes through the same
+        // MacCommandRouter as every other command — the actual
+        // `openWindow(id: "settings")` happens in MacCommandDispatchModifier
+        // (a ViewModifier with the `\.openWindow` env + the single-instance
+        // presenter flag), since a Commands body can't reliably hold either.
+        #if targetEnvironment(macCatalyst)
+        CommandGroup(after: .appInfo) {
+            Button("Settings…") { router.send(.showSettings) }
+                .keyboardShortcut(",", modifiers: .command)
+        }
+        #endif
+
         // FILE — replace the default "New ..." item with our own pair so
         // Catalyst doesn't surface an inert "New Document" menu entry.
         CommandGroup(replacing: .newItem) {
