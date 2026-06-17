@@ -821,6 +821,17 @@ final class AppDependencies {
             task.setTaskCompleted(success: false)
             return
         }
+        // Phase 33 plan 33-02 — Auto Sync gate (§G2 site 1). When the user
+        // turns Auto Sync OFF, the OS-scheduled background wave is a no-op:
+        // report success (the task DID its job — "nothing to do") AND re-arm
+        // via scheduleAll() so the budget survives for when the flag flips
+        // back on. Manual `syncNow()` is never gated — the gate lives here at
+        // the auto call site, not inside SyncEngine.
+        guard services.readerDefaults.autoSync else {
+            task.setTaskCompleted(success: true)
+            services.backgroundTaskCoordinator.scheduleAll()
+            return
+        }
         // KEEP: runTask handle is consumed by `task.expirationHandler` for
         // cancellation; the engine.runOnce() body runs on the syncEngine
         // actor's executor. Wrapper body only chains an await + returns Bool.

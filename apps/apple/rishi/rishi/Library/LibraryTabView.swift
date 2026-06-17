@@ -118,9 +118,13 @@ struct LibraryTabView: View {
                 // device (or cold launch with an existing session) shows the
                 // user's whole library, not just locally-cached rows. Shows
                 // cached first, then the synced rows after the wave lands.
+                // Phase 33 plan 33-02 — Auto Sync gate (§G2 site 3). Guard only
+                // the network wave; `refresh` (local DB read) still runs so the
+                // library paints from cache even when Auto Sync is OFF. Manual
+                // Sync Now is unaffected — the gate is at the auto call site.
                 await model.performInitialLibrarySync(
                     refresh: { await libraryVM.refresh() },
-                    sync: { _ = await services.syncEngine.runOnce() }
+                    sync: { if services.readerDefaults.autoSync { _ = await services.syncEngine.runOnce() } }
                 )
             }
         }
