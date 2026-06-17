@@ -14,6 +14,7 @@
 import SwiftUI
 import RishiCore
 import RishiAuth
+import RishiAudio
 import RishiBilling
 import RishiChat
 import RishiOnboarding
@@ -60,6 +61,16 @@ struct SignedInView: View {
     /// sheet, and transient book-hint cache. Extracted into a viewModel so
     /// these concerns are unit-testable independently of the view.
     @State private var model = SignedInViewModel()
+
+    /// Phase 33 Plan 33-03 (Wave 3) — live source for the Mac menu's Audio
+    /// voice/speed checkmarks. `TTSSettings` is immutable + loaded async per
+    /// userId via `TTSSettingsStore`, so we hold the live values in a small
+    /// `@Observable` seeded on appear and persisted on every change. The
+    /// `ReaderPrefsMenuModel` voice/speed `Binding`s read/write THIS holder,
+    /// whose setters fan out to `store.save(_, userId:)`. Declared on every
+    /// target (harmless/unused on iOS) so the publisher modifier signature is
+    /// uniform; only the Catalyst publisher reads it.
+    @State private var macAudioPrefs = AudioMenuPrefs()
 
     // MARK: - Body
 
@@ -108,6 +119,14 @@ struct SignedInView: View {
         }
         // Phase 12 Plan 12-01 — drain the Mac command router on every intent change.
         .macCommandDispatch(readerDefaults: services.readerDefaults)
+        // Phase 33 Plan 33-03 (Wave 3) — publish the reader-preference menu
+        // model as a focused scene value so `RishiMenuCommands` helper Views can
+        // read it via `@FocusedValue(\.readerPrefsMenu)` and render LIVE native
+        // checkmarks. Built ONLY from the post-bootstrap `services` + the live
+        // `audioPrefs` holder; the focused value is `nil` until this live view
+        // mounts, which disables the menu items pre-bootstrap for free.
+        // Catalyst-only: iOS keeps the in-app gear + settings sheet untouched.
+        .readerPrefsMenuPublisher(services: services, user: user, audioPrefs: macAudioPrefs)
         // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader cover,
         // and persist the latest scene state on every visible path change.
         .sceneRestoration(
@@ -119,3 +138,130 @@ struct SignedInView: View {
     }
 
 }
+
+// MARK: - Reader-preference menu publishing (Phase 33 Plan 33-03, Wave 3)
+
+/// Live holder for the Mac menu's Audio voice/speed selection. `TTSSettings`
+/// is immutable + loaded async per userId, so the menu cannot bind directly to
+/// it; instead the voice/speed `Binding`s in `ReaderPrefsMenuModel` read/write
+/// these `@Observable` fields, and `SignedInView` persists each change back
+/// through `TTSSettingsStore.save(_, userId:)`. Declared on every target so the
+/// publisher modifier signature is uniform; only Catalyst consumes it.
+@MainActor
+@Observable
+final class AudioMenuPrefs {
+    var voice: String = TTSSettings.default.voice
+    var speed: Double = TTSSettings.default.speed
+    /// Guards the write-back so the initial async seed doesn't echo a save.
+    var isSeeded: Bool = false
+}
+
+extension View {
+    /// Publishes the `readerPrefsMenu` focused scene value on Mac Catalyst and
+    /// seeds/persists the live audio holder; a no-op on iOS (which keeps the
+    /// in-app gear + settings sheet).
+    @ViewBuilder
+    func readerPrefsMenuPublisher(
+        services: BootstrappedServices,
+        user: User,
+        audioPrefs: AudioMenuPrefs
+    ) -> some View {
+        #if targetEnvironment(macCatalyst)
+        self.modifier(
+            ReaderPrefsMenuPublisher(services: services, user: user, audioPrefs: audioPrefs)
+        )
+        #else
+        self
+        #endif
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+
+/// Catalyst-only modifier that builds + publishes the `ReaderPrefsMenuModel`
+/// focused scene value from the post-bootstrap services and the live audio
+/// holder. Account/legal closures are no-op placeholders this wave (Plan 04
+/// wires them). `userEmail` is resolved from the in-scope `user` (no async
+/// `currentUser` call — Pitfall 3).
+private struct ReaderPrefsMenuPublisher: ViewModifier {
+
+    let services: BootstrappedServices
+    let user: User
+    @Bindable var audioPrefs: AudioMenuPrefs
+
+    init(services: BootstrappedServices, user: User, audioPrefs: AudioMenuPrefs) {
+        self.services = services
+        self.user = user
+        self.audioPrefs = audioPrefs
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .focusedSceneValue(\.readerPrefsMenu, makeModel())
+            .task(id: user.id) {
+                let loaded = await services.ttsSettingsStore.load(userId: user.id)
+                audioPrefs.voice = loaded.voice
+                audioPrefs.speed = loaded.speed
+                audioPrefs.isSeeded = true
+            }
+    }
+
+    private func makeModel() -> ReaderPrefsMenuModel {
+        let defaults = services.readerDefaults
+        return ReaderPrefsMenuModel(
+            theme: Binding(
+                get: { defaults.theme },
+                set: { defaults.theme = $0 }
+            ),
+            pdfViewMode: Binding(
+                get: { defaults.pdfViewMode },
+                set: { defaults.pdfViewMode = $0 }
+            ),
+            fontFamily: Binding(
+                get: { defaults.fontFamily },
+                set: { defaults.fontFamily = $0 }
+            ),
+            voice: Binding(
+                get: { audioPrefs.voice },
+                set: { newValue in
+                    audioPrefs.voice = newValue
+                    persistAudio()
+                }
+            ),
+            speed: Binding(
+                get: { audioPrefs.speed },
+                set: { newValue in
+                    audioPrefs.speed = newValue
+                    persistAudio()
+                }
+            ),
+            autoSync: Binding(
+                get: { defaults.autoSync },
+                set: { defaults.autoSync = $0 }
+            ),
+            // KEEP: syncEngine.syncNow() is an actor await; mirrors
+            // SettingsContent.swift:71. Manual sync ignores the autoSync flag.
+            onSyncNow: { Task { await services.syncEngine.syncNow() } },
+            syncStatus: services.syncStatus,
+            userEmail: user.email.isEmpty ? nil : user.email,
+            // Plan 04 (Wave 4) replaces these account/legal placeholders.
+            onManageSubscription: {},
+            onSignOut: {},
+            onOpenPrivacy: {},
+            onOpenTerms: {}
+        )
+    }
+
+    /// Persist the current voice/speed back through the store. Skips writes
+    /// until the initial async seed completes so the seed itself never echoes
+    /// a redundant save.
+    private func persistAudio() {
+        guard audioPrefs.isSeeded else { return }
+        let settings = TTSSettings(voice: audioPrefs.voice, speed: audioPrefs.speed)
+        let store = services.ttsSettingsStore
+        let userId = user.id
+        Task { await store.save(settings, userId: userId) }
+    }
+}
+
+#endif
