@@ -27,106 +27,11 @@ import Observation
 import RishiAudio
 import RishiCore
 
-/// Pure decision logic for the paragraph advance watcher, factored out of
-/// `ReaderTTSBridge.startAdvanceWatcher` so it can be unit-tested without a
-/// live `TTSEngine` / audio render cycle.
-///
-/// The watcher polls `TTSPlaybackState.status` on a fixed cadence and must
-/// decide, per observed status, whether to advance to the next paragraph,
-/// bail on error, or keep waiting. Feed it the polled statuses in order via
-/// `observe(_:)`.
-///
-/// Race fix (epub-tts-premature-stop, round 1): advancement is gated on having
-/// first observed the current paragraph START (`.loading` OR `.playing`). It
-/// MUST accept `.loading` and not only `.playing` — `.playing` lasts only as
-/// long as the audio renders, so a very short paragraph (e.g. a heading) can
-/// render its single buffer in under one poll interval and never be observed in
-/// the `.playing` state.
-///
-/// Round 2 (no-advance regression): the round-1 ".loading is reliably > one
-/// poll interval" assumption holds only for the FIRST chunk. Chunk N>=1 is
-/// PREWARMED — its mp3 is already cached, so `.loading` is a fast cache hit and
-/// the entire `.loading`->`.playing`->`.stopped` lifecycle of a short prewarmed
-/// paragraph can elapse inside a single 100ms poll sleep. The watcher then sees
-/// a residual `.stopped` with no start observed and, treating it as pre-start
-/// residual, waits forever. Playback halts after one chunk.
-///
-/// The robust fix is to key advancement off PASSAGE IDENTITY, which the engine
-/// exposes as a STABLE post-condition rather than a transient. `TTSEngine` sets
-/// `TTSPlaybackState.currentPassageId` to the playing passage's id on its first
-/// buffer and leaves it set through the `.stopped` that ends that passage. So
-/// `(status == .stopped, currentPassageId == targetPassageId)` persists until
-/// the NEXT passage's first buffer and survives any poll gap. Construct the
-/// decision with `targetPassageId` and feed `observe(status:passageId:)`.
-///
-/// The legacy status-only `observe(_:)` path (no target id) is retained for
-/// callers/tests that don't track passage identity; it keeps the round-1
-/// started-gate behaviour.
-struct AdvanceWatcherDecision {
-
-    enum Action: Equatable {
-        case wait
-        case advance
-        case bail
-    }
-
-    private let targetPassageId: String?
-    private var hasStarted = false
-
-    /// Status-only watcher (round-1 behaviour). Advances on the first
-    /// `.stopped` seen AFTER a start (`.loading`/`.playing`) was observed.
-    init() {
-        self.targetPassageId = nil
-    }
-
-    /// Passage-identity-aware watcher (round-2 fix). Advances on a `.stopped`
-    /// whose `currentPassageId` matches `targetPassageId` — a stable
-    /// post-condition that does not require catching the transient start — or,
-    /// as a fallback, on a `.stopped` (with nil/cleared id) once the target
-    /// passage's start was observed.
-    init(targetPassageId: String) {
-        self.targetPassageId = targetPassageId
-    }
-
-    /// Legacy status-only entry point. Equivalent to
-    /// `observe(status:passageId:)` with a nil passage id.
-    mutating func observe(_ status: TTSStatus) -> Action {
-        observe(status: status, passageId: nil)
-    }
-
-    /// Process the next polled `(status, currentPassageId)` and return the
-    /// action to take.
-    mutating func observe(status: TTSStatus, passageId: String?) -> Action {
-        if status == .error {
-            return .bail
-        }
-
-        // Arm the started-gate when we see our passage begin. With a target id
-        // we only count a start that belongs to our passage; without one (legacy
-        // path) any start arms the gate.
-        if status == .loading || status == .playing {
-            if targetPassageId == nil || passageId == targetPassageId {
-                hasStarted = true
-            }
-        }
-
-        if status == .stopped {
-            // Primary, race-proof signal: a `.stopped` carrying our passage id
-            // means our passage actually played and finished — advance even if
-            // we never caught its transient start (prewarmed fast path).
-            if let target = targetPassageId, passageId == target {
-                return .advance
-            }
-            // Fallback: started-gate. Covers the legacy status-only path and the
-            // case where the id was cleared (teardown) after our start was seen.
-            if hasStarted {
-                return .advance
-            }
-        }
-
-        return .wait
-    }
-}
+// `AdvanceWatcherDecision` (the pure poll-decision struct) and the polling
+// `ParagraphAdvanceWatcher` that drives it now live in
+// `ParagraphAdvanceWatcher.swift`. The read-ahead prewarm lockstep lives in
+// `ReadAheadCoordinator.swift`. ReaderTTSBridge orchestrates both as internal
+// collaborators it constructs itself (so the public init below is unchanged).
 
 @MainActor
 final class ReaderTTSBridge {
@@ -138,10 +43,19 @@ final class ReaderTTSBridge {
     private let engine: any TTSPlaying
     private let state: TTSPlaybackState
     private let tracker: TTSPassageTracker
-    private let prewarmer: TTSPrewarmer
     private let settingsStore: any TTSSettingsStore
     private let userId: UserID
     private let onPassageChange: (Int?) -> Void
+
+    /// Polls `TTSPlaybackState` and decides when the current paragraph has
+    /// finished so the bridge should advance. Internal collaborator the bridge
+    /// constructs itself (extracted by plan 34-08).
+    private let advanceWatcher: ParagraphAdvanceWatcher
+
+    /// Owns the read-ahead window math + `warm`/`cancelAll` lockstep against the
+    /// prewarmer. Internal collaborator the bridge constructs itself (extracted
+    /// by plan 34-08).
+    private let readAhead: ReadAheadCoordinator
 
     /// Source of the NEXT batch of paragraphs when the current batch is
     /// exhausted. For EPUB this loads the next reading-order resource (the next
@@ -162,14 +76,9 @@ final class ReaderTTSBridge {
     /// page). The default (`{ [] }`) preserves clamped single-batch behaviour.
     private let onParagraphsBeforeStart: () async -> [String]
 
-    /// Number of paragraphs to prewarm ahead of the current play head.
-    /// Phase 24 (D1): default 5; configurable knob.
-    var readAhead: Int = 5
-
     private var paragraphs: [String] = []
     private var currentIndex = 0
     private var consumeTask: Task<Void, Never>?
-    private var advanceTask: Task<Void, Never>?
 
     init(
         engine: any TTSPlaying,
@@ -185,12 +94,16 @@ final class ReaderTTSBridge {
         self.engine = engine
         self.state = state
         self.tracker = tracker
-        self.prewarmer = prewarmer
         self.settingsStore = settingsStore
         self.userId = userId
         self.onPassageChange = onPassageChange
         self.onParagraphsExhausted = onParagraphsExhausted
         self.onParagraphsBeforeStart = onParagraphsBeforeStart
+        // Internal collaborators (plan 34-08). The bridge constructs them from
+        // the same injected `state` / `prewarmer` so the PUBLIC init signature is
+        // unchanged — AppDependencies.makeAudioStack wires the bridge identically.
+        self.advanceWatcher = ParagraphAdvanceWatcher(state: state)
+        self.readAhead = ReadAheadCoordinator(prewarmer: prewarmer)
     }
 
     // MARK: - Public surface
@@ -208,14 +121,24 @@ final class ReaderTTSBridge {
         await playCurrent()
     }
 
+    /// Restart the advance watcher for the current play head. Delegates the
+    /// poll loop to `ParagraphAdvanceWatcher`; the bridge supplies the target
+    /// passage id (the engine plays paragraph `currentIndex` with
+    /// `passageId = String(currentIndex)`, see `playCurrent`) and the advance
+    /// continuation.
+    private func startAdvanceWatcher() {
+        advanceWatcher.start(targetPassageId: String(currentIndex)) { [weak self] in
+            await self?.advance()
+        }
+    }
+
     /// Stop the active session (if any). Idempotent. Phase 24 (D6): cancels
     /// any in-flight prewarms before stopping the engine.
     func stop() async {
         consumeTask?.cancel()
         consumeTask = nil
-        advanceTask?.cancel()
-        advanceTask = nil
-        await prewarmer.cancelAll()
+        advanceWatcher.cancel()
+        await readAhead.cancelAll()
         await engine.stop()
         await tracker.detach()
         paragraphs = []
@@ -229,7 +152,7 @@ final class ReaderTTSBridge {
     /// On `resume()` the bridge does NOT automatically re-warm; the next
     /// `playCurrent()` after sequential advance will.
     func pause() async {
-        await prewarmer.cancelAll()
+        await readAhead.cancelAll()
         await engine.pause()
     }
 
@@ -249,9 +172,8 @@ final class ReaderTTSBridge {
         // which the live watcher would read as "current passage finished" and
         // fire advance() concurrently with this jump — racing currentIndex and
         // playCurrent (observed as an index-out-of-range crash on repeat).
-        advanceTask?.cancel()
-        advanceTask = nil
-        await prewarmer.cancelAll()
+        advanceWatcher.cancel()
+        await readAhead.cancelAll()
         // Long-lived engine: do NOT stop the engine on a switch. The previous
         // approach (full engine.stop() + session release per passage) HUNG on
         // device when stopping mid-render, and the restarted engine had no live
@@ -318,47 +240,6 @@ final class ReaderTTSBridge {
         }
     }
 
-    /// Watches `state.status` for the .stopped transition that signals
-    /// the current paragraph's buffers have all drained, then advances to
-    /// the next paragraph. Polling cadence matches TTSEngine's own
-    /// state-update cadence (50ms in NowPlayingController + tracker).
-    private func startAdvanceWatcher() {
-        advanceTask?.cancel()
-        // Capture the index this watcher is responsible for so it can match the
-        // engine's currentPassageId. The bridge plays paragraph `currentIndex`
-        // with passageId = String(currentIndex) (see playCurrent), so this is
-        // the id we wait to see `.stopped` against.
-        let targetPassageId = String(currentIndex)
-        // KEEP: F-P0-06 audit — explicit @MainActor required to read
-        // `state.status` (the @Observable TTSPlaybackState lives on main).
-        // Body sleeps 100ms between poll ticks; the await sleep yields
-        // back to the main runloop so SwiftUI rendering interleaves.
-        advanceTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            // See `AdvanceWatcherDecision` for the gating rationale. Round 2:
-            // we key advancement off PASSAGE IDENTITY — a `.stopped` carrying
-            // our target passage id is a stable post-condition that survives the
-            // 100ms poll gap, so a short PREWARMED chunk whose whole lifecycle
-            // elapses inside one poll sleep is still honoured
-            // (epub-tts-premature-stop, round 2).
-            var decision = AdvanceWatcherDecision(targetPassageId: targetPassageId)
-            while !Task.isCancelled {
-                switch decision.observe(
-                    status: self.state.status,
-                    passageId: self.state.currentPassageId
-                ) {
-                case .advance:
-                    await self.advance()
-                    return
-                case .bail:
-                    return
-                case .wait:
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-                }
-            }
-        }
-    }
-
     private func playCurrent() async {
         guard currentIndex < paragraphs.count else { return }
         let settings = await settingsStore.load(userId: userId)
@@ -377,22 +258,14 @@ final class ReaderTTSBridge {
         // playback await. We don't await warm's completion — warm only
         // awaits to spawn per-request Tasks; the drains run independently.
         // End-of-page (window slice empty) still goes through warm([]) so
-        // the lockstep call site is uniform.
-        let windowStart = currentIndex + 1
-        let upper = min(windowStart + readAhead, paragraphs.count)
-        if windowStart < upper {
-            let window = paragraphs[windowStart..<upper].map { text in
-                TTSStreamRequest(
-                    text: text,
-                    voice: settings.voice,
-                    speed: settings.speed,
-                    passageId: nil
-                )
-            }
-            await prewarmer.warm(requests: window)
-        } else {
-            await prewarmer.warm(requests: [])
-        }
+        // the lockstep call site is uniform. Window math + warm lockstep are
+        // owned by `ReadAheadCoordinator` (plan 34-08).
+        await readAhead.warm(
+            after: currentIndex,
+            in: paragraphs,
+            voice: settings.voice,
+            speed: settings.speed
+        )
         await engine.start(request: request)
     }
 
@@ -417,9 +290,8 @@ final class ReaderTTSBridge {
     /// the new index.
     @discardableResult
     private func advanceToNextBatch() async -> Bool {
-        advanceTask?.cancel()
-        advanceTask = nil
-        await prewarmer.cancelAll()
+        advanceWatcher.cancel()
+        await readAhead.cancelAll()
         let next = await onParagraphsExhausted()
         guard !next.isEmpty else {
             await stop()
@@ -448,9 +320,8 @@ final class ReaderTTSBridge {
     private func retreatToPreviousBatch() async -> Bool {
         let previous = await onParagraphsBeforeStart()
         guard !previous.isEmpty else { return false }
-        advanceTask?.cancel()
-        advanceTask = nil
-        await prewarmer.cancelAll()
+        advanceWatcher.cancel()
+        await readAhead.cancelAll()
         paragraphs = previous
         currentIndex = previous.count - 1
         startAdvanceWatcher()
