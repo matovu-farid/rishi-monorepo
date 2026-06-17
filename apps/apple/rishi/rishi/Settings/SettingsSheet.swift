@@ -2,26 +2,19 @@
 //  SettingsSheet.swift
 //  rishi
 //
-//  Phase 11 Plan 11-06 — replaces the Phase-7 minimal SettingsSheet with
-//  the full `RishiSettings.SettingsScreen` (Account / Subscription /
-//  Reader Defaults / Audio / Sync / Privacy / About sections).
-//
-//  Receives a `BootstrappedServices` value and constructs `SettingsScreen`
-//  inline. Owns:
-//    1. Loading the initial `TTSSettings` for the Audio section picker.
-//    2. Dismiss + sign-out + delete-account dispatch back to RootView.
+//  Phase 11 Plan 11-06 — full `RishiSettings.SettingsScreen` settings.
+//  Phase 32 Plan 32-02 — slimmed to a thin iOS wrapper. The SettingsScreen
+//  wiring + audio-load now live in the shared `SettingsContent` view (reused
+//  by the Mac Settings window). This sheet just hosts `SettingsContent` and
+//  bridges its explicit `onDismiss` to the sheet's dismiss environment.
 //
 
 import SwiftUI
-import RishiAudio
-import RishiAuth
-import RishiBilling
 import RishiCore
-import RishiSettings
-import RishiSync
 
-/// Sheet wrapping `RishiSettings.SettingsScreen`. Presented from the Library
-/// toolbar gear button.
+/// iOS sheet wrapping the shared `SettingsContent`. Presented from the
+/// Library toolbar gear button. The dismiss environment is valid inside a
+/// sheet, so it is bridged into `SettingsContent` via `onDismiss`.
 struct SettingsSheet: View {
 
     let services: BootstrappedServices
@@ -29,75 +22,14 @@ struct SettingsSheet: View {
     let onSignedOut: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var initialAudio: TTSSettings = .default
-    @State private var audioLoaded = false
 
     var body: some View {
-        Group {
-            if audioLoaded {
-                let defaults = services.readerDefaults
-                let auth = services.authService
-                let presenter = services.manageSubscriptionPresenter
-                let sync = services.syncEngine
-                SettingsScreen(
-                    user: user,
-                    readerTheme: Binding(
-                        get: { defaults.theme },
-                        set: { defaults.theme = $0 }
-                    ),
-                    readerFontFamily: Binding(
-                        get: { defaults.fontFamily },
-                        set: { defaults.fontFamily = $0 }
-                    ),
-                    pdfViewMode: Binding(
-                        get: { defaults.pdfViewMode },
-                        set: { defaults.pdfViewMode = $0 }
-                    ),
-                    audioUserId: user.id,
-                    audioInitial: initialAudio,
-                    audioStore: services.ttsSettingsStore,
-                    onAudioChange: { _ in },
-                    syncStatus: services.syncStatus,
-                    // KEEP: Settings "Sync now" tap -> syncEngine actor await; no main IO.
-                    onSyncNow: { Task { await sync.syncNow() } },
-                    telemetryStore: services.telemetryStore,
-                    footerDetectionStore: services.footerDetectionStore,
-                    onSignOut: {
-                        try? await auth.signOut()
-                        await MainActor.run {
-                            dismiss()
-                            onSignedOut()
-                        }
-                    },
-                    onDelete: {
-                        try await auth.deleteAccount()
-                    },
-                    onDeleted: {
-                        dismiss()
-                        onSignedOut()
-                    },
-                    onManageSubscription: {
-                        // KEEP: presenter.present() drives StoreKit's
-                        // ManageSubscriptionsView which is a @MainActor sheet --
-                        // explicit isolation is required for the SwiftUI surface.
-                        Task { @MainActor in
-                            await presenter.present()
-                        }
-                    },
-                    onDismiss: { dismiss() }
-                )
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task {
-            // Load once per sheet presentation; the AudioSection picker reads
-            // `initialAudio` as its seed value, then persists subsequent
-            // changes through `audioStore` itself.
-            initialAudio = await services.ttsSettingsStore.load(userId: user.id)
-            audioLoaded = true
-        }
+        SettingsContent(
+            services: services,
+            user: user,
+            onSignedOut: onSignedOut,
+            onDismiss: { dismiss() }
+        )
     }
 }
 
