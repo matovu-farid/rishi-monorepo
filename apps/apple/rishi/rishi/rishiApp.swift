@@ -28,9 +28,10 @@ struct rishiApp: App {
         // Phase 19 plan 19-01 — BGTaskScheduler.register MUST run before
         // application(_:didFinishLaunchingWithOptions:) returns per Apple's
         // contract. The AppDelegate is the canonical home for that hook;
-        // it calls `deps.registerBGTasksSynchronously()` from inside
-        // `didFinishLaunchingWithOptions`. We forward the back-reference
-        // here so the delegate can find the live AppDependencies instance.
+        // it calls `deps.backgroundSyncLifecycle.registerSynchronously()`
+        // from inside `didFinishLaunchingWithOptions`. We forward the
+        // back-reference here so the delegate can find the live
+        // AppDependencies instance.
         #if canImport(UIKit)
         RishiAppDelegate.shared.dependencies = deps
         #endif
@@ -99,12 +100,12 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         // Phase 19 plan 19-01 — BGTaskScheduler.register MUST run before
-        // this method returns per Apple's contract. We invoke the
-        // synchronous helper on AppDependencies, which registers the
-        // launch handlers directly against BGTaskScheduler.shared. The
+        // this method returns per Apple's contract. Plan 34-14 SRP split —
+        // the registration + Auto-Sync gate now live in
+        // BackgroundSyncLifecycle; the delegate just forwards to it. The
         // handlers await bootstrap before driving syncEngine.runOnce().
         if let deps = dependencies {
-            deps.registerBGTasksSynchronously()
+            deps.backgroundSyncLifecycle.registerSynchronously()
         }
 
         // Request silent-push registration. Apple-recommended dispatch to
@@ -122,24 +123,18 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
         guard let deps = dependencies else { return }
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
         let platform = "ios"
-        // Phase 19 plan 19-01 — services may still be nil if APNs
-        // registration races against bootstrap. The Task awaits bootstrap
-        // through the AppDependencies guard before reaching apnsDeviceRegistrar.
+        // Phase 19 plan 19-01 / plan 34-14 — services may still be nil if
+        // APNs registration races against bootstrap. BackgroundSyncLifecycle
+        // owns the bootstrap-await buffering before reaching apnsDeviceRegistrar.
         // KEEP: explicit @MainActor required to touch `deps` (the @MainActor
         // composition root); registrar is itself an actor so the worker
         // call hops off main internally — body is fire-and-forget.
         Task { @MainActor in
-            if deps.services == nil { await deps.bootstrap() }
-            guard let registrar = deps.services?.apnsDeviceRegistrar else { return }
-            do {
-                try await registrar.register(
-                    token: deviceToken,
-                    platform: platform,
-                    appVersion: version
-                )
-            } catch {
-                // Silent — engine still works via BGTaskScheduler fallback.
-            }
+            await deps.backgroundSyncLifecycle.registerDeviceToken(
+                deviceToken,
+                platform: platform,
+                appVersion: version
+            )
         }
     }
 
@@ -163,28 +158,18 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
             completionHandler,
             to: (@Sendable (UIBackgroundFetchResult) -> Void).self
         )
-        // Phase 19 plan 19-01 — silent push may arrive before bootstrap
-        // completes (push wakes the app from a cold-launch background
-        // window). Buffer by awaiting bootstrap, then dispatch into the
-        // freshly published syncEngine.
-        // KEEP: explicit @MainActor to touch `deps`; SilentPushHandler
-        // hops into the syncEngine actor on its own — body is short.
+        // Phase 19 plan 19-01 / plan 34-14 — silent push may arrive before
+        // bootstrap completes (push wakes the app from a cold-launch
+        // background window). BackgroundSyncLifecycle owns the bootstrap-await
+        // buffering AND the Phase-33 Auto-Sync gate (§G2 site 2) in one place;
+        // the delegate just forwards. Manual Sync Now is never gated.
+        // KEEP: explicit @MainActor to touch `deps`; the lifecycle hops into
+        // the syncEngine actor on its own — body is short.
         Task { @MainActor in
-            if deps.services == nil { await deps.bootstrap() }
-            guard let engine = deps.services?.syncEngine else {
-                sendableHandler(.noData)
-                return
-            }
-            // Phase 33 plan 33-02 — Auto Sync gate (§G2 site 2). When the user
-            // turns Auto Sync OFF, the silent-push wave is skipped: returning
-            // .noData is the honest result and avoids the engine wave. The gate
-            // lives here at the auto call site, not inside SilentPushHandler or
-            // SyncEngine; manual Sync Now is never gated.
-            guard deps.services?.readerDefaults.autoSync == true else {
-                sendableHandler(.noData)
-                return
-            }
-            SilentPushHandler.handle(userInfo, engine: engine, completion: sendableHandler)
+            await deps.backgroundSyncLifecycle.handleSilentPush(
+                userInfo,
+                completion: sendableHandler
+            )
         }
     }
 }
