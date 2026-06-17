@@ -20,6 +20,7 @@ import RishiChat
 import RishiOnboarding
 import RishiReader
 import RishiSettings
+import RishiSync
 import RishiUIKit
 
 struct SignedInView: View {
@@ -126,7 +127,7 @@ struct SignedInView: View {
         // `audioPrefs` holder; the focused value is `nil` until this live view
         // mounts, which disables the menu items pre-bootstrap for free.
         // Catalyst-only: iOS keeps the in-app gear + settings sheet untouched.
-        .readerPrefsMenuPublisher(services: services, user: user, audioPrefs: macAudioPrefs)
+        .readerPrefsMenuPublisher(services: services, user: user, audioPrefs: macAudioPrefs, onSignedOut: onSignedOut)
         // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader cover,
         // and persist the latest scene state on every visible path change.
         .sceneRestoration(
@@ -164,11 +165,12 @@ extension View {
     func readerPrefsMenuPublisher(
         services: BootstrappedServices,
         user: User,
-        audioPrefs: AudioMenuPrefs
+        audioPrefs: AudioMenuPrefs,
+        onSignedOut: @escaping () -> Void
     ) -> some View {
         #if targetEnvironment(macCatalyst)
         self.modifier(
-            ReaderPrefsMenuPublisher(services: services, user: user, audioPrefs: audioPrefs)
+            ReaderPrefsMenuPublisher(services: services, user: user, audioPrefs: audioPrefs, onSignedOut: onSignedOut)
         )
         #else
         self
@@ -188,11 +190,13 @@ private struct ReaderPrefsMenuPublisher: ViewModifier {
     let services: BootstrappedServices
     let user: User
     @Bindable var audioPrefs: AudioMenuPrefs
+    let onSignedOut: () -> Void
 
-    init(services: BootstrappedServices, user: User, audioPrefs: AudioMenuPrefs) {
+    init(services: BootstrappedServices, user: User, audioPrefs: AudioMenuPrefs, onSignedOut: @escaping () -> Void) {
         self.services = services
         self.user = user
         self.audioPrefs = audioPrefs
+        self.onSignedOut = onSignedOut
     }
 
     func body(content: Content) -> some View {
