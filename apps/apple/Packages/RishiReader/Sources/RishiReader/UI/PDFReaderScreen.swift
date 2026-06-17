@@ -88,6 +88,15 @@ public struct PDFReaderScreen: View {
     /// an inline `PDFView.highlightedSelections` highlight that follows the
     /// spoken passage page-to-page.
     private let readAloudParagraph: String?
+    /// Phase 31 — the LIVE user-facing PDF view-mode setting. Mac-only: the
+    /// `resolvedLayoutMode` resolver consults it under `macCatalyst`; iOS never
+    /// reads it (its `#else` reader block ignores `layoutMode` entirely). Plan
+    /// 31-04 supplies this value from the `@Observable` `AppReaderDefaults` at
+    /// the construction site (`PDFReaderDestination`), so reading it inside the
+    /// SwiftUI body triggers invalidation on a Settings change — applies live
+    /// (RESEARCH Pitfall 5: do NOT snapshot it to `@State`). Defaults to
+    /// `.automatic` so previews / pre-31-04 callers compile unchanged.
+    private let pdfViewMode: PDFViewModeSetting
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Chrome visibility is owned by a small `@Observable` controller so
     /// the tap-to-toggle, auto-hide, and VoiceOver behaviors live in a
@@ -149,15 +158,57 @@ public struct PDFReaderScreen: View {
     /// right based on actual width.
     @State private var readerAreaSize: CGSize = .zero
 
-    /// Phase 30 — resolved Mac PDF layout mode derived from the live
-    /// `readerAreaSize`. The resolver is pure + cheap so it is computed
-    /// unconditionally; only the `#if targetEnvironment(macCatalyst)` branch
-    /// inside ``PDFReaderView`` acts on it (iOS ignores the param), so this
-    /// stays byte-neutral for iOS rendering. Re-evaluates whenever
-    /// `readerAreaSize` changes via the existing `.onChange(of: proxy.size)`
-    /// seam, driving live-resize mode switches.
+    /// Phase 31 — Mac-only full-screen proxy. No clean public Catalyst
+    /// full-screen API exists (31-RESEARCH.md Q3), so we treat the scene as
+    /// full-screen when it effectively fills the screen width. The IMPURE scene
+    /// read (the `connectedScenes` idiom, mirroring ``PDFMacWindowSizing`` /
+    /// SiwaPresenter / ManageSubscriptionPresenter) is kept thin; the comparison
+    /// math is the pure ``PDFReaderLayoutResolver/isFullScreen(sceneSize:screenSize:tolerance:)``
+    /// from plan 31-01. Reads the live `readerAreaSize` so it re-evaluates on
+    /// resize / full-screen toggle via the same `.onChange(of: proxy.size)` seam.
+    private var isWindowFullScreen: Bool {
+        #if targetEnvironment(macCatalyst)
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            return PDFReaderLayoutResolver.isFullScreen(
+                sceneSize: readerAreaSize,
+                screenSize: windowScene.screen.bounds.size
+            )
+        }
+        return false
+        #else
+        return false
+        #endif
+    }
+
+    /// Phase 30 / Phase 31 — resolved Mac PDF layout mode. Phase 30 derived it
+    /// from the bare `readerAreaSize` width breakpoint; Phase 31 routes it
+    /// through ``PDFReaderLayoutResolver/resolve(setting:isFullScreen:availableSize:minPageWidth:gutter:)``
+    /// so the user's live `pdfViewMode` setting + the full-screen proxy decide
+    /// the effective layout (LOCKED: explicit modes force; Automatic resolves
+    /// windowed -> Continuous, full-screen -> Two Page). Reading the
+    /// `@Observable`-backed `pdfViewMode` here means a Settings change applies
+    /// live (RESEARCH Pitfall 5). Only the `#if targetEnvironment(macCatalyst)`
+    /// branch inside ``PDFReaderView`` acts on the result; the iOS path ignores
+    /// `layoutMode`, so iOS rendering stays byte-identical regardless of value.
     private var resolvedLayoutMode: PDFReaderLayoutMode {
-        PDFReaderLayoutResolver.mode(availableSize: readerAreaSize)
+        #if targetEnvironment(macCatalyst)
+        PDFReaderLayoutResolver.resolve(
+            setting: pdfViewMode,
+            isFullScreen: isWindowFullScreen,
+            availableSize: readerAreaSize
+        )
+        #else
+        // iOS never consults pdfViewMode: PDFReaderView's iOS `#else` block
+        // ignores `layoutMode` entirely, so this value is inert. Resolving with
+        // `.automatic` / not-full-screen keeps the call site unbranched and the
+        // iOS rendering path byte-identical to Phase 30.
+        PDFReaderLayoutResolver.resolve(
+            setting: .automatic,
+            isFullScreen: false,
+            availableSize: readerAreaSize
+        )
+        #endif
     }
     #endif
 
@@ -167,7 +218,8 @@ public struct PDFReaderScreen: View {
         highlightStore: (any HighlightStore)? = nil,
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
-        readAloudParagraph: String? = nil
+        readAloudParagraph: String? = nil,
+        pdfViewMode: PDFViewModeSetting = .automatic
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
@@ -175,6 +227,7 @@ public struct PDFReaderScreen: View {
         self.onReadAloud = onReadAloud
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
+        self.pdfViewMode = pdfViewMode
     }
 
     /// SwiftUI binding to the @Observable viewModel's theme. Tracks writes so
@@ -259,6 +312,22 @@ public struct PDFReaderScreen: View {
                         }
                     }
                 )
+                // Phase 31 — parent `.id()` rebuild token (pre-resolved
+                // decision #2, LOCKED). `usePageViewController(true)` is a sticky
+                // one-way scroller swap with no documented off-toggle (RESEARCH
+                // Pitfall 1 / Open Q1), so crossing the Single Page boundary must
+                // produce a FRESH `makeUIView` rather than an in-place
+                // reconfigure. Keying the id on whether the effective mode is
+                // `.singlePage` recreates the PDFView when entering/leaving Single
+                // Page, while Continuous <-> Two Page keep the SAME id and use
+                // plan 31-02's Phase-30 in-place reconfigure. Coordinates with
+                // 31-02's `updateUIView` rebuild, which fires ONLY for a live
+                // transition on an already-realized view (`oldMode != nil`): a
+                // fresh `makeUIView` from this `.id()` change lands with
+                // `appliedLayoutMode == nil`, so it takes the plain configure path
+                // and never double-rebuilds. The VM (`viewModel.pageIndex`)
+                // preserves reading position across the fresh make.
+                .id(resolvedLayoutMode == .singlePage ? "pdf-singlePage" : "pdf-scrolling")
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }
