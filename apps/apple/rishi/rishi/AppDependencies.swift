@@ -111,15 +111,6 @@ final class AppDependencies {
     /// from the SwiftUI environment that `RootView` reads.
     let macCommandRouter = MacCommandRouter()
 
-    /// Phase 32 Plan 32-03 — single shared single-instance backstop flag for
-    /// the dedicated Mac Settings window. ONE instance lives here so the Cmd+,
-    /// dispatcher (`MacCommandDispatchModifier`) reads `shouldOpen` and the
-    /// Settings scene root (`SettingsWindowRoot`) flips it via
-    /// `markOpened()`/`markClosed()` on appear/disappear. Constructed
-    /// synchronously alongside `macCommandRouter` (its init is nonisolated) so
-    /// it is reachable before bootstrap completes.
-    let settingsWindowPresenter = SettingsWindowPresenter()
-
     /// Cached user id pumped in by SignedInView after the auth session resolves.
     /// `RishiChatService` and the voice presenter read this synchronously from
     /// their `currentUserId` closures so they do not need to hop into the auth actor.
