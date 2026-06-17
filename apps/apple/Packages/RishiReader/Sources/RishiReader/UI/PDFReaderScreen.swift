@@ -148,6 +148,17 @@ public struct PDFReaderScreen: View {
     /// GeometryReader so the tap-region resolver can compute left/center/
     /// right based on actual width.
     @State private var readerAreaSize: CGSize = .zero
+
+    /// Phase 30 — resolved Mac PDF layout mode derived from the live
+    /// `readerAreaSize`. The resolver is pure + cheap so it is computed
+    /// unconditionally; only the `#if targetEnvironment(macCatalyst)` branch
+    /// inside ``PDFReaderView`` acts on it (iOS ignores the param), so this
+    /// stays byte-neutral for iOS rendering. Re-evaluates whenever
+    /// `readerAreaSize` changes via the existing `.onChange(of: proxy.size)`
+    /// seam, driving live-resize mode switches.
+    private var resolvedLayoutMode: PDFReaderLayoutMode {
+        PDFReaderLayoutResolver.mode(availableSize: readerAreaSize)
+    }
     #endif
 
     public init(
@@ -204,6 +215,7 @@ public struct PDFReaderScreen: View {
             GeometryReader { proxy in
                 PDFReaderView(
                     viewModel: viewModel,
+                    layoutMode: resolvedLayoutMode,
                     onSelectionChange: { sel in
                         handleSelectionChange(sel)
                     },
