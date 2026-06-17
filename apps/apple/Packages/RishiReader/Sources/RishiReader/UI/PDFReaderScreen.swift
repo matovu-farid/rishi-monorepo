@@ -171,57 +171,18 @@ public struct PDFReaderScreen: View {
     /// right based on actual width.
     @State private var readerAreaSize: CGSize = .zero
 
-    /// Phase 31 — Mac-only full-screen proxy. No clean public Catalyst
-    /// full-screen API exists (31-RESEARCH.md Q3), so we treat the scene as
-    /// full-screen when it effectively fills the screen width. The IMPURE scene
-    /// read (the `connectedScenes` idiom, mirroring ``PDFMacWindowSizing`` /
-    /// SiwaPresenter / ManageSubscriptionPresenter) is kept thin; the comparison
-    /// math is the pure ``PDFReaderLayoutResolver/isFullScreen(sceneSize:screenSize:tolerance:)``
-    /// from plan 31-01. Reads the live `readerAreaSize` so it re-evaluates on
-    /// resize / full-screen toggle via the same `.onChange(of: proxy.size)` seam.
-    private var isWindowFullScreen: Bool {
-        #if targetEnvironment(macCatalyst)
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            return PDFReaderLayoutResolver.isFullScreen(
-                sceneSize: readerAreaSize,
-                screenSize: windowScene.screen.bounds.size
-            )
-        }
-        return false
-        #else
-        return false
-        #endif
-    }
-
-    /// Phase 30 / Phase 31 — resolved Mac PDF layout mode. Phase 30 derived it
-    /// from the bare `readerAreaSize` width breakpoint; Phase 31 routes it
-    /// through ``PDFReaderLayoutResolver/resolve(setting:isFullScreen:availableSize:minPageWidth:gutter:)``
-    /// so the user's live `pdfViewMode` setting + the full-screen proxy decide
-    /// the effective layout (LOCKED: explicit modes force; Automatic resolves
-    /// windowed -> Continuous, full-screen -> Two Page). Reading the
+    /// Phase 30 / Phase 31 — resolved Mac PDF layout mode. The full-screen
+    /// scene probe + resolution math live in ``PDFMacLayoutResolver`` (plan
+    /// 34-02); the view just reads the resolved value. Reading the
     /// `@Observable`-backed `pdfViewMode` here means a Settings change applies
     /// live (RESEARCH Pitfall 5). Only the `#if targetEnvironment(macCatalyst)`
     /// branch inside ``PDFReaderView`` acts on the result; the iOS path ignores
     /// `layoutMode`, so iOS rendering stays byte-identical regardless of value.
     private var resolvedLayoutMode: PDFReaderLayoutMode {
-        #if targetEnvironment(macCatalyst)
-        PDFReaderLayoutResolver.resolve(
-            setting: pdfViewMode,
-            isFullScreen: isWindowFullScreen,
-            availableSize: readerAreaSize
+        PDFMacLayoutResolver.resolvedLayoutMode(
+            pdfViewMode: pdfViewMode,
+            readerAreaSize: readerAreaSize
         )
-        #else
-        // iOS never consults pdfViewMode: PDFReaderView's iOS `#else` block
-        // ignores `layoutMode` entirely, so this value is inert. Resolving with
-        // `.automatic` / not-full-screen keeps the call site unbranched and the
-        // iOS rendering path byte-identical to Phase 30.
-        PDFReaderLayoutResolver.resolve(
-            setting: .automatic,
-            isFullScreen: false,
-            availableSize: readerAreaSize
-        )
-        #endif
     }
     #endif
 
@@ -241,6 +202,13 @@ public struct PDFReaderScreen: View {
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.pdfViewMode = pdfViewMode
+    }
+
+    /// Phase 34 Plan 34-02 — the single page-navigation state machine. Collapses
+    /// the three previously-duplicated next/prev/clamp blocks (tap, Mac
+    /// `pageForward`, Mac `pageBackward`) into one tested ``PDFPageNavigator``.
+    private var navigator: PDFPageNavigator {
+        PDFPageNavigator(viewModel: viewModel)
     }
 
     /// SwiftUI binding to the @Observable viewModel's theme. Tracks writes so
@@ -301,27 +269,9 @@ public struct PDFReaderScreen: View {
                                 chrome.toggle()
                             }
                         case .nextPage:
-                            let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
-                            if next == viewModel.pageIndex {
-                                // Phase 18 Plan 18-02 — F-P1-01:
-                                // clamp didn't move = boundary hit.
-                                // Drives `.sensoryFeedback(.warning,
-                                // trigger: viewModel.lastBoundaryHitTick)`.
-                                viewModel.hitBoundary()
-                            } else {
-                                // Drives `.sensoryFeedback(.impact(.light),
-                                // trigger: viewModel.currentPageIndex)`.
-                                viewModel.advancePage()
-                                viewModel.seek(toPage: next)
-                            }
+                            navigator.goNext()
                         case .previousPage:
-                            let prev = max(viewModel.pageIndex - 1, 0)
-                            if prev == viewModel.pageIndex {
-                                viewModel.hitBoundary()
-                            } else {
-                                viewModel.advancePage()
-                                viewModel.seek(toPage: prev)
-                            }
+                            navigator.goPrev()
                         }
                     }
                 )
@@ -480,22 +430,10 @@ public struct PDFReaderScreen: View {
         // Phase 18 Plan 18-02 (F-P1-01) — bump the haptic trigger
         // counters so `.sensoryFeedback` fires from Mac arrow keys too.
         .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageForward)) { _ in
-            let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
-            if next == viewModel.pageIndex {
-                viewModel.hitBoundary()
-            } else {
-                viewModel.advancePage()
-                viewModel.seek(toPage: next)
-            }
+            navigator.goNext()
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageBackward)) { _ in
-            let prev = max(viewModel.pageIndex - 1, 0)
-            if prev == viewModel.pageIndex {
-                viewModel.hitBoundary()
-            } else {
-                viewModel.advancePage()
-                viewModel.seek(toPage: prev)
-            }
+            navigator.goPrev()
         }
         // Phase 18 Plan 18-08 (F-P2-01) — single `.sheet(item:)` driven by
         // the `ReaderSheet?` enum replaces the prior chain of three
@@ -669,112 +607,44 @@ public struct PDFReaderScreen: View {
     // MARK: - Selection / highlight flow (UIKit-only)
 
     #if canImport(UIKit)
-    /// Resolves `readAloudParagraph` to a `PDFSelection` on the current page
-    /// and pushes it into `PDFView.highlightedSelections` so the passage is
-    /// tinted without disturbing the user's own text selection. Clears the
-    /// highlight when no passage is active or it is not on the visible page.
+    /// Resolves `readAloudParagraph` to a tinted `PDFView.highlightedSelections`
+    /// passage and drives Mac auto-scroll via ``PDFReadAloudPresenter`` (plan
+    /// 34-02). The view just wires the live `pdfViewRef`, paragraph text, and
+    /// resolved layout mode; all PDFKit/geometry work lives in the presenter.
     private func applyReadAloudHighlight() {
-        guard let pdfView = pdfViewRef else { return }
-        guard let paragraph = readAloudParagraph,
-              let page = pdfView.currentPage,
-              let selection = PDFReadAloudHighlighter.selection(in: page, paragraph: paragraph)
-        else {
-            pdfView.highlightedSelections = nil
-            return
-        }
-        pdfView.highlightedSelections = [selection]
-
-        // Phase 30 plan 30-05 — Mac-gated read-aloud auto-scroll. iOS keeps
-        // PDFKit's paged mode and gets no auto-scroll. Mode A (single
-        // fit-to-width) scrolls the spoken passage near the top of the
-        // enclosed scroll view via the pure `ReadAloudScrollTarget` offset
-        // math (plan 30-02). Mode B (two-up spread) has no within-page scroll,
-        // so it only ensures the spoken page's spread is on screen.
-        #if targetEnvironment(macCatalyst)
-        switch resolvedLayoutMode {
-        case .singleFitWidth:
-            let rect = selection.bounds(for: page)
-            if let scroll = pdfView.firstEnclosedScrollViewForAutoScroll() {
-                let viewRect = pdfView.convert(rect, from: page)
-                let passageMinY = scroll.convert(viewRect, from: pdfView).minY
-                var target = scroll.contentOffset
-                target.y = ReadAloudScrollTarget.targetOffsetY(
-                    passageMinY: passageMinY,
-                    viewportHeight: scroll.bounds.height,
-                    contentHeight: scroll.contentSize.height
-                )
-                // animated (Pitfall 6: go(to:) is not animated; setContentOffset is).
-                scroll.setContentOffset(target, animated: true)
-            } else {
-                // Nil-safe fallback (Pitfall 3): no enclosed scroll view found.
-                pdfView.go(to: rect, on: page)
-            }
-        case .twoUpSpread:
-            // Two-up has no within-page scroll: just ensure the spoken page's
-            // spread is on screen if it is currently off-spread.
-            if let spokenPage = selection.pages.first, pdfView.currentPage !== spokenPage {
-                pdfView.go(to: spokenPage)
-            }
-        case .singlePage:
-            // Phase 31 — Single Page has no within-page vertical scroll; just
-            // navigate to the spoken page (same as .twoUpSpread). PDFKit's
-            // UIPageViewController handles the horizontal turn. The non-exhaustive
-            // switch (no default:) compiler-forced this case once Wave 1 added the
-            // effective .singlePage mode (RESEARCH Pitfall 6 safety net).
-            if let spokenPage = selection.pages.first, pdfView.currentPage !== spokenPage {
-                pdfView.go(to: spokenPage)
-            }
-        }
-        #endif
+        readAloudPresenter.apply(
+            paragraph: readAloudParagraph,
+            on: pdfViewRef,
+            mode: resolvedLayoutMode
+        )
     }
 
+    /// Orchestrates highlight CRUD through ``PDFHighlightInteractor`` (plan
+    /// 34-02). The interactor owns the `await viewModel.create/updateHighlight`
+    /// choreography; the view retains `@State` ownership and just applies the
+    /// returned outcomes.
+    private var highlightInteractor: PDFHighlightInteractor {
+        PDFHighlightInteractor(viewModel: viewModel, highlightStore: highlightStore)
+    }
+
+    private var readAloudPresenter: PDFReadAloudPresenter { PDFReadAloudPresenter() }
+
     private func handleSelectionChange(_ selection: PDFSelection?) {
-        guard let selection,
-              let document = viewModel.document,
-              let locator = PDFSelectionCoordinator.makeLocator(from: selection, in: document)
-        else {
-            pendingHighlight = nil
-            return
-        }
-        pendingHighlight = PendingHighlight(locator: locator, text: locator.text)
+        pendingHighlight = highlightInteractor.pendingHighlight(for: selection)
     }
 
     private func saveHighlight(pending: PendingHighlight, color: HighlightColor, note: String?) {
-        let store = highlightStore
-        // KEEP: viewModel.createHighlight is @MainActor (writes to @Observable
-        // viewModel.highlights). The store actor hop happens inside; explicit
-        // @MainActor here documents the intent and matches the @State write of
-        // pendingHighlight.
+        let interactor = highlightInteractor
         Task { @MainActor in
-            if let store {
-                _ = await viewModel.createHighlight(
-                    color: color,
-                    locator: pending.locator,
-                    note: note,
-                    store: store
-                )
-            }
+            await interactor.save(pending: pending, color: color, note: note)
             pendingHighlight = nil
         }
     }
 
     private func startNoteFlow(for pending: PendingHighlight) {
-        let store = highlightStore
-        // KEEP: viewModel.createHighlight is @MainActor; activeSheet is @State
-        // on this view. Both writes need MainActor.
+        let interactor = highlightInteractor
         Task { @MainActor in
-            guard let store else {
-                pendingHighlight = nil
-                return
-            }
-            // Save first with default yellow + empty note, then open the editor
-            // bound to the saved row.
-            if let saved = await viewModel.createHighlight(
-                color: .yellow,
-                locator: pending.locator,
-                note: nil,
-                store: store
-            ) {
+            if let saved = await interactor.startNoteFlow(for: pending) {
                 editingNoteText = ""
                 // Phase 18 Plan 18-08 (F-P2-01) — drive the single
                 // .sheet(item:) instead of the prior dedicated
@@ -787,17 +657,9 @@ public struct PDFReaderScreen: View {
 
     private func commitNoteEdit(on highlight: Highlight) {
         let text = editingNoteText
-        let store = highlightStore
-        // KEEP: viewModel.updateNote is @MainActor and activeSheet is @State.
-        // The store actor hop happens inside updateNote.
+        let interactor = highlightInteractor
         Task { @MainActor in
-            if let store {
-                await viewModel.updateNote(
-                    on: highlight,
-                    note: text.isEmpty ? nil : text,
-                    store: store
-                )
-            }
+            await interactor.commitNote(on: highlight, text: text)
             // Phase 18 Plan 18-08 (F-P2-01) — dismissing the highlight
             // editor clears the single-sheet enum.
             activeSheet = nil
@@ -811,27 +673,6 @@ public struct PDFReaderScreen: View {
 struct PendingHighlight: Equatable {
     let locator: PDFHighlightLocator
     let text: String
-}
-#endif
-
-#if targetEnvironment(macCatalyst)
-extension PDFView {
-    /// First `UIScrollView` descendant of this PDFView, or nil — used by the
-    /// Phase 30 read-aloud auto-scroll (Mode A) to drive the content offset.
-    /// Pitfall 3: PDFKit's enclosed-scroll-view structure is NOT contractual,
-    /// so this degrades gracefully and NEVER force-unwraps; a nil result falls
-    /// back to `go(to:on:)` at the call site. Mirrors the private traversal in
-    /// ``PDFReaderView`` (plan 30-04) but exposed for the screen's highlight seam.
-    func firstEnclosedScrollViewForAutoScroll() -> UIScrollView? {
-        func search(_ view: UIView) -> UIScrollView? {
-            if let scroll = view as? UIScrollView { return scroll }
-            for sub in view.subviews {
-                if let found = search(sub) { return found }
-            }
-            return nil
-        }
-        return search(self)
-    }
 }
 #endif
 
