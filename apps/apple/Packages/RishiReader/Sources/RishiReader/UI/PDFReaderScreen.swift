@@ -568,6 +568,40 @@ public struct PDFReaderScreen: View {
             return
         }
         pdfView.highlightedSelections = [selection]
+
+        // Phase 30 plan 30-05 — Mac-gated read-aloud auto-scroll. iOS keeps
+        // PDFKit's paged mode and gets no auto-scroll. Mode A (single
+        // fit-to-width) scrolls the spoken passage near the top of the
+        // enclosed scroll view via the pure `ReadAloudScrollTarget` offset
+        // math (plan 30-02). Mode B (two-up spread) has no within-page scroll,
+        // so it only ensures the spoken page's spread is on screen.
+        #if targetEnvironment(macCatalyst)
+        switch resolvedLayoutMode {
+        case .singleFitWidth:
+            let rect = selection.bounds(for: page)
+            if let scroll = pdfView.firstEnclosedScrollViewForAutoScroll() {
+                let viewRect = pdfView.convert(rect, from: page)
+                let passageMinY = scroll.convert(viewRect, from: pdfView).minY
+                var target = scroll.contentOffset
+                target.y = ReadAloudScrollTarget.targetOffsetY(
+                    passageMinY: passageMinY,
+                    viewportHeight: scroll.bounds.height,
+                    contentHeight: scroll.contentSize.height
+                )
+                // animated (Pitfall 6: go(to:) is not animated; setContentOffset is).
+                scroll.setContentOffset(target, animated: true)
+            } else {
+                // Nil-safe fallback (Pitfall 3): no enclosed scroll view found.
+                pdfView.go(to: rect, on: page)
+            }
+        case .twoUpSpread:
+            // Two-up has no within-page scroll: just ensure the spoken page's
+            // spread is on screen if it is currently off-spread.
+            if let spokenPage = selection.pages.first, pdfView.currentPage !== spokenPage {
+                pdfView.go(to: spokenPage)
+            }
+        }
+        #endif
     }
 
     private func handleSelectionChange(_ selection: PDFSelection?) {
@@ -653,6 +687,27 @@ public struct PDFReaderScreen: View {
 struct PendingHighlight: Equatable {
     let locator: PDFHighlightLocator
     let text: String
+}
+#endif
+
+#if targetEnvironment(macCatalyst)
+extension PDFView {
+    /// First `UIScrollView` descendant of this PDFView, or nil — used by the
+    /// Phase 30 read-aloud auto-scroll (Mode A) to drive the content offset.
+    /// Pitfall 3: PDFKit's enclosed-scroll-view structure is NOT contractual,
+    /// so this degrades gracefully and NEVER force-unwraps; a nil result falls
+    /// back to `go(to:on:)` at the call site. Mirrors the private traversal in
+    /// ``PDFReaderView`` (plan 30-04) but exposed for the screen's highlight seam.
+    func firstEnclosedScrollViewForAutoScroll() -> UIScrollView? {
+        func search(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            for sub in view.subviews {
+                if let found = search(sub) { return found }
+            }
+            return nil
+        }
+        return search(self)
+    }
 }
 #endif
 
