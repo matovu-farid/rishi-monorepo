@@ -66,6 +66,13 @@ public actor SyncEngine {
     private let messageStore: any MessageStore
     private let chatRefreshDelegate: (any ChatSyncRefreshDelegate)?
 
+    // Plan 34-10 (SRP) — runOnce's three responsibilities extracted into
+    // focused collaborators. The engine keeps only orchestration + actor
+    // isolation + debouncer lifecycle.
+    private let chatInboundMerger: ChatInboundMerger
+    private let outboundDrainer: OutboundDrainer
+    private let statusReporter: SyncStatusReporter
+
     private var debouncer: PositionDebouncer!
     private var status: SyncStatus?
 
@@ -104,6 +111,28 @@ public actor SyncEngine {
         self.messageStore = messageStore
         self.chatRefreshDelegate = chatRefreshDelegate
 
+        // Plan 34-10 (SRP) — assemble the runOnce collaborators from the
+        // already-stored dependencies. No new init params; uploaders/fetchers/
+        // stores are reused as-is so behavior is unchanged.
+        self.chatInboundMerger = ChatInboundMerger(
+            conversationsFetcher: conversationsFetcher,
+            messagesFetcher: messagesFetcher,
+            conversationStore: conversationStore,
+            messageStore: messageStore,
+            metadataStore: metadataStore
+        )
+        self.outboundDrainer = OutboundDrainer(
+            queue: queue,
+            bookStore: bookStore,
+            metadataStore: metadataStore,
+            bookUploader: bookUploader,
+            positionUploader: positionUploader,
+            highlightUploader: highlightUploader,
+            conversationUploader: conversationUploader,
+            messageUploader: messageUploader
+        )
+        self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
+
         // PositionDebouncer's commit closure hops back into this actor so
         // queue + metadata + status mutations stay isolated. self isn't
         // available yet for `[weak self]` — use a holder that the actor's
@@ -137,7 +166,7 @@ public actor SyncEngine {
         do {
             try await metadataStore.markDirty(entityId: bookId, kind: .book)
             await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
-            await refreshPendingCount()
+            await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markBookDirty.failed", error: error)
         }
@@ -151,7 +180,7 @@ public actor SyncEngine {
         do {
             try await metadataStore.markDirty(entityId: highlightId, kind: .highlight)
             await queue.enqueue(SyncQueueItem(entityId: highlightId, kind: .highlight))
-            await refreshPendingCount()
+            await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markHighlightDirty.failed", error: error)
         }
@@ -164,7 +193,7 @@ public actor SyncEngine {
         do {
             try await metadataStore.markDirty(entityId: id, kind: .conversation)
             await queue.enqueue(SyncQueueItem(entityId: id, kind: .conversation))
-            await refreshPendingCount()
+            await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markConversationDirty.failed", error: error)
         }
@@ -177,7 +206,7 @@ public actor SyncEngine {
         do {
             try await metadataStore.markDirty(entityId: id, kind: .message)
             await queue.enqueue(SyncQueueItem(entityId: id, kind: .message))
-            await refreshPendingCount()
+            await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markMessageDirty.failed", error: error)
         }
@@ -188,7 +217,7 @@ public actor SyncEngine {
         do {
             try await metadataStore.markDirty(entityId: bookId, kind: .position)
             await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .position))
-            await refreshPendingCount()
+            await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.commitPositionDirty.failed", error: error)
         }
@@ -208,7 +237,7 @@ public actor SyncEngine {
         let signpostState = syncSignposter.beginInterval("sync.wave")
         defer { syncSignposter.endInterval("sync.wave", signpostState) }
         var wave = Wave()
-        setRunning(true)
+        statusReporter.setRunning(true, on: status)
 
         // 0. Hydrate the in-memory queue from sync_metadata.
         do {
@@ -232,131 +261,31 @@ public actor SyncEngine {
             wave.errors.append("fetch: \(error)")
         }
 
-        // 1b. Inbound — Phase 16-05: dedicated chat-sync pulls. The legacy
-        //     ChangeApplier `.conversation` / `.message` branches stay as a
-        //     defensive markClean no-op (regression-guarded by tests); the
-        //     real merge happens here so the engine can drive the stores
-        //     directly without widening ChangeApplier's dep surface.
-        var chatRowsApplied = 0
-        do {
-            let convos = try await conversationsFetcher.fetch()
-            for convo in convos {
-                // LWW: drop remote if local is newer-or-equal.
-                if let local = try await conversationStore.conversation(convo.id),
-                   local.updatedAt >= convo.updatedAt {
-                    wave.conflicts += 1
-                    continue
-                }
-                try await conversationStore.upsert(convo)
-                try await metadataStore.markClean(
-                    entityId: convo.id,
-                    kind: .conversation,
-                    lastSyncedAt: convo.updatedAt,
-                    remoteEtag: nil
-                )
-                wave.applied += 1
-                chatRowsApplied += 1
-            }
-        } catch {
-            wave.errors.append("conversations.fetch: \(error)")
-        }
+        // 1b. Inbound — Phase 16-05: dedicated chat-sync pulls, delegated to
+        //     ChatInboundMerger (plan 34-10). The legacy ChangeApplier
+        //     `.conversation` / `.message` branches stay a defensive markClean
+        //     no-op (regression-guarded by tests); the real merge runs here so
+        //     the engine drives the stores directly without widening
+        //     ChangeApplier's dep surface.
+        let chatMerge = await chatInboundMerger.merge()
+        wave.applied += chatMerge.applied
+        wave.conflicts += chatMerge.conflicts
+        wave.errors.append(contentsOf: chatMerge.errors)
+        let chatRowsApplied = chatMerge.chatRowsApplied
 
-        do {
-            let msgs = try await messagesFetcher.fetch()
-            for msg in msgs {
-                // Messages are append-only locally — server is canonical;
-                // unconditional upsert keyed by id is the right move.
-                try await messageStore.upsert(msg)
-                try await metadataStore.markClean(
-                    entityId: msg.id,
-                    kind: .message,
-                    lastSyncedAt: msg.createdAt,
-                    remoteEtag: nil
-                )
-                wave.applied += 1
-                chatRowsApplied += 1
-            }
-        } catch {
-            wave.errors.append("messages.fetch: \(error)")
-        }
-
-        // 2. Outbound — drain queue with per-kind buckets so a book-only
-        //    drain doesn't accidentally swallow position items as collateral.
-        let limit = config.batchLimit
-        let drained = await queue.dequeueNext(limit: limit)
-        var booksBucket: [SyncQueueItem] = []
-        var positionsBucket: [SyncQueueItem] = []
-        var highlightsBucket: [SyncQueueItem] = []
-        var conversationsBucket: [SyncQueueItem] = []
-        var messagesBucket: [SyncQueueItem] = []
-        for item in drained {
-            switch item.kind {
-            case .book:         booksBucket.append(item)
-            case .position:     positionsBucket.append(item)
-            case .highlight:    highlightsBucket.append(item)
-            case .conversation: conversationsBucket.append(item)
-            case .message:      messagesBucket.append(item)
-            }
-        }
-
-        // 2a. Books — one upload per item (no batching API today).
-        for item in booksBucket {
-            do {
-                if let book = try await bookStore.book(item.entityId) {
-                    try await bookUploader.upload(book)
-                    wave.booksUploaded += 1
-                } else {
-                    // Local row gone — drop the dirty mark.
-                    try await metadataStore.forget(entityId: item.entityId, kind: .book)
-                }
-            } catch {
-                wave.errors.append("book.upload: \(error)")
-                await queue.enqueue(item) // re-enqueue for the next wave
-            }
-        }
-
-        // 2b. Positions — batch push.
-        if !positionsBucket.isEmpty {
-            do {
-                wave.positionsPushed = try await positionUploader.pushPending(items: positionsBucket)
-            } catch {
-                wave.errors.append("position.push: \(error)")
-                for item in positionsBucket { await queue.enqueue(item) }
-            }
-        }
-
-        // 2c. Highlights — batch push (live + tombstones).
-        if !highlightsBucket.isEmpty {
-            do {
-                wave.highlightsPushed = try await highlightUploader.pushPending(items: highlightsBucket)
-            } catch {
-                wave.errors.append("highlight.push: \(error)")
-                for item in highlightsBucket { await queue.enqueue(item) }
-            }
-        }
-
-        // 2d. Conversations — batch push (Phase 16-04).
-        if !conversationsBucket.isEmpty {
-            do {
-                wave.conversationsPushed = try await conversationUploader.pushPending(items: conversationsBucket)
-            } catch {
-                wave.errors.append("conversation.push: \(error)")
-                for item in conversationsBucket { await queue.enqueue(item) }
-            }
-        }
-
-        // 2e. Messages — batch push (Phase 16-04).
-        if !messagesBucket.isEmpty {
-            do {
-                wave.messagesPushed = try await messageUploader.pushPending(items: messagesBucket)
-            } catch {
-                wave.errors.append("message.push: \(error)")
-                for item in messagesBucket { await queue.enqueue(item) }
-            }
-        }
+        // 2. Outbound — drain the queue by kind, delegated to OutboundDrainer
+        //    (plan 34-10). Per-kind buckets keep a book-only drain from
+        //    swallowing position items as collateral.
+        let drain = await outboundDrainer.drain(limit: config.batchLimit)
+        wave.booksUploaded = drain.booksUploaded
+        wave.positionsPushed = drain.positionsPushed
+        wave.highlightsPushed = drain.highlightsPushed
+        wave.conversationsPushed = drain.conversationsPushed
+        wave.messagesPushed = drain.messagesPushed
+        wave.errors.append(contentsOf: drain.errors)
 
         // 3. Snapshot SyncStatus for the UI.
-        await snapshotStatus(error: wave.errors.first)
+        await statusReporter.snapshotStatus(error: wave.errors.first, on: status)
 
         // 3b. Phase 16-05 — fire the chat-refresh delegate so the
         //     Conversations tab re-reads from the store after an inbound
@@ -366,7 +295,7 @@ public actor SyncEngine {
             await delegate.chatSyncDidMerge()
         }
 
-        setRunning(false)
+        statusReporter.setRunning(false, on: status)
 
         Log.event("sync.wave.completed", level: .info, data: [
             "fetched": String(wave.fetched),
@@ -394,39 +323,8 @@ public actor SyncEngine {
     }
 
     // MARK: - Status mutations
-
-    private func setRunning(_ running: Bool) {
-        guard let status else { return }
-        let now = status.snapshot()
-        status.apply(SyncStatusSnapshot(
-            lastSyncedAt: now.lastSyncedAt,
-            pendingCount: now.pendingCount,
-            isRunning: running,
-            lastError: running ? nil : now.lastError
-        ))
-    }
-
-    private func refreshPendingCount() async {
-        guard let status else { return }
-        let count = (try? await metadataStore.pendingCount()) ?? 0
-        let now = status.snapshot()
-        status.apply(SyncStatusSnapshot(
-            lastSyncedAt: now.lastSyncedAt,
-            pendingCount: count,
-            isRunning: now.isRunning,
-            lastError: now.lastError
-        ))
-    }
-
-    private func snapshotStatus(error: String?) async {
-        guard let status else { return }
-        let cursor = try? await metadataStore.globalLastSyncedAt()
-        let pending = (try? await metadataStore.pendingCount()) ?? 0
-        status.apply(SyncStatusSnapshot(
-            lastSyncedAt: cursor,
-            pendingCount: pending,
-            isRunning: false,
-            lastError: error
-        ))
-    }
+    //
+    // Plan 34-10 (SRP) — the setRunning / refreshPendingCount / snapshotStatus
+    // bodies moved to `SyncStatusReporter`. The engine routes through
+    // `statusReporter`, passing the late-bound `status` per call.
 }

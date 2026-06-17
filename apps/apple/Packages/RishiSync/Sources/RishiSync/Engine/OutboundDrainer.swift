@@ -1,0 +1,139 @@
+import Foundation
+import RishiCore
+
+/// Outbound queue drain, extracted from `SyncEngine.runOnce` (plan 34-10 SRP).
+///
+/// Owns the per-kind bucketing + per-uploader dispatch + re-enqueue-on-error
+/// that previously lived inline at `runOnce` step 2. Behavior is byte-identical:
+///   - dequeue up to `limit` items, bucket by kind so a book-only drain can't
+///     swallow position items as collateral;
+///   - **Books** — one upload per item (no batch API); a missing local row
+///     drops the dirty mark via `metadataStore.forget`; an error re-enqueues
+///     that single item;
+///   - **Positions / Highlights / Conversations / Messages** — batch
+///     `pushPending`; an error re-enqueues every item in that bucket.
+///
+/// Error strings keep the exact "book.upload:" / "position.push:" / … prefixes
+/// the engine emitted, so `Wave.errors` is unchanged.
+struct OutboundDrainer: Sendable {
+
+    struct DrainResult: Sendable, Equatable {
+        var booksUploaded: Int = 0
+        var positionsPushed: Int = 0
+        var highlightsPushed: Int = 0
+        var conversationsPushed: Int = 0
+        var messagesPushed: Int = 0
+        var errors: [String] = []
+        init() {}
+    }
+
+    private let queue: SyncQueue
+    private let bookStore: any BookStore
+    private let metadataStore: any SyncMetadataStore
+    private let bookUploader: BookUploader
+    private let positionUploader: PositionUploader
+    private let highlightUploader: HighlightUploader
+    private let conversationUploader: ConversationUploader
+    private let messageUploader: MessageUploader
+
+    init(
+        queue: SyncQueue,
+        bookStore: any BookStore,
+        metadataStore: any SyncMetadataStore,
+        bookUploader: BookUploader,
+        positionUploader: PositionUploader,
+        highlightUploader: HighlightUploader,
+        conversationUploader: ConversationUploader,
+        messageUploader: MessageUploader
+    ) {
+        self.queue = queue
+        self.bookStore = bookStore
+        self.metadataStore = metadataStore
+        self.bookUploader = bookUploader
+        self.positionUploader = positionUploader
+        self.highlightUploader = highlightUploader
+        self.conversationUploader = conversationUploader
+        self.messageUploader = messageUploader
+    }
+
+    /// Drain up to `limit` queue items and push them by kind.
+    func drain(limit: Int) async -> DrainResult {
+        var result = DrainResult()
+
+        // Per-kind buckets so a book-only drain doesn't accidentally swallow
+        // position items as collateral.
+        let drained = await queue.dequeueNext(limit: limit)
+        var booksBucket: [SyncQueueItem] = []
+        var positionsBucket: [SyncQueueItem] = []
+        var highlightsBucket: [SyncQueueItem] = []
+        var conversationsBucket: [SyncQueueItem] = []
+        var messagesBucket: [SyncQueueItem] = []
+        for item in drained {
+            switch item.kind {
+            case .book:         booksBucket.append(item)
+            case .position:     positionsBucket.append(item)
+            case .highlight:    highlightsBucket.append(item)
+            case .conversation: conversationsBucket.append(item)
+            case .message:      messagesBucket.append(item)
+            }
+        }
+
+        // Books — one upload per item (no batching API today).
+        for item in booksBucket {
+            do {
+                if let book = try await bookStore.book(item.entityId) {
+                    try await bookUploader.upload(book)
+                    result.booksUploaded += 1
+                } else {
+                    // Local row gone — drop the dirty mark.
+                    try await metadataStore.forget(entityId: item.entityId, kind: .book)
+                }
+            } catch {
+                result.errors.append("book.upload: \(error)")
+                await queue.enqueue(item) // re-enqueue for the next wave
+            }
+        }
+
+        // Positions — batch push.
+        if !positionsBucket.isEmpty {
+            do {
+                result.positionsPushed = try await positionUploader.pushPending(items: positionsBucket)
+            } catch {
+                result.errors.append("position.push: \(error)")
+                for item in positionsBucket { await queue.enqueue(item) }
+            }
+        }
+
+        // Highlights — batch push (live + tombstones).
+        if !highlightsBucket.isEmpty {
+            do {
+                result.highlightsPushed = try await highlightUploader.pushPending(items: highlightsBucket)
+            } catch {
+                result.errors.append("highlight.push: \(error)")
+                for item in highlightsBucket { await queue.enqueue(item) }
+            }
+        }
+
+        // Conversations — batch push (Phase 16-04).
+        if !conversationsBucket.isEmpty {
+            do {
+                result.conversationsPushed = try await conversationUploader.pushPending(items: conversationsBucket)
+            } catch {
+                result.errors.append("conversation.push: \(error)")
+                for item in conversationsBucket { await queue.enqueue(item) }
+            }
+        }
+
+        // Messages — batch push (Phase 16-04).
+        if !messagesBucket.isEmpty {
+            do {
+                result.messagesPushed = try await messageUploader.pushPending(items: messagesBucket)
+            } catch {
+                result.errors.append("message.push: \(error)")
+                for item in messagesBucket { await queue.enqueue(item) }
+            }
+        }
+
+        return result
+    }
+}
