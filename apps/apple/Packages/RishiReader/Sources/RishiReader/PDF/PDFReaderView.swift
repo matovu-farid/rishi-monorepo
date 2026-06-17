@@ -138,12 +138,30 @@ public struct PDFReaderView: UIViewRepresentable {
     }
 
     #if targetEnvironment(macCatalyst)
-    /// Mac-only per-mode `PDFView` configuration. NEVER calls
-    /// `usePageViewController` (RESEARCH Pitfall 1/7: it ignores
-    /// `displayMode` and disables fit). Mode A = single fit-to-width with
-    /// vertical scrolling; Mode B = two-up height-fit spread.
+    /// Mac-only per-mode `PDFView` configuration. The fit-to-width (Mode A)
+    /// and two-up (Mode B) cases NEVER call `usePageViewController` (RESEARCH
+    /// Pitfall 1/7: it ignores `displayMode` and disables fit). Phase 31's
+    /// Single Page case DOES call it (it restores the pre-Phase-30 horizontal
+    /// page-turn config) — because that toggle is sticky, transitions
+    /// into/out of Single Page rebuild the `PDFView` rather than reconfigure
+    /// in place (see updateUIView). Mode A = single fit-to-width with vertical
+    /// scrolling; Mode B = two-up height-fit spread; Single Page = one page,
+    /// horizontal page-turn.
     private func configureMacLayout(_ pdfView: PDFView, mode: PDFReaderLayoutMode) {
         switch mode {
+        case .singlePage:
+            // Phase 31 — restore the pre-Phase-30 Mac config (it IS the iOS
+            // `#else` block): one page at a time, horizontal page-turns, whole
+            // page fit. usePageViewController(true) MUST be first; it is a
+            // sticky one-way scroller swap (Pitfall 1) — switching into/out of
+            // this mode on a live PDFView is handled by the rebuild path in
+            // updateUIView, NOT an in-place reconfigure.
+            pdfView.usePageViewController(true, withViewOptions: nil)
+            pdfView.displayMode = .singlePage
+            pdfView.displayDirection = .horizontal
+            pdfView.autoScales = true
+            pdfView.minScaleFactor = 0.5
+            pdfView.maxScaleFactor = 4.0
         case .singleFitWidth:
             pdfView.displayMode = .singlePageContinuous
             pdfView.displayDirection = .vertical
@@ -339,10 +357,22 @@ public struct PDFReaderView: UIViewRepresentable {
         /// the applied layout mode is `.twoUpSpread`; everything else is Mode A.
         private func handleContentOffsetChange(_ scroll: UIScrollView) {
             guard !isTurnSettling else { return }
-            if appliedLayoutMode == .twoUpSpread {
-                handleSpreadSwipe(scroll)
-            } else {
+            // Phase 31 — strict, exhaustive switch (no `default:`) so the
+            // compiler forces a decision for every effective mode. Single Page
+            // is INERT: PDFKit's UIPageViewController owns horizontal turns and
+            // the directional-transition overlay (driven only from
+            // handleOverscroll/handleSpreadSwipe) is therefore never triggered
+            // there — correct, since PDFKit provides its own native horizontal
+            // transition (Pitfall 2). Two Page + Continuous unchanged.
+            switch appliedLayoutMode {
+            case .singleFitWidth?:
                 handleOverscroll(scroll)
+            case .twoUpSpread?:
+                handleSpreadSwipe(scroll)
+            case .singlePage?:
+                return
+            case nil:
+                return
             }
         }
 
