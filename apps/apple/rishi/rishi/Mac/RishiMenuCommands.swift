@@ -55,8 +55,14 @@ struct RishiMenuCommands: Commands {
                                   modifiers: RishiKeyboardShortcut.find.modifiers)
         }
 
-        // VIEW — theme + font + tab switchers.
-        CommandMenu("View") {
+        // VIEW — theme + font + tab switchers. Phase 32 Plan 32-04: merged
+        // into the SINGLE system View menu (created by `.searchable(.toolbar)`
+        // in LibrarySearchField.swift) via `CommandGroup(after: .sidebar)`.
+        // Previously this declared its own custom View command menu, which
+        // collided with SwiftUI's auto-generated View menu and produced TWO
+        // "View" menus on Mac. Placing these items after `.sidebar` lands them
+        // in the same system View menu — exactly one "View" now appears.
+        CommandGroup(after: .sidebar) {
             Button("Light Theme")  { router.send(.selectTheme(.light)) }
                 .keyboardShortcut("l", modifiers: [.command, .option])
             Button("Sepia Theme")  { router.send(.selectTheme(.sepia)) }

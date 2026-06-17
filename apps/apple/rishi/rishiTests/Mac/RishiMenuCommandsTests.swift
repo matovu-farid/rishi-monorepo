@@ -61,4 +61,31 @@ struct RishiMenuCommandsTests {
         #expect(shortcut.key.character == "i")
         #expect(shortcut.modifiers == .command)
     }
+
+    // Phase 32 Plan 32-04 — the custom `CommandMenu("View")` was merged into
+    // the system View menu via `CommandGroup(after: .sidebar)` so exactly one
+    // "View" menu appears on Mac. The "exactly one View menu" rendering is a
+    // MANUAL MAC SMOKE (SwiftUI menu structure isn't unit-introspectable
+    // without a running NS/UIApplication) — see the plan's verification note.
+    // What we CAN pin here: the View-menu intents still round-trip through the
+    // same MacCommandRouter the (now relocated) buttons send to, so the menu
+    // relocation didn't change any button body, intent, or routing.
+    @Test("View-menu intents still round-trip through MacCommandRouter")
+    func viewMenuIntentsRoundTrip() {
+        let router = MacCommandRouter()
+
+        router.send(.selectTheme(.dark))
+        #expect(router.pendingIntent == .selectTheme(.dark))
+        router.consume()
+
+        router.send(.fontIncrease)
+        #expect(router.pendingIntent == .fontIncrease)
+        router.consume()
+
+        router.send(.selectTab(.chats))
+        #expect(router.pendingIntent == .selectTab(.chats))
+        router.consume()
+
+        #expect(router.pendingIntent == nil)
+    }
 }
