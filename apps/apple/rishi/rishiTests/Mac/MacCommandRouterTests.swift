@@ -37,6 +37,15 @@ struct MacCommandRouterTests {
         #expect(r.pendingIntent == .fontDecrease)
     }
 
+    @Test("send(.showSettings) round-trips")
+    func showSettingsRoundTrip() {
+        let r = MacCommandRouter()
+        r.send(.showSettings)
+        #expect(r.pendingIntent == .showSettings)
+        r.consume()
+        #expect(r.pendingIntent == nil)
+    }
+
     @Test("Shortcut key + modifier table")
     func shortcutTable() {
         #expect(RishiKeyboardShortcut.importBook.key   == "o")

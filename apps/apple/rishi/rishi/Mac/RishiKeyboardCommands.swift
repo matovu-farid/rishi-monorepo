@@ -49,6 +49,7 @@ enum MacCommandIntent: Equatable, Sendable {
     case selectTab(MacTab)
     case pageForward
     case pageBackward
+    case showSettings
 }
 
 /// Two-tab top-level navigation surface for Mac menu commands.
