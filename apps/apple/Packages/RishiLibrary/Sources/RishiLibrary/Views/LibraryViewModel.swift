@@ -62,23 +62,31 @@ public final class LibraryViewModel {
     public var debounceDuration: Duration = .milliseconds(150)
 
     private let bookStore: any BookStore
-    private let positionStore: any PositionStore
     private let storage: BookFileStorage
     private let currentUserId: @MainActor () -> UserID?
     private let importCoordinator: ImportCoordinator
+    private let positionLoader: PositionLoader
+    private let coverResolver: BookCoverResolver
 
     private var searchTask: Task<Void, Never>? = nil
 
+    /// `positionLoader` / `coverResolver` are defaulted so existing call
+    /// sites keep the stable five-argument init; production constructs them
+    /// from the injected `positionStore` / `storage`. Tests may inject
+    /// custom collaborators.
     public init(bookStore: any BookStore,
                 positionStore: any PositionStore,
                 storage: BookFileStorage,
                 currentUserId: @escaping @MainActor () -> UserID?,
-                importCoordinator: ImportCoordinator) {
+                importCoordinator: ImportCoordinator,
+                positionLoader: PositionLoader? = nil,
+                coverResolver: BookCoverResolver? = nil) {
         self.bookStore = bookStore
-        self.positionStore = positionStore
         self.storage = storage
         self.currentUserId = currentUserId
         self.importCoordinator = importCoordinator
+        self.positionLoader = positionLoader ?? PositionLoader(positionStore: positionStore)
+        self.coverResolver = coverResolver ?? BookCoverResolver(storage: storage)
     }
 
     /// Imports picker-vended URLs through `ImportCoordinator` (security-scoped
@@ -110,59 +118,16 @@ public final class LibraryViewModel {
         }
         do {
             let loaded = try await bookStore.books(for: userId)
-            // F-P0-03: fan out positionStore reads concurrently via withTaskGroup
-            // instead of awaiting each one serially. PositionStore is Sendable +
-            // nonisolated, so each spawned task runs off the MainActor; the only
-            // hop back is for the final state assignment. Per locked decision #2
-            // the PositionStore protocol stays unchanged — fan-out lives in the
-            // view-model. Swift book reference: "Calling Asynchronous Functions
-            // in Parallel".
-            let positionsByBook: [BookID: Position] = await withTaskGroup(
-                of: (BookID, Position?).self
-            ) { group in
-                for book in loaded {
-                    group.addTask { [positionStore = self.positionStore] in
-                        let p = try? await positionStore.position(for: book.id)
-                        return (book.id, p)
-                    }
-                }
-                var out: [BookID: Position] = [:]
-                for await (id, position) in group {
-                    if let position { out[id] = position }
-                }
-                return out
-            }
-            // Phase 21 Plan 21-01 — fan out cover-URL resolution INSIDE
-            // refresh() so the grid's first paint (which binds to
-            // `coverURLs`) sees real URLs and skips the gradient placeholder
-            // flash. Each child task tries the nonisolated HEIC-cache fast
-            // path first (`cachedCoverURLIfFresh`) so cache-warm books pay
-            // only a stat syscall on the cooperative executor. On MISS we
-            // fall through to the actor-isolated `cachedCoverURL(for:)`
-            // slow path which lazily warms the HEIC cache from the on-disk
-            // `cover.png` that `importBook` wrote. This second hop is what
-            // makes newly-imported books render their cover on the very
-            // next paint instead of staying stuck on the gradient — locked
-            // by `LibraryViewModelImportCoverRegressionTests`. Subsequent
-            // refreshes hit the warm cache and skip the slow-path entirely.
-            let resolvedCovers: [BookID: URL] = await withTaskGroup(
-                of: (BookID, URL?).self
-            ) { group in
-                for book in loaded {
-                    group.addTask { [storage = self.storage] in
-                        if let warm = storage.cachedCoverURLIfFresh(for: book) {
-                            return (book.id, warm)
-                        }
-                        let cold = await storage.cachedCoverURL(for: book)
-                        return (book.id, cold)
-                    }
-                }
-                var out: [BookID: URL] = [:]
-                for await (id, url) in group {
-                    if let url { out[id] = url }
-                }
-                return out
-            }
+            // Thin orchestration: the position fan-out and the cover
+            // fast/slow resolution now live in dedicated services
+            // (`PositionLoader`, `BookCoverResolver`). Both resolve BEFORE
+            // assigning state so the grid's first paint sees real positions
+            // AND real cover URLs in the same MainActor turn — no gradient
+            // placeholder flash. Cover resolution warms the HEIC cache for
+            // newly-imported books, locked by
+            // `LibraryViewModelImportCoverRegressionTests`.
+            let positionsByBook = await positionLoader.positions(for: loaded)
+            let resolvedCovers = await coverResolver.coverURLs(for: loaded)
             self.books = loaded
             self.positionsByBookId = positionsByBook
             self.coverURLs = resolvedCovers
@@ -192,19 +157,10 @@ public final class LibraryViewModel {
     }
 
     public func coverURL(for book: Book) async -> URL? {
-        // Phase 21 perf — nonisolated cache-hit fast path. The library
-        // renders N tiles in parallel via `LibraryRootView.computeCoverURLs`
-        // (`withTaskGroup`); previously every tile (including cache HITs)
-        // had to queue behind the BookFileStorage actor's single executor
-        // and then again behind the CoverCache actor's executor, defeating
-        // the parallel fan-out. The fast path reads HEIC + mtime sidecar
-        // off-actor via FileManager.default, so warm-cache paints fan out
-        // truly concurrently. Cache MISS / stale still falls through to
-        // the slow path which owns the write side under actor isolation.
-        if let hit = storage.cachedCoverURLIfFresh(for: book) {
-            return hit
-        }
-        return await storage.cachedCoverURL(for: book)
+        // Delegates to `BookCoverResolver`, which owns the single fast/slow
+        // cache decision (nonisolated HEIC fast path, then the actor-isolated
+        // slow path on miss). Kept as a VM method for existing call sites.
+        await coverResolver.coverURL(for: book)
     }
 
     // MARK: - Search debounce
