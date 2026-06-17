@@ -4,8 +4,9 @@ import CoreGraphics
 /// width with vertical scrolling and overscroll page turns; Mode B shows a
 /// two-page spread when the window is wide enough to hold both pages.
 public enum PDFReaderLayoutMode: Sendable, Equatable {
-    case singleFitWidth   // Mode A: one page, fit width, vertical scroll, overscroll-turn
-    case twoUpSpread      // Mode B: two pages, fit height, swipe = one spread
+    case singlePage       // Phase 31: pre-Phase-30 horizontal page-turn (usePageViewController)
+    case singleFitWidth   // Mode A / Continuous: one page, fit width, vertical scroll, overscroll-turn
+    case twoUpSpread      // Mode B / Two Page: two pages, fit height, swipe = one spread
 }
 
 /// Single source of truth for the PDF reader layout metrics. The minimum page
@@ -22,7 +23,7 @@ public enum PDFReaderLayoutMetrics {
     public static let minWindowHeight: CGFloat = 480
 }
 
-/// Pure, `#if`-free decision seam for the Mac PDF reader. Kept free of PDFKit
+/// Pure, preprocessor-free decision seam for the Mac PDF reader. Kept free of PDFKit
 /// and UIKit so the breakpoint and spread mapping are fully unit-testable on the
 /// dev host; UIKit-touching plans (30-03, 30-05) only READ its results.
 public enum PDFReaderLayoutResolver {
@@ -36,6 +37,45 @@ public enum PDFReaderLayoutResolver {
     ) -> PDFReaderLayoutMode {
         let twoPageWidth = (minPageWidth * 2) + gutter
         return availableSize.width >= twoPageWidth ? .twoUpSpread : .singleFitWidth
+    }
+
+    /// Maps the user-facing ``PDFViewModeSetting`` to the effective
+    /// ``PDFReaderLayoutMode``. Explicit cases FORCE their layout regardless of
+    /// window size/state (LOCKED); `.automatic` resolves by full-screen state.
+    ///
+    /// Pre-resolved decision #1 (LOCKED): when windowed, Automatic is ALWAYS
+    /// Continuous (`.singleFitWidth`) — even an ultra-wide windowed window does
+    /// NOT get a Two Page spread. Two Page is reserved for full-screen. The
+    /// `minPageWidth`/`gutter` params are retained for signature stability and a
+    /// possible future width-breakpoint decay path, but the strict windowed
+    /// branch deliberately does not consult them.
+    public static func resolve(
+        setting: PDFViewModeSetting,
+        isFullScreen: Bool,
+        availableSize: CGSize,
+        minPageWidth: CGFloat = PDFReaderLayoutMetrics.minPageWidth,
+        gutter: CGFloat = PDFReaderLayoutMetrics.gutter
+    ) -> PDFReaderLayoutMode {
+        switch setting {
+        case .singlePage: return .singlePage
+        case .continuous: return .singleFitWidth
+        case .twoPage:    return .twoUpSpread
+        case .automatic:
+            // LOCKED decision #1: full-screen -> Two Page, windowed -> Continuous.
+            return isFullScreen ? .twoUpSpread : .singleFitWidth
+        }
+    }
+
+    /// Pure size-proxy: treat the scene as full-screen when it effectively fills
+    /// the screen width. No clean public Catalyst full-screen API exists
+    /// (31-RESEARCH.md Q3), so this is the documented fallback. Host-testable;
+    /// the impure `connectedScenes` scene read lands in Wave 3 and consumes this.
+    public static func isFullScreen(
+        sceneSize: CGSize,
+        screenSize: CGSize,
+        tolerance: CGFloat = 4
+    ) -> Bool {
+        screenSize.width - sceneSize.width <= tolerance
     }
 
     /// Maps a single pageIndex to the LEFT page index of the spread it belongs

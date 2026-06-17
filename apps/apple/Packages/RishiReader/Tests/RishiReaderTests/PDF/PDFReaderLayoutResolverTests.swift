@@ -102,4 +102,97 @@ struct PDFReaderLayoutResolverTests {
     func nonBookIndexThree() {
         #expect(PDFReaderLayoutResolver.spreadLeftPage(forPageIndex: 3, displaysAsBook: false) == 2)
     }
+
+    // MARK: - resolve(setting:isFullScreen:availableSize:) (Phase 31)
+
+    @Test("explicit Single Page forces .singlePage regardless of size/full-screen")
+    func explicitSinglePageForces() {
+        let any = CGSize(width: 1200, height: 800)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .singlePage, isFullScreen: false, availableSize: any) == .singlePage)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .singlePage, isFullScreen: true, availableSize: any) == .singlePage)
+    }
+
+    @Test("explicit Continuous forces .singleFitWidth regardless of size/full-screen")
+    func explicitContinuousForces() {
+        let wide = CGSize(width: 2400, height: 1200)
+        let narrow = CGSize(width: 400, height: 900)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .continuous, isFullScreen: false, availableSize: wide) == .singleFitWidth)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .continuous, isFullScreen: true, availableSize: narrow) == .singleFitWidth)
+    }
+
+    @Test("explicit Two Page forces .twoUpSpread regardless of size/full-screen")
+    func explicitTwoPageForces() {
+        let narrow = CGSize(width: 400, height: 900)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .twoPage, isFullScreen: false, availableSize: narrow) == .twoUpSpread)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .twoPage, isFullScreen: true, availableSize: narrow) == .twoUpSpread)
+    }
+
+    @Test("Automatic full-screen resolves to Two Page")
+    func automaticFullScreenIsTwoUp() {
+        let any = CGSize(width: 1200, height: 800)
+        #expect(PDFReaderLayoutResolver.resolve(setting: .automatic, isFullScreen: true, availableSize: any) == .twoUpSpread)
+    }
+
+    @Test("Automatic windowed at ultra-wide STILL resolves to Continuous (LOCKED decision #1)")
+    func automaticWideWindowedStaysContinuous() {
+        #expect(
+            PDFReaderLayoutResolver.resolve(
+                setting: .automatic,
+                isFullScreen: false,
+                availableSize: CGSize(width: 2400, height: 1200)
+            ) == .singleFitWidth
+        )
+    }
+
+    @Test("Automatic windowed at narrow resolves to Continuous")
+    func automaticNarrowWindowedIsContinuous() {
+        #expect(
+            PDFReaderLayoutResolver.resolve(
+                setting: .automatic,
+                isFullScreen: false,
+                availableSize: CGSize(width: 600, height: 900)
+            ) == .singleFitWidth
+        )
+    }
+
+    // MARK: - isFullScreen size-proxy (Phase 31)
+
+    @Test("scene width equal to screen width is full-screen")
+    func sceneFillsScreenIsFullScreen() {
+        #expect(
+            PDFReaderLayoutResolver.isFullScreen(
+                sceneSize: CGSize(width: 1512, height: 982),
+                screenSize: CGSize(width: 1512, height: 982)
+            )
+        )
+    }
+
+    @Test("clearly smaller scene is not full-screen")
+    func smallSceneIsNotFullScreen() {
+        #expect(
+            !PDFReaderLayoutResolver.isFullScreen(
+                sceneSize: CGSize(width: 900, height: 700),
+                screenSize: CGSize(width: 1512, height: 982)
+            )
+        )
+    }
+
+    @Test("gap exactly at tolerance is full-screen; above tolerance is not")
+    func toleranceEdge() {
+        let screen = CGSize(width: 1512, height: 982)
+        // gap == tolerance (default 4) -> true
+        #expect(
+            PDFReaderLayoutResolver.isFullScreen(
+                sceneSize: CGSize(width: 1508, height: 982),
+                screenSize: screen
+            )
+        )
+        // gap == 5 (> tolerance 4) -> false
+        #expect(
+            !PDFReaderLayoutResolver.isFullScreen(
+                sceneSize: CGSize(width: 1507, height: 982),
+                screenSize: screen
+            )
+        )
+    }
 }
