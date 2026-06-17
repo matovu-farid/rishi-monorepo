@@ -208,6 +208,15 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
                 sendableHandler(.noData)
                 return
             }
+            // Phase 33 plan 33-02 — Auto Sync gate (§G2 site 2). When the user
+            // turns Auto Sync OFF, the silent-push wave is skipped: returning
+            // .noData is the honest result and avoids the engine wave. The gate
+            // lives here at the auto call site, not inside SilentPushHandler or
+            // SyncEngine; manual Sync Now is never gated.
+            guard deps.services?.readerDefaults.autoSync == true else {
+                sendableHandler(.noData)
+                return
+            }
             SilentPushHandler.handle(userInfo, engine: engine, completion: sendableHandler)
         }
     }
