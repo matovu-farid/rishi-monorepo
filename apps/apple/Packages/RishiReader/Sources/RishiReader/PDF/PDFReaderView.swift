@@ -45,6 +45,20 @@ final class FitWidthPDFView: PDFView {
     var fitsWidthToSinglePage: Bool = false
 
     #if targetEnvironment(macCatalyst)
+    /// The fit-width scale is derived from `currentPage`, which only exists once
+    /// the (asynchronously loaded) document is assigned. If the realized-bounds
+    /// `layoutSubviews` pass already fired while the document was still nil,
+    /// nothing re-pins the scale when the document finally arrives, leaving the
+    /// page stuck at the fallback 1x (tiny, centered). Re-pin on every document
+    /// assignment and request a fresh layout pass so the scale corrects whether
+    /// the page or the bounds settle last.
+    override var document: PDFDocument? {
+        didSet {
+            applyFitWidthIfNeeded()
+            setNeedsLayout()
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         applyFitWidthIfNeeded()
@@ -59,6 +73,10 @@ final class FitWidthPDFView: PDFView {
         guard let page = currentPage else { return }
         let pageWidth = page.bounds(for: displayBox).width
         let availableWidth = bounds.width
+        // Bail when either input is unrealized (bounds still 0, or a degenerate
+        // page) so we never pin the fallback 1x scale and flash a tiny page; the
+        // next layout/document event re-invokes this once the inputs are ready.
+        guard pageWidth > 0, availableWidth > 0 else { return }
         let target = PDFReaderLayoutResolver.fitWidthScaleFactor(
             pageWidth: pageWidth,
             availableWidth: availableWidth
@@ -545,7 +563,11 @@ public struct PDFReaderView: UIViewRepresentable {
                 let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
                 viewModel.advancePage()
                 viewModel.seek(toPage: next)
-                resetAccumulator()
+                // A forward turn commits from the BOTTOM of the page, so the
+                // enclosed scroll view's offset is near-max. PDFKit's page swap
+                // (go(to:)) preserves that offset, which would land the new page
+                // on its bottom; pin it back to the top.
+                resetAccumulator(landAtTop: true)
                 // Continuous turns are vertical: forward at the page bottom, the
                 // next page enters from underneath (bottom).
                 runTransition(.fromBottom)
@@ -587,21 +609,29 @@ public struct PDFReaderView: UIViewRepresentable {
 
         /// Resets the Mode-A accumulator and begins the settle debounce so the
         /// committed turn lands before any further offset callback is honored.
-        private func resetAccumulator() {
+        private func resetAccumulator(landAtTop: Bool = false) {
             accumulatedOverscroll = 0
             lastDirection = .none
-            beginTurnSettling()
+            beginTurnSettling(landAtTop: landAtTop)
         }
 
         /// Briefly ignores offset callbacks so the new page/spread settles and
         /// one overscroll/swipe commits exactly one turn (Pitfall 4 — no
         /// accidental multi-flips). Re-syncs `lastOffsetY/X` to the settled
         /// position on resume so the next delta is measured cleanly.
-        private func beginTurnSettling() {
+        private func beginTurnSettling(landAtTop: Bool = false) {
             isTurnSettling = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
                 guard let self else { return }
                 if let scroll = self.observedPDFView.flatMap({ self.firstEnclosedScrollView($0) }) {
+                    // After a forward (.singleFitWidth) turn the swapped-in page
+                    // inherits the previous page's near-bottom offset; force it to
+                    // the top so the new page opens at its top, not its bottom.
+                    // Runs while isTurnSettling is true, so the KVO observer
+                    // ignores this programmatic write (no spurious reverse turn).
+                    if landAtTop {
+                        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: 0), animated: false)
+                    }
                     self.lastOffsetY = scroll.contentOffset.y
                     self.lastOffsetX = scroll.contentOffset.x
                 }
