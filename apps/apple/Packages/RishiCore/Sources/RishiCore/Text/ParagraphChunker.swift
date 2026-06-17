@@ -7,6 +7,15 @@
 //  lifted from the rishi app target into the RishiCore SwiftPM package and
 //  made public. Behavior is byte-for-byte preserved.
 //
+//  Plan 34-12 SRP split: the four algorithms this namespace bundled have been
+//  factored into focused units, keeping this type's public surface stable:
+//    - HTML/XHTML cleanup -> `HTMLTextCleaner`
+//    - indexing header heuristic -> `IndexHeaderHeuristic`
+//    - progression -> paragraph index -> `ProgressionIndexLocator`
+//    - paragraph chunking (this file) drives them and forwards the public
+//      `chunkForIndexing`, `startIndex`, `minBodyChars` symbols so existing
+//      callers (RishiSearch, RishiReader) compile unchanged.
+//
 //  Splits a page of text into paragraph-sized chunks for TTS. Replaces the
 //  per-sentence chunking used in Phases 8..23: each paragraph becomes one
 //  `TTSStreamRequest`, which collapses HTTP/cache fan-out and lets the
@@ -32,10 +41,10 @@ public nonisolated enum ParagraphChunker {
     public nonisolated static let maxParagraphChars = 4096
 
     /// Short-paragraph threshold (trimmed character count) for the
-    /// indexing-side positional header heuristic. Matches
-    /// `MIN_PARAGRAPH_LENGTH = 50` at
-    /// apps/rishi-electron/src/renderer/src/components/pdf/utils/getPageParagraphs.ts:15.
-    public nonisolated static let minBodyChars = 50
+    /// indexing-side positional header heuristic. Forwards to
+    /// `IndexHeaderHeuristic.minBodyChars` (kept here for source stability of
+    /// existing `ParagraphChunker.minBodyChars` callers).
+    public nonisolated static let minBodyChars = IndexHeaderHeuristic.minBodyChars
 
     /// Indexing-side variant of `chunk(_:maxChars:)` that, in addition to
     /// greedy paragraph packing under `maxChars`, applies the electron
@@ -60,73 +69,26 @@ public nonisolated enum ParagraphChunker {
     /// cap bypass this method. A future phase will move the heuristic
     /// upstream to the PDF/EPUB import pipeline where it can drop title
     /// rows wholesale.
+    ///
+    /// The header heuristic itself lives in `IndexHeaderHeuristic`; this
+    /// method composes it with the chunker's greedy packing.
     public nonisolated static func chunkForIndexing(
         _ text: String,
         shortThreshold: Int = minBodyChars,
         maxChars: Int = maxParagraphChars
     ) -> [String] {
         let packed = chunk(text, maxChars: maxChars)
-        return mergeShortParagraphs(packed, minChars: shortThreshold)
+        return IndexHeaderHeuristic.mergeShortParagraphs(packed, minChars: shortThreshold)
     }
 
-    /// Mirror of the electron `getPageParagraphs.ts:188-219` filter:
-    ///   - first paragraph with trimmed length `< minChars` is DROPPED
-    ///     (suspected header — `filter((p, i) => i !== 0 || p.text.trim().length > MIN`).
-    ///   - subsequent paragraphs with trimmed length `< minChars` are
-    ///     popped + merged into the preceding emitted paragraph with a
-    ///     single newline (`reduce` fallback).
-    ///   - if a short paragraph appears before any body has been emitted,
-    ///     it is appended as-is so we do not silently lose text (electron's
-    ///     `if (!lastParagraph) acc.push(paragraph)` fallback).
-    nonisolated private static func mergeShortParagraphs(
-        _ paragraphs: [String],
-        minChars: Int
-    ) -> [String] {
-        guard !paragraphs.isEmpty else { return paragraphs }
-        var out: [String] = []
-        for (i, p) in paragraphs.enumerated() {
-            let trimmedCount = p
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .count
-            if i == 0 && trimmedCount < minChars {
-                // Drop leading short paragraph (suspected header).
-                continue
-            }
-            if trimmedCount < minChars {
-                if let last = out.popLast() {
-                    out.append(last + "\n" + p)
-                } else {
-                    // No prior body yet — keep so we don't lose text.
-                    // Mirrors electron reducer fallback at
-                    // getPageParagraphs.ts:206-208.
-                    out.append(p)
-                }
-            } else {
-                out.append(p)
-            }
-        }
-        return out
-    }
-
-    /// Map a within-resource reading progression (0.0...1.0, as reported by
-    /// Readium's `Locator.locations.progression`) to the index of the first
-    /// paragraph at or after that point, for a resource chunked into `count`
-    /// paragraphs.
-    ///
-    /// Read-aloud "Play" on a forwarded page must begin at the paragraph the
-    /// reader is looking at, not paragraph 0 of the resource (the page-1 bug).
-    /// The locator gives a fractional position inside the resource, so the
-    /// corresponding paragraph is `floor(progression * count)`, clamped into
-    /// range. A `nil`/out-of-range progression falls back to the start (0) so
-    /// behaviour degrades to "read the whole resource" rather than crashing.
+    /// Map a within-resource reading progression to the index of the first
+    /// paragraph at or after that point. Forwards to `ProgressionIndexLocator`;
+    /// kept here for source stability of existing
+    /// `ParagraphChunker.startIndex(forProgression:count:)` callers.
     ///
     /// - Returns: an index in `0..<count` (or 0 when `count == 0`).
     public nonisolated static func startIndex(forProgression progression: Double?, count: Int) -> Int {
-        guard count > 0 else { return 0 }
-        guard let progression, progression.isFinite, progression > 0 else { return 0 }
-        let clamped = min(max(progression, 0), 1)
-        let index = Int((Double(count) * clamped).rounded(.down))
-        return min(index, count - 1)
+        ProgressionIndexLocator.startIndex(forProgression: progression, count: count)
     }
 
     public nonisolated static func chunk(_ text: String, maxChars: Int = maxParagraphChars) -> [String] {
@@ -141,14 +103,14 @@ public nonisolated enum ParagraphChunker {
             // then split on `<p>` boundaries (with the outside-`<p>` regions
             // tag-stripped too). Anything left without `<p>` tags still gets
             // its inline tags stripped before blank-line splitting.
-            let cleaned = insertBlockBoundaries(removeNonSpokenElements(text))
+            let cleaned = HTMLTextCleaner.prepare(text)
             if cleaned.range(of: "<p", options: .caseInsensitive) != nil {
-                rawParagraphs = splitByPTags(cleaned)
+                rawParagraphs = HTMLTextCleaner.splitByPTags(cleaned, blankLineSplit: splitByBlankLines)
             } else {
                 // Split on blank-line boundaries FIRST, then strip tags per
                 // block. Stripping first would collapse the boundaries we just
                 // inserted (and any source blank lines) into single spaces.
-                rawParagraphs = splitByBlankLines(cleaned).map { stripTags($0) }
+                rawParagraphs = splitByBlankLines(cleaned).map { HTMLTextCleaner.stripTags($0) }
             }
         } else {
             rawParagraphs = splitByBlankLines(text)
@@ -167,90 +129,7 @@ public nonisolated enum ParagraphChunker {
         return output
     }
 
-    // MARK: - Boundary heuristics
-
-    /// Split on `<p ...>...</p>` boundaries. Tolerates attributes on the open tag,
-    /// case-insensitive. Anything outside `<p>` regions is treated as one more
-    /// blank-line-separated block (so mixed `<p>` + raw blank-line input both work).
-    nonisolated private static func splitByPTags(_ text: String) -> [String] {
-        let pattern = "<p[^>]*>([\\s\\S]*?)</p>"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return splitByBlankLines(text)
-        }
-        let nsText = text as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
-        let matches = regex.matches(in: text, range: fullRange)
-
-        var paragraphs: [String] = []
-        var cursor = 0
-        for match in matches {
-            let outside = NSRange(location: cursor, length: match.range.location - cursor)
-            if outside.length > 0 {
-                let chunk = nsText.substring(with: outside)
-                paragraphs.append(contentsOf: splitOutsideRegion(chunk))
-            }
-            let inside = nsText.substring(with: match.range(at: 1))
-            paragraphs.append(stripTags(inside))
-            cursor = match.range.location + match.range.length
-        }
-        if cursor < nsText.length {
-            let tail = nsText.substring(with: NSRange(location: cursor, length: nsText.length - cursor))
-            paragraphs.append(contentsOf: splitOutsideRegion(tail))
-        }
-        return paragraphs
-    }
-
-    /// Handle a region that sits OUTSIDE any `<p>...</p>` (document scaffold,
-    /// headings, list items, raw blank-line blocks). Inline / block tags here
-    /// (`<h1>`, `<body>`, `<div>`, doctype, closing tags) MUST be stripped so
-    /// markup is never spoken — the prior implementation forwarded these
-    /// straight to `splitByBlankLines`, which leaked the raw XHTML scaffold
-    /// into the TTS chunks (reader-tts-xml-and-loading symptom 1). We strip
-    /// tags first, THEN split the resulting plain text on blank lines.
-    nonisolated private static func splitOutsideRegion(_ region: String) -> [String] {
-        // Split on blank-line boundaries FIRST (so raw blank-line-separated
-        // paragraphs survive as distinct chunks), THEN strip tags per block.
-        // `stripTags` collapses internal whitespace, so doing it before the
-        // blank-line split would merge separate paragraphs into one chunk.
-        return splitByBlankLines(region)
-            .map { stripTags($0) }
-            .filter { !$0.isEmpty }
-    }
-
-    /// Block-level HTML elements whose edges should start a new chunk even
-    /// when no blank line separates them. EPUB/XHTML expresses paragraph
-    /// structure with tags (headings, list items, divs) rather than blank
-    /// lines, so the `<p>`-only + blank-line splitters lump a heading, an
-    /// intro paragraph and a `<ul>` list into one chunk. Normalising these
-    /// boundaries into blank lines up front lets the existing splitters break
-    /// on them. Runs of inserted newlines collapse in `scanByBlankLines`, so
-    /// emitting `\n\n` on both sides of every boundary tag is safe.
-    nonisolated private static func insertBlockBoundaries(_ html: String) -> String {
-        let blockTags = "p|div|li|ul|ol|h[1-6]|blockquote|section|article|aside"
-            + "|header|footer|figure|figcaption|table|thead|tbody|tr|pre|hr"
-        let pattern = "</?(?:\(blockTags))\\b[^>]*>"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return html
-        }
-        let range = NSRange(html.startIndex..., in: html)
-        return regex.stringByReplacingMatches(in: html, range: range, withTemplate: "\n\n$0\n\n")
-    }
-
-    /// Remove element bodies that are never spoken: `<head>...</head>`,
-    /// `<style>...</style>`, `<script>...</script>`. Without this the CSS /
-    /// JS / `<title>` / `<meta>` text inside those elements survives tag
-    /// stripping (it is character data, not markup) and gets read aloud.
-    nonisolated private static func removeNonSpokenElements(_ html: String) -> String {
-        var result = html
-        for tag in ["head", "style", "script"] {
-            let pattern = "<\(tag)[^>]*>[\\s\\S]*?</\(tag)>"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                let range = NSRange(result.startIndex..., in: result)
-                result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: " ")
-            }
-        }
-        return result
-    }
+    // MARK: - Blank-line splitting
 
     /// Split on blank-line boundaries (`\n\s*\n`).
     nonisolated private static func splitByBlankLines(_ text: String) -> [String] {
@@ -287,26 +166,6 @@ public nonisolated enum ParagraphChunker {
             paragraphs.append(current)
         }
         return paragraphs
-    }
-
-    // MARK: - Tag strip (HTML-cleanup)
-
-    /// Inside-`<p>` content may still contain inline tags (`<em>`, `<a>`, `<br>`).
-    /// Strip them to bare text for TTS.
-    nonisolated private static func stripTags(_ html: String) -> String {
-        let pattern = "<[^>]+>"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
-        let range = NSRange(html.startIndex..., in: html)
-        let stripped = regex.stringByReplacingMatches(in: html, range: range, withTemplate: " ")
-        let collapsed = stripped.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return collapsed
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Oversize subdivision
