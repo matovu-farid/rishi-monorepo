@@ -91,12 +91,12 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     private let debounceSeconds: Double
     private var pendingPositionTask: Task<Void, Never>?
 
-    /// Reading-order resource (chapter) that read-aloud is currently narrating.
-    /// Set by ``paragraphsForReadAloud()`` and advanced by
-    /// ``paragraphsForFollowingResource()`` so chapter continuation does not
-    /// depend on the navigator's (asynchronous) locator updates. Fragment is
-    /// stripped so it matches a reading-order ``Link`` href.
-    private var readAloudResourceHref: AnyURL?
+    /// Read-aloud resource/page parsing + chapter-continuation cursor. Created
+    /// when the publication loads (the cursor holds the publication). `nil`
+    /// before ``load()`` completes, which the facade methods treat as "no
+    /// paragraphs". This separates the read-aloud narration concern from the
+    /// VM's reading-position responsibility (plan 34-06).
+    private var readAloudCursor: EPUBReadAloudCursor?
 
     public init(
         book: Book,
@@ -192,6 +192,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         // caller's isolation after the full off-main round-trip
         // returns. SwiftUI sees one cohesive transition.
         self.publication = pub
+        self.readAloudCursor = EPUBReadAloudCursor(publication: pub)
         self.title = pub.metadata.title ?? book.title
         if let restoredLocator {
             self.latestLocator = restoredLocator
@@ -272,21 +273,10 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     /// the read-aloud bridge indexes into it from 0, so the highlight index and
     /// the spoken paragraph stay aligned with what is on screen.
     public func paragraphsForReadAloud() async -> [String] {
-        guard let publication = publication,
-              let locator = latestLocator else { return [] }
-        guard let resource = publication.get(locator.href) else { return [] }
-        // Anchor the read-aloud chapter cursor on the resource we are about to
-        // narrate so ``paragraphsForFollowingResource()`` can advance from here.
-        readAloudResourceHref = locator.href.removingFragment()
-        let result = await resource.read().asString(encoding: .utf8)
-        guard case .success(let html) = result else { return [] }
-        let all = ParagraphChunker.chunk(html)
-        let start = ParagraphChunker.startIndex(
-            forProgression: locator.locations.progression,
-            count: all.count
-        )
-        guard start < all.count else { return [] }
-        return Array(all[start...])
+        guard let readAloudCursor, let locator = latestLocator else { return [] }
+        let result = await readAloudCursor.paragraphsAtCurrentPage(locator: locator)
+        applyReadAloudNavigation(result.navigateTo)
+        return result.paragraphs
     }
 
     /// Paragraphs for the NEXT reading-order resource (chapter) after the one
@@ -300,35 +290,10 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     /// as "stop". The cursor falls back to ``latestLocator`` the first time if
     /// ``paragraphsForReadAloud()`` has not yet run.
     public func paragraphsForFollowingResource() async -> [String] {
-        guard let publication = publication else { return [] }
-        // Cursor first (set as each chapter starts narrating); fall back to the
-        // live locator before the first chapter's paragraphs were requested.
-        guard let currentHref = readAloudResourceHref ?? latestLocator?.href.removingFragment()
-        else { return [] }
-        let order = publication.readingOrder
-        guard let currentIndex = order.firstIndexWithHREF(currentHref) else { return [] }
-
-        var nextIndex = currentIndex + 1
-        while nextIndex < order.count {
-            let link = order[nextIndex]
-            if let resource = publication.get(link),
-               case .success(let html) = await resource.read().asString(encoding: .utf8) {
-                let paragraphs = ParagraphChunker.chunk(html)
-                if !paragraphs.isEmpty {
-                    readAloudResourceHref = link.url().removingFragment()
-                    // Move the live locator to the new chapter so the
-                    // text-anchored read-aloud follow (which anchors to
-                    // `latestLocator.href`) turns the page into this resource
-                    // rather than failing to find the paragraph in the old one.
-                    if let locator = await publication.locate(link) {
-                        latestLocator = locator
-                    }
-                    return paragraphs
-                }
-            }
-            nextIndex += 1
-        }
-        return []
+        guard let readAloudCursor else { return [] }
+        let result = await readAloudCursor.paragraphsFollowing(fallbackLocator: latestLocator)
+        applyReadAloudNavigation(result.navigateTo)
+        return result.paragraphs
     }
 
     /// Paragraphs for the PREVIOUS reading-order resource (chapter) before the
@@ -341,33 +306,20 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     /// full paragraph list. Returns `[]` at the start of the book (no earlier
     /// non-empty resource), which the bridge treats as "stay put".
     public func paragraphsForPrecedingResource() async -> [String] {
-        guard let publication = publication else { return [] }
-        guard let currentHref = readAloudResourceHref ?? latestLocator?.href.removingFragment()
-        else { return [] }
-        let order = publication.readingOrder
-        guard let currentIndex = order.firstIndexWithHREF(currentHref) else { return [] }
+        guard let readAloudCursor else { return [] }
+        let result = await readAloudCursor.paragraphsPreceding(fallbackLocator: latestLocator)
+        applyReadAloudNavigation(result.navigateTo)
+        return result.paragraphs
+    }
 
-        var prevIndex = currentIndex - 1
-        while prevIndex >= 0 {
-            let link = order[prevIndex]
-            if let resource = publication.get(link),
-               case .success(let html) = await resource.read().asString(encoding: .utf8) {
-                let paragraphs = ParagraphChunker.chunk(html)
-                if !paragraphs.isEmpty {
-                    readAloudResourceHref = link.url().removingFragment()
-                    // Move the live locator back to the previous chapter so the
-                    // text-anchored read-aloud follow turns the page into this
-                    // resource rather than failing to find the paragraph in the
-                    // chapter we just left.
-                    if let locator = await publication.locate(link) {
-                        latestLocator = locator
-                    }
-                    return paragraphs
-                }
-            }
-            prevIndex -= 1
-        }
-        return []
+    /// Applies the cursor's explicit "navigate to this chapter" intent to
+    /// ``latestLocator`` so the text-anchored read-aloud follow turns the page
+    /// into the new chapter. No-op when the batch did not cross a resource
+    /// boundary. The locator mutation is now an explicit hand-off from the
+    /// cursor rather than a hidden side effect of paragraph fetching.
+    private func applyReadAloudNavigation(_ locator: Locator?) {
+        guard let locator else { return }
+        latestLocator = locator
     }
 
     // MARK: - Debounce

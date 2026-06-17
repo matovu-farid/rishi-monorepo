@@ -17,18 +17,29 @@ import RishiLogging
 /// selections need distinct CFI endpoints, that's a schema bump
 /// (`epub-v2`) with a decoder fallback that still accepts `epub-v1`.
 ///
-/// **Why a stored property here.** `EPUBReaderViewModel` is
-/// `@Observable final class @unchecked Sendable` (matches the PDF VM
-/// shape) so Swift extensions cannot add stored properties directly.
-/// We hang the cache off a per-instance `ObjectIdentifier`-keyed
-/// dictionary guarded by `NSLock`. `bumpHighlightsObservation()` touches
-/// an already-tracked property (`theme`) so SwiftUI views that read
-/// `loadedHighlights` re-evaluate when the cache mutates.
+/// **Storage note.** `EPUBReaderViewModel` is `@Observable final class
+/// @unchecked Sendable` (not `@MainActor`). These CRUD methods are
+/// `nonisolated async` — their array writes run on the generic executor
+/// AFTER `await store.…` resumes, so two concurrent calls would race on a
+/// plain stored array. The highlights cache therefore lives in an external
+/// `NSLock`-guarded, `ObjectIdentifier`-keyed box (identical in shape to
+/// ``PDFReaderViewModel+Highlights``). `@Observable` cannot track the
+/// external box, so every mutation bumps a tracked property (`theme`) via an
+/// identity assignment to force SwiftUI re-evaluation.
 extension EPUBReaderViewModel {
+
+    // MARK: - Cached state
+
+    /// All loaded highlights for the current book — read by
+    /// ``EPUBReaderScreen`` and ``EPUBHighlightInteractor`` to drive the
+    /// in-page highlight overlay.
+    public var loadedHighlights: [Highlight] {
+        Self.cache.read(self)
+    }
 
     // MARK: - Cache plumbing
 
-    fileprivate final class EPUBHighlightCacheBox: @unchecked Sendable {
+    fileprivate final class HighlightCacheBox: @unchecked Sendable {
         private var storage: [ObjectIdentifier: [Highlight]] = [:]
         private let lock = NSLock()
 
@@ -51,15 +62,9 @@ extension EPUBReaderViewModel {
             storage.removeValue(forKey: ObjectIdentifier(owner))
         }
     }
-    fileprivate static let highlightCache = EPUBHighlightCacheBox()
+    fileprivate static let cache = HighlightCacheBox()
 
     // MARK: - Public API
-
-    /// All loaded highlights for the current book — feeds the
-    /// decoration applier and any future "highlights" sheet.
-    public var loadedHighlights: [Highlight] {
-        Self.highlightCache.read(self)
-    }
 
     /// Loads every highlight for the current book from the store and
     /// seeds the cache. Errors degrade gracefully — no highlights, no
@@ -67,7 +72,7 @@ extension EPUBReaderViewModel {
     public func loadHighlights(from store: any HighlightStore) async {
         do {
             let rows = try await store.highlights(for: book.id)
-            Self.highlightCache.write(self, rows)
+            Self.cache.write(self, rows)
             bumpHighlightsObservation()
         } catch {
             Log.reader.error(
@@ -98,7 +103,7 @@ extension EPUBReaderViewModel {
                 createdAt: Date()
             )
             try await store.upsert(highlight)
-            Self.highlightCache.mutate(self) { $0.append(highlight) }
+            Self.cache.mutate(self) { $0.append(highlight) }
             bumpHighlightsObservation()
             return highlight
         } catch {
@@ -119,7 +124,7 @@ extension EPUBReaderViewModel {
         updated.note = note
         do {
             try await store.upsert(updated)
-            Self.highlightCache.mutate(self) { rows in
+            Self.cache.mutate(self) { rows in
                 if let idx = rows.firstIndex(where: { $0.id == updated.id }) {
                     rows[idx] = updated
                 }
@@ -139,7 +144,7 @@ extension EPUBReaderViewModel {
     ) async {
         do {
             try await store.delete(highlight.id)
-            Self.highlightCache.mutate(self) { rows in
+            Self.cache.mutate(self) { rows in
                 rows.removeAll { $0.id == highlight.id }
             }
             bumpHighlightsObservation()
@@ -152,10 +157,11 @@ extension EPUBReaderViewModel {
 
     // MARK: - Observation
 
-    /// `@Observable` cannot track mutations of an external cache
+    /// `@Observable` cannot track mutations of the external cache box
     /// directly, so we touch a property the framework already observes
-    /// (`theme`) with an identity assignment. This wakes any view body
-    /// that read `loadedHighlights` without changing visible state.
+    /// (`theme`) via an identity assignment. This forces a re-evaluation of
+    /// any view body that read `loadedHighlights` without changing visible
+    /// state.
     private func bumpHighlightsObservation() {
         let current = self.theme
         self.theme = current
