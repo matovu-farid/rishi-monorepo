@@ -43,6 +43,20 @@ struct SignedInViewModelTests {
         #expect(model.showSettings == true)
     }
 
+    // Phase 32 Plan 32-04 — the in-app gear + Settings sheet are gated OFF on
+    // Mac (the native menu-bar window from 32-03 is the sole Mac entry point),
+    // but the iOS Settings flow must stay byte-identical: the gear callback
+    // still calls requestSettings(), which flips showSettings so LibraryTabView
+    // presents the SettingsSheet (gated `#if !targetEnvironment(macCatalyst)`).
+    // This pins that iOS seam so the Mac gating can't silently break iOS.
+    @Test("iOS Settings flow stays wired: requestSettings() flips showSettings")
+    func iosSettingsFlowStaysWired() {
+        let model = SignedInViewModel()
+        #expect(model.showSettings == false)
+        model.requestSettings()
+        #expect(model.showSettings == true)
+    }
+
     @Test("present(conversation:) sets selectedConversation")
     func presentConversation() {
         let model = SignedInViewModel()

@@ -56,7 +56,16 @@ struct LibraryTabView: View {
                     model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
                 },
+                // Phase 32 Plan 32-04 — on Mac the Settings entry point is the
+                // native menu-bar window (rishi ▸ Settings…, Cmd+,) from Plan
+                // 32-03, so the in-app gear is gone. LibraryRootView renders the
+                // gear only `if let onShowSettings`, so passing nil hides it
+                // (no RishiLibrary edit). iOS/iPadOS keep the gear + sheet.
+                #if targetEnvironment(macCatalyst)
+                onShowSettings: nil,
+                #else
                 onShowSettings: { model.requestSettings() },
+                #endif
                 onShowChats: onShowChats,
                 onImported: { outcomes in
                     let successes = outcomes.compactMap(\.book)
@@ -106,6 +115,10 @@ struct LibraryTabView: View {
                 )
             }
         }
+        // Phase 32 Plan 32-04 — Mac uses the native menu-bar Settings window
+        // (Plan 32-03), so the in-app Settings sheet is gated off here. iOS
+        // keeps it (gear → requestSettings() → showSettings → this sheet).
+        #if !targetEnvironment(macCatalyst)
         .sheet(isPresented: Bindable(model).showSettings) {
             SettingsSheet(
                 services: services,
@@ -113,6 +126,7 @@ struct LibraryTabView: View {
                 onSignedOut: onSignedOut
             )
         }
+        #endif
         .deepLinkHandling(services: services, model: model, libraryVM: libraryVM)
     }
 }
