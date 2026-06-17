@@ -204,17 +204,63 @@ public struct PDFReaderView: UIViewRepresentable {
         // re-seeks to the model's page (RESEARCH Pitfall 8: a display-mode
         // change can reset the visible page to 1).
         if context.coordinator.appliedLayoutMode != layoutMode {
-            configureMacLayout(uiView, mode: layoutMode)
-            context.coordinator.appliedLayoutMode = layoutMode
-            if let doc = viewModel.document {
-                let landingIndex: Int = (layoutMode == .twoUpSpread)
-                    ? PDFReaderLayoutResolver.spreadLeftPage(
-                        forPageIndex: viewModel.pageIndex,
-                        displaysAsBook: uiView.displaysAsBook
-                    )
-                    : viewModel.pageIndex
-                if let target = doc.page(at: landingIndex) {
+            let oldMode = context.coordinator.appliedLayoutMode
+            // A transition INVOLVES Single Page when either endpoint is
+            // `.singlePage`. `usePageViewController(true)` is a sticky one-way
+            // scroller swap with no documented off-toggle (Pitfall 1 / Open Q1),
+            // so a plain in-place reconfigure into/out of Single Page can leave a
+            // stale scroller. Guard on `oldMode != nil` so this fires ONLY on a
+            // genuine LIVE switch on an already-realized PDFView — a fresh
+            // `makeUIView` (oldMode == nil, e.g. after the parent `.id()` rebuild
+            // landing in 31-03) takes the plain configure path and never
+            // double-rebuilds.
+            let involvesSinglePage = (oldMode == .singlePage) || (layoutMode == .singlePage)
+            if involvesSinglePage, oldMode != nil {
+                // HARDWARE-VERIFY (Pitfall 1 / Open Q1): live Single Page <-> other
+                // switch. usePageViewController has no clean off-toggle, so we
+                // rebuild the PDFView's internal scroller in place by re-applying
+                // the layout and re-attaching the document, then re-seek from the
+                // VM (single-page granularity — no spread map). The authoritative
+                // fix is a fresh `makeUIView` driven by a parent `.id()` token,
+                // which lands in 31-03; until then this is the in-place fallback.
+                // Smoke-test item: toggle the view-mode setting while a book is
+                // open and confirm no blank/duplicated page or dead swipes.
+                configureMacLayout(uiView, mode: layoutMode)
+                context.coordinator.appliedLayoutMode = layoutMode
+                // Force the scroller to rebuild against the new display mode by
+                // re-asserting the document, then re-seek the reading position.
+                let doc = viewModel.document
+                uiView.document = doc
+                if let doc, viewModel.pageIndex < doc.pageCount,
+                   let target = doc.page(at: viewModel.pageIndex) {
                     uiView.go(to: target)
+                }
+                // Re-install the KVO scroll observer against the rebuilt
+                // scroller. Deferred to the next main-loop tick (mirroring
+                // makeUIView) so PDFKit has built the new enclosed scroll view;
+                // installScrollObserver is idempotent (invalidates the prior
+                // token first) and degrades gracefully if no scroll view exists
+                // yet (Pitfall 3). Inert for Single Page (Task 1 no-op switch),
+                // active again once switched to Continuous/Two Page.
+                let coordinator = context.coordinator
+                DispatchQueue.main.async {
+                    coordinator.installScrollObserver(on: uiView)
+                }
+            } else {
+                // Continuous <-> Two Page (neither uses usePageViewController):
+                // existing Phase 30 in-place reconfigure + re-seek, unchanged.
+                configureMacLayout(uiView, mode: layoutMode)
+                context.coordinator.appliedLayoutMode = layoutMode
+                if let doc = viewModel.document {
+                    let landingIndex: Int = (layoutMode == .twoUpSpread)
+                        ? PDFReaderLayoutResolver.spreadLeftPage(
+                            forPageIndex: viewModel.pageIndex,
+                            displaysAsBook: uiView.displaysAsBook
+                        )
+                        : viewModel.pageIndex
+                    if let target = doc.page(at: landingIndex) {
+                        uiView.go(to: target)
+                    }
                 }
             }
         }
