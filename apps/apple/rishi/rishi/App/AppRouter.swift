@@ -148,51 +148,19 @@ final class AppRouter {
 
     // MARK: - Scene restoration
 
-    /// Applies the decoded scene-restore cells to `path`.
-    /// Mirrors `RootView.restoreSceneState()`. Async because the Legacy B
-    /// (bare-UUID) path needs a `bookStore` DB lookup.
+    /// Scene-restoration hook invoked once when a signed-in scene appears.
     ///
-    /// Decode precedence (identical to the prior RootView implementation):
-    ///   1. Full NavigationPath via `CodableRepresentation`.
-    ///   2. Legacy A — JSON-encoded `ReaderRoute`.
-    ///   3. Legacy B — bare `UUID.uuidString` (v0 cell shape), looked up
-    ///      via `bookStore` to build a path entry.
+    /// The app always launches into the Library home. We intentionally do NOT
+    /// reopen the last-open book: the persisted scene cells are ignored and the
+    /// navigation path is left at the Library root. A reader route already
+    /// pushed onto `path` by a cold-launch deep link (`handle(url:)`) is
+    /// preserved, because this method never mutates `path`.
     func applyRestored(
-        tabRaw: String,
-        openBookIdRaw: String,
-        bookStore: (any BookStore)?
+        tabRaw _: String,
+        openBookIdRaw _: String,
+        bookStore _: (any BookStore)?
     ) async {
-        let decoded = RishiSceneState.decodeSceneRestoreCells(
-            tabRaw: tabRaw,
-            openBookIdRaw: openBookIdRaw
-        )
-
-        // selectedTab has been removed (single-home layout); decoded.state.selectedTab
-        // is decoded but not stored — the tab is always .library.
-
-        // Preferred — full NavigationPath via CodableRepresentation.
-        if let restoredPath = decoded.path {
-            path = restoredPath
-            return
-        }
-
-        // Legacy A — JSON-encoded ReaderRoute.
-        if let route = decoded.route {
-            var p = NavigationPath()
-            p.append(route)
-            path = p
-            return
-        }
-
-        // Legacy B — bare UUID.uuidString from the v0 cell.
-        if let legacyId = decoded.legacyId, let bookStore {
-            let book = try? await bookStore.book(legacyId)
-            guard let book else { return }
-            onBookResolved?(book)
-            var p = NavigationPath()
-            p.append(ReaderRoute.route(for: book))
-            path = p
-        }
+        // No-op: start at the Library on every launch.
     }
 
     /// Encodes the live navigation state into `@SceneStorage`-compatible

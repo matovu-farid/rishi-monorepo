@@ -198,6 +198,12 @@ struct AppRouterTests {
     }
 
     // MARK: - Scene restoration: applyRestored
+    //
+    // The app always launches into the Library home. `applyRestored` no longer
+    // reopens the last-open book — regardless of what the persisted scene cells
+    // contain, the navigation path is left at the Library root. A reader route
+    // pushed by a cold-launch deep link (via `handle(url:)`) before this runs is
+    // preserved, since `applyRestored` never mutates `path`.
 
     @Test("applyRestored with empty cells leaves path empty")
     func applyRestoredEmptyCells() async {
@@ -206,41 +212,30 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
-    @Test("applyRestored restores a full NavigationPath (preferred branch)")
-    func applyRestoredFullPath() async {
+    @Test("applyRestored ignores a stored full NavigationPath and starts at the library")
+    func applyRestoredIgnoresFullPath() async {
         let router = AppRouter()
-        // Encode a path with one ReaderRoute as the preferred shape.
+        // A path with one ReaderRoute persisted from a previous session.
         var src = NavigationPath()
         src.append(ReaderRoute.epub(UUID()))
         let rawPath = NavigationPath.encodeForStorage(src)
 
         let tabRaw = RishiSceneState(selectedTab: .library, openBookId: nil).encodeForStorage()
         await router.applyRestored(tabRaw: tabRaw, openBookIdRaw: rawPath, bookStore: nil)
-        #expect(router.path.count == 1)
-    }
-
-    @Test("applyRestored restores via Legacy A (JSON ReaderRoute)")
-    func applyRestoredLegacyA() async {
-        let router = AppRouter()
-        let id = UUID()
-        let rawRoute = ReaderRoute.encodeForStorage(.pdf(id))
-        let tabRaw = RishiSceneState(selectedTab: .library, openBookId: nil).encodeForStorage()
-        await router.applyRestored(tabRaw: tabRaw, openBookIdRaw: rawRoute, bookStore: nil)
-        #expect(router.path.count == 1)
-    }
-
-    @Test("applyRestored Legacy B (bare UUID) no-ops when bookStore is nil")
-    func applyRestoredLegacyBNilStore() async {
-        let router = AppRouter()
-        let bareUUID = UUID().uuidString   // v0 cell shape
-        let tabRaw = RishiSceneState(selectedTab: .library, openBookId: nil).encodeForStorage()
-        // Without a bookStore the lookup cannot run — path must stay empty.
-        await router.applyRestored(tabRaw: tabRaw, openBookIdRaw: bareUUID, bookStore: nil)
         #expect(router.path.isEmpty)
     }
 
-    @Test("applyRestored Legacy B (bare UUID) resolves book and fires onBookResolved")
-    func applyRestoredLegacyBHappyPath() async {
+    @Test("applyRestored ignores a stored Legacy A reader route and starts at the library")
+    func applyRestoredIgnoresLegacyA() async {
+        let router = AppRouter()
+        let rawRoute = ReaderRoute.encodeForStorage(.pdf(UUID()))
+        let tabRaw = RishiSceneState(selectedTab: .library, openBookId: nil).encodeForStorage()
+        await router.applyRestored(tabRaw: tabRaw, openBookIdRaw: rawRoute, bookStore: nil)
+        #expect(router.path.isEmpty)
+    }
+
+    @Test("applyRestored ignores a stored Legacy B bare UUID and never resolves the book")
+    func applyRestoredIgnoresLegacyB() async {
         let bookId = UUID()
         let book = Book(
             id: bookId,
@@ -262,7 +257,25 @@ struct AppRouterTests {
             bookStore: store
         )
 
-        #expect(resolvedBook?.id == bookId)
+        // The book is never reopened, so onBookResolved must not fire.
+        #expect(resolvedBook == nil)
+        #expect(router.path.isEmpty)
+    }
+
+    @Test("applyRestored preserves a reader route already pushed by a deep link")
+    func applyRestoredPreservesDeepLinkRoute() async {
+        let router = AppRouter()
+        // Simulate a cold-launch deep link having pushed a route before the
+        // scene-restoration task runs.
+        router.path.append(ReaderRoute.epub(UUID()))
+        #expect(router.path.count == 1)
+
+        var src = NavigationPath()
+        src.append(ReaderRoute.epub(UUID()))
+        let rawPath = NavigationPath.encodeForStorage(src)
+
+        await router.applyRestored(tabRaw: "", openBookIdRaw: rawPath, bookStore: nil)
+        // The deep-link route is untouched — restoration does not clobber it.
         #expect(router.path.count == 1)
     }
 
