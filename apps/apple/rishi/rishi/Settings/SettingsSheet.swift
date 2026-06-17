@@ -49,6 +49,10 @@ struct SettingsSheet: View {
                         get: { defaults.fontFamily },
                         set: { defaults.fontFamily = $0 }
                     ),
+                    pdfViewMode: Binding(
+                        get: { defaults.pdfViewMode },
+                        set: { defaults.pdfViewMode = $0 }
+                    ),
                     audioUserId: user.id,
                     audioInitial: initialAudio,
                     audioStore: services.ttsSettingsStore,

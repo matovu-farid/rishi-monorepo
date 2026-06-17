@@ -27,6 +27,12 @@ public struct SettingsScreen: View {
     @Binding public var readerTheme: ReaderTheme
     @Binding public var readerFontFamily: ReaderFontFamily
 
+    /// Phase 31 plan 31-04 — Mac-only PDF view-mode preference. Bound to
+    /// `AppReaderDefaults.pdfViewMode` by `SettingsSheet`. The rendered
+    /// `PDFViewModeSection` is itself Mac-gated, so this control is absent on
+    /// iOS even though the binding exists for source compatibility.
+    @Binding public var pdfViewMode: PDFViewModeSetting
+
     /// Audio (TTS) deps. The picker persists changes through `audioStore`
     /// and notifies the parent via `onAudioChange`.
     public let audioUserId: UserID
@@ -56,6 +62,7 @@ public struct SettingsScreen: View {
         user: User,
         readerTheme: Binding<ReaderTheme>,
         readerFontFamily: Binding<ReaderFontFamily>,
+        pdfViewMode: Binding<PDFViewModeSetting>,
         audioUserId: UserID,
         audioInitial: TTSSettings,
         audioStore: any TTSSettingsStore,
@@ -74,6 +81,7 @@ public struct SettingsScreen: View {
         self.user = user
         self._readerTheme = readerTheme
         self._readerFontFamily = readerFontFamily
+        self._pdfViewMode = pdfViewMode
         self.audioUserId = audioUserId
         self.audioInitial = audioInitial
         self.audioStore = audioStore
@@ -110,6 +118,7 @@ public struct SettingsScreen: View {
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily
                 )
+                PDFViewModeSection(selection: $pdfViewMode)
                 FooterDetectionSection(store: footerDetectionStore)
                 AudioSection(
                     userId: audioUserId,
@@ -149,6 +158,7 @@ public struct SettingsScreen: View {
 private struct SettingsScreenPreviewHost: View {
     @State private var theme: ReaderTheme = .light
     @State private var font: ReaderFontFamily = .system
+    @State private var pdfViewMode: PDFViewModeSetting = .automatic
 
     var body: some View {
         SettingsScreen(
@@ -159,6 +169,7 @@ private struct SettingsScreenPreviewHost: View {
             ),
             readerTheme: $theme,
             readerFontFamily: $font,
+            pdfViewMode: $pdfViewMode,
             audioUserId: UUID(),
             audioInitial: .default,
             audioStore: InMemoryTTSSettingsStore(),

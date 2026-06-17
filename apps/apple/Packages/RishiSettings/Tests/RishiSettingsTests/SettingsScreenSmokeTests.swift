@@ -79,10 +79,12 @@ struct SettingsScreenSmokeTests {
         )
         var theme: ReaderTheme = .light
         var font: ReaderFontFamily = .system
+        var pdfViewMode: PDFViewModeSetting = .automatic
         let screen = SettingsScreen(
             user: user,
             readerTheme: .init(get: { theme }, set: { theme = $0 }),
             readerFontFamily: .init(get: { font }, set: { font = $0 }),
+            pdfViewMode: .init(get: { pdfViewMode }, set: { pdfViewMode = $0 }),
             audioUserId: user.id,
             audioInitial: .default,
             audioStore: InMemoryTTSSettingsStore(),
