@@ -79,7 +79,16 @@ struct PDFReaderDestination: View {
                 }
             } : nil,
             voicePresenter: voiceEntry,
-            readAloudParagraph: readAloud?.currentParagraph
+            readAloudParagraph: readAloud?.currentParagraph,
+            // Phase 31 plan 31-04 — feed the LIVE PDF view-mode setting into the
+            // reader. `services.readerDefaults` is the SAME @Observable
+            // AppReaderDefaults instance the Settings sheet writes (SettingsSheet
+            // binds `defaults.pdfViewMode`). Reading it HERE in the SwiftUI body
+            // (not snapshotting to @State — RESEARCH Pitfall 5) means a Settings
+            // change invalidates this body, recomputes PDFReaderScreen's
+            // resolvedLayoutMode, and live-reconfigures the open PDFView while the
+            // VM preserves reading position.
+            pdfViewMode: services.readerDefaults.pdfViewMode
         )
         .task {
             syncBinding = PDFReaderPositionSyncBinding(
