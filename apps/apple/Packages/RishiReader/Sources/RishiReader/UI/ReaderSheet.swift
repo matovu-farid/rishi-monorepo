@@ -47,6 +47,9 @@ public enum ReaderSheet: Identifiable, Hashable, Sendable {
     /// Saved-bookmarks list. Shared across the PDF (37-02) and EPUB (37-03)
     /// readers — both present the engine-agnostic `BookmarksListView` here.
     case bookmarks
+    /// In-book full-text search. Shared across the PDF (37-04) and EPUB (37-05)
+    /// readers — both present the engine-agnostic `SearchResultsView` here.
+    case search
 
     public var id: String {
         switch self {
@@ -57,6 +60,7 @@ public enum ReaderSheet: Identifiable, Hashable, Sendable {
         case .ttsPicker:                 return "ttsPicker"
         case .highlightNote(let h):      return "highlightNote.\(h.id.uuidString)"
         case .bookmarks:                 return "bookmarks"
+        case .search:                    return "search"
         }
     }
 }
