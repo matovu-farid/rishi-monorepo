@@ -82,6 +82,11 @@ public struct PDFReaderScreen: View {
     /// toggle + list are inert (the toolbar buttons still render but never
     /// persist). `PDFReaderDestination` wires `services.bookmarkStore`.
     private let bookmarkStore: (any BookmarkStore)?
+    /// Phase 37-08 (BMK-05) — fired after a bookmark persist so the SyncEngine
+    /// flags it dirty for outbound cross-device sync. `PDFReaderDestination`
+    /// wires `services.syncEngine.markBookmarkDirty`; `nil` leaves bookmarks
+    /// local-only (tests/previews).
+    private let bookmarkMarkDirty: ((BookmarkID) async -> Void)?
     /// Optional injection: when `nil`, theme selections are not persisted
     /// (used by tests / previews). Production wiring in 05-07 AppDependencies
     /// passes a `UserDefaultsReaderSettingsStore`.
@@ -219,6 +224,7 @@ public struct PDFReaderScreen: View {
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         bookmarkStore: (any BookmarkStore)? = nil,
+        bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
@@ -228,6 +234,7 @@ public struct PDFReaderScreen: View {
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.bookmarkStore = bookmarkStore
+        self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloud = onReadAloud
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
@@ -445,7 +452,8 @@ public struct PDFReaderScreen: View {
             if let store = bookmarkStore {
                 let toggle = bookmarkToggle ?? PDFBookmarkToggleModel(
                     store: store,
-                    bookId: viewModel.book.id
+                    bookId: viewModel.book.id,
+                    markDirty: bookmarkMarkDirty
                 )
                 bookmarkToggle = toggle
                 await toggle.refresh(currentPage: viewModel.pageIndex)
@@ -557,6 +565,7 @@ public struct PDFReaderScreen: View {
                     onDelete: { bookmark in
                         Task {
                             try? await bookmarkStore?.delete(bookmark.id)
+                            await bookmarkMarkDirty?(bookmark.id)
                             await bookmarkToggle?.refresh(currentPage: viewModel.pageIndex)
                         }
                     },

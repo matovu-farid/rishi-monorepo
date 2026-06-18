@@ -55,6 +55,9 @@ struct PDFReaderDestination: View {
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
             bookmarkStore: services.bookmarkStore,
+            // Phase 37-08 (BMK-05) — flag the bookmark dirty after add/remove so
+            // the SyncEngine pushes it to the user's other devices.
+            bookmarkMarkDirty: { [services] id in await services.syncEngine.markBookmarkDirty(id) },
             onReadAloud: FeatureFlags.readAloud ? {
                 // KEEP: read-aloud start gated on entitlement check; MainActor store access
                 Task {

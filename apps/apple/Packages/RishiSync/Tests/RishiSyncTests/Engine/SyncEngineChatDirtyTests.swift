@@ -122,7 +122,7 @@ struct SyncEngineChatDirtyTests {
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: workerClient, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
-        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
+        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         // Phase 16-05 — dedicated chat-sync fetchers.
         let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
         let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)

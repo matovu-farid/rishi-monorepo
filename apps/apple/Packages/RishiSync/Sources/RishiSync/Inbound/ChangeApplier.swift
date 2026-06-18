@@ -36,17 +36,20 @@ public final class ChangeApplier: Sendable {
     private let bookStore: any BookStore
     private let positionStore: any PositionStore
     private let highlightStore: any HighlightStore
+    private let bookmarkStore: any BookmarkStore
     private let metadataStore: any SyncMetadataStore
 
     public init(
         bookStore: any BookStore,
         positionStore: any PositionStore,
         highlightStore: any HighlightStore,
+        bookmarkStore: any BookmarkStore,
         metadataStore: any SyncMetadataStore
     ) {
         self.bookStore = bookStore
         self.positionStore = positionStore
         self.highlightStore = highlightStore
+        self.bookmarkStore = bookmarkStore
         self.metadataStore = metadataStore
     }
 
@@ -67,15 +70,7 @@ public final class ChangeApplier: Sendable {
                 case .book:
                     try await applyBook(change, into: &result)
                 case .bookmark:
-                    // Phase 37-08 Task 3 wires applyBookmark + bookmarkStore.
-                    // Until then, record the cursor so the kind doesn't loop.
-                    result.skipped += 1
-                    try await metadataStore.markClean(
-                        entityId: change.id,
-                        kind: kind,
-                        lastSyncedAt: change.updatedAt,
-                        remoteEtag: nil
-                    )
+                    try await applyBookmark(change, into: &result)
                 case .conversation, .message:
                     // Phase 9 will wire — record the cursor so we don't echo.
                     result.skipped += 1
@@ -138,6 +133,30 @@ public final class ChangeApplier: Sendable {
         try await metadataStore.markClean(
             entityId: remote.id,
             kind: .highlight,
+            lastSyncedAt: change.updatedAt,
+            remoteEtag: nil
+        )
+        result.applied += 1
+    }
+
+    private func applyBookmark(_ change: SyncChange, into result: inout ApplyResult) async throws {
+        if change.deleted {
+            try await bookmarkStore.delete(change.id)
+            try await metadataStore.forget(entityId: change.id, kind: .bookmark)
+            result.applied += 1
+            return
+        }
+        let remote = try SyncPayloadCodec.decodeBookmark(change.payload, fallbackCreatedAt: change.updatedAt)
+        if let local = try await bookmarkStore.bookmark(remote.id),
+           local.createdAt >= remote.createdAt {
+            // Same id, local newer-or-equal -> keep local (Pitfall 5: no echo).
+            result.conflicts += 1
+            return
+        }
+        try await bookmarkStore.upsert(remote)
+        try await metadataStore.markClean(
+            entityId: remote.id,
+            kind: .bookmark,
             lastSyncedAt: change.updatedAt,
             remoteEtag: nil
         )

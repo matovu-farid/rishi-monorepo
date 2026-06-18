@@ -237,6 +237,13 @@ enum ServiceGraphFactory {
             highlightStore: highlightStore,
             metadataStore: syncMetadataStore
         )
+        // Phase 37-08 (BMK-05) — bookmark outbound uploader, mirroring the
+        // highlight chain. `bookmarkStore` was built above (GRDBBookmarkStore).
+        let bookmarkUploader = BookmarkUploader(
+            workerClient: workerClient,
+            bookmarkStore: bookmarkStore,
+            metadataStore: syncMetadataStore
+        )
 
         // Phase 16-04 — conversation + message GRDB stores must exist before
         // the SyncEngine so the new uploaders can be wired into the init.
@@ -262,6 +269,7 @@ enum ServiceGraphFactory {
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
+            bookmarkStore: bookmarkStore,
             metadataStore: syncMetadataStore
         )
         let conversationsFetcher = ConversationsFetcher(
@@ -285,6 +293,7 @@ enum ServiceGraphFactory {
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
+            bookmarkUploader: bookmarkUploader,
             fetcher: remoteChangeFetcher,
             applier: changeApplier,
             conversationsFetcher: conversationsFetcher,
@@ -553,6 +562,7 @@ enum ServiceGraphFactory {
             bookUploader: bookUploader,
             positionUploader: positionUploader,
             highlightUploader: highlightUploader,
+            bookmarkUploader: bookmarkUploader,
             remoteChangeFetcher: remoteChangeFetcher,
             changeApplier: changeApplier,
             syncEngine: syncEngine,

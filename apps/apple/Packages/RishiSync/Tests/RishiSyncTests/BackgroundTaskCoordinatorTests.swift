@@ -72,7 +72,7 @@ struct BackgroundTaskCoordinatorTests {
         let messageUploader = MessageUploader(workerClient: client, messageStore: NoopMessageStore(), metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
-        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
+        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
 
         return SyncEngine(
             queue: queue,

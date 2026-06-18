@@ -72,6 +72,16 @@ struct ChangeApplierConflictTests {
         func snapshot() -> [Highlight] { Array(rows.values) }
     }
 
+    private actor StubBookmarkStore: BookmarkStore {
+        var rows: [BookmarkID: Bookmark] = [:]
+        func bookmarks(for bookId: BookID) async throws -> [Bookmark] {
+            rows.values.filter { $0.bookId == bookId }
+        }
+        func bookmark(_ id: BookmarkID) async throws -> Bookmark? { rows[id] }
+        func upsert(_ bookmark: Bookmark) async throws { rows[bookmark.id] = bookmark }
+        func delete(_ id: BookmarkID) async throws { rows[id] = nil }
+    }
+
     // MARK: - Helpers
 
     private func makeApplier(
@@ -84,6 +94,7 @@ struct ChangeApplierConflictTests {
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
+            bookmarkStore: StubBookmarkStore(),
             metadataStore: metadata
         )
     }

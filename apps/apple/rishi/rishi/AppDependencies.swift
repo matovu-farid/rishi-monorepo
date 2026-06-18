@@ -258,6 +258,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let bookUploader: BookUploader
     let positionUploader: PositionUploader
     let highlightUploader: HighlightUploader
+    let bookmarkUploader: BookmarkUploader
     let remoteChangeFetcher: RemoteChangeFetcher
     let changeApplier: ChangeApplier
     let syncEngine: SyncEngine

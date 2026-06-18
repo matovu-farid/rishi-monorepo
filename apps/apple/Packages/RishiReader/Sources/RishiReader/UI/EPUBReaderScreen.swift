@@ -109,6 +109,11 @@ public struct EPUBReaderScreen: View {
     /// toggle + list are inert (the toolbar buttons still render but never
     /// persist). `EPUBReaderDestination` wires `services.bookmarkStore`.
     private let bookmarkStore: (any BookmarkStore)?
+    /// Phase 37-08 (BMK-05) — fired after a bookmark persist so the SyncEngine
+    /// flags it dirty for outbound cross-device sync. `EPUBReaderDestination`
+    /// wires `services.syncEngine.markBookmarkDirty`; `nil` leaves bookmarks
+    /// local-only (tests/previews).
+    private let bookmarkMarkDirty: ((BookmarkID) async -> Void)?
     /// Optional Phase 8 hook — when non-nil, the toolbar surfaces a
     /// "Read Aloud" button that invokes this closure. Wiring lives in the
     /// rishi app layer (RishiReader has no dependency on RishiAudio).
@@ -221,6 +226,7 @@ public struct EPUBReaderScreen: View {
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         bookmarkStore: (any BookmarkStore)? = nil,
+        bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil
@@ -229,6 +235,7 @@ public struct EPUBReaderScreen: View {
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.bookmarkStore = bookmarkStore
+        self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloud = onReadAloud
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
@@ -294,7 +301,8 @@ public struct EPUBReaderScreen: View {
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }
-            .ignoresSafeArea()
+            .ignoresSafeArea(edges: readerIgnoredSafeAreaEdges)
+            .padding(.top, readerMacTopTrim)
             .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
 
             // Apple Books-style on-screen page-turn chevrons, overlaid on the
@@ -426,7 +434,8 @@ public struct EPUBReaderScreen: View {
                 let toggle = bookmarkToggle ?? EPUBBookmarkToggleModel(
                     store: store,
                     bookId: viewModel.book.id,
-                    currentLocator: { viewModel.latestLocator }
+                    currentLocator: { viewModel.latestLocator },
+                    markDirty: bookmarkMarkDirty
                 )
                 bookmarkToggle = toggle
                 await toggle.refresh()
@@ -731,6 +740,35 @@ public struct EPUBReaderScreen: View {
         }
     }
 
+    /// Safe-area edges the reader content is allowed to bleed under.
+    ///
+    /// On Mac the toolbar is ALWAYS visible (chrome never auto-hides), so the
+    /// page must sit below it — ignoring the top safe area would draw the first
+    /// line of text under the opaque toolbar and clip it. iOS reads immersive
+    /// (chrome auto-hides to overlay), so it keeps the full-bleed `.all`.
+    private var readerIgnoredSafeAreaEdges: Edge.Set {
+        #if targetEnvironment(macCatalyst)
+        return [.bottom, .horizontal]
+        #else
+        return .all
+        #endif
+    }
+
+    /// Mac-only upward trim of the top reading margin. Insetting below the
+    /// always-on toolbar (see ``readerIgnoredSafeAreaEdges``) stacks the
+    /// toolbar+titlebar safe-area inset on top of Readium's own page margin,
+    /// leaving a large empty band under the toolbar. This negative top padding
+    /// pulls the page back up to a comfortable margin. Tunable: make it more
+    /// negative to tighten further, less to loosen. iOS keeps full-bleed, so
+    /// no trim there.
+    private var readerMacTopTrim: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return -50
+        #else
+        return 0
+        #endif
+    }
+
     /// Theme-matched solid color for the nav-bar background so it reads as a
     /// seamless extension of the page (no visible bar line) and never reveals
     /// the transient black behind a translucent bar during a page turn.
@@ -804,6 +842,7 @@ public struct EPUBReaderScreen: View {
                 onDelete: { bookmark in
                     Task {
                         try? await bookmarkStore?.delete(bookmark.id)
+                        await bookmarkMarkDirty?(bookmark.id)
                         await bookmarkToggle?.refresh()
                     }
                 },

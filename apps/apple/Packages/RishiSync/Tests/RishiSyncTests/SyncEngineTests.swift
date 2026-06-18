@@ -166,7 +166,7 @@ struct SyncEngineTests {
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: workerClient, bookmarkStore: EngineStubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
-        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
+        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: EngineStubBookmarkStore(), metadataStore: metadata)
         let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
         let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
         return SyncEngine(

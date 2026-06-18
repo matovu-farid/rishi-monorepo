@@ -29,15 +29,21 @@ public final class EPUBBookmarkToggleModel {
     private let store: any BookmarkStore
     private let bookId: BookID
     private let currentLocator: @MainActor () -> Locator?
+    /// Phase 37-08 (BMK-05) — fired after a persist so the SyncEngine flags the
+    /// bookmark dirty for outbound cross-device sync. `nil` in tests/previews
+    /// that don't wire a sync engine.
+    private let markDirty: ((BookmarkID) async -> Void)?
 
     public init(
         store: any BookmarkStore,
         bookId: BookID,
-        currentLocator: @escaping @MainActor () -> Locator?
+        currentLocator: @escaping @MainActor () -> Locator?,
+        markDirty: ((BookmarkID) async -> Void)? = nil
     ) {
         self.store = store
         self.bookId = bookId
         self.currentLocator = currentLocator
+        self.markDirty = markDirty
     }
 
     /// Reloads the book's bookmark set and recomputes `isBookmarked` for the
@@ -59,10 +65,12 @@ public final class EPUBBookmarkToggleModel {
         guard let current = currentLocator() else { return }
         if let existing = EPUBBookmarkMatcher.bookmark(matching: current, in: bookmarks) {
             try? await store.delete(existing.id)
+            await markDirty?(existing.id)
         } else if let locator = try? EPUBBookmarkLocator(locator: current).encodedToJSONString() {
             let snippet = current.text.highlight
             let bookmark = Bookmark(bookId: bookId, locator: locator, snippet: snippet)
             try? await store.upsert(bookmark)
+            await markDirty?(bookmark.id)
         }
         await refresh()
     }
