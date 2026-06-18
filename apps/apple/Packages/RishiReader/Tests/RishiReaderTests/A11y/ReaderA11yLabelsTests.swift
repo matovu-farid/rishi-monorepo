@@ -121,6 +121,9 @@ struct ReaderA11yLabelsTests {
         let pdfIds = [
             "reader.toolbar.toc",
             "reader.toolbar.theme",
+            // Phase 37 Plan 37-02 — PDF bookmark toggle + list buttons.
+            "reader.toolbar.bookmark",
+            "reader.toolbar.bookmarksList",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
         ]
@@ -131,7 +134,15 @@ struct ReaderA11yLabelsTests {
         let epubURL = try Self.readerSources().first { $0.lastPathComponent == "EPUBReaderScreen.swift" }
         try #require(epubURL != nil)
         let epub = try String(contentsOf: epubURL!, encoding: .utf8)
-        let epubIds = pdfIds + ["reader.toolbar.typography"]
+        // EPUB bookmark buttons land in plan 37-03; until then EPUB carries the
+        // pre-37 toolbar set plus its typography button (no PDF bookmark ids).
+        let epubIds = [
+            "reader.toolbar.toc",
+            "reader.toolbar.theme",
+            "reader.toolbar.readAloud",
+            "reader.toolbar.voice",
+            "reader.toolbar.typography",
+        ]
         for id in epubIds {
             #expect(epub.contains(id), "EPUBReaderScreen missing identifier \(id)")
         }
@@ -150,7 +161,9 @@ struct ReaderA11yLabelsTests {
         // flag the mismatch.
         let expectedByFile: [String: Int] = [
             "EPUBReaderScreen.swift": 5,
-            "PDFReaderScreen.swift": 4,
+            // Phase 37 Plan 37-02 added the bookmark toggle + bookmarks-list
+            // identifier sites (4 -> 6). EPUB picks its two up in plan 37-03.
+            "PDFReaderScreen.swift": 6,
         ]
         for url in try Self.readerSources() where expectedByFile.keys.contains(url.lastPathComponent) {
             let s = try String(contentsOf: url, encoding: .utf8)

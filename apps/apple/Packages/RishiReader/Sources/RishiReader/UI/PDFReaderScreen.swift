@@ -59,6 +59,8 @@ public struct PDFReaderScreen: View {
     nonisolated public static let toolbarAccessibilityIdentifiers: [String] = [
         "reader.toolbar.toc",
         "reader.toolbar.theme",
+        "reader.toolbar.bookmark",
+        "reader.toolbar.bookmarksList",
         "reader.toolbar.readAloud",
         "reader.toolbar.voice",
     ]
@@ -67,6 +69,10 @@ public struct PDFReaderScreen: View {
     /// Optional injection: when `nil`, the highlight UI is mounted but never
     /// persists. Call sites in plan 05-07 will wire `GRDBHighlightStore`.
     private let highlightStore: (any HighlightStore)?
+    /// Phase 37 Plan 37-02 — optional injection: when `nil`, the bookmark
+    /// toggle + list are inert (the toolbar buttons still render but never
+    /// persist). `PDFReaderDestination` wires `services.bookmarkStore`.
+    private let bookmarkStore: (any BookmarkStore)?
     /// Optional injection: when `nil`, theme selections are not persisted
     /// (used by tests / previews). Production wiring in 05-07 AppDependencies
     /// passes a `UserDefaultsReaderSettingsStore`.
@@ -155,6 +161,13 @@ public struct PDFReaderScreen: View {
     /// content sheet here.
     @State private var activeSheet: ReaderSheet?
 
+    /// Phase 37 Plan 37-02 — owns the bookmark set + `isBookmarked` + toggle for
+    /// this book. Built lazily in `.task` once `bookmarkStore` is available
+    /// (stays `nil` for previews / store-less callers). Read directly in the
+    /// toolbar body (do NOT snapshot to a derived `@State` — RESEARCH Pitfall 5)
+    /// so a toggle/refresh repaints the `bookmark`/`bookmark.fill` SF Symbol.
+    @State private var bookmarkToggle: PDFBookmarkToggleModel?
+
     #if canImport(UIKit)
     // Selection coordinator state — set whenever PDFView publishes a new
     // PDFSelection. `pendingHighlight` holds the locator+text from the
@@ -190,6 +203,7 @@ public struct PDFReaderScreen: View {
         viewModel: PDFReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
+        bookmarkStore: (any BookmarkStore)? = nil,
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
@@ -198,6 +212,7 @@ public struct PDFReaderScreen: View {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
+        self.bookmarkStore = bookmarkStore
         self.onReadAloud = onReadAloud
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
@@ -409,6 +424,17 @@ public struct PDFReaderScreen: View {
             if let settings = readerSettingsStore {
                 viewModel.theme = await settings.theme(for: viewModel.book.id)
             }
+            // Phase 37 Plan 37-02 — build the bookmark toggle model once the
+            // store is available, then hydrate `isBookmarked` for the page the
+            // reader opened on.
+            if let store = bookmarkStore {
+                let toggle = bookmarkToggle ?? PDFBookmarkToggleModel(
+                    store: store,
+                    bookId: viewModel.book.id
+                )
+                bookmarkToggle = toggle
+                await toggle.refresh(currentPage: viewModel.pageIndex)
+            }
         }
         // Phase 30 plan 30-05 — Mac Catalyst window minimum-width clamp. Scoped
         // to the reader (RESEARCH recommendation: PDFReaderScreen.onAppear, not
@@ -426,6 +452,12 @@ public struct PDFReaderScreen: View {
         .onChange(of: readAloudParagraph) { _, _ in applyReadAloudHighlight() }
         .onChange(of: viewModel.pageIndex) { _, _ in applyReadAloudHighlight() }
         #endif
+        // Phase 37 Plan 37-02 — re-derive the bookmark fill state when the page
+        // changes (swipe, tap, TOC/bookmark jump) so the toolbar SF Symbol
+        // reflects whether the now-current page is bookmarked.
+        .onChange(of: viewModel.pageIndex) { _, newPage in
+            Task { await bookmarkToggle?.refresh(currentPage: newPage) }
+        }
         // Phase 12 Plan 12-01 — Mac menu arrow paging.
         // Phase 18 Plan 18-02 (F-P1-01) — bump the haptic trigger
         // counters so `.sensoryFeedback` fires from Mac arrow keys too.
@@ -479,6 +511,27 @@ public struct PDFReaderScreen: View {
                         onClose: { activeSheet = nil }
                     )
                 }
+            case .bookmarks:
+                // Phase 37 Plan 37-02 — saved-bookmarks list. Selecting a row
+                // decodes the page from the locator and jumps via the same
+                // `seek(toPage:)` the TOC sheet uses; swipe-delete removes the
+                // row through the store and refreshes the toggle state.
+                BookmarksListView(
+                    bookmarks: bookmarkToggle?.bookmarks ?? [],
+                    onSelect: { bookmark in
+                        if let page = PDFBookmarkMatcher.page(of: bookmark) {
+                            viewModel.seek(toPage: page)
+                        }
+                        activeSheet = nil
+                    },
+                    onDelete: { bookmark in
+                        Task {
+                            try? await bookmarkStore?.delete(bookmark.id)
+                            await bookmarkToggle?.refresh(currentPage: viewModel.pageIndex)
+                        }
+                    },
+                    onClose: { activeSheet = nil }
+                )
             case .typography, .ttsControls, .ttsPicker:
                 // Unreachable for PDF — PDFKit owns typography; TTS sheets
                 // are owned by RootView. Placeholder keeps the switch
@@ -527,6 +580,34 @@ public struct PDFReaderScreen: View {
                 }
                 .accessibilityIdentifier("reader.toolbar.theme")
                 .accessibilityLabel(A11yLabel.readerOpenTheme)
+
+                // Phase 37 Plan 37-02 — bookmark toggle. Filled SF Symbol when
+                // the current page is bookmarked; tapping adds/removes via the
+                // toggle model (persisted through `bookmarkStore`).
+                Button {
+                    chrome.userActivity()
+                    Task {
+                        await bookmarkToggle?.toggle(
+                            currentPage: viewModel.pageIndex,
+                            snippet: nil
+                        )
+                    }
+                } label: {
+                    Image(systemName: (bookmarkToggle?.isBookmarked ?? false) ? "bookmark.fill" : "bookmark")
+                }
+                .accessibilityIdentifier("reader.toolbar.bookmark")
+                .accessibilityLabel(A11yLabel.readerToggleBookmark)
+
+                // Phase 37 Plan 37-02 — open the saved-bookmarks list sheet.
+                Button {
+                    chrome.userActivity()
+                    Task { await bookmarkToggle?.refresh(currentPage: viewModel.pageIndex) }
+                    activeSheet = .bookmarks
+                } label: {
+                    Image(systemName: "bookmark.circle")
+                }
+                .accessibilityIdentifier("reader.toolbar.bookmarksList")
+                .accessibilityLabel(A11yLabel.readerOpenBookmarks)
 
                 if let onReadAloud {
                     Button {

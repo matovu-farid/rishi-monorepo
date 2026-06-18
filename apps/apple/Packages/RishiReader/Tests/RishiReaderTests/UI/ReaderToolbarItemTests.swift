@@ -34,12 +34,15 @@ struct ReaderToolbarItemTests {
         #expect(Set(ids) == expected)
     }
 
-    @Test("PDFReaderScreen exposes the four top-bar trailing identifiers (no typography)")
+    @Test("PDFReaderScreen exposes the six top-bar trailing identifiers (no typography)")
     func pdfIdentifiers() {
         let ids = PDFReaderScreen.toolbarAccessibilityIdentifiers
         let expected: Set<String> = [
             "reader.toolbar.toc",
             "reader.toolbar.theme",
+            // Phase 37 Plan 37-02 — PDF bookmark toggle + bookmarks-list buttons.
+            "reader.toolbar.bookmark",
+            "reader.toolbar.bookmarksList",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
         ]
