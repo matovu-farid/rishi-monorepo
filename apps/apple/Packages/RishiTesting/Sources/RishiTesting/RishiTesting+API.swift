@@ -25,6 +25,7 @@
 // MARK: - In-memory stores (RishiCore protocol implementations)
 //
 // InMemoryBookStore           — `Stores/InMemoryBookStore.swift`. BookStore actor.
+// InMemoryBookmarkStore       — `Stores/InMemoryBookmarkStore.swift`. BookmarkStore actor.
 // InMemoryConversationStore   — `Stores/InMemoryConversationStore.swift`. ConversationStore actor.
 // InMemoryHighlightStore      — `Stores/InMemoryHighlightStore.swift`. HighlightStore actor.
 // InMemoryMessageStore        — `Stores/InMemoryMessageStore.swift`. MessageStore actor.
@@ -42,6 +43,7 @@
 // MARK: - Conformance suites
 //
 // assertBookStoreConformance         — `Conformance/BookStoreConformance.swift`.
+// assertBookmarkStoreConformance     — `Conformance/BookmarkStoreConformance.swift`.
 // assertConversationStoreConformance — `Conformance/ConversationStoreConformance.swift`.
 // assertHighlightStoreConformance    — `Conformance/HighlightStoreConformance.swift`.
 // assertMessageStoreConformance      — `Conformance/MessageStoreConformance.swift`.

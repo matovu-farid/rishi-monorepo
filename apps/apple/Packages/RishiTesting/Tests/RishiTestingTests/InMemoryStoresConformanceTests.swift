@@ -14,6 +14,10 @@ struct InMemoryStoresConformanceTests {
         try await assertHighlightStoreConformance(InMemoryHighlightStore())
     }
 
+    @Test func bookmarkStoreConforms() async throws {
+        try await assertBookmarkStoreConformance(InMemoryBookmarkStore())
+    }
+
     @Test func positionStoreConforms() async throws {
         try await assertPositionStoreConformance(InMemoryPositionStore())
     }
