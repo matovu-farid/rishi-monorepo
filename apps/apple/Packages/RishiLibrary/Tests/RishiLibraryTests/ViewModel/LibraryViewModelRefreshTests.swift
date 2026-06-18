@@ -101,8 +101,8 @@ struct LibraryViewModelRefreshTests {
             #expect(mapped?.bookId == b.id, "position landed under wrong bookId for \(b.title)")
             #expect(mapped?.percentComplete == positions[b.id]?.percentComplete)
         }
-        // All 5 books are in-progress (0.1–0.5).
-        #expect(vm.readingNow.count == 5)
+        // All 5 books are in-progress (0.1–0.5), but the shelf caps at 3.
+        #expect(vm.readingNow.count == 3)
     }
 
     @Test("refresh handles partial nil results — only books with saved positions land in readingNow")

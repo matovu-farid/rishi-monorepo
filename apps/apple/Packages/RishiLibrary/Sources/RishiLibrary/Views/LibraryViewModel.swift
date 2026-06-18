@@ -188,10 +188,18 @@ public final class LibraryViewModel {
         }
     }
 
+    /// The Reading-Now shelf shows at most this many books — the most
+    /// recently read ones.
+    static let readingNowLimit = 3
+
     static func deriveReadingNow(books: [Book], positions: [BookID: Position]) -> [ReadingNowEntry] {
-        books.compactMap { book in
-            guard let pos = positions[book.id], ReadingNowEntry.isInProgress(pos) else { return nil }
-            return ReadingNowEntry(book: book, position: pos)
-        }.sorted { $0.position.updatedAt > $1.position.updatedAt }
+        let inProgress = books.compactMap { book -> ReadingNowEntry? in
+            guard let position = positions[book.id], ReadingNowEntry.isInProgress(position) else { return nil }
+            return ReadingNowEntry(book: book, position: position)
+        }
+        let mostRecentFirst = inProgress.sorted { left, right in
+            left.position.updatedAt > right.position.updatedAt
+        }
+        return Array(mostRecentFirst.prefix(readingNowLimit))
     }
 }

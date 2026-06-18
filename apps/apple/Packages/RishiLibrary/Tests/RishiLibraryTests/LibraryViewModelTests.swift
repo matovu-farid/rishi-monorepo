@@ -40,6 +40,24 @@ struct LibraryViewModelTests {
         #expect(vm.readingNow.map(\.book.title) == ["A"])
     }
 
+    @Test("readingNow caps at 3, keeping the most recently read")
+    func readingNowCapsAtThree() async throws {
+        let (vm, bookStore, positionStore, userId, _) = await Self.setup()
+        let now = Date()
+        // Five in-progress books, each read at a distinct time.
+        for i in 0..<5 {
+            let book = Book(userId: userId, title: "B\(i)", formatType: .pdf, fileURL: "b\(i)")
+            try await bookStore.upsert(book)
+            try await positionStore.upsert(Position(bookId: book.id,
+                                                    locator: "page:1",
+                                                    percentComplete: 0.5,
+                                                    updatedAt: now.addingTimeInterval(Double(i))))
+        }
+        await vm.refresh()
+        // B4..B2 are the three most-recently updated.
+        #expect(vm.readingNow.map(\.book.title) == ["B4", "B3", "B2"])
+    }
+
     @Test("delete removes from books + readingNow + filteredBooks")
     func deleteCascades() async throws {
         let (vm, bookStore, positionStore, userId, _) = await Self.setup()
