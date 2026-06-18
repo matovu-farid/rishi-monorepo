@@ -13,12 +13,12 @@ import RishiCore
 
 struct SceneRestorationModifier: ViewModifier {
 
-    let services: BootstrappedServices
     let model: SignedInViewModel
     @Binding var tabRaw: String
     @Binding var openBookIdRaw: String
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.services) private var servicesEnv
 
     /// Guards the scene-restoration task so it only fires once per scene
     /// instance. Matches the original `@State private var sceneRestored` in
@@ -31,6 +31,7 @@ struct SceneRestorationModifier: ViewModifier {
             .task {
                 guard !sceneRestored else { return }
                 sceneRestored = true
+                guard let services = servicesEnv else { return }
                 router.onBookResolved = { book in
                     model.hint(book)
                 }
@@ -51,13 +52,11 @@ struct SceneRestorationModifier: ViewModifier {
 
 extension View {
     func sceneRestoration(
-        services: BootstrappedServices,
         model: SignedInViewModel,
         tabRaw: Binding<String>,
         openBookIdRaw: Binding<String>
     ) -> some View {
         modifier(SceneRestorationModifier(
-            services: services,
             model: model,
             tabRaw: tabRaw,
             openBookIdRaw: openBookIdRaw
