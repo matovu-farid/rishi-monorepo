@@ -33,10 +33,14 @@ struct SettingsContent: View {
 
     let services: BootstrappedServices
     let user: User
-    let onSignedOut: () -> Void
     /// EXPLICIT dismiss — replaces the dismiss environment so the same view
     /// works inside a sheet (`{ dismiss() }`) and a window (window-close).
     let onDismiss: () -> Void
+
+    /// Sign-out action injected once at `RootView` (`\.signOut`). Resolves to
+    /// `{ currentUser = nil }` on the live signed-in path; the env default is a
+    /// no-op so previews/tests without an ancestor injection don't crash.
+    @Environment(\.signOut) private var signOut
 
     @State private var initialAudio: TTSSettings = .default
     @State private var audioLoaded = false
@@ -75,7 +79,7 @@ struct SettingsContent: View {
                         try? await auth.signOut()
                         await MainActor.run {
                             onDismiss()
-                            onSignedOut()
+                            signOut()
                         }
                     },
                     onDelete: {
@@ -83,7 +87,7 @@ struct SettingsContent: View {
                     },
                     onDeleted: {
                         onDismiss()
-                        onSignedOut()
+                        signOut()
                     },
                     onManageSubscription: {
                         // KEEP: presenter.present() drives StoreKit's

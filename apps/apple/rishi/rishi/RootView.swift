@@ -75,6 +75,7 @@ struct RootView: View {
             .environment(deps.manageSubscriptionPresenter)
             .environment(\.services, deps.services)
             .environment(\.currentUser, currentUser)
+            .environment(\.signOut, { currentUser = nil })
     }
 
     @ViewBuilder

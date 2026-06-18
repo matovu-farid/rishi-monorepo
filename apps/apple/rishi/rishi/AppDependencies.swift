@@ -367,3 +367,14 @@ extension EnvironmentValues {
         set { self[CurrentUserKey.self] = newValue }
     }
 }
+
+private struct SignOutActionKey: EnvironmentKey {
+    @MainActor static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var signOut: () -> Void {
+        get { self[SignOutActionKey.self] }
+        set { self[SignOutActionKey.self] = newValue }
+    }
+}
