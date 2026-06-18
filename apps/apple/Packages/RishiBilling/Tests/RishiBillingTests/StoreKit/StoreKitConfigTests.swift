@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RishiBilling
 
 @Suite("StoreKit Config")
 struct StoreKitConfigTests {
@@ -46,6 +47,16 @@ struct StoreKitConfigTests {
             "org.fidexa.rishi.pro.annual",
         ]
         #expect(ids == expected, "subscription productIDs were \(ids); expected \(expected)")
+    }
+
+    @Test("Storekit product IDs match StoreKitProductService constants")
+    func testProductIdsMatchCodeConstants() throws {
+        let subs = try subscriptionProducts()
+        let configIds = Set(subs.compactMap { $0["productID"] as? String })
+        #expect(
+            configIds == StoreKitProductService.productIds,
+            "Rishi.storekit productIDs \(configIds) drifted from code constants \(StoreKitProductService.productIds) (monthly=\(StoreKitProductService.monthlyProductId), annual=\(StoreKitProductService.annualProductId))"
+        )
     }
 
     @Test("Both subscriptions have a 7-day free introductory offer")

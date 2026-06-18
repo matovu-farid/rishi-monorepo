@@ -89,6 +89,33 @@ struct EntitlementServiceTests {
         #expect(reader.string(forKey: "billing.entitlement.level") == "pro")
     }
 
+    // MARK: - clearCache
+
+    @Test("clearCache resets snapshot to .free, persists .free, and emits .free")
+    func clearCacheResetsToFree() async {
+        let suiteName = "test.billing.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
+
+        var iter = service.currentLevel.makeAsyncIterator()
+        // Drain the init yield (.free) before driving to .pro.
+        _ = await iter.next()
+
+        await service.setCached(.pro)
+        #expect(await service.snapshot() == .pro)
+        _ = await iter.next() // .pro emission
+
+        await service.clearCache()
+        #expect(await service.snapshot() == .free)
+
+        let reader = UserDefaults(suiteName: suiteName)!
+        #expect(reader.string(forKey: "billing.entitlement.level") == "free")
+
+        let emitted = await iter.next()
+        #expect(emitted == .free)
+    }
+
     // MARK: - AsyncStream
 
     @Test("currentLevel stream yields cached value to first subscriber")

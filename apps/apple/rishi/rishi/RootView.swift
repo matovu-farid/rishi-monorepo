@@ -75,7 +75,17 @@ struct RootView: View {
             .environment(deps.manageSubscriptionPresenter)
             .environment(\.services, deps.services)
             .environment(\.currentUser, currentUser)
-            .environment(\.signOut, { currentUser = nil })
+            .environment(\.signOut, {
+                // Single sign-out chokepoint: clear the cached entitlement so
+                // the next user can't briefly inherit this user's Pro state
+                // before a server refresh runs. reset() is @MainActor (this
+                // closure runs on MainActor); clearCache() hops to the
+                // EntitlementService actor.
+                deps.entitlementReconciler.reset()
+                let service = deps.entitlementService
+                Task { await service.clearCache() }
+                currentUser = nil
+            })
     }
 
     @ViewBuilder

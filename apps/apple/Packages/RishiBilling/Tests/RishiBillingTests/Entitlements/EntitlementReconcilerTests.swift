@@ -74,6 +74,41 @@ struct EntitlementReconcilerTests {
         #expect(r.level == .free)
     }
 
+    // MARK: - reset (sign-out)
+
+    @Test("reset() clears both signals and drops level to .free")
+    func reset_dropsToFree() {
+        let r = EntitlementReconciler()
+        r.forceSet(onDevice: .pro, server: .pro)
+        #expect(r.level == .pro)
+
+        r.reset()
+        #expect(r.level == .free)
+
+        // Re-arming the server signal alone must not resurrect a stale
+        // on-device .pro — reset must have cleared on-device too.
+        r.setServer(.free)
+        #expect(r.level == .free)
+    }
+
+    @Test("reset() emits an Observation change when level was .pro")
+    func reset_notifiesObservers() async {
+        let r = EntitlementReconciler()
+        r.forceSet(onDevice: .pro, server: .pro)
+
+        let counter = LockedCounter()
+        withObservationTracking {
+            _ = r.level
+        } onChange: {
+            counter.increment()
+        }
+
+        r.reset()
+        await Task.yield()
+
+        #expect(counter.value == 1)
+    }
+
     // MARK: - StoreKitIAPFlag gating
 
     @Test("flag OFF: setOnDevice(.pro) is a no-op (server signal independent)")

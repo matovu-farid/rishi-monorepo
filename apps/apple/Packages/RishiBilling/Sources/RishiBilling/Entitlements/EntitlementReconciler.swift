@@ -91,6 +91,16 @@ public final class EntitlementReconciler {
         recompute()
     }
 
+    /// Clear both source signals on sign-out so the next user does not
+    /// inherit the previous user's reconciled `.pro`. Goes through
+    /// `recompute()` so the `@Observable` `level` publishes the change to
+    /// any SwiftUI binding exactly once.
+    public func reset() {
+        onDevice = .free
+        server = .free
+        recompute()
+    }
+
     private func recompute() {
         // Most permissive wins (RESEARCH §3.4).
         let next: EntitlementLevel = (onDevice == .pro || server == .pro) ? .pro : .free

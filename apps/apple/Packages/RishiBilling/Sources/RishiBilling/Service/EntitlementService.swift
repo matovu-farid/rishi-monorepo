@@ -83,6 +83,18 @@ public actor EntitlementService {
         }
     }
 
+    /// Clear the cached entitlement on sign-out so the next user does not
+    /// briefly inherit the previous user's Pro state before a server refresh.
+    /// Resets to `.free`, persists `.free` (so a relaunch before any refresh
+    /// shows free), and yields `.free` to the stream. Always emits even when
+    /// already `.free`, since sign-out must guarantee a clean baseline.
+    public func clearCache() {
+        latest = .free
+        defaults.set(EntitlementLevel.free.rawValue, forKey: Self.defaultsKey)
+        continuation.yield(.free)
+        Log.event("billing.entitlement.cleared", level: .info)
+    }
+
     /// Snapshot accessor for code paths that need a synchronous read
     /// (e.g. SwiftUI body that can't await). Always reflects the latest
     /// value yielded into the stream.

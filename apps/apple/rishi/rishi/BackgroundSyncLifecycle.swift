@@ -28,6 +28,7 @@
 //
 
 import Foundation
+import RishiBilling
 import RishiLogging
 import RishiSync
 #if canImport(UIKit)
@@ -229,13 +230,25 @@ final class BackgroundSyncLifecycle {
             completion(.noData)
             return
         }
-        guard Self.shouldRunSilentPush(autoSync: services.readerDefaults.autoSync) else {
+        // An entitlement.changed push (e.g. refund / billing change) must
+        // refresh the billing entitlement REGARDLESS of the Auto-Sync gate —
+        // entitlement is independent of library auto-sync. SilentPushHandler
+        // routes by payload kind; for sync.changed it still runs the engine
+        // wave only when the gate allows. We therefore consult the gate only
+        // for the library-sync branch, and always hand the entitlement
+        // refresh closure through. Capture the service (not self) in the
+        // closure to avoid retaining the lifecycle.
+        let isEntitlementChange = (userInfo["rishi"] as? [String: Any])?["kind"] as? String == "entitlement.changed"
+        if !isEntitlementChange,
+           !Self.shouldRunSilentPush(autoSync: services.readerDefaults.autoSync) {
             completion(.noData)
             return
         }
+        let entitlementService = services.entitlementService
         SilentPushHandler.handle(
             userInfo,
             engine: services.syncEngine,
+            onEntitlementChanged: { await entitlementService.refresh() },
             completion: completion
         )
     }
