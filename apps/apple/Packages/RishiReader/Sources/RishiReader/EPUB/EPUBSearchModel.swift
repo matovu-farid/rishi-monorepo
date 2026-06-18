@@ -1,6 +1,9 @@
 import Foundation
 import Observation
-import ReadiumShared
+// `@preconcurrency` downgrades the Readium 3.x non-Sendable `Publication`
+// sending diagnostics across its nonisolated async `search`/`next` boundaries,
+// matching EPUBReadAloudCursor / EPUBReaderViewModel / EPUBPublicationLoader.
+@preconcurrency import ReadiumShared
 
 /// Phase 37 Plan 37-05 — drives Readium's built-in full-text search for the
 /// EPUB reader and resolves a chosen result back to its `Locator` for the jump.

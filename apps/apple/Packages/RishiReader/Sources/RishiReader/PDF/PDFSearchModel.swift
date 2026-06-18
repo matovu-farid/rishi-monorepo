@@ -71,22 +71,26 @@ public final class PDFSearchModel {
             object: document,
             queue: .main
         ) { [weak self] note in
-            // The block is `@Sendable` (non-isolated), but `queue: .main`
-            // guarantees it runs on the main thread, so `assumeIsolated` gives a
-            // sound MainActor context to mutate `results`/`selectionsByResultID`.
-            // `note.object` is the searching `PDFDocument` (PDFKit posts self),
-            // so the index lookup needs no captured non-Sendable document.
+            // The block is `@Sendable` (non-isolated). Extract everything from the
+            // non-Sendable `Notification` HERE (never send `note` across the
+            // isolation boundary). `note.object` is the searching `PDFDocument`
+            // (PDFKit posts self), so no captured document is needed.
+            guard
+                let matchedDocument = note.object as? PDFDocument,
+                let selection = note.userInfo?[PDFDocumentFoundSelectionKey] as? PDFSelection,
+                let firstPage = selection.pages.first
+            else { return }
+            let page = matchedDocument.index(for: firstPage)
+            let snippetText = selection.string ?? ""
+            // `queue: .main` guarantees this runs on the main thread, so
+            // `assumeIsolated` is a sound MainActor context. Only Sendable values
+            // (`page`, `snippetText`) and the `@preconcurrency`-downgraded PDFKit
+            // `selection` cross in — not `note`.
             MainActor.assumeIsolated {
-                guard
-                    let self,
-                    let matchedDocument = note.object as? PDFDocument,
-                    let selection = note.userInfo?[PDFDocumentFoundSelectionKey] as? PDFSelection,
-                    let firstPage = selection.pages.first
-                else { return }
-                let page = matchedDocument.index(for: firstPage)
+                guard let self else { return }
                 let result = PDFSearchResult(
                     page: page,
-                    snippet: PDFSearchResult.snippet(from: selection.string ?? "")
+                    snippet: PDFSearchResult.snippet(from: snippetText)
                 )
                 self.selectionsByResultID[result.id] = selection
                 self.results.append(result)
