@@ -175,9 +175,29 @@ public actor WorkerClient {
 
     // MARK: - Request building
 
-    private func buildRequest<E: WorkerEndpoint>(for endpoint: E) async throws -> URLRequest {
+    /// Build the request URL from an endpoint path that MAY embed a query
+    /// string. `URL.append(path:)` is for path components and percent-encodes
+    /// reserved characters, so a "/x?since=y" path would have its "?" turned
+    /// into "%3F" and break worker routing (404). Split any query off and attach
+    /// it as a real, already-encoded query component instead.
+    private func makeURL(path: String) -> URL {
+        guard let qIndex = path.firstIndex(of: "?") else {
+            var url = baseURL
+            url.append(path: path)
+            return url
+        }
         var url = baseURL
-        url.append(path: endpoint.path)
+        url.append(path: String(path[..<qIndex]))
+        let query = String(path[path.index(after: qIndex)...])
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        components.percentEncodedQuery = query
+        return components.url ?? url
+    }
+
+    private func buildRequest<E: WorkerEndpoint>(for endpoint: E) async throws -> URLRequest {
+        let url = makeURL(path: endpoint.path)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -202,8 +222,7 @@ public actor WorkerClient {
     private func buildStreamingRequest<E: WorkerStreamingEndpoint>(
         for endpoint: E
     ) async throws -> URLRequest {
-        var url = baseURL
-        url.append(path: endpoint.path)
+        let url = makeURL(path: endpoint.path)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
 

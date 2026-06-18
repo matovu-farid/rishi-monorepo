@@ -181,6 +181,19 @@ struct WorkerClientTests {
         }
     }
 
+    @Test func endpointPathQueryBecomesRealQueryNotPercentEncoded() async throws {
+        let (client, _) = makeClient()
+        MockURLProtocol.setHandler { _ in (self.ok(), Data(#"{"changes":[]}"#.utf8)) }
+        let since = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try await client.send(SyncChangesEndpoint(since: since))
+        let req = try #require(MockURLProtocol.recordedRequests.first)
+        let url = try #require(req.url)
+        // The '?' must be a real query separator, never percent-encoded into the path.
+        #expect(!url.absoluteString.contains("%3F"))
+        #expect(url.path == "/api/sync/changes")
+        #expect(url.query?.hasPrefix("since=") == true)
+    }
+
     @Test func decodeFailureThrowsRishiErrorDecoding() async {
         let (client, _) = makeClient()
         MockURLProtocol.setHandler { _ in (self.ok(), Data("not json".utf8)) }
