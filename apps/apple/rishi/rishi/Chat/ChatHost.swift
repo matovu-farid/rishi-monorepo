@@ -10,19 +10,18 @@ import RishiCore
 struct ConversationsListHost: View {
     let userId: UserID
     let onSelect: (Conversation) -> Void
-    let chatRefreshAdapter: AppChatRefreshAdapter
+
+    @Environment(\.services) private var servicesEnv
 
     @State private var vm: ConversationsListViewModel
 
     init(
         vm: ConversationsListViewModel,
-        services: BootstrappedServices,
         userId: UserID,
         onSelect: @escaping (Conversation) -> Void
     ) {
         self.userId = userId
         self.onSelect = onSelect
-        self.chatRefreshAdapter = services.chatRefreshAdapter
         _vm = State(initialValue: vm)
     }
 
@@ -33,11 +32,16 @@ struct ConversationsListHost: View {
             onSelect: onSelect
         )
         .navigationTitle("Conversations")
+        // `@Environment` is not readable in `init`, so the `chatRefreshAdapter`
+        // capture lives here in `.task`/`.onDisappear` (where `setActive`
+        // already ran). `servicesEnv` is always non-nil under the signed-in
+        // subtree this host mounts in, so behavior is identical to the prior
+        // init-time grab.
         .task {
-            chatRefreshAdapter.setActive(viewModel: vm, userId: userId)
+            servicesEnv?.chatRefreshAdapter.setActive(viewModel: vm, userId: userId)
         }
         .onDisappear {
-            chatRefreshAdapter.clearActive()
+            servicesEnv?.chatRefreshAdapter.clearActive()
         }
     }
 }
