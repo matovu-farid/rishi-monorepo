@@ -73,6 +73,18 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// coordinate space.
     public var onTap: (CGPoint) -> Void = { _ in }
 
+    /// Fired when a hardware right-arrow key (or the on-screen right edge
+    /// chevron) requests a forward page turn. The screen routes this to
+    /// `EPUBPageNavigator.goNext()`. Registered as a Readium key observer in
+    /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
+    public var onPageForward: () -> Void = {}
+
+    /// Fired when a hardware left-arrow key (or the on-screen left edge
+    /// chevron) requests a backward page turn. The screen routes this to
+    /// `EPUBPageNavigator.goPrev()`. Registered as a Readium key observer in
+    /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
+    public var onPageBackward: () -> Void = {}
+
     public init(viewModel: EPUBReaderViewModel) {
         self.viewModel = viewModel
         super.init()
@@ -86,6 +98,16 @@ public final class EPUBNavigatorCoordinator: NSObject {
         guard recognizer.state == .ended,
               let view = recognizer.view else { return }
         onTap(recognizer.location(in: view))
+    }
+
+    /// Maps a Readium arrow key to a page turn. Returns true when consumed.
+    @discardableResult
+    public func handleArrowKey(_ key: Key) -> Bool {
+        switch key {
+        case .arrowRight: onPageForward(); return true
+        case .arrowLeft:  onPageBackward(); return true
+        default:          return false
+        }
     }
 
     /// Re-applies the supplied highlights as Readium decorations in the
@@ -165,6 +187,16 @@ public final class EPUBNavigatorCoordinator: NSObject {
         return await nav.go(to: link, options: NavigatorGoOptions(animated: true))
     }
 
+    /// Navigates to a precise `Locator` — used by the bookmark-list jump (and,
+    /// later, the search-result jump). Mirrors ``go(to:)`` for a `Link` and the
+    /// read-aloud follow (`navigateToReadAloudParagraph`), which both go through
+    /// `nav.go(to:options:)`. No-ops if the navigator hasn't been built yet.
+    @discardableResult
+    public func go(to locator: ReadiumShared.Locator) async -> Bool {
+        guard let nav = navigator else { return false }
+        return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+    }
+
     /// Imperatively clears the live selection (used after a highlight
     /// is saved so the menu doesn't stay anchored to old text).
     public func clearSelection() {
@@ -187,6 +219,16 @@ public final class EPUBNavigatorCoordinator: NSObject {
             initialLocation: viewModel.latestLocator
         )
         nav.delegate = self
+        // Hardware arrow keys (primarily Mac; iPad hardware keyboards get it
+        // for free) drive page turns through the same seam as the on-screen
+        // edge chevrons. The returned tokens are discarded — the observers
+        // live as long as the navigator.
+        _ = nav.addObserver(.key(.arrowRight) { [weak self] in
+            self?.handleArrowKey(.arrowRight) ?? false
+        })
+        _ = nav.addObserver(.key(.arrowLeft) { [weak self] in
+            self?.handleArrowKey(.arrowLeft) ?? false
+        })
         self.navigator = nav
     }
 }
