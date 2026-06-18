@@ -134,6 +134,6 @@ struct LibraryTabView: View {
             )
         }
         #endif
-        .deepLinkHandling(services: services, model: model, libraryVM: libraryVM)
+        .deepLinkHandling(model: model, libraryVM: libraryVM)
     }
 }
