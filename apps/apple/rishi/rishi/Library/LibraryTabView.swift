@@ -21,7 +21,6 @@ struct LibraryTabView: View {
     let user: User
     let model: SignedInViewModel
     let onCacheUserId: (UserID) -> Void
-    let onShowChats: () -> Void
     let onSignedOut: () -> Void
 
     @Environment(AppRouter.self) private var router
@@ -33,14 +32,12 @@ struct LibraryTabView: View {
         user: User,
         model: SignedInViewModel,
         onCacheUserId: @escaping (UserID) -> Void,
-        onShowChats: @escaping () -> Void,
         onSignedOut: @escaping () -> Void
     ) {
         self.services = services
         self.user = user
         self.model = model
         self.onCacheUserId = onCacheUserId
-        self.onShowChats = onShowChats
         self.onSignedOut = onSignedOut
         _libraryVM = State(initialValue: LibraryViewModel.make(services: services, user: user))
     }
@@ -72,7 +69,6 @@ struct LibraryTabView: View {
                 // (`#if` cannot conditionalize a single call argument inline, so
                 // the platform choice lives in `macSettingsHandler`.)
                 onShowSettings: settingsHandler,
-                onShowChats: onShowChats,
                 onImported: { outcomes in
                     let successes = outcomes.compactMap(\.book)
                     guard successes.count == 1, let book = successes.first else { return }

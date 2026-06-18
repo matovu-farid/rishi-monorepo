@@ -77,7 +77,6 @@ struct SignedInView: View {
             user: user,
             model: model,
             onCacheUserId: onCacheUserId,
-            onShowChats: { router.showConversations() },
             onSignedOut: onSignedOut
         )
         .sheet(item: $model.selectedConversation) { convo in

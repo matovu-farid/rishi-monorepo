@@ -78,7 +78,6 @@ public struct LibraryRootView: View {
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: @escaping (() -> Void),
-                onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.viewModel = viewModel
         self.importCoordinator = importCoordinator
@@ -96,7 +95,6 @@ public struct LibraryRootView: View {
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: @escaping (() -> Void),
-                onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.viewModel = viewModel
         self.importCoordinator = importCoordinator
