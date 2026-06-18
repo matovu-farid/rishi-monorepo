@@ -36,14 +36,13 @@ struct LibraryView: View {
             if books.isEmpty {
                 LibraryEmptyStateView()
             } else {
-                ScrollView{
+                ScrollView {
                     if !readingNow.isEmpty {
                         ReadingNowShelf(
                             entries: readingNow,
                             coverURL: coverURL,
                             onOpen: onOpen
                         )
-                        Divider().background(RishiColor.divider)
                     }
                     LibraryGrid(
                         books: books,
