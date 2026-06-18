@@ -14,6 +14,7 @@ import RishiCore
 import RishiLibrary
 import RishiReader
 import RishiSearch
+import RishiSync
 import RishiUIKit
 #if canImport(PDFKit)
 import PDFKit

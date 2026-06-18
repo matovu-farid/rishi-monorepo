@@ -20,6 +20,7 @@ import RishiCore
 import RishiLibrary
 import RishiReader
 import RishiSearch
+import RishiSync
 import RishiUIKit
 
 struct EPUBReaderDestination: View {
