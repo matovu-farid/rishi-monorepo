@@ -86,15 +86,30 @@ interface FakeMessageRow {
   isDeleted: boolean
 }
 
+interface FakeBookmarkRow {
+  id: string
+  bookId: string
+  userId: string
+  location: string
+  label: string
+  snippet: string | null
+  pageNumber: number | null
+  createdAt: number
+  updatedAt: number
+  isDeleted: boolean
+}
+
 const {
   booksStore,
   highlightsStore,
   conversationsStore,
   messagesStore,
+  bookmarksStore,
   BOOK_COLS,
   HIGHLIGHT_COLS,
   CONV_COLS,
   MSG_COLS,
+  BOOKMARK_COLS,
 } = vi.hoisted(() => {
   function mkCols<T extends string>(table: T, names: string[]) {
     const out: Record<string, { __table: T; __col: string }> = {}
@@ -106,6 +121,7 @@ const {
     highlightsStore: [] as FakeHighlightRow[],
     conversationsStore: [] as FakeConversationRow[],
     messagesStore: [] as FakeMessageRow[],
+    bookmarksStore: [] as FakeBookmarkRow[],
     BOOK_COLS: mkCols("books", [
       "id",
       "userId",
@@ -118,6 +134,7 @@ const {
     HIGHLIGHT_COLS: mkCols("highlights", ["id", "userId", "updatedAt", "isDeleted"]),
     CONV_COLS: mkCols("conversations", ["id", "userId", "updatedAt", "isDeleted"]),
     MSG_COLS: mkCols("messages", ["id", "conversationId", "updatedAt"]),
+    BOOKMARK_COLS: mkCols("bookmarks", ["id", "userId", "updatedAt", "isDeleted"]),
   }
 })
 
@@ -126,6 +143,7 @@ function resetStores() {
   highlightsStore.length = 0
   conversationsStore.length = 0
   messagesStore.length = 0
+  bookmarksStore.length = 0
 }
 
 // ─── Mock schema so table imports resolve to column-id maps ──────────────────
@@ -135,7 +153,7 @@ vi.mock("@rishi/shared/schema", () => ({
   conversations: CONV_COLS,
   messages: MSG_COLS,
   devices: {},
-  bookmarks: {},
+  bookmarks: BOOKMARK_COLS,
   user: {},
   session: {},
   account: {},
@@ -194,6 +212,8 @@ function storeFor(table: string): Array<Record<string, unknown>> {
     return conversationsStore as unknown as Array<Record<string, unknown>>
   if (table === "messages")
     return messagesStore as unknown as Array<Record<string, unknown>>
+  if (table === "bookmarks")
+    return bookmarksStore as unknown as Array<Record<string, unknown>>
   return []
 }
 
@@ -344,6 +364,8 @@ const UUID_HL = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const UUID_HL_2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const UUID_HL_3 = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const UUID_POS = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+const UUID_BM = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+const UUID_BM_2 = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 
 interface SyncChange {
   kind: string
@@ -383,6 +405,24 @@ function seedBook(overrides: Partial<FakeBookRow> = {}): FakeBookRow {
     isDeleted: overrides.isDeleted ?? false,
   }
   booksStore.push(full)
+  return full
+}
+
+function seedBookmark(overrides: Partial<FakeBookmarkRow> = {}): FakeBookmarkRow {
+  const updatedAt = overrides.updatedAt ?? 1_700_000_000_000
+  const full: FakeBookmarkRow = {
+    id: overrides.id ?? UUID_BM,
+    bookId: overrides.bookId ?? UUID_BOOK,
+    userId: overrides.userId ?? "user_alice",
+    location: overrides.location ?? "epubcfi(/6/4!/4/2)",
+    label: overrides.label ?? "",
+    snippet: overrides.snippet ?? null,
+    pageNumber: overrides.pageNumber ?? null,
+    createdAt: overrides.createdAt ?? updatedAt,
+    updatedAt,
+    isDeleted: overrides.isDeleted ?? false,
+  }
+  bookmarksStore.push(full)
   return full
 }
 
@@ -621,5 +661,232 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     const body = (await res.json()) as { accepted_at: number }
     expect(body.accepted_at).toBe(4.5)
     expect(highlightsStore.length).toBe(3)
+  })
+})
+
+describe("POST /api/sync/push — bookmark kind", () => {
+  it("live insert: writes a row mapping locator->location, label, snippet, book_id, userId, updatedAt", async () => {
+    const updatedAt = 7.5
+    const res = await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: {
+            id: UUID_BM,
+            book_id: UUID_BOOK,
+            locator: "epubcfi(/6/4!/4/10)",
+            label: "Chapter 2",
+            snippet: "the snippet text",
+            created_at: "2026-06-18T00:00:00Z",
+          },
+          updated_at: updatedAt,
+          deleted: false,
+        },
+      ],
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { accepted_at: number }
+    expect(body.accepted_at).toBe(updatedAt)
+    expect(bookmarksStore.length).toBe(1)
+    const row = bookmarksStore[0]
+    expect(row.id).toBe(UUID_BM)
+    expect(row.bookId).toBe(UUID_BOOK)
+    expect(row.userId).toBe("user_alice")
+    // NAME MISMATCH lock: payload.locator -> column location.
+    expect(row.location).toBe("epubcfi(/6/4!/4/10)")
+    expect(row.label).toBe("Chapter 2")
+    expect(row.snippet).toBe("the snippet text")
+    expect(row.isDeleted).toBe(false)
+    // updatedAt = fromSecondsSinceRef(updated_at) = updated_at*1000 + 978_307_200_000.
+    expect(row.updatedAt).toBe(updatedAt * 1000 + REFERENCE_DATE_OFFSET_MS)
+  })
+
+  it("missing label/snippet: label coalesces to '' and snippet to null", async () => {
+    const res = await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: {
+            id: UUID_BM,
+            book_id: UUID_BOOK,
+            locator: "epubcfi(/6/4!/4/10)",
+            created_at: "2026-06-18T00:00:00Z",
+          },
+          updated_at: 1.0,
+          deleted: false,
+        },
+      ],
+    })
+    expect(res.status).toBe(200)
+    expect(bookmarksStore.length).toBe(1)
+    expect(bookmarksStore[0].label).toBe("")
+    expect(bookmarksStore[0].snippet).toBeNull()
+  })
+
+  it("LWW update: a newer updated_at overwrites; an older one is ignored", async () => {
+    seedBookmark({
+      id: UUID_BM,
+      location: "old-loc",
+      label: "old",
+      snippet: "old-snip",
+      updatedAt: 5.0 * 1000 + REFERENCE_DATE_OFFSET_MS,
+    })
+    // Newer push wins.
+    await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: {
+            id: UUID_BM,
+            book_id: UUID_BOOK,
+            locator: "new-loc",
+            label: "new",
+            snippet: "new-snip",
+          },
+          updated_at: 9.0,
+          deleted: false,
+        },
+      ],
+    })
+    expect(bookmarksStore.length).toBe(1)
+    expect(bookmarksStore[0].location).toBe("new-loc")
+    expect(bookmarksStore[0].label).toBe("new")
+    expect(bookmarksStore[0].snippet).toBe("new-snip")
+    expect(bookmarksStore[0].updatedAt).toBe(9.0 * 1000 + REFERENCE_DATE_OFFSET_MS)
+
+    // Older push is ignored (does not regress the row).
+    await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: {
+            id: UUID_BM,
+            book_id: UUID_BOOK,
+            locator: "stale-loc",
+            label: "stale",
+            snippet: "stale-snip",
+          },
+          updated_at: 2.0,
+          deleted: false,
+        },
+      ],
+    })
+    expect(bookmarksStore[0].location).toBe("new-loc")
+    expect(bookmarksStore[0].label).toBe("new")
+  })
+
+  it("tombstone: deleted=true flips is_deleted on an existing row; no-op for unknown id", async () => {
+    seedBookmark({ id: UUID_BM, isDeleted: false, updatedAt: 1.0 * 1000 + REFERENCE_DATE_OFFSET_MS })
+    // Known id -> flips isDeleted.
+    await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: { id: UUID_BM },
+          updated_at: 5.0,
+          deleted: true,
+        },
+      ],
+    })
+    expect(bookmarksStore[0].isDeleted).toBe(true)
+
+    // Unknown id -> no row created, no throw.
+    const res = await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM_2,
+          payload: { id: UUID_BM_2 },
+          updated_at: 6.0,
+          deleted: true,
+        },
+      ],
+    })
+    expect(res.status).toBe(200)
+    // Still only the one seeded bookmark.
+    expect(bookmarksStore.length).toBe(1)
+  })
+
+  it("cross-user isolation: a bookmark for user A is not written/visible under user B", async () => {
+    // Seed an existing bookmark owned by alice.
+    seedBookmark({
+      id: UUID_BM,
+      userId: "user_alice",
+      location: "alice-loc",
+      updatedAt: 1.0 * 1000 + REFERENCE_DATE_OFFSET_MS,
+    })
+    setUser("user_bob")
+    // Bob pushes a bookmark with the SAME id — must NOT overwrite alice's row;
+    // it inserts a bob-scoped row instead (existence check is (id, userId)).
+    await callPush({
+      changes: [
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: {
+            id: UUID_BM,
+            book_id: UUID_BOOK,
+            locator: "bob-loc",
+            label: "bob",
+          },
+          updated_at: 9.0,
+          deleted: false,
+        },
+      ],
+    })
+    const aliceRow = bookmarksStore.find(
+      (r) => r.id === UUID_BM && r.userId === "user_alice",
+    )
+    const bobRow = bookmarksStore.find(
+      (r) => r.id === UUID_BM && r.userId === "user_bob",
+    )
+    expect(aliceRow?.location).toBe("alice-loc") // untouched
+    expect(bobRow?.location).toBe("bob-loc") // bob's own row
+    expect(bobRow?.userId).toBe("user_bob")
+  })
+
+  it("batch tolerance: a highlight + a bookmark in one batch returns 200 and writes BOTH", async () => {
+    const res = await callPush({
+      changes: [
+        {
+          kind: "highlight",
+          id: UUID_HL,
+          payload: {
+            id: UUID_HL,
+            book_id: UUID_BOOK,
+            locator_start: "a",
+            locator_end: "b",
+            color: "yellow",
+            text: "hi",
+          },
+          updated_at: 1.0,
+          deleted: false,
+        },
+        {
+          kind: "bookmark",
+          id: UUID_BM,
+          payload: {
+            id: UUID_BM,
+            book_id: UUID_BOOK,
+            locator: "epubcfi(/6/4!/4/2)",
+            label: "L",
+          },
+          updated_at: 2.0,
+          deleted: false,
+        },
+      ],
+    })
+    // Proves the Zod enum no longer 400s on a bookmark mixed with other kinds.
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { accepted_at: number }
+    expect(body.accepted_at).toBe(2.0)
+    expect(highlightsStore.length).toBe(1)
+    expect(bookmarksStore.length).toBe(1)
+    expect(bookmarksStore[0].location).toBe("epubcfi(/6/4!/4/2)")
   })
 })

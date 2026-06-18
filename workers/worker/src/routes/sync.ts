@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
-import { books, highlights, conversations, messages } from "@rishi/shared/schema";
+import { books, highlights, conversations, messages, bookmarks } from "@rishi/shared/schema";
 import type { PullResponse } from "@rishi/shared/sync-types";
 
 // ─── Date wire convention ──────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ const fromSecondsSinceRef = (s: number) => s * 1000 + REFERENCE_DATE_OFFSET_MS;
 // the legacy grouped-object body {changes: {books, highlights, ...}} that the
 // /pull handler still echoes — those two contracts diverged after Phase 7.
 const SyncChangeSchema = z.object({
-  kind: z.enum(["book", "position", "highlight", "conversation", "message"]),
+  kind: z.enum(["book", "position", "highlight", "conversation", "message", "bookmark"]),
   id: z.string(),
   payload: z.record(z.string(), z.unknown()),
   updated_at: z.number(),
@@ -227,6 +227,81 @@ syncRoutes.post("/push", requireAuth, async (c) => {
               and(
                 eq(highlights.id, highlightId),
                 eq(highlights.userId, userId),
+              ),
+            );
+        }
+        continue;
+      }
+
+      // ── bookmark ─────────────────────────────────────────────────────────
+      // Clones the highlight arm exactly. The iOS wire field is `locator`;
+      // the existing D1 column is `location` — map explicitly (Phase 17
+      // class-of-bug). LWW by updated_at; userId from session, never payload.
+      if (change.kind === "bookmark") {
+        const p = change.payload as Record<string, unknown>;
+        const bookmarkId = (p.id as string) ?? change.id;
+        if (!bookmarkId) continue;
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
+
+        const existing = await tx
+          .select()
+          .from(bookmarks)
+          .where(
+            and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId)),
+          )
+          .get();
+
+        if (change.deleted) {
+          // Tombstone: flip isDeleted on the matching row if it exists.
+          // No-op for unknown ids (the row may live on another device).
+          if (existing) {
+            await tx
+              .update(bookmarks)
+              .set({
+                isDeleted: true,
+                updatedAt: pushedUpdatedAtMs,
+              } as Partial<typeof bookmarks.$inferInsert>)
+              .where(
+                and(
+                  eq(bookmarks.id, bookmarkId),
+                  eq(bookmarks.userId, userId),
+                ),
+              );
+          }
+          continue;
+        }
+
+        // NAME MISMATCH: payload.locator -> column location.
+        const location = (p.locator as string | undefined) ?? "";
+        const label = (p.label as string | undefined) ?? "";
+        const snippet = (p.snippet as string | undefined) ?? null;
+        const bookId = (p.book_id as string | undefined) ?? "";
+
+        if (!existing) {
+          await tx.insert(bookmarks).values({
+            id: bookmarkId,
+            bookId,
+            userId,
+            location,
+            label,
+            snippet,
+            isDeleted: false,
+            updatedAt: pushedUpdatedAtMs,
+            createdAt: pushedUpdatedAtMs,
+          } as typeof bookmarks.$inferInsert);
+        } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          await tx
+            .update(bookmarks)
+            .set({
+              location,
+              label,
+              snippet,
+              updatedAt: pushedUpdatedAtMs,
+            } as Partial<typeof bookmarks.$inferInsert>)
+            .where(
+              and(
+                eq(bookmarks.id, bookmarkId),
+                eq(bookmarks.userId, userId),
               ),
             );
         }
