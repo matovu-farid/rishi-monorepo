@@ -122,6 +122,25 @@ enum Migrations {
             // intentionally empty
         }
 
+        // v3_bookmarks — adds the bookmark table for the reader bookmark slice
+        // (Phase 37). Forward-only: never modify v1_initial or v2_placeholder.
+        // Mirrors the highlights table shape minus color/selection-range; a single
+        // versioned locator column plus optional label/snippet.
+        m.registerMigration("v3_bookmarks") { db in
+            try db.execute(sql: """
+                CREATE TABLE \(Tables.Bookmarks.table) (
+                    \(Tables.Bookmarks.id) TEXT PRIMARY KEY NOT NULL,
+                    \(Tables.Bookmarks.bookId) TEXT NOT NULL,
+                    \(Tables.Bookmarks.locator) TEXT NOT NULL,
+                    \(Tables.Bookmarks.label) TEXT,
+                    \(Tables.Bookmarks.snippet) TEXT,
+                    \(Tables.Bookmarks.createdAt) REAL NOT NULL,
+                    FOREIGN KEY (\(Tables.Bookmarks.bookId)) REFERENCES \(Tables.Books.table)(\(Tables.Books.id)) ON DELETE CASCADE
+                )
+            """)
+            try db.execute(sql: "CREATE INDEX idx_bookmark_book_id ON \(Tables.Bookmarks.table)(\(Tables.Bookmarks.bookId))")
+        }
+
         return m
     }()
 }

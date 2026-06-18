@@ -13,7 +13,7 @@ struct MigrationsTests {
         let applied = try queue.read { db in
             try Migrations.migrator.appliedMigrations(db)
         }
-        #expect(applied == ["v1_initial", "v2_placeholder"])
+        #expect(applied == ["v1_initial", "v2_placeholder", "v3_bookmarks"])
     }
 
     @Test func allSevenTablesExistAfterMigration() throws {

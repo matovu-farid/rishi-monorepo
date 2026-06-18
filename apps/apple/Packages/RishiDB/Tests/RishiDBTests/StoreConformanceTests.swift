@@ -42,6 +42,11 @@ struct StoreConformanceTests {
         try await assertHighlightStoreConformance(store)
     }
 
+    @Test func grdbBookmarkStoreSatisfiesContract() async throws {
+        let store = GRDBBookmarkStore(dbQueue: try makeQueue())
+        try await assertBookmarkStoreConformance(store)
+    }
+
     @Test func grdbPositionStoreSatisfiesContract() async throws {
         let store = GRDBPositionStore(dbQueue: try makeQueue())
         try await assertPositionStoreConformance(store)

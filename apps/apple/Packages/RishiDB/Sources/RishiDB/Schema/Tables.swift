@@ -48,6 +48,17 @@ public enum Tables {
         static let createdAt     = "created_at"     // REAL
     }
 
+    enum Bookmarks {
+        static let table = "bookmark"
+
+        static let id         = "id"          // TEXT PK
+        static let bookId     = "book_id"     // TEXT FK -> books.id
+        static let locator    = "locator"     // TEXT versioned locator JSON
+        static let label      = "label"       // TEXT?
+        static let snippet    = "snippet"     // TEXT?
+        static let createdAt  = "created_at"  // REAL
+    }
+
     enum Conversations {
         static let table = "conversations"
 
