@@ -82,6 +82,8 @@ public struct EPUBReaderScreen: View {
         // Phase 37 Plan 37-03 — EPUB bookmark toggle + bookmarks-list buttons.
         "reader.toolbar.bookmark",
         "reader.toolbar.bookmarksList",
+        // Phase 37 Plan 37-05 — EPUB in-book search button.
+        "reader.toolbar.search",
         "reader.toolbar.readAloud",
         "reader.toolbar.voice",
     ]
@@ -190,6 +192,13 @@ public struct EPUBReaderScreen: View {
     /// model reads the live `viewModel.latestLocator` via a closure, so the EPUB
     /// match always uses the current top-of-viewport location.
     @State private var bookmarkToggle: EPUBBookmarkToggleModel?
+
+    /// Phase 37 Plan 37-05 — drives Readium's in-book full-text search + the
+    /// jump to a chosen result. Built lazily in `.task` once
+    /// `viewModel.publication` is loaded (search needs the live publication); the
+    /// `.search` sheet reads it directly. Read in the toolbar/sheet body so a
+    /// new result page repaints the list.
+    @State private var searchModel: EPUBSearchModel?
 
     @State private var currentSpread: EPUBSpreadMode = .single
 
@@ -414,6 +423,13 @@ public struct EPUBReaderScreen: View {
                 bookmarkToggle = toggle
                 await toggle.refresh()
             }
+            // Phase 37 Plan 37-05 — build the search model once the publication
+            // is loaded (search runs against the live Readium publication). The
+            // default-installed ContentSearchService makes `publication.search`
+            // work with no service registration.
+            if searchModel == nil, let publication = viewModel.publication {
+                searchModel = EPUBSearchModel(publication: publication)
+            }
             // Apply the restored settings to Readium immediately so the
             // first render uses them (font / size / line-height / theme).
             applyPreferences()
@@ -506,6 +522,13 @@ public struct EPUBReaderScreen: View {
                 }
                 .accessibilityIdentifier("reader.toolbar.bookmarksList")
                 .accessibilityLabel(A11yLabel.readerOpenBookmarks)
+
+                // Phase 37 Plan 37-05 — open the in-book full-text search sheet.
+                Button(action: showSearchAction) {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityIdentifier("reader.toolbar.search")
+                .accessibilityLabel(A11yLabel.readerSearch)
 
                 if onReadAloud != nil {
                     Button(action: readAloudAction) {
@@ -622,6 +645,19 @@ public struct EPUBReaderScreen: View {
             chrome.userActivity()
             Task { await bookmarkToggle?.refresh() }
             activeSheet = .bookmarks
+        }
+        #else
+        return { }
+        #endif
+    }
+
+    /// Presents the `.search` in-book search sheet. UIKit-gated so the macOS
+    /// dev-host stub branch no-ops.
+    private var showSearchAction: () -> Void {
+        #if canImport(UIKit)
+        return {
+            chrome.userActivity()
+            activeSheet = .search
         }
         #else
         return { }
@@ -760,12 +796,38 @@ public struct EPUBReaderScreen: View {
                 onSave: { highlightInteractor.commitNoteEdit(on: hl) },
                 onCancel: { activeSheet = nil }
             )
-        case .bookmarks:
-            // EPUB bookmarks UI is not wired on this screen (the EPUB slice of
-            // Phase 37-03 never reached here). The case is unreachable on this
-            // screen; EmptyView keeps the switch exhaustive, mirroring the
-            // .ttsControls / .ttsPicker placeholder above.
-            EmptyView()
+        case .search:
+            // Phase 37 Plan 37-05 — EPUB in-book search (the shared
+            // engine-agnostic view from 37-04). Submitting runs Readium's
+            // `publication.search`; selecting a row resolves it back to a
+            // `Locator` and jumps via the navigator's `go(to: Locator)` overload.
+            SearchResultsView(
+                query: Binding(
+                    get: { searchModel?.query ?? "" },
+                    set: { searchModel?.query = $0 }
+                ),
+                isSearching: searchModel?.isSearching ?? false,
+                rows: searchModel?.resultRows ?? [],
+                onSubmit: {
+                    if let model = searchModel {
+                        model.search(model.query)
+                    }
+                },
+                onSelect: { row in
+                    activeSheet = nil
+                    if let locator = searchModel?.locator(for: row) {
+                        let coordinator = coordinatorRef.coordinator
+                        // KEEP: Readium navigator.go(to:) requires @MainActor.
+                        Task { @MainActor in
+                            _ = await coordinator?.go(to: locator)
+                        }
+                    }
+                },
+                onClose: {
+                    searchModel?.cancel()
+                    activeSheet = nil
+                }
+            )
         }
     }
     #endif

@@ -21,7 +21,7 @@ import Testing
 @Suite("ReaderToolbarItem")
 struct ReaderToolbarItemTests {
 
-    @Test("EPUBReaderScreen exposes the seven top-bar trailing identifiers")
+    @Test("EPUBReaderScreen exposes the eight top-bar trailing identifiers")
     func epubIdentifiers() {
         let ids = EPUBReaderScreen.toolbarAccessibilityIdentifiers
         let expected: Set<String> = [
@@ -31,6 +31,8 @@ struct ReaderToolbarItemTests {
             // Phase 37 Plan 37-03 — EPUB bookmark toggle + bookmarks-list buttons.
             "reader.toolbar.bookmark",
             "reader.toolbar.bookmarksList",
+            // Phase 37 Plan 37-05 — in-book search button.
+            "reader.toolbar.search",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
         ]

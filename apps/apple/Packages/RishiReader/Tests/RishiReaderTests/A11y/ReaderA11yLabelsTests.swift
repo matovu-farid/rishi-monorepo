@@ -138,12 +138,13 @@ struct ReaderA11yLabelsTests {
         let epub = try String(contentsOf: epubURL!, encoding: .utf8)
         // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
         // buttons; the EPUB toolbar now carries its typography button plus the
-        // two bookmark ids.
+        // two bookmark ids. Plan 37-05 adds the in-book search id.
         let epubIds = [
             "reader.toolbar.toc",
             "reader.toolbar.theme",
             "reader.toolbar.bookmark",
             "reader.toolbar.bookmarksList",
+            "reader.toolbar.search",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
             "reader.toolbar.typography",
@@ -166,8 +167,9 @@ struct ReaderA11yLabelsTests {
         // flag the mismatch.
         let expectedByFile: [String: Int] = [
             // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
-            // identifier sites (5 -> 7); EPUB picks its search id up in plan 37-05.
-            "EPUBReaderScreen.swift": 7,
+            // identifier sites (5 -> 7); Plan 37-05 added the search button
+            // (7 -> 8).
+            "EPUBReaderScreen.swift": 8,
             // Phase 37 Plan 37-02 added the bookmark toggle + bookmarks-list
             // identifier sites (4 -> 6); Plan 37-04 added the search button
             // (6 -> 7).
