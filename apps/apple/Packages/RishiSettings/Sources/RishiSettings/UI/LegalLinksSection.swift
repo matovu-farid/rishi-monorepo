@@ -24,7 +24,14 @@ import UIKit
 /// CI guard (`check-anti-steering.sh`) treats as non-billing legal
 /// disclosures (i.e. not steering language).
 public struct LegalLinksSection: View {
-    @State private var sheetURL: IdentifiedURL?
+    /// Invoked when a legal row is tapped. The parent owns the sheet
+    /// presentation and attaches `.sheet` to the enclosing `Form` — a
+    /// `Section` is an unstable presentation host inside a `List`/`Form`
+    /// (presenting from it triggers "Attempt to present ... while a
+    /// presentation is in progress" and the sheet never appears). This
+    /// mirrors how `SettingsScreen` already hoists its delete-account alerts
+    /// to the `Form` level.
+    public let onSelect: (URL) -> Void
 
     /// Canonical legal-page URLs. Update here if the marketing site moves.
     /// MUST stay on `rishi.fidexa.org/legal/*` — the anti-steering allow
@@ -53,14 +60,16 @@ public struct LegalLinksSection: View {
         }
     }
 
-    public init() {}
+    public init(onSelect: @escaping (URL) -> Void = { _ in }) {
+        self.onSelect = onSelect
+    }
 
     public var body: some View {
         Section("Legal") {
             ForEach(LegalLink.allCases) { link in
                 Button {
                     if let url = URL(string: link.rawValue) {
-                        sheetURL = IdentifiedURL(url: url)
+                        onSelect(url)
                     }
                 } label: {
                     HStack {
@@ -78,9 +87,6 @@ public struct LegalLinksSection: View {
                 .accessibilityHint("Opens \(link.title) in an in-app browser")
                 .accessibilityIdentifier("legal-link-\(link.rawValue)")
             }
-        }
-        .sheet(item: $sheetURL) { wrapper in
-            SafariSheet(url: wrapper.url)
         }
     }
 }

@@ -59,6 +59,12 @@ public struct SettingsScreen: View {
     @State private var showDeleteConfirm = false
     @State private var deleteModel: DeleteAccountModel?
 
+    /// Owns the legal-link Safari sheet so it presents from the `Form` rather
+    /// than from `LegalLinksSection`'s `Section` (a `Section` is an unstable
+    /// presentation host — presenting from it collides with the in-progress
+    /// Settings sheet and the Safari sheet never appears).
+    @State private var legalSheetURL: IdentifiedURL?
+
     public init(
         user: User,
         readerTheme: Binding<ReaderTheme>,
@@ -141,7 +147,7 @@ public struct SettingsScreen: View {
                 )
                 SyncSettingsSection(status: syncStatus, onSyncNow: onSyncNow)
                 TelemetrySection(store: telemetryStore)
-                LegalLinksSection()
+                LegalLinksSection(onSelect: { legalSheetURL = IdentifiedURL(url: $0) })
                 AboutSection()
             }
             .navigationTitle("Settings")
@@ -177,6 +183,9 @@ public struct SettingsScreen: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(deleteModel?.deleteError ?? "")
+            }
+            .sheet(item: $legalSheetURL) { wrapper in
+                SafariSheet(url: wrapper.url)
             }
         }
     }
