@@ -222,6 +222,13 @@ export interface CloudflareBindings {
   APPLE_SIWA_KEY_ID?: string;
   APPLE_SIWA_PRIVATE_KEY?: string;
   APPLE_TEAM_ID?: string;
+  // APNs auth for entitlement-invalidation silent pushes (REFUND/REVOKE).
+  // APPLE_APNS_KEY_P8 is the .p8 file contents (PKCS8 PEM), APPLE_APNS_KEY_ID
+  // is the 10-char APNs Key ID. APPLE_TEAM_ID (above) is reused as the JWT
+  // issuer. All three must be set or the webhook skips the push. Set the
+  // first two via `wrangler secret put`.
+  APPLE_APNS_KEY_P8?: string;
+  APPLE_APNS_KEY_ID?: string;
 }
 
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();

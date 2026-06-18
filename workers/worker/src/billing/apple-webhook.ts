@@ -1,8 +1,13 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { Hono } from "hono";
 import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
-import { appleSubscriptions, appleNotificationsLog } from "@rishi/shared/schema";
+import { createApnsSender, type ApnsSender } from "./apns";
+import {
+  appleSubscriptions,
+  appleNotificationsLog,
+  devices as devicesTable,
+} from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
 // NOTE: type-only import — runtime import would form an ESM cycle with
 // src/index.ts via the route mount (same constraint as 14-04). The webhook
@@ -88,7 +93,31 @@ export interface AppleWebhookDeps {
         currentPeriodEnd: Date;
       },
     ): Promise<void>;
+    /**
+     * Resolve the owning userId for a subscription from a prior row keyed on
+     * `appleOriginalTransactionId` (populated by /verify-receipt with the
+     * real userId). Returns null when no non-empty-userId row exists yet —
+     * e.g. a brand-new purchase whose verify-receipt call hasn't landed.
+     */
+    findUserIdByOriginalTransactionId(
+      originalTransactionId: string,
+    ): Promise<string | null>;
+    /**
+     * All devices registered for a user, for silent-push fan-out. Returns
+     * the minimal shape APNs needs (token + topic + env). Empty when the
+     * user has no registered devices.
+     */
+    findDevicesByUserId(
+      userId: string,
+    ): Promise<Array<{ deviceToken: string; topic: string; env: string }>>;
   };
+  /**
+   * APNs silent-push sender, or null when APNs credentials
+   * (APPLE_APNS_KEY_P8 / APPLE_APNS_KEY_ID / APPLE_TEAM_ID) are not
+   * provisioned. When null the REFUND/REVOKE path skips the push and logs a
+   * warning — entitlement still flips on the device's next foreground pull.
+   */
+  apns: ApnsSender | null;
 }
 
 const BodySchema = z.object({ signedPayload: z.string().min(10) });
@@ -244,22 +273,27 @@ async function dispatch(
 
   switch (envelope.notificationType) {
     case "SUBSCRIBED":
-    case "DID_RENEW":
-      // userId="" placeholder: server-initiated rows can't resolve the
-      // user from a webhook alone. Phase 14 follow-up wires an
-      // originalTransactionId -> userId lookup; for now the row is
-      // useful for status tracking and gets reconciled on the next
-      // /verify-receipt call from the device (which keys the real userId).
+    case "DID_RENEW": {
+      // Recover the owning user from a prior /verify-receipt row keyed on the
+      // ORIGINAL transaction id (renewals share it). When found, the
+      // notification-written row attaches to the real user instead of "".
+      // When null (brand-new purchase whose verify-receipt hasn't arrived
+      // yet) we keep the "" placeholder: the row is still useful for status
+      // tracking and gets reconciled on the next /verify-receipt call from
+      // the device (which keys the real userId).
+      const resolvedUserId =
+        (await deps.db.findUserIdByOriginalTransactionId(origIdStr)) ?? "";
       await deps.db.upsertSub({
         appleTransactionId: txIdStr,
         appleOriginalTransactionId: origIdStr,
-        userId: "",
+        userId: resolvedUserId,
         productId: tx.productId,
         status: "active",
         currentPeriodEnd: expires,
         environment: tx.environment,
       });
       break;
+    }
     case "DID_FAIL_TO_RENEW":
       if (envelope.subtype === "GRACE_PERIOD") {
         await deps.db.updateSubStatus(txIdStr, {
@@ -281,15 +315,18 @@ async function dispatch(
       });
       break;
     case "REFUND":
-    case "REVOKE":
+    case "REVOKE": {
       await deps.db.updateSubStatus(txIdStr, {
         status: "refunded",
         currentPeriodEnd: new Date(),
       });
-      // TODO Phase 7: emit silent-push to user devices so the in-flight
+      // Emit a silent push to every registered device so the app's
       // EntitlementReconciler invalidates immediately rather than waiting
-      // for the next launch/foreground pull.
+      // for the next launch/foreground pull. Best-effort: a push failure
+      // must NEVER change the webhook response — Apple still gets HTTP 200.
+      await emitEntitlementChangedPush(origIdStr, deps);
       break;
+    }
     case "DID_CHANGE_RENEWAL_STATUS":
       // autoRenew flag flip only — does NOT change entitlement state.
       // Already logged by the insertLog call above; nothing else.
@@ -299,6 +336,61 @@ async function dispatch(
       // ACK 200 means Apple will NOT redeliver; that's the intended
       // contract for forward-compat with new notification types.
       break;
+  }
+}
+
+/**
+ * Resolve the owning user from the original transaction id and fan out a
+ * `entitlement.changed` silent push to all of their devices.
+ *
+ * Strictly best-effort:
+ *   - No resolvable userId  -> log + return (no device lookup, no send).
+ *   - apns not configured    -> log a warn + return (push skipped).
+ *   - Per-device send fails  -> log + continue to the next device.
+ * The caller's webhook response is unaffected; Apple always gets HTTP 200.
+ */
+async function emitEntitlementChangedPush(
+  originalTransactionId: string,
+  deps: AppleWebhookDeps,
+): Promise<void> {
+  const userId =
+    (await deps.db.findUserIdByOriginalTransactionId(originalTransactionId)) ??
+    "";
+  if (!userId) {
+    console.log(
+      "[apple-webhook] REFUND/REVOKE: no resolvable userId; skipping push",
+    );
+    return;
+  }
+  if (!deps.apns) {
+    console.warn(
+      "[apple-webhook] REFUND/REVOKE: APNs not configured; skipping silent push",
+    );
+    return;
+  }
+  const apns = deps.apns;
+  const userDevices = await deps.db.findDevicesByUserId(userId);
+  if (userDevices.length === 0) {
+    console.log(
+      `[apple-webhook] REFUND/REVOKE: user ${userId} has no devices; skipping push`,
+    );
+    return;
+  }
+  const payload = { rishi: { kind: "entitlement.changed" } };
+  for (const d of userDevices) {
+    try {
+      await apns.sendSilentPush({
+        deviceToken: d.deviceToken,
+        topic: d.topic,
+        env: d.env,
+        payload,
+      });
+    } catch (e) {
+      // Best-effort: log and keep going. Failures do not affect the ACK.
+      console.error(
+        `[apple-webhook] silent push failed for device ${d.deviceToken}: ${String(e)}`,
+      );
+    }
   }
 }
 
@@ -323,8 +415,26 @@ export function registerAppleWebhookRoute(
     }
 
     const db = createDb(c.env.DB);
+
+    // Build the real APNs sender only when all three credentials are
+    // provisioned. When any is missing, pass null and the REFUND/REVOKE
+    // path logs a warning and skips the silent push (entitlement still
+    // reconciles on the device's next foreground pull).
+    const apnsKeyP8 = c.env.APPLE_APNS_KEY_P8;
+    const apnsKeyId = c.env.APPLE_APNS_KEY_ID;
+    const apnsTeamId = c.env.APPLE_TEAM_ID;
+    const apns: ApnsSender | null =
+      apnsKeyP8 && apnsKeyId && apnsTeamId
+        ? createApnsSender({
+            keyP8: apnsKeyP8,
+            keyId: apnsKeyId,
+            teamId: apnsTeamId,
+          })
+        : null;
+
     const deps: AppleWebhookDeps = {
       verifyJws: (jws) => verifyAppleJWS<any>(jws),
+      apns,
       db: {
         insertLog: async (row) => {
           // D1 ON CONFLICT DO NOTHING — atomic dedupe on notificationUuid PK.
@@ -378,6 +488,38 @@ export function registerAppleWebhookRoute(
             })
             .where(eq(appleSubscriptions.appleTransactionId, txId))
             .run();
+        },
+        findUserIdByOriginalTransactionId: async (originalTransactionId) => {
+          // Resolve via the apple_subscriptions_original_txn index. Filter
+          // out empty userIds so we never "resolve" to another placeholder
+          // row; newest wins.
+          const row = await db
+            .select({ userId: appleSubscriptions.userId })
+            .from(appleSubscriptions)
+            .where(
+              and(
+                eq(
+                  appleSubscriptions.appleOriginalTransactionId,
+                  originalTransactionId,
+                ),
+                ne(appleSubscriptions.userId, ""),
+              ),
+            )
+            .orderBy(desc(appleSubscriptions.updatedAt))
+            .get();
+          return row?.userId ?? null;
+        },
+        findDevicesByUserId: async (userId) => {
+          const rows = await db
+            .select({
+              deviceToken: devicesTable.deviceToken,
+              topic: devicesTable.topic,
+              env: devicesTable.env,
+            })
+            .from(devicesTable)
+            .where(eq(devicesTable.userId, userId))
+            .all();
+          return rows;
         },
       },
     };
