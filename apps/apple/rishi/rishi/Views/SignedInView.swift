@@ -168,7 +168,6 @@ struct SignedInView: View {
         // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader cover,
         // and persist the latest scene state on every visible path change.
         .sceneRestoration(
-            services: services,
             model: model,
             tabRaw: $selectedTabRaw,
             openBookIdRaw: $openBookIdRaw
