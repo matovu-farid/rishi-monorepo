@@ -52,7 +52,7 @@ public struct LibraryRootView: View {
     /// surface a Settings sheet without RishiLibrary knowing what's in it.
     /// `nil` (the default) hides the button entirely so older callers and
     /// tests continue to render the same toolbar.
-    public let onShowSettings: (() -> Void)?
+    public let onShowSettings: (() -> Void)
 
     /// Phase 21 follow-up — fires once per import batch with the resulting
     /// outcomes. Host app uses this to auto-open the reader when a SINGLE
@@ -77,7 +77,7 @@ public struct LibraryRootView: View {
     public init(viewModel: LibraryViewModel,
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
-                onShowSettings: (() -> Void)? = nil,
+                onShowSettings: @escaping (() -> Void),
                 onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.viewModel = viewModel
@@ -95,7 +95,7 @@ public struct LibraryRootView: View {
                 path: Binding<NavigationPath>,
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
-                onShowSettings: (() -> Void)? = nil,
+                onShowSettings: @escaping (() -> Void),
                 onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.viewModel = viewModel
@@ -216,15 +216,21 @@ public struct LibraryRootView: View {
                 // menu command owns Cmd+O. A second claimant here collides with
                 // it (and previously with AppKit's system Open) on Mac.
             }
-            if let onShowSettings {
-                ToolbarItem(placement: .secondaryAction) {
-                    Button {
-                        onShowSettings()
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
+      
+            
+            #if os(iOS) && !targetEnvironment(macCatalyst)
+                    // iOS code
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            onShowSettings()
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
                     }
-                }
-            }
+            #endif
+           
+            
+
         }
     }
 }
@@ -337,38 +343,4 @@ private enum LibraryRootPreviewFixtures {
             currentUserId: { capturedUserId }
         )
     }
-}
-
-#Preview("Root - populated") {
-    LibraryRootView(
-        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated),
-        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
-        onOpenBook: { _ in }
-    )
-}
-
-#Preview("Root - empty") {
-    LibraryRootView(
-        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: []),
-        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
-        onOpenBook: { _ in }
-    )
-}
-
-#Preview("Root - with settings button") {
-    LibraryRootView(
-        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated),
-        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
-        onOpenBook: { _ in },
-        onShowSettings: { }
-    )
-}
-
-#Preview("Root - dark mode") {
-    LibraryRootView(
-        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated),
-        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
-        onOpenBook: { _ in }
-    )
-    .preferredColorScheme(.dark)
 }
