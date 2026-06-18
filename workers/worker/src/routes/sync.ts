@@ -71,7 +71,12 @@ syncRoutes.post("/push", requireAuth, async (c) => {
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
-  await db.transaction(async (tx) => {
+  // D1 has no interactive transactions: drizzle's db.transaction() emits a SQL
+  // BEGIN that D1 rejects ("Failed query: begin", confirmed via wrangler tail).
+  // Apply changes sequentially instead (each statement autocommits). Push is
+  // idempotent and last-write-wins, and the client re-pushes dirty records every
+  // wave, so a mid-loop failure is reconciled on the next sync, not rolled back.
+  await (async (tx) => {
     for (const change of body.changes) {
       // ── book ─────────────────────────────────────────────────────────────
       if (change.kind === "book") {
@@ -321,7 +326,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
         continue;
       }
     }
-  });
+  })(db);
 
   // High-water-mark cursor: the max wire updated_at across all accepted
   // changes. Already in seconds-since-2001 — pass through unmodified so iOS
