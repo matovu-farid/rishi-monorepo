@@ -73,6 +73,8 @@ struct RootView: View {
         // `@Environment(ManageSubscriptionPresenter.self)`.
         realBodyContent(deps: deps)
             .environment(deps.manageSubscriptionPresenter)
+            .environment(\.services, deps.services)
+            .environment(\.currentUser, currentUser)
     }
 
     @ViewBuilder
