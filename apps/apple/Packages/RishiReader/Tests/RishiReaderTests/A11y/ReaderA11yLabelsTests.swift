@@ -124,6 +124,8 @@ struct ReaderA11yLabelsTests {
             // Phase 37 Plan 37-02 — PDF bookmark toggle + list buttons.
             "reader.toolbar.bookmark",
             "reader.toolbar.bookmarksList",
+            // Phase 37 Plan 37-04 — in-book search button.
+            "reader.toolbar.search",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
         ]
@@ -134,11 +136,14 @@ struct ReaderA11yLabelsTests {
         let epubURL = try Self.readerSources().first { $0.lastPathComponent == "EPUBReaderScreen.swift" }
         try #require(epubURL != nil)
         let epub = try String(contentsOf: epubURL!, encoding: .utf8)
-        // EPUB bookmark buttons land in plan 37-03; until then EPUB carries the
-        // pre-37 toolbar set plus its typography button (no PDF bookmark ids).
+        // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
+        // buttons; the EPUB toolbar now carries its typography button plus the
+        // two bookmark ids.
         let epubIds = [
             "reader.toolbar.toc",
             "reader.toolbar.theme",
+            "reader.toolbar.bookmark",
+            "reader.toolbar.bookmarksList",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
             "reader.toolbar.typography",
@@ -160,10 +165,13 @@ struct ReaderA11yLabelsTests {
         // fewer). If the runtime block grows or shrinks the test will
         // flag the mismatch.
         let expectedByFile: [String: Int] = [
-            "EPUBReaderScreen.swift": 5,
+            // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
+            // identifier sites (5 -> 7); EPUB picks its search id up in plan 37-05.
+            "EPUBReaderScreen.swift": 7,
             // Phase 37 Plan 37-02 added the bookmark toggle + bookmarks-list
-            // identifier sites (4 -> 6). EPUB picks its two up in plan 37-03.
-            "PDFReaderScreen.swift": 6,
+            // identifier sites (4 -> 6); Plan 37-04 added the search button
+            // (6 -> 7).
+            "PDFReaderScreen.swift": 7,
         ]
         for url in try Self.readerSources() where expectedByFile.keys.contains(url.lastPathComponent) {
             let s = try String(contentsOf: url, encoding: .utf8)

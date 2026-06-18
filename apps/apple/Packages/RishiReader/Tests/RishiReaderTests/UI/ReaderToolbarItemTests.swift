@@ -21,20 +21,23 @@ import Testing
 @Suite("ReaderToolbarItem")
 struct ReaderToolbarItemTests {
 
-    @Test("EPUBReaderScreen exposes the five top-bar trailing identifiers")
+    @Test("EPUBReaderScreen exposes the seven top-bar trailing identifiers")
     func epubIdentifiers() {
         let ids = EPUBReaderScreen.toolbarAccessibilityIdentifiers
         let expected: Set<String> = [
             "reader.toolbar.toc",
             "reader.toolbar.typography",
             "reader.toolbar.theme",
+            // Phase 37 Plan 37-03 — EPUB bookmark toggle + bookmarks-list buttons.
+            "reader.toolbar.bookmark",
+            "reader.toolbar.bookmarksList",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
         ]
         #expect(Set(ids) == expected)
     }
 
-    @Test("PDFReaderScreen exposes the six top-bar trailing identifiers (no typography)")
+    @Test("PDFReaderScreen exposes the seven top-bar trailing identifiers (no typography)")
     func pdfIdentifiers() {
         let ids = PDFReaderScreen.toolbarAccessibilityIdentifiers
         let expected: Set<String> = [
@@ -43,6 +46,8 @@ struct ReaderToolbarItemTests {
             // Phase 37 Plan 37-02 — PDF bookmark toggle + bookmarks-list buttons.
             "reader.toolbar.bookmark",
             "reader.toolbar.bookmarksList",
+            // Phase 37 Plan 37-04 — in-book search button.
+            "reader.toolbar.search",
             "reader.toolbar.readAloud",
             "reader.toolbar.voice",
         ]

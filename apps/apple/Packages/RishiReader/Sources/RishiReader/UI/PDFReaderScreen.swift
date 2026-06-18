@@ -61,6 +61,7 @@ public struct PDFReaderScreen: View {
         "reader.toolbar.theme",
         "reader.toolbar.bookmark",
         "reader.toolbar.bookmarksList",
+        "reader.toolbar.search",
         "reader.toolbar.readAloud",
         "reader.toolbar.voice",
     ]
@@ -167,6 +168,12 @@ public struct PDFReaderScreen: View {
     /// toolbar body (do NOT snapshot to a derived `@State` — RESEARCH Pitfall 5)
     /// so a toggle/refresh repaints the `bookmark`/`bookmark.fill` SF Symbol.
     @State private var bookmarkToggle: PDFBookmarkToggleModel?
+
+    /// Phase 37 Plan 37-04 — owns the PDFKit incremental-search state for this
+    /// book. Read directly by the `.search` sheet (query / isSearching /
+    /// resultRows) so a new match repaints the results `List`. Engine-agnostic
+    /// rows feed the shared ``SearchResultsView``.
+    @State private var searchModel = PDFSearchModel()
 
     #if canImport(UIKit)
     // Selection coordinator state — set whenever PDFView publishes a new
@@ -532,6 +539,42 @@ public struct PDFReaderScreen: View {
                     },
                     onClose: { activeSheet = nil }
                 )
+            case .search:
+                // Phase 37 Plan 37-04 — in-book PDFKit search. Submitting the
+                // query runs `beginFindString` off-main; selecting a result
+                // jumps + highlights the match via the stored `PDFSelection`
+                // and seeks the page so the indicator + read-aloud cursor
+                // follow.
+                SearchResultsView(
+                    query: Binding(
+                        get: { searchModel.query },
+                        set: { searchModel.query = $0 }
+                    ),
+                    isSearching: searchModel.isSearching,
+                    rows: searchModel.resultRows,
+                    onSubmit: {
+                        if let doc = viewModel.document {
+                            searchModel.search(searchModel.query, in: doc)
+                        }
+                    },
+                    onSelect: { row in
+                        #if canImport(UIKit)
+                        if let result = searchModel.result(for: row), let pdfView = pdfViewRef {
+                            searchModel.jump(to: result, in: pdfView)
+                            viewModel.seek(toPage: result.page)
+                        }
+                        #else
+                        if let result = searchModel.result(for: row) {
+                            viewModel.seek(toPage: result.page)
+                        }
+                        #endif
+                        activeSheet = nil
+                    },
+                    onClose: {
+                        searchModel.cancel()
+                        activeSheet = nil
+                    }
+                )
             case .typography, .ttsControls, .ttsPicker:
                 // Unreachable for PDF — PDFKit owns typography; TTS sheets
                 // are owned by RootView. Placeholder keeps the switch
@@ -608,6 +651,16 @@ public struct PDFReaderScreen: View {
                 }
                 .accessibilityIdentifier("reader.toolbar.bookmarksList")
                 .accessibilityLabel(A11yLabel.readerOpenBookmarks)
+
+                // Phase 37 Plan 37-04 — open the in-book search sheet.
+                Button {
+                    chrome.userActivity()
+                    activeSheet = .search
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityIdentifier("reader.toolbar.search")
+                .accessibilityLabel(A11yLabel.readerSearch)
 
                 if let onReadAloud {
                     Button {

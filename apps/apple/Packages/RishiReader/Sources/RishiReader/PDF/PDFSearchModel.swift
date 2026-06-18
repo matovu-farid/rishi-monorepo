@@ -9,7 +9,7 @@ import Observation
 /// directly from the search sheet, so all published state lives on the main
 /// actor. The actual text scan is delegated to PDFKit's
 /// `PDFDocument.beginFindString(_:withOptions:)`, which walks the document on a
-/// background queue and posts `.PDFDocumentDidMatchString` per hit; the
+/// background queue and posts `.PDFDocumentDidFindMatch` per hit; the
 /// notification handler hops back to the MainActor before mutating `results`,
 /// so result-array writes are never made off-main (RESEARCH §"PDF incremental
 /// search").
@@ -67,16 +67,20 @@ public final class PDFSearchModel {
 
         let center = NotificationCenter.default
         matchObserver = center.addObserver(
-            forName: .PDFDocumentDidMatchString,
+            forName: .PDFDocumentDidFindMatch,
             object: document,
             queue: .main
         ) { [weak self] note in
+            // `note.object` is the searching `PDFDocument` (PDFKit posts self),
+            // so the index lookup needs no captured non-Sendable document — the
+            // `@Sendable` notification closure stays capture-clean.
             guard
                 let self,
-                let selection = note.userInfo?["PDFDocumentFoundSelection"] as? PDFSelection,
+                let matchedDocument = note.object as? PDFDocument,
+                let selection = note.userInfo?[PDFDocumentFoundSelectionKey] as? PDFSelection,
                 let firstPage = selection.pages.first
             else { return }
-            let page = document.index(for: firstPage)
+            let page = matchedDocument.index(for: firstPage)
             let result = PDFSearchResult(
                 page: page,
                 snippet: PDFSearchResult.snippet(from: selection.string ?? "")

@@ -59,6 +59,7 @@ struct EPUBReaderDestination: View {
             viewModel: vm,
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
+            bookmarkStore: services.bookmarkStore,
             onReadAloud: FeatureFlags.readAloud ? {
                 // KEEP: read-aloud start gated on entitlement check; MainActor store access
                 Task {
