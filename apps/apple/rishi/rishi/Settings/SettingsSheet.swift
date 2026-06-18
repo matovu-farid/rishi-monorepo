@@ -19,7 +19,6 @@ struct SettingsSheet: View {
 
     let services: BootstrappedServices
     let user: User
-    let onSignedOut: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -27,7 +26,6 @@ struct SettingsSheet: View {
         SettingsContent(
             services: services,
             user: user,
-            onSignedOut: onSignedOut,
             onDismiss: { dismiss() }
         )
     }

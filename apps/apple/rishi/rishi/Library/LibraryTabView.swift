@@ -21,7 +21,6 @@ struct LibraryTabView: View {
     let user: User
     let model: SignedInViewModel
     let onCacheUserId: (UserID) -> Void
-    let onSignedOut: () -> Void
 
     @Environment(AppRouter.self) private var router
 
@@ -31,14 +30,12 @@ struct LibraryTabView: View {
         services: BootstrappedServices,
         user: User,
         model: SignedInViewModel,
-        onCacheUserId: @escaping (UserID) -> Void,
-        onSignedOut: @escaping () -> Void
+        onCacheUserId: @escaping (UserID) -> Void
     ) {
         self.services = services
         self.user = user
         self.model = model
         self.onCacheUserId = onCacheUserId
-        self.onSignedOut = onSignedOut
         _libraryVM = State(initialValue: LibraryViewModel.make(services: services, user: user))
     }
 
@@ -125,8 +122,7 @@ struct LibraryTabView: View {
         .sheet(isPresented: Bindable(model).showSettings) {
             SettingsSheet(
                 services: services,
-                user: user,
-                onSignedOut: onSignedOut
+                user: user
             )
         }
         #endif

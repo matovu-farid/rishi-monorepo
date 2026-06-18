@@ -76,8 +76,7 @@ struct SignedInView: View {
             services: services,
             user: user,
             model: model,
-            onCacheUserId: onCacheUserId,
-            onSignedOut: onSignedOut
+            onCacheUserId: onCacheUserId
         )
         .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
