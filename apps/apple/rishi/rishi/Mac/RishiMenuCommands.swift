@@ -93,6 +93,18 @@ struct RishiMenuCommands: Commands {
                 .keyboardShortcut(RishiKeyboardShortcut.fontDecrease.key,
                                   modifiers: RishiKeyboardShortcut.fontDecrease.modifiers)
             Divider()
+            // Phase 37 Plan 37-06 — Apple-Books-style reader affordances.
+            // "Find in Book" sends the SAME `.focusSearch` intent as the EDIT
+            // menu's ⌘F "Find…" (single Find affordance, no second ⌘F chord —
+            // Pitfall 6): when a reader is open it intercepts `focusSearch` and
+            // opens its in-book search sheet; otherwise the library search
+            // field focuses. "Add Bookmark" (⌘D) posts `RishiCommand.addBookmark`,
+            // toggled by the open reader screen.
+            Button("Find in Book") { router.send(.focusSearch) }
+            Button("Add Bookmark") { router.send(.addBookmark) }
+                .keyboardShortcut(RishiKeyboardShortcut.addBookmark.key,
+                                  modifiers: RishiKeyboardShortcut.addBookmark.modifiers)
+            Divider()
             #if targetEnvironment(macCatalyst)
             SyncMenuItems()
             Divider()

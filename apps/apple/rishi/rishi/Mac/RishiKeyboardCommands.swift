@@ -17,6 +17,7 @@ import Foundation
 enum RishiKeyboardShortcut {
     case importBook        // ⌘I (NOT ⌘O: collides with the system File > Open)
     case find              // ⌘F
+    case addBookmark       // ⌘D (Phase 37 Plan 37-06 — Apple-Books-style add bookmark)
     case fontIncrease      // ⌘+
     case fontDecrease      // ⌘-
     case libraryTab        // ⌘1
@@ -26,6 +27,7 @@ enum RishiKeyboardShortcut {
         switch self {
         case .importBook:   return "i"
         case .find:         return "f"
+        case .addBookmark:  return "d"
         case .fontIncrease: return "+"
         case .fontDecrease: return "-"
         case .libraryTab:   return "1"
@@ -43,6 +45,7 @@ enum MacCommandIntent: Equatable, Sendable {
     case importBook
     case newConversation
     case focusSearch
+    case addBookmark
     case fontIncrease
     case fontDecrease
     case selectTheme(MacReaderTheme)
@@ -70,6 +73,10 @@ enum MacReaderTheme: String, Equatable, Sendable { case light, sepia, dark }
 enum RishiCommand {
     static let importBook   = Notification.Name("RishiCommand.importBook")
     static let focusSearch  = Notification.Name("RishiCommand.focusSearch")
+    /// Phase 37 Plan 37-06 — ⌘D add-bookmark. Reader screens observe this and
+    /// toggle the current location's bookmark via their bookmark-toggle model;
+    /// no library-side handler (it is a reader-only command).
+    static let addBookmark  = Notification.Name("RishiCommand.addBookmark")
     static let pageForward  = Notification.Name("RishiCommand.pageForward")
     static let pageBackward = Notification.Name("RishiCommand.pageBackward")
     /// Userinfo carries `["delta": Int]` (+1 = larger, -1 = smaller). Reader

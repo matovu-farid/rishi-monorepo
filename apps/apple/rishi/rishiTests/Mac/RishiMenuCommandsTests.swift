@@ -88,4 +88,52 @@ struct RishiMenuCommandsTests {
 
         #expect(router.pendingIntent == nil)
     }
+
+    // Phase 37 Plan 37-06 — context-aware Find + ⌘D add-bookmark.
+    //
+    // "Find in Book" and the EDIT-menu "Find…" both send the SAME
+    // `.focusSearch` intent — there is ONE Find affordance (no second ⌘F
+    // chord, Pitfall 6). Whether ⌘F focuses the library search or opens the
+    // open reader's in-book search is resolved on the RECEIVER side: the
+    // reader screens intercept `RishiCommand.focusSearch` while mounted (the
+    // "reader-open wins" rule), the library handles it otherwise. The actual
+    // intercept is in the reader package + hardware-verified; here we pin that
+    // the menu surface keeps exactly one Find intent and adds the ⌘D bookmark
+    // intent, both round-tripping through the same MacCommandRouter the buttons
+    // send to.
+    @Test("Find in Book + Add Bookmark intents round-trip through MacCommandRouter")
+    func readerAffordanceIntentsRoundTrip() {
+        let router = MacCommandRouter()
+
+        // Both the EDIT "Find…" and the VIEW "Find in Book" send .focusSearch:
+        // a single Find affordance, context-resolved by the reader receiver.
+        router.send(.focusSearch)
+        #expect(router.pendingIntent == .focusSearch)
+        router.consume()
+
+        // ⌘D "Add Bookmark" is its own intent + ⌘D chord.
+        router.send(.addBookmark)
+        #expect(router.pendingIntent == .addBookmark)
+        #expect(RishiKeyboardShortcut.addBookmark.key == "d")
+        #expect(RishiKeyboardShortcut.addBookmark.modifiers == .command)
+        router.consume()
+
+        #expect(router.pendingIntent == nil)
+    }
+
+    // The ⌘F Find chord stays UNIQUE to the EDIT-menu "Find…" — the new VIEW
+    // "Find in Book" item reuses .focusSearch WITHOUT a keyboard shortcut, so
+    // ⌘D (add bookmark) is the only new chord introduced this phase and it
+    // never collides with the existing Find chord (Pitfall 6).
+    @Test("Add Bookmark (⌘D) does not collide with the Find (⌘F) chord")
+    func addBookmarkChordDoesNotCollideWithFind() {
+        let bookmark = RishiKeyboardShortcut.addBookmark
+        let find = RishiKeyboardShortcut.find
+        let sameChord =
+            bookmark.key.character == find.key.character
+            && bookmark.modifiers == find.modifiers
+        #expect(sameChord == false)
+        #expect(bookmark.key.character == "d")
+        #expect(find.key.character == "f")
+    }
 }
