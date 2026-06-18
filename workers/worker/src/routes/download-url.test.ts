@@ -91,11 +91,12 @@ const { signCalls } = vi.hoisted(() => ({
 vi.mock("aws4fetch", () => ({
   AwsClient: class {
     constructor(_cfg: unknown) {}
-    async sign(req: Request, opts?: { headers?: Record<string, string> }) {
+    async sign(req: Request) {
       signCalls.push({
         url: req.url,
         method: req.method,
-        expires: opts?.headers?.["X-Amz-Expires"] ?? null,
+        // Expiry is a query param on the URL being signed (not a sign header).
+        expires: new URL(req.url).searchParams.get("X-Amz-Expires"),
       })
       return {
         url: new URL(

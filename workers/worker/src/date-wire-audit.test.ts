@@ -67,11 +67,12 @@ import { dirname, join } from "node:path"
  *     SUMMARY + Phase 17 CONTEXT.md decisions. Locked.
  *   - workers/worker/src/index.ts:382 — `/health` probe timestamp ISO8601.
  *     Human-readable health endpoint, not an iOS-decoded route.
- *   - workers/worker/src/routes/upload.ts:174,234 — `datetime: new
- *     Date().toISOString()` is the AWS SigV4 `X-Amz-Date` signing-protocol
- *     header on the outbound R2 sign() call, NOT a JSON response body. R2/S3
- *     signature format, not iOS. The route's iOS-decoded `expires_at` field
- *     is converted via 978_307_200_000 on the response side.
+ *
+ * Note: routes/upload.ts used to hand-roll the SigV4 `X-Amz-Date` via
+ * `.toISOString()`, but presigning now delegates to `src/r2-presign.ts`
+ * (aws4fetch sets X-Amz-Date internally), so upload.ts no longer carries an
+ * ISO-string exception. Its iOS-decoded `expires_at` is still converted via
+ * 978_307_200_000 on the response side.
  */
 
 const REFERENCE_DATE_OFFSET_MS = 978_307_200_000
@@ -142,7 +143,6 @@ const ISO_STRING_ALLOWED_SOURCES: readonly string[] = [
   "billing/apple-me.ts", // premiumUntil — Phase 14-09 / 17-CONTEXT.md
   "billing/jws-verify.ts", // error message strings, not JSON bodies
   "index.ts", // /health probe timestamp
-  "routes/upload.ts", // AWS SigV4 X-Amz-Date signing protocol, not JSON
 ]
 
 describe("Date wire-audit (Phase 17 Plan 10)", () => {
@@ -270,13 +270,6 @@ describe("Date wire-audit (Phase 17 Plan 10)", () => {
       // The /health handler is a human probe, not an iOS-decoded route — see
       // Phase 17 CONTEXT.md decisions. Locked.
       expect(src).toMatch(/\/health[\s\S]{0,200}?toISOString\(\)/)
-    })
-
-    it("routes/upload.ts AWS SigV4 datetime stays ISO8601 (signing protocol, not JSON body)", () => {
-      const src = readSource("routes/upload.ts")
-      // X-Amz-Date is part of the SigV4 signing string; emitting it through
-      // .toISOString() is the documented AWS convention, NOT a JSON Date.
-      expect(src).toMatch(/datetime:\s*new Date\(\)\.toISOString\(\)\.replace/)
     })
   })
 })

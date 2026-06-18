@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { eq, and, count, sum } from "drizzle-orm";
-import { AwsClient } from "aws4fetch";
 import type { CloudflareBindings } from "../index";
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
+import { signR2Url } from "../r2-presign";
 
 // Defaults applied when the corresponding wrangler var is unset.
 const DEFAULT_BOOK_MAX_PER_USER = 500;
@@ -159,21 +159,10 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
   }
 
   // ─── Sign the PUT URL against the iOS-supplied key ──────────────────────
-  const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${body.key}`;
-
-  const aws = new AwsClient({
-    accessKeyId: c.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: c.env.R2_SECRET_ACCESS_KEY,
-    service: "s3",
-    region: "auto",
-  });
-
-  const signed = await aws.sign(new Request(bucketUrl, { method: "PUT" }), {
-    aws: {
-      signQuery: true,
-      datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, ""),
-    },
-    headers: { "X-Amz-Expires": String(UPLOAD_URL_EXPIRES_SEC) },
+  const signedUrl = await signR2Url(c.env, {
+    key: body.key,
+    method: "PUT",
+    expiresSec: UPLOAD_URL_EXPIRES_SEC,
   });
 
   // Date wire format = seconds since 2001-01-01 reference date — see
@@ -183,7 +172,7 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
     1000;
 
   return c.json({
-    url: signed.url.toString(),
+    url: signedUrl,
     expires_at: expiresAtSeconds,
   });
 });
@@ -219,21 +208,10 @@ uploadRoutes.post("/download-url", requireAuth, async (c) => {
   }
 
   // ─── Sign the GET URL against the iOS-supplied key ──────────────────────
-  const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${body.key}`;
-
-  const aws = new AwsClient({
-    accessKeyId: c.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: c.env.R2_SECRET_ACCESS_KEY,
-    service: "s3",
-    region: "auto",
-  });
-
-  const signed = await aws.sign(new Request(bucketUrl, { method: "GET" }), {
-    aws: {
-      signQuery: true,
-      datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, ""),
-    },
-    headers: { "X-Amz-Expires": String(DOWNLOAD_URL_EXPIRES_SEC) },
+  const signedUrl = await signR2Url(c.env, {
+    key: body.key,
+    method: "GET",
+    expiresSec: DOWNLOAD_URL_EXPIRES_SEC,
   });
 
   // Date wire format = seconds since 2001-01-01 reference date — see
@@ -243,7 +221,7 @@ uploadRoutes.post("/download-url", requireAuth, async (c) => {
     1000;
 
   return c.json({
-    url: signed.url.toString(),
+    url: signedUrl,
     expires_at: expiresAtSeconds,
   });
 });
