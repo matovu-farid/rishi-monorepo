@@ -44,6 +44,9 @@ public enum ReaderSheet: Identifiable, Hashable, Sendable {
     /// Per-highlight note editor. The associated `Highlight` keys the
     /// sheet so editing the same row twice in a row does not re-mount.
     case highlightNote(Highlight)
+    /// Saved-bookmarks list. Shared across the PDF (37-02) and EPUB (37-03)
+    /// readers — both present the engine-agnostic `BookmarksListView` here.
+    case bookmarks
 
     public var id: String {
         switch self {
@@ -53,6 +56,7 @@ public enum ReaderSheet: Identifiable, Hashable, Sendable {
         case .ttsControls:               return "ttsControls"
         case .ttsPicker:                 return "ttsPicker"
         case .highlightNote(let h):      return "highlightNote.\(h.id.uuidString)"
+        case .bookmarks:                 return "bookmarks"
         }
     }
 }
