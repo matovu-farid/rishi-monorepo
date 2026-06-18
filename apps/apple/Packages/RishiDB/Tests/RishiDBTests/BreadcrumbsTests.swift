@@ -50,10 +50,16 @@ struct BreadcrumbsTests {
         try await store.upsert(book)
 
         let captures = sink.snapshot()
+        // `Log._testCapture.handler` is a process-global sink and other suites run
+        // in parallel, so the buffer can interleave foreign `db.write` crumbs from
+        // other stores (messages, bookmarks, ...). Match on table too so we assert
+        // against THIS store's upsert rather than whatever landed first.
         let writeCrumb = captures.first {
-            $0.name == "db.write" && $0.data?["operation"] == "upsert"
+            $0.name == "db.write"
+                && $0.data?["operation"] == "upsert"
+                && $0.data?["table"] == Tables.Books.table
         }
-        #expect(writeCrumb != nil, "expected a db.write/upsert breadcrumb")
+        #expect(writeCrumb != nil, "expected a db.write/upsert breadcrumb for books")
         #expect(writeCrumb?.data?["table"] == "books")
         #expect(writeCrumb?.level == .debug)
     }
