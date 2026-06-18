@@ -16,14 +16,20 @@ import RishiReader
 
 struct ReaderDestinationView: View {
     let route: ReaderRoute
-    let services: BootstrappedServices
-    let userId: UserID
     let hint: Book?
     let onRequestPaywall: (String) -> Void
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.services) private var servicesEnv
+    @Environment(\.currentUser) private var currentUser
 
     var body: some View {
+        // Force-unwrap under the RootView.realBody non-nil guard contract:
+        // ReaderDestinationView is only mounted in LibraryTabView's
+        // .navigationDestination, which lives under the signed-in subtree where
+        // both env values are guaranteed present (RESEARCH Risk #1).
+        let services = servicesEnv!
+        let userId = currentUser!.id
         switch route {
         case .pdf(let bookId):
             NavigationLazyBook(bookId: bookId, hint: hint, bookStore: services.bookStore) { book in
