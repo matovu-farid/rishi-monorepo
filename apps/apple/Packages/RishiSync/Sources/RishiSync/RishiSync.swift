@@ -24,5 +24,11 @@ enum RishiSync {
 
     /// Wire-format tag for sync payloads. Schema changes require a bump
     /// AND a decoder fallback that still accepts the prior version.
-    static let wireFormat = "sync-v1"
+    ///
+    /// sync-v2 (Phase 37-08) adds the additive `bookmark` SyncEntityKind +
+    /// bookmark payload codec. The bump is backward-compatible: prior sync-v1
+    /// payloads (book/position/highlight/conversation/message) still decode
+    /// unchanged (no field shape changed), and old clients gracefully skip the
+    /// unknown `bookmark` kind via `ChangeApplier`'s unknown-kind branch.
+    static let wireFormat = "sync-v2"
 }

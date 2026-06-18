@@ -13,10 +13,12 @@ struct PackageSmokeTests {
         #expect(RishiSync.version == "0.1.0-scaffold")
     }
 
-    @Test("Wire format pinned to sync-v1")
+    @Test("Wire format pinned to sync-v2")
     func wireFormatPinned() {
-        // Schema changes require bumping this AND adding a sync-v1 decoder fallback.
-        #expect(RishiSync.wireFormat == "sync-v1")
+        // Phase 37-08 bumped sync-v1 -> sync-v2 for the additive `bookmark` kind.
+        // Schema changes require bumping this AND keeping a decoder fallback that
+        // still accepts prior payloads (SyncPayloadCodecBookmarkTests proves it).
+        #expect(RishiSync.wireFormat == "sync-v2")
     }
 
     @Test("RishiCore Book is reachable from the test target")

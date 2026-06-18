@@ -68,6 +68,7 @@ struct OutboundDrainer: Sendable {
         var highlightsBucket: [SyncQueueItem] = []
         var conversationsBucket: [SyncQueueItem] = []
         var messagesBucket: [SyncQueueItem] = []
+        var bookmarksBucket: [SyncQueueItem] = []
         for item in drained {
             switch item.kind {
             case .book:         booksBucket.append(item)
@@ -75,6 +76,7 @@ struct OutboundDrainer: Sendable {
             case .highlight:    highlightsBucket.append(item)
             case .conversation: conversationsBucket.append(item)
             case .message:      messagesBucket.append(item)
+            case .bookmark:     bookmarksBucket.append(item)
             }
         }
 

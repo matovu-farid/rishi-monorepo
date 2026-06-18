@@ -63,6 +63,26 @@ enum SyncPayloadCodec {
         }
     }
 
+    /// Decode a bookmark payload (sync-v2). `fallbackCreatedAt` is used if the
+    /// wire payload omits `created_at` (mirrors `decodeHighlight`).
+    public static func decodeBookmark(_ payload: SyncOpaqueJSON, fallbackCreatedAt: Date) throws -> Bookmark {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            let wire = try decoder.decode(WireBookmark.self, from: payload.data)
+            return Bookmark(
+                id: wire.id,
+                bookId: wire.bookId,
+                locator: wire.locator,
+                label: wire.label,
+                snippet: wire.snippet,
+                createdAt: wire.createdAt ?? fallbackCreatedAt
+            )
+        } catch {
+            throw CodecError.decodeFailed(kind: "bookmark", underlying: String(describing: error))
+        }
+    }
+
     public static func decodeBook(_ payload: SyncOpaqueJSON, fallbackAddedAt: Date) throws -> Book {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -113,6 +133,20 @@ enum SyncPayloadCodec {
             text: highlight.text,
             note: highlight.note,
             createdAt: highlight.createdAt
+        )
+        return SyncOpaqueJSON(data: try encoder.encode(wire))
+    }
+
+    public static func encodeBookmark(_ bookmark: Bookmark) throws -> SyncOpaqueJSON {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let wire = WireBookmark(
+            id: bookmark.id,
+            bookId: bookmark.bookId,
+            locator: bookmark.locator,
+            label: bookmark.label,
+            snippet: bookmark.snippet,
+            createdAt: bookmark.createdAt
         )
         return SyncOpaqueJSON(data: try encoder.encode(wire))
     }
@@ -172,6 +206,24 @@ enum SyncPayloadCodec {
             case color
             case text
             case note
+            case createdAt = "created_at"
+        }
+    }
+
+    private struct WireBookmark: Codable {
+        let id: BookmarkID
+        let bookId: BookID
+        let locator: String
+        let label: String?
+        let snippet: String?
+        let createdAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case bookId = "book_id"
+            case locator
+            case label
+            case snippet
             case createdAt = "created_at"
         }
     }

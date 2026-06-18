@@ -17,10 +17,11 @@ struct SyncMetadataStoreTests {
         return (GRDBSyncMetadataStore(dbQueue: queue), queue)
     }
 
-    @Test("SyncEntityKind raw values are pinned to sync-v1 wire format")
+    @Test("SyncEntityKind raw values are pinned to sync-v2 wire format")
     func entityKindRawValuesPinned() {
+        // sync-v2 (Phase 37-08) adds the additive `bookmark` kind.
         let kinds = SyncEntityKind.allCases.map(\.rawValue).sorted()
-        #expect(kinds == ["book", "conversation", "highlight", "message", "position"])
+        #expect(kinds == ["book", "bookmark", "conversation", "highlight", "message", "position"])
     }
 
     @Test("Empty DB returns 0 pending + nil cursors")

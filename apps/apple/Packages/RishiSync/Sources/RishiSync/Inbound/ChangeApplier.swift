@@ -66,6 +66,16 @@ public final class ChangeApplier: Sendable {
                     try await applyHighlight(change, into: &result)
                 case .book:
                     try await applyBook(change, into: &result)
+                case .bookmark:
+                    // Phase 37-08 Task 3 wires applyBookmark + bookmarkStore.
+                    // Until then, record the cursor so the kind doesn't loop.
+                    result.skipped += 1
+                    try await metadataStore.markClean(
+                        entityId: change.id,
+                        kind: kind,
+                        lastSyncedAt: change.updatedAt,
+                        remoteEtag: nil
+                    )
                 case .conversation, .message:
                     // Phase 9 will wire — record the cursor so we don't echo.
                     result.skipped += 1
