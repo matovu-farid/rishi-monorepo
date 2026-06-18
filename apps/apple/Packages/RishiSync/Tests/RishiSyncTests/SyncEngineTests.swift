@@ -149,7 +149,7 @@ struct SyncEngineTests {
         chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil
     ) -> SyncEngine {
         let queue = SyncQueue(metadataStore: metadata)
-        let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage)
+        let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)

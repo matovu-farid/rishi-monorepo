@@ -222,7 +222,8 @@ enum ServiceGraphFactory {
         let bookUploader = BookUploader(
             workerClient: workerClient,
             metadataStore: syncMetadataStore,
-            fileStorage: bookFileStorage
+            fileStorage: bookFileStorage,
+            userIdProvider: { [keychain] in (try? await keychain.load())?.userId }
         )
         let positionUploader = PositionUploader(
             workerClient: workerClient,

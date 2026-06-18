@@ -103,7 +103,7 @@ struct SyncEngineChatDirtyTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let storage = BookFileStorage(rootURL: root, bookStore: StubBookStore(), coverExtractors: [:])
         let queue = SyncQueue(metadataStore: metadata)
-        let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: storage)
+        let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: storage, userIdProvider: { "test-user" })
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
         let conversationStore = StubConversationStore()

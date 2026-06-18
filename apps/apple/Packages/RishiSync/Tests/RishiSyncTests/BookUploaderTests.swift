@@ -95,7 +95,8 @@ struct BookUploaderTests {
             workerClient: workerClient,
             metadataStore: metadata,
             fileStorage: storage,
-            urlSession: session
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" }
         )
 
         let presignedURL = "https://r2.example.invalid/books/\(book.userId.uuidString)/\(book.id.uuidString).epub?sig=abc"
@@ -145,7 +146,8 @@ struct BookUploaderTests {
             workerClient: workerClient,
             metadataStore: metadata,
             fileStorage: storage,
-            urlSession: session
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" }
         )
 
         // Worker returns 500 on the presign call.
@@ -172,7 +174,8 @@ struct BookUploaderTests {
             workerClient: workerClient,
             metadataStore: metadata,
             fileStorage: storage,
-            urlSession: session
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" }
         )
 
         let presignedURL = "https://r2.example.invalid/books/x.epub?sig=abc"
@@ -193,19 +196,36 @@ struct BookUploaderTests {
         #expect(calls.isEmpty)
     }
 
-    @Test("R2 key matches worker contract: books/<userId>/<bookId>.<ext>")
-    func r2KeyShape() {
-        let userId = UUID()
-        let bookId = UUID()
-        let book = Book(
-            id: bookId,
-            userId: userId,
-            title: "T",
-            formatType: .pdf,
-            fileURL: "x"
+    @Test("Upload with no signed-in user throws and does not markClean")
+    func noUserThrows() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, root) = try await makeFileStorage()
+        let book = try makeBookOnDisk(in: root)
+        let uploader = BookUploader(
+            workerClient: workerClient,
+            metadataStore: metadata,
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { nil }
         )
-        let key = BookUploader.r2Key(for: book)
-        #expect(key == "books/\(userId.uuidString)/\(bookId.uuidString).pdf")
+        await #expect(throws: BookUploader.UploadError.self) {
+            try await uploader.upload(book)
+        }
+        let calls = await metadata.calls()
+        #expect(calls.isEmpty)
+    }
+
+    @Test("R2 key uses the raw session userId verbatim, not the book's UUID")
+    func r2KeyUsesRawSessionUserId() {
+        let bookId = UUID()
+        let book = Book(id: bookId, userId: UUID(), title: "T", formatType: .pdf, fileURL: "x")
+        // Better Auth ids are non-UUID strings (e.g. Apple sub or 32-char id).
+        let rawUserId = "001234.abcdef0123456789.1234"
+        let key = BookUploader.r2Key(for: book, userId: rawUserId)
+        #expect(key == "books/\(rawUserId)/\(bookId.uuidString).pdf")
     }
 
     @Test("Content-Type matches BookFormat")

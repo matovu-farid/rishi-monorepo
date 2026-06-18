@@ -28,23 +28,29 @@ public final class BookUploader: Sendable {
     private let metadataStore: any SyncMetadataStore
     private let fileStorage: BookFileStorage
     private let urlSession: URLSession
+    private let userIdProvider: @Sendable () async -> String?
 
     public init(
         workerClient: WorkerClient,
         metadataStore: any SyncMetadataStore,
         fileStorage: BookFileStorage,
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        userIdProvider: @escaping @Sendable () async -> String?
     ) {
         self.workerClient = workerClient
         self.metadataStore = metadataStore
         self.fileStorage = fileStorage
         self.urlSession = urlSession
+        self.userIdProvider = userIdProvider
     }
 
     /// Upload a single book's bytes. Throws on any failure (without marking
     /// the metadata row clean) so the engine retries on the next wave.
     public func upload(_ book: Book) async throws {
-        let key = Self.r2Key(for: book)
+        guard let ownerId = await userIdProvider() else {
+            throw UploadError.presignedRequestFailed("missing session user id")
+        }
+        let key = Self.r2Key(for: book, userId: ownerId)
         let contentType = Self.contentType(for: book.formatType)
 
         // 1. Request a presigned PUT URL from the worker.
@@ -80,12 +86,16 @@ public final class BookUploader: Sendable {
             "book_id": book.id.uuidString,
             "bytes": String(data.count),
         ])
-        let (_, response) = try await urlSession.upload(for: request, from: data)
+        let (responseBody, response) = try await urlSession.upload(for: request, from: data)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            // R2 returns an S3-style XML body (<Error><Code>...</Code>...) on
+            // rejection — surface it so PUT failures are diagnosable.
+            let r2Error = String(decoding: responseBody, as: UTF8.self)
             Log.event("sync.book.upload.failed", level: .error, data: [
                 "book_id": book.id.uuidString,
                 "status": String(status),
+                "r2_error": String(r2Error.prefix(500)),
             ])
             throw UploadError.uploadFailed(status: status)
         }
@@ -106,10 +116,12 @@ public final class BookUploader: Sendable {
     // MARK: - Helpers
 
     /// R2 object key for a book file. Pinned by the worker contract:
-    /// `books/<userId>/<bookId>.<ext>`.
-    static func r2Key(for book: Book) -> String {
+    /// `books/<userId>/<bookId>.<ext>`, where `userId` is the raw worker
+    /// session user id string (Better Auth `user.id`), not the book's
+    /// derived UUID.
+    static func r2Key(for book: Book, userId: String) -> String {
         let ext = book.formatType.rawValue
-        return "books/\(book.userId.uuidString)/\(book.id.uuidString).\(ext)"
+        return "books/\(userId)/\(book.id.uuidString).\(ext)"
     }
 
     /// Content-Type header value for the R2 PUT. Worker's bucket policy keys

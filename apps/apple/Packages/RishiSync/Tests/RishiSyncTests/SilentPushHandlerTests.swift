@@ -96,7 +96,7 @@ struct SilentPushHandlerTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-push-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
-        let bookUploader = BookUploader(workerClient: client, metadataStore: metadata, fileStorage: fileStorage)
+        let bookUploader = BookUploader(workerClient: client, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
         let positionUploader = PositionUploader(workerClient: client, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: client, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: client, conversationStore: StubConversationStore(), metadataStore: metadata)
