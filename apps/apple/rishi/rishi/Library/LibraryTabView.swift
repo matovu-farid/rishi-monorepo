@@ -83,8 +83,6 @@ struct LibraryTabView: View {
             .navigationDestination(for: ReaderRoute.self) { route in
                 ReaderDestinationView(
                     route: route,
-                    services: services,
-                    userId: user.id,
                     hint: model.hint(for: route.bookId),
                     onRequestPaywall: { model.requestPaywall($0) }
                 )
