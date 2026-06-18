@@ -71,29 +71,33 @@ public final class PDFSearchModel {
             object: document,
             queue: .main
         ) { [weak self] note in
+            // The block is `@Sendable` (non-isolated), but `queue: .main`
+            // guarantees it runs on the main thread, so `assumeIsolated` gives a
+            // sound MainActor context to mutate `results`/`selectionsByResultID`.
             // `note.object` is the searching `PDFDocument` (PDFKit posts self),
-            // so the index lookup needs no captured non-Sendable document — the
-            // `@Sendable` notification closure stays capture-clean.
-            guard
-                let self,
-                let matchedDocument = note.object as? PDFDocument,
-                let selection = note.userInfo?[PDFDocumentFoundSelectionKey] as? PDFSelection,
-                let firstPage = selection.pages.first
-            else { return }
-            let page = matchedDocument.index(for: firstPage)
-            let result = PDFSearchResult(
-                page: page,
-                snippet: PDFSearchResult.snippet(from: selection.string ?? "")
-            )
-            self.selectionsByResultID[result.id] = selection
-            self.results.append(result)
+            // so the index lookup needs no captured non-Sendable document.
+            MainActor.assumeIsolated {
+                guard
+                    let self,
+                    let matchedDocument = note.object as? PDFDocument,
+                    let selection = note.userInfo?[PDFDocumentFoundSelectionKey] as? PDFSelection,
+                    let firstPage = selection.pages.first
+                else { return }
+                let page = matchedDocument.index(for: firstPage)
+                let result = PDFSearchResult(
+                    page: page,
+                    snippet: PDFSearchResult.snippet(from: selection.string ?? "")
+                )
+                self.selectionsByResultID[result.id] = selection
+                self.results.append(result)
+            }
         }
         endObserver = center.addObserver(
             forName: .PDFDocumentDidEndFind,
             object: document,
             queue: .main
         ) { [weak self] _ in
-            self?.isSearching = false
+            MainActor.assumeIsolated { self?.isSearching = false }
         }
 
         document.beginFindString(trimmed, withOptions: [.caseInsensitive, .diacriticInsensitive])
