@@ -345,3 +345,25 @@ extension EnvironmentValues {
         set { self[AppDependenciesKey.self] = newValue }
     }
 }
+
+private struct ServicesKey: EnvironmentKey {
+    @MainActor static let defaultValue: BootstrappedServices? = nil
+}
+
+extension EnvironmentValues {
+    var services: BootstrappedServices? {
+        get { self[ServicesKey.self] }
+        set { self[ServicesKey.self] = newValue }
+    }
+}
+
+private struct CurrentUserKey: EnvironmentKey {
+    @MainActor static let defaultValue: User? = nil
+}
+
+extension EnvironmentValues {
+    var currentUser: User? {
+        get { self[CurrentUserKey.self] }
+        set { self[CurrentUserKey.self] = newValue }
+    }
+}
