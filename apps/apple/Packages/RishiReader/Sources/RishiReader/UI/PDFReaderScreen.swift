@@ -27,6 +27,14 @@ private enum ReaderMacCommandNotification {
     static let pageBackward   = Notification.Name("RishiCommand.pageBackward")
     static let fontStep       = Notification.Name("RishiCommand.fontStep")
     static let fontStepDelta  = "delta"
+    // Phase 37 Plan 37-06 — context-aware Mac ⌘F / ⌘D. Same literal strings as
+    // the app's `RishiCommand` enum so this reader package receives the bridged
+    // notifications without depending on the host target. While this screen is
+    // mounted, `focusSearch` opens the in-book search sheet (reader-open wins
+    // over the library search field) and `addBookmark` toggles the current
+    // page's bookmark.
+    static let focusSearch    = Notification.Name("RishiCommand.focusSearch")
+    static let addBookmark    = Notification.Name("RishiCommand.addBookmark")
 }
 
 /// Top-level SwiftUI screen for reading a PDF.
@@ -473,6 +481,21 @@ public struct PDFReaderScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageBackward)) { _ in
             navigator.goPrev()
+        }
+        // Phase 37 Plan 37-06 — context-aware Mac ⌘F: while the reader is
+        // mounted over the library, intercept `focusSearch` and open the
+        // in-book search sheet instead of focusing the library search field
+        // (reader-open wins). The library handler still fires when no reader is
+        // up. `activeSheet` is MainActor-isolated state and the closure runs on
+        // the MainActor, so the write is in-context (no actor hop).
+        .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.focusSearch)) { _ in
+            activeSheet = .search
+        }
+        // Phase 37 Plan 37-06 — Mac ⌘D: toggle the current page's bookmark via
+        // the same toggle model the toolbar button uses (no-op until the model
+        // is built once `bookmarkStore` is injected).
+        .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.addBookmark)) { _ in
+            Task { await bookmarkToggle?.toggle(currentPage: viewModel.pageIndex, snippet: nil) }
         }
         // Phase 18 Plan 18-08 (F-P2-01) — single `.sheet(item:)` driven by
         // the `ReaderSheet?` enum replaces the prior chain of three
