@@ -74,8 +74,23 @@ interface FakeHighlightRow {
   isDeleted: boolean
 }
 
-const { booksStore, highlightsStore, BOOK_COLS, HIGHLIGHT_COLS } = vi.hoisted(
-  () => {
+interface FakeBookmarkRow {
+  id: string
+  bookId: string
+  userId: string
+  location: string
+  label: string
+  snippet: string | null
+  pageNumber: number | null
+  createdAt: number
+  updatedAt: number
+  syncVersion: number
+  isDirty: boolean
+  isDeleted: boolean
+}
+
+const { booksStore, highlightsStore, bookmarksStore, BOOK_COLS, HIGHLIGHT_COLS, BOOKMARK_COLS } =
+  vi.hoisted(() => {
     const BOOK_COLS = {
       id: { __table: "books" as const, __col: "id" } as const,
       userId: { __table: "books" as const, __col: "userId" } as const,
@@ -89,24 +104,35 @@ const { booksStore, highlightsStore, BOOK_COLS, HIGHLIGHT_COLS } = vi.hoisted(
         __col: "updatedAt",
       } as const,
     }
+    const BOOKMARK_COLS = {
+      id: { __table: "bookmarks" as const, __col: "id" } as const,
+      userId: { __table: "bookmarks" as const, __col: "userId" } as const,
+      updatedAt: {
+        __table: "bookmarks" as const,
+        __col: "updatedAt",
+      } as const,
+    }
     return {
       booksStore: [] as FakeBookRow[],
       highlightsStore: [] as FakeHighlightRow[],
+      bookmarksStore: [] as FakeBookmarkRow[],
       BOOK_COLS,
       HIGHLIGHT_COLS,
+      BOOKMARK_COLS,
     }
-  },
-)
+  })
 
 function resetStores() {
   booksStore.length = 0
   highlightsStore.length = 0
+  bookmarksStore.length = 0
 }
 
 const UUID_BOOK_A = "11111111-1111-4111-8111-111111111111"
 const UUID_BOOK_B = "22222222-2222-4222-8222-222222222222"
 const UUID_BOOK_C = "33333333-3333-4333-8333-333333333333"
 const UUID_HL_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const UUID_BM_A = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 
 function seedBook(overrides: Partial<FakeBookRow> = {}): FakeBookRow {
   const updatedAt = overrides.updatedAt ?? 1_700_000_000_000
@@ -163,15 +189,37 @@ function seedHighlight(
   return full
 }
 
-// ─── Mock @rishi/shared/schema so `books` + `highlights` resolve to col ids ───
+function seedBookmark(
+  overrides: Partial<FakeBookmarkRow> = {},
+): FakeBookmarkRow {
+  const updatedAt = overrides.updatedAt ?? 1_700_000_200_000
+  const full: FakeBookmarkRow = {
+    id: overrides.id ?? UUID_BM_A,
+    bookId: overrides.bookId ?? UUID_BOOK_A,
+    userId: overrides.userId ?? "user_alice",
+    location: overrides.location ?? "epubcfi(/6/4!/4/2)",
+    label: overrides.label ?? "My bookmark",
+    snippet: overrides.snippet ?? null,
+    pageNumber: overrides.pageNumber ?? null,
+    createdAt: overrides.createdAt ?? updatedAt,
+    updatedAt,
+    syncVersion: overrides.syncVersion ?? 0,
+    isDirty: overrides.isDirty ?? false,
+    isDeleted: overrides.isDeleted ?? false,
+  }
+  bookmarksStore.push(full)
+  return full
+}
+
+// ─── Mock @rishi/shared/schema so `books` + `highlights` + `bookmarks` resolve ───
 vi.mock("@rishi/shared/schema", () => ({
   books: BOOK_COLS,
   highlights: HIGHLIGHT_COLS,
+  bookmarks: BOOKMARK_COLS,
   // Sibling tables touched by transitive imports — empty stubs.
   conversations: {},
   messages: {},
   devices: {},
-  bookmarks: {},
   user: {},
   session: {},
   account: {},
@@ -184,7 +232,7 @@ vi.mock("@rishi/shared/schema", () => ({
 }))
 
 // ─── Mock drizzle-orm helpers as predicate descriptors ────────────────────────
-type ColRef = { __table: "books" | "highlights"; __col: string }
+type ColRef = { __table: "books" | "highlights" | "bookmarks"; __col: string }
 type Pred =
   | { kind: "eq"; table: ColRef["__table"]; col: string; value: unknown }
   | { kind: "gt"; table: ColRef["__table"]; col: string; value: number }
@@ -234,7 +282,7 @@ vi.mock("../db/drizzle", () => {
     return {
       select(_proj?: unknown) {
         return {
-          from(table: { __table?: "books" | "highlights" } | unknown) {
+          from(table: { __table?: "books" | "highlights" | "bookmarks" } | unknown) {
             // Detect which store to read from. Our column-id stubs all
             // share the same __table tag, but drizzle's table objects
             // themselves are the column-id map we mocked above. The
@@ -275,7 +323,9 @@ vi.mock("../db/drizzle", () => {
                     ? (booksStore as unknown as Record<string, unknown>[])
                     : tableTag === "highlights"
                       ? (highlightsStore as unknown as Record<string, unknown>[])
-                      : []
+                      : tableTag === "bookmarks"
+                        ? (bookmarksStore as unknown as Record<string, unknown>[])
+                        : []
                 let rows = src.slice()
                 if (predicate) rows = rows.filter((r) => matches(r, predicate!))
                 if (order) {
@@ -350,7 +400,7 @@ const env = {
 } as unknown as Record<string, unknown>
 
 interface SyncChange {
-  kind: "book" | "highlight"
+  kind: "book" | "highlight" | "bookmark"
   id: string
   payload: Record<string, unknown>
   updated_at: number
@@ -551,5 +601,80 @@ describe("GET /api/sync/changes", () => {
     expect(env.changes.length).toBe(1)
     expect(typeof env.changes[0].updated_at).toBe("number")
     expect(env.changes[0].updated_at).toBe(1)
+  })
+
+  it("emits a seeded bookmark as kind 'bookmark' with location->locator mapping", async () => {
+    const REFERENCE_DATE_OFFSET_MS = 978_307_200_000
+    seedBookmark({
+      id: UUID_BM_A,
+      bookId: UUID_BOOK_A,
+      location: "epubcfi(/6/4!/4/8)",
+      label: "Ch 1",
+      snippet: "a saved excerpt",
+      createdAt: REFERENCE_DATE_OFFSET_MS + 5000, // 2001-01-01 + 5s
+      updatedAt: REFERENCE_DATE_OFFSET_MS + 2000, // wire = 2
+      isDeleted: false,
+    })
+    const res = await callChanges()
+    expect(res.status).toBe(200)
+    const env = await parseEnvelope(res)
+    expect(env.changes.length).toBe(1)
+    const bm = env.changes[0]
+    expect(bm.kind).toBe("bookmark")
+    expect(bm.id).toBe(UUID_BM_A)
+    // NAME MISMATCH lock: row.location -> payload.locator.
+    expect(bm.payload.locator).toBe("epubcfi(/6/4!/4/8)")
+    expect(bm.payload.book_id).toBe(UUID_BOOK_A)
+    expect(bm.payload.label).toBe("Ch 1")
+    expect(bm.payload.snippet).toBe("a saved excerpt")
+    // payload.created_at is an ISO8601 STRING (SyncPayloadCodec .iso8601).
+    expect(typeof bm.payload.created_at).toBe("string")
+    expect(bm.payload.created_at).toBe(
+      new Date(REFERENCE_DATE_OFFSET_MS + 5000).toISOString(),
+    )
+    // Envelope updated_at = seconds-since-2001 = 2.
+    expect(typeof bm.updated_at).toBe("number")
+    expect(bm.updated_at).toBe(2)
+    expect(bm.deleted).toBe(false)
+    // Envelope keys MUST match the SyncChange CodingKeys exactly.
+    expect(new Set(Object.keys(bm).sort())).toEqual(
+      new Set(["kind", "id", "payload", "updated_at", "deleted"].sort()),
+    )
+  })
+
+  it("bookmark soft-delete is emitted with deleted: true", async () => {
+    seedBookmark({ id: UUID_BM_A, isDeleted: true })
+    const res = await callChanges()
+    expect(res.status).toBe(200)
+    const env = await parseEnvelope(res)
+    const bm = env.changes.find((c) => c.kind === "bookmark")!
+    expect(bm).toBeDefined()
+    expect(bm.deleted).toBe(true)
+  })
+
+  it("cross-user isolation: user B's /changes excludes user A's bookmark", async () => {
+    seedBookmark({ id: UUID_BM_A, userId: "user_alice" })
+    setUser("user_bob")
+    const res = await callChanges()
+    expect(res.status).toBe(200)
+    const env = await parseEnvelope(res)
+    expect(env.changes.find((c) => c.kind === "bookmark")).toBeUndefined()
+  })
+
+  it("since-cursor: bookmark <= since excluded; > since included", async () => {
+    // since = 2020-01-01; seed one before and one after.
+    const sinceMs = Date.parse("2020-01-01T00:00:00Z")
+    seedBookmark({ id: UUID_BM_A, updatedAt: sinceMs - 1000 }) // excluded
+    const res = await callChanges("?since=2020-01-01T00:00:00Z")
+    expect(res.status).toBe(200)
+    const env = await parseEnvelope(res)
+    expect(env.changes.find((c) => c.kind === "bookmark")).toBeUndefined()
+
+    resetStores()
+    setUser("user_alice")
+    seedBookmark({ id: UUID_BM_A, updatedAt: sinceMs + 1000 }) // included
+    const res2 = await callChanges("?since=2020-01-01T00:00:00Z")
+    const env2 = await parseEnvelope(res2)
+    expect(env2.changes.find((c) => c.kind === "bookmark")?.id).toBe(UUID_BM_A)
   })
 })

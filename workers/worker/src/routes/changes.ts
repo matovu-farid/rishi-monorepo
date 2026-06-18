@@ -3,7 +3,7 @@ import { and, asc, eq, gt } from "drizzle-orm"
 import type { CloudflareBindings } from "../index"
 import { requireAuth } from "../index"
 import { createDb } from "../db/drizzle"
-import { books, highlights } from "@rishi/shared/schema"
+import { books, highlights, bookmarks } from "@rishi/shared/schema"
 
 /**
  * GET /api/sync/changes?since=<ISO8601>
@@ -76,6 +76,13 @@ changesRoutes.get("/", requireAuth, async (c) => {
           eq(highlights.userId, userId),
           gt(highlights.updatedAt, sinceMs),
         )
+  const bookmarkWhere =
+    sinceMs === null
+      ? eq(bookmarks.userId, userId)
+      : and(
+          eq(bookmarks.userId, userId),
+          gt(bookmarks.updatedAt, sinceMs),
+        )
 
   const bookRows = await db
     .select()
@@ -91,10 +98,17 @@ changesRoutes.get("/", requireAuth, async (c) => {
     .orderBy(asc(highlights.updatedAt))
     .limit(PULL_LIMIT)
     .all()
+  const bookmarkRows = await db
+    .select()
+    .from(bookmarks)
+    .where(bookmarkWhere)
+    .orderBy(asc(bookmarks.updatedAt))
+    .limit(PULL_LIMIT)
+    .all()
 
   // ── Map rows to SyncChange envelopes ────────────────────────────────
   interface Change {
-    kind: "book" | "highlight"
+    kind: "book" | "highlight" | "bookmark"
     id: string
     payload: Record<string, unknown>
     updated_at: number
@@ -139,6 +153,37 @@ changesRoutes.get("/", requireAuth, async (c) => {
       kind: "highlight",
       id: row.id as string,
       payload,
+      updated_at: toSecondsSinceRefDate(updatedAt),
+      deleted: isDeleted,
+      __sortKey: updatedAt,
+    })
+  }
+
+  for (const row of bookmarkRows as unknown as Array<
+    Record<string, unknown>
+  >) {
+    const updatedAt = row.updatedAt as number
+    const isDeleted = !!row.isDeleted
+    // NAME MISMATCH: column `location` -> wire `locator` (inverse of the
+    // sync.ts push arm). created_at is an ISO8601 STRING because the iOS
+    // SyncPayloadCodec decodes PAYLOAD dates with .iso8601 (NOT the envelope's
+    // .deferredToDate seconds-since-2001). row.createdAt is integer ms epoch.
+    const createdAtMs = row.createdAt as number | null | undefined
+    const createdAtIso =
+      typeof createdAtMs === "number"
+        ? new Date(createdAtMs).toISOString() // WIRE-ISO8601-PAYLOAD: payload-internal date, decoded by SyncPayloadCodec .iso8601, NOT the envelope .deferredToDate field
+        : null
+    changes.push({
+      kind: "bookmark",
+      id: row.id as string,
+      payload: {
+        id: row.id as string,
+        book_id: row.bookId as string,
+        locator: row.location as string,
+        label: (row.label as string | null) ?? null,
+        snippet: (row.snippet as string | null) ?? null,
+        created_at: createdAtIso,
+      },
       updated_at: toSecondsSinceRefDate(updatedAt),
       deleted: isDeleted,
       __sortKey: updatedAt,

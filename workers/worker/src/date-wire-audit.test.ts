@@ -180,10 +180,20 @@ describe("Date wire-audit (Phase 17 Plan 10)", () => {
         const src = readSource(route.source)
         // Source is allowed to have toISOString IF it's inside a comment.
         // The audit is conservative: grep live code lines only.
+        //
+        // EXCEPTION: a line bearing the `WIRE-ISO8601-PAYLOAD` marker is a
+        // PAYLOAD-INTERNAL date (e.g. bookmark.created_at), which the iOS
+        // SyncPayloadCodec decodes with .iso8601 — NOT the envelope's
+        // .deferredToDate seconds-since-2001 field. This is the canonical
+        // 37-07 bookmark wire contract (payload created_at = ISO8601 string,
+        // envelope updated_at = numeric seconds-2001). The marker keeps the
+        // guard strict for envelope-level Date fields while allowing the
+        // intentional payload-internal ISO8601 string.
         const offendingLines: string[] = []
         for (const [lineIndex, line] of src.split("\n").entries()) {
           const trimmed = line.trim()
           if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue
+          if (trimmed.includes("WIRE-ISO8601-PAYLOAD")) continue
           if (trimmed.includes(".toISOString()")) {
             offendingLines.push(`${lineIndex + 1}: ${trimmed}`)
           }
