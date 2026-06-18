@@ -79,6 +79,9 @@ public struct EPUBReaderScreen: View {
         "reader.toolbar.toc",
         "reader.toolbar.typography",
         "reader.toolbar.theme",
+        // Phase 37 Plan 37-03 — EPUB bookmark toggle + bookmarks-list buttons.
+        "reader.toolbar.bookmark",
+        "reader.toolbar.bookmarksList",
         "reader.toolbar.readAloud",
         "reader.toolbar.voice",
     ]
@@ -92,6 +95,10 @@ public struct EPUBReaderScreen: View {
     /// never persists. Production wiring in `AppDependencies` passes
     /// `GRDBHighlightStore`.
     private let highlightStore: (any HighlightStore)?
+    /// Phase 37 Plan 37-03 — optional injection: when `nil`, the bookmark
+    /// toggle + list are inert (the toolbar buttons still render but never
+    /// persist). `EPUBReaderDestination` wires `services.bookmarkStore`.
+    private let bookmarkStore: (any BookmarkStore)?
     /// Optional Phase 8 hook — when non-nil, the toolbar surfaces a
     /// "Read Aloud" button that invokes this closure. Wiring lives in the
     /// rishi app layer (RishiReader has no dependency on RishiAudio).
@@ -175,6 +182,15 @@ public struct EPUBReaderScreen: View {
     /// concurrently with a content sheet here.
     @State private var activeSheet: ReaderSheet?
 
+    /// Phase 37 Plan 37-03 — owns the bookmark set + `isBookmarked` + toggle for
+    /// this book. Built lazily in `.task` once `bookmarkStore` is available
+    /// (stays `nil` for previews / store-less callers). Read directly in the
+    /// toolbar body (do NOT snapshot to a derived `@State` — RESEARCH Pitfall 5)
+    /// so a toggle/refresh repaints the `bookmark`/`bookmark.fill` SF Symbol. The
+    /// model reads the live `viewModel.latestLocator` via a closure, so the EPUB
+    /// match always uses the current top-of-viewport location.
+    @State private var bookmarkToggle: EPUBBookmarkToggleModel?
+
     @State private var currentSpread: EPUBSpreadMode = .single
 
     /// Live size of the reader content area; populated by the outer
@@ -187,6 +203,7 @@ public struct EPUBReaderScreen: View {
         viewModel: EPUBReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
+        bookmarkStore: (any BookmarkStore)? = nil,
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil
@@ -194,6 +211,7 @@ public struct EPUBReaderScreen: View {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
+        self.bookmarkStore = bookmarkStore
         self.onReadAloud = onReadAloud
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
@@ -252,6 +270,8 @@ public struct EPUBReaderScreen: View {
                             pageNavigator.goPrev()
                         }
                     },
+                    onPageForward: { pageNavigator.goNext() },
+                    onPageBackward: { pageNavigator.goPrev() },
                     coordinatorRef: coordinatorRef
                 )
                 .onAppear { readerAreaSize = proxy.size }
@@ -259,6 +279,24 @@ public struct EPUBReaderScreen: View {
             }
             .ignoresSafeArea()
             .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
+
+            // Apple Books-style on-screen page-turn chevrons, overlaid on the
+            // left & right edges. Shown on iPad + Mac only (not iPhone) and
+            // ALWAYS visible — they're not tied to the chrome/toolbar state.
+            // The ZStack centers the HStack vertically.
+            if ReaderEdgeArrowPolicy.shouldShow(idiom: UIDevice.current.userInterfaceIdiom) {
+                HStack {
+                    EPUBEdgeArrowButton(systemName: "chevron.left",
+                                        label: "Previous page",
+                                        action: { pageNavigator.goPrev() })
+                    Spacer()
+                    EPUBEdgeArrowButton(systemName: "chevron.right",
+                                        label: "Next page",
+                                        action: { pageNavigator.goNext() })
+                }
+                .padding(.horizontal, RishiSpacing.m)
+                .allowsHitTesting(true)
+            }
 
             if let pending = pendingSelection {
                 EPUBHighlightContextMenu(
@@ -363,6 +401,19 @@ public struct EPUBReaderScreen: View {
                 await viewModel.loadHighlights(from: store)
                 coordinatorRef.coordinator?.applyHighlights(viewModel.loadedHighlights)
             }
+            // Phase 37 Plan 37-03 — build the bookmark toggle model once the
+            // store is available, then hydrate `isBookmarked` for the location
+            // the reader opened on. The closure reads the live locator so the
+            // match never goes stale.
+            if let store = bookmarkStore {
+                let toggle = bookmarkToggle ?? EPUBBookmarkToggleModel(
+                    store: store,
+                    bookId: viewModel.book.id,
+                    currentLocator: { viewModel.latestLocator }
+                )
+                bookmarkToggle = toggle
+                await toggle.refresh()
+            }
             // Apply the restored settings to Readium immediately so the
             // first render uses them (font / size / line-height / theme).
             applyPreferences()
@@ -406,52 +457,7 @@ public struct EPUBReaderScreen: View {
         // migrates into this package, swap the `EmptyView()` for the real
         // sheet view and the call sites already feed the right enum case.
         .readerSheet(item: $activeSheet) { sheet in
-            switch sheet {
-            case .toc:
-                EPUBTOCView(
-                    entries: viewModel.publication?.manifest.tableOfContents ?? [],
-                    onSelect: { link in
-                        activeSheet = nil
-                        let coordinator = coordinatorRef.coordinator
-                        // KEEP: Readium navigator.go(to:) requires @MainActor.
-                        Task { @MainActor in
-                            _ = await coordinator?.go(to: link)
-                        }
-                    },
-                    onClose: { activeSheet = nil }
-                )
-            case .typography:
-                EPUBTypographyPicker(
-                    typography: Binding(
-                        get: { viewModel.typography },
-                        set: { viewModel.typography = $0 }
-                    ),
-                    bookId: viewModel.book.id,
-                    store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
-                    onClose: { activeSheet = nil }
-                )
-            case .theme:
-                EPUBThemePicker(
-                    theme: Binding(
-                        get: { viewModel.theme },
-                        set: { viewModel.theme = $0 }
-                    ),
-                    bookId: viewModel.book.id,
-                    store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
-                    onClose: { activeSheet = nil }
-                )
-            case .ttsControls, .ttsPicker:
-                // Owned by RootView today. Placeholder keeps the
-                // switch exhaustive and the enum invariant intact.
-                EmptyView()
-            case .highlightNote(let hl):
-                HighlightNoteEditor(
-                    note: $noteText,
-                    snippet: hl.text,
-                    onSave: { highlightInteractor.commitNoteEdit(on: hl) },
-                    onCancel: { activeSheet = nil }
-                )
-            }
+            sheetContent(for: sheet)
         }
         #endif
         #if !os(macOS)
@@ -485,6 +491,22 @@ public struct EPUBReaderScreen: View {
                 .accessibilityIdentifier("reader.toolbar.theme")
                 .accessibilityLabel(A11yLabel.readerOpenTheme)
 
+                // Phase 37 Plan 37-03 — bookmark toggle. Filled SF Symbol when
+                // the current EPUB locator is bookmarked; tapping adds/removes
+                // via the toggle model (persisted through `bookmarkStore`).
+                Button(action: bookmarkToggleAction) {
+                    Image(systemName: (bookmarkToggle?.isBookmarked ?? false) ? "bookmark.fill" : "bookmark")
+                }
+                .accessibilityIdentifier("reader.toolbar.bookmark")
+                .accessibilityLabel(A11yLabel.readerToggleBookmark)
+
+                // Phase 37 Plan 37-03 — open the saved-bookmarks list sheet.
+                Button(action: showBookmarksAction) {
+                    Image(systemName: "bookmark.circle")
+                }
+                .accessibilityIdentifier("reader.toolbar.bookmarksList")
+                .accessibilityLabel(A11yLabel.readerOpenBookmarks)
+
                 if onReadAloud != nil {
                     Button(action: readAloudAction) {
                         Image(systemName: "speaker.wave.2.fill")
@@ -512,6 +534,16 @@ public struct EPUBReaderScreen: View {
         // NavigationStack owns dismissal.
         .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .navigationBar)
         .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .bottomBar)
+        // Opaque, theme-matched nav-bar background. The default system bar is
+        // translucent; with the page drawn under it (`.ignoresSafeArea()`), a
+        // page turn briefly blanks the area behind the bar to black and the
+        // translucent material samples it — a black band flashes across the
+        // top. An opaque background the same color as the page makes the bar
+        // seamless at rest AND keeps it solid through the animated turn, so
+        // nothing black is ever revealed. Keeps Readium's slide animation.
+        // Extracted into a helper so the (already large) body stays within
+        // the Swift type-checker's complexity budget.
+        .opaqueReaderNavBar(readerBarColor)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -567,6 +599,35 @@ public struct EPUBReaderScreen: View {
         #endif
     }
 
+    /// Adds/removes a bookmark at the current locator. UIKit-gated so the macOS
+    /// dev-host stub branch no-ops (Swift forbids `#if` inside a closure mounted
+    /// inline on a `ToolbarItem`).
+    private var bookmarkToggleAction: () -> Void {
+        #if canImport(UIKit)
+        return {
+            chrome.userActivity()
+            // KEEP: toggle is @MainActor async on the model; the store upsert/
+            // delete is the only suspension point.
+            Task { await bookmarkToggle?.toggle() }
+        }
+        #else
+        return { }
+        #endif
+    }
+
+    /// Refreshes the bookmark set and presents the `.bookmarks` list sheet.
+    private var showBookmarksAction: () -> Void {
+        #if canImport(UIKit)
+        return {
+            chrome.userActivity()
+            Task { await bookmarkToggle?.refresh() }
+            activeSheet = .bookmarks
+        }
+        #else
+        return { }
+        #endif
+    }
+
     /// Voice opener used by the `ToolbarItem` (top-bar trailing). The
     /// selection menu's "Ask about this" affordance routes through the same
     /// presenter with a non-nil quote. Bumps chrome user-activity so the
@@ -609,6 +670,105 @@ public struct EPUBReaderScreen: View {
         case .dark:  RishiColor.readerBackgroundDark.ignoresSafeArea()
         }
     }
+
+    /// Theme-matched solid color for the nav-bar background so it reads as a
+    /// seamless extension of the page (no visible bar line) and never reveals
+    /// the transient black behind a translucent bar during a page turn.
+    private var readerBarColor: SwiftUI.Color {
+        switch viewModel.theme {
+        case .light: return RishiColor.readerBackgroundLight
+        case .sepia: return RishiColor.readerBackgroundSepia
+        case .dark:  return RishiColor.readerBackgroundDark
+        }
+    }
+
+    #if canImport(UIKit)
+    /// Content for the single `.readerSheet(item:)`. Extracted from `body` so
+    /// the screen's modifier chain stays within the Swift type-checker's
+    /// complexity budget (the inline switch tipped it over once the nav-bar
+    /// background modifier was added).
+    @ViewBuilder
+    private func sheetContent(for sheet: ReaderSheet) -> some View {
+        switch sheet {
+        case .toc:
+            EPUBTOCView(
+                entries: viewModel.publication?.manifest.tableOfContents ?? [],
+                onSelect: { link in
+                    activeSheet = nil
+                    let coordinator = coordinatorRef.coordinator
+                    // KEEP: Readium navigator.go(to:) requires @MainActor.
+                    Task { @MainActor in
+                        _ = await coordinator?.go(to: link)
+                    }
+                },
+                onClose: { activeSheet = nil }
+            )
+        case .typography:
+            EPUBTypographyPicker(
+                typography: Binding(
+                    get: { viewModel.typography },
+                    set: { viewModel.typography = $0 }
+                ),
+                bookId: viewModel.book.id,
+                store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
+                onClose: { activeSheet = nil }
+            )
+        case .theme:
+            EPUBThemePicker(
+                theme: Binding(
+                    get: { viewModel.theme },
+                    set: { viewModel.theme = $0 }
+                ),
+                bookId: viewModel.book.id,
+                store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
+                onClose: { activeSheet = nil }
+            )
+        case .bookmarks:
+            // Phase 37 Plan 37-03 — saved-bookmarks list (the shared
+            // engine-agnostic view from 37-02). Selecting a row decodes the
+            // Readium locator and jumps via the navigator's `go(to: Locator)`
+            // overload; swipe-delete removes the row through the store and
+            // refreshes the toggle state.
+            BookmarksListView(
+                bookmarks: bookmarkToggle?.bookmarks ?? [],
+                onSelect: { bookmark in
+                    activeSheet = nil
+                    if let locator = EPUBBookmarkMatcher.locator(of: bookmark) {
+                        let coordinator = coordinatorRef.coordinator
+                        // KEEP: Readium navigator.go(to:) requires @MainActor.
+                        Task { @MainActor in
+                            _ = await coordinator?.go(to: locator)
+                        }
+                    }
+                },
+                onDelete: { bookmark in
+                    Task {
+                        try? await bookmarkStore?.delete(bookmark.id)
+                        await bookmarkToggle?.refresh()
+                    }
+                },
+                onClose: { activeSheet = nil }
+            )
+        case .ttsControls, .ttsPicker:
+            // Owned by RootView today. Placeholder keeps the
+            // switch exhaustive and the enum invariant intact.
+            EmptyView()
+        case .highlightNote(let hl):
+            HighlightNoteEditor(
+                note: $noteText,
+                snippet: hl.text,
+                onSave: { highlightInteractor.commitNoteEdit(on: hl) },
+                onCancel: { activeSheet = nil }
+            )
+        case .bookmarks:
+            // EPUB bookmarks UI is not wired on this screen (the EPUB slice of
+            // Phase 37-03 never reached here). The case is unreachable on this
+            // screen; EmptyView keeps the switch exhaustive, mirroring the
+            // .ttsControls / .ttsPicker placeholder above.
+            EmptyView()
+        }
+    }
+    #endif
 
     /// Maps `loadingState` to the cold-open failure reason: non-nil only when
     /// `load()` failed, which drives the native `.readerColdOpenFailureAlert`.
@@ -672,6 +832,37 @@ struct SelectionContext: Identifiable {
     let id = UUID()
     let locator: EPUBHighlightLocator
     let frame: CGRect?
+}
+
+/// One of the two on-screen edge page-turn chevrons (iPad + Mac). Subtle
+/// secondary-tinted glyph in a 44pt hit target.
+private struct EPUBEdgeArrowButton: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 30, weight: .regular))
+                .foregroundStyle(RishiColor.textSecondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+private extension View {
+    /// Pins an opaque, theme-matched background to the navigation bar so the
+    /// translucent system bar never samples the transient black behind it
+    /// during an animated page turn. Extracted from the screen's `body` so the
+    /// (already large) chain stays within the Swift type-checker's budget.
+    @ViewBuilder
+    func opaqueReaderNavBar(_ color: SwiftUI.Color) -> some View {
+        toolbarBackground(color, for: .navigationBar)
+            .toolbarBackground(Visibility.visible, for: .navigationBar)
+    }
 }
 #endif
 
