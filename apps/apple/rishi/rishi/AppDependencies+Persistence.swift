@@ -13,6 +13,7 @@ extension AppDependencies {
     var bookStore: any BookStore { services!.bookStore }
     var positionStore: any PositionStore { services!.positionStore }
     var highlightStore: any HighlightStore { services!.highlightStore }
+    var bookmarkStore: any BookmarkStore { services!.bookmarkStore }
     var bookFileStorage: BookFileStorage { services!.bookFileStorage }
     var importCoordinator: ImportCoordinator { services!.importCoordinator }
     var sampleBookInstaller: SampleBookInstaller { services!.sampleBookInstaller }

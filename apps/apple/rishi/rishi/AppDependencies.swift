@@ -236,6 +236,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let bookStore: any BookStore
     let positionStore: any PositionStore
     let highlightStore: any HighlightStore
+    let bookmarkStore: any BookmarkStore
     let bookFileStorage: BookFileStorage
     let importCoordinator: ImportCoordinator
     let sampleBookInstaller: SampleBookInstaller

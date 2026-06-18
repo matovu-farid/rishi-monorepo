@@ -155,6 +155,7 @@ enum ServiceGraphFactory {
         let bookStore = GRDBBookStore(dbQueue: dbQueue)
         let positionStore = GRDBPositionStore(dbQueue: dbQueue)
         let highlightStore = GRDBHighlightStore(dbQueue: dbQueue)
+        let bookmarkStore = GRDBBookmarkStore(dbQueue: dbQueue)
 
         // 8b. Reader settings (per-book theme persistence via UserDefaults).
         let readerSettingsStore = UserDefaultsReaderSettingsStore()
@@ -534,6 +535,7 @@ enum ServiceGraphFactory {
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
+            bookmarkStore: bookmarkStore,
             bookFileStorage: bookFileStorage,
             importCoordinator: importCoordinator,
             sampleBookInstaller: sampleBookInstaller,
