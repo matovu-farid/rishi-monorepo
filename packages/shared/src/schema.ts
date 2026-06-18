@@ -106,6 +106,7 @@ export const bookmarks = sqliteTable("bookmarks", {
   userId: text("user_id"), // null on mobile, set by server
   location: text("location").notNull(), // EPUB CFI / PDF page locator
   label: text("label").notNull().default(""),
+  snippet: text("snippet"), // optional surrounding-text excerpt (iOS Bookmark.snippet); nullable
   pageNumber: integer("page_number"), // optional page hint for PDF parity
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
