@@ -99,9 +99,9 @@ struct RishiAuthServiceTests {
 
         let user = try await service.signInWithApple()
         // Plan 15-02: User.id (UUID) is derived from Session.userId (String)
-        // via RishiAuthService.deriveUserUUID; the persisted Session keeps
-        // the raw String so the worker join continues to work.
-        let expectedUserId = RishiAuthService.deriveUserUUID(from: session.userId)
+        // via DerivedUserID.from; the persisted Session keeps the raw String
+        // so the worker join continues to work.
+        let expectedUserId = DerivedUserID.from(session.userId)
         #expect(user.id == expectedUserId)
         #expect(user.email == "u@example.com")
 
@@ -136,7 +136,7 @@ struct RishiAuthServiceTests {
         )
         let current = await serviceB.currentUser
         // Plan 15-02: derived UUID is deterministic from Session.userId String.
-        #expect(current?.id == RishiAuthService.deriveUserUUID(from: session.userId))
+        #expect(current?.id == DerivedUserID.from(session.userId))
     }
 
     @Test func signOutClearsKeychainEvenIfWorkerFails() async throws {
@@ -251,6 +251,6 @@ struct RishiAuthServiceTests {
         )
         let user = try await service.signInWithApple()
         #expect(user.email == "apple+\(userId).local")
-        #expect(user.id == RishiAuthService.deriveUserUUID(from: userId))
+        #expect(user.id == DerivedUserID.from(userId))
     }
 }

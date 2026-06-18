@@ -107,13 +107,13 @@ public actor RishiAuthService: AuthService {
     /// rest of the app graph (BookStore, PositionStore, LibraryViewModel,
     /// SyncEngine) keys every owner FK off a UUID. We derive a stable v5-ish
     /// namespace UUID from the Session userId String via
-    /// ``Self.deriveUserUUID(from:)`` — the same input String always yields the
+    /// ``DerivedUserID/from(_:)`` — the same input String always yields the
     /// same UUID, so in-memory User.id is stable across sign-ins. The
     /// Phase-14 `apple_subscriptions.userId` join is unaffected because that
     /// join keys against the worker-side String (read from Session.userId
     /// directly by network calls), not the derived in-memory UUID.
     private func makeUser(from session: Session) -> User {
-        let derivedId = Self.deriveUserUUID(from: session.userId)
+        let derivedId = DerivedUserID.from(session.userId)
         let email = session.email
             ?? "\(session.provider.rawValue)+\(session.userId).local"
         return User(
@@ -124,51 +124,5 @@ public actor RishiAuthService: AuthService {
             hasPro: false,
             createdAt: session.issuedAt
         )
-    }
-
-    /// Derives a stable UUID from an arbitrary identifier String.
-    ///
-    /// If `id` already parses as a UUID (legacy Phase-3 keychain blobs
-    /// where the userId was a real UUID string), return that UUID verbatim
-    /// so existing on-device sessions keep the same in-memory User.id
-    /// across the migration.
-    ///
-    /// Otherwise compute a name-based UUID by hashing the input with a
-    /// fixed namespace and packing the first 16 bytes into a UUID with
-    /// RFC 4122 version 5 / variant bits set. Same input always yields the
-    /// same UUID.
-    static func deriveUserUUID(from id: String) -> UUID {
-        if let direct = UUID(uuidString: id) {
-            return direct
-        }
-        // Fixed namespace bytes for Rishi-Apple-derived user IDs. Random
-        // 16-byte literal chosen once; do not change without a migration
-        // plan (would shuffle every Apple user's derived UUID).
-        var bytes: [UInt8] = [
-            0x52, 0x49, 0x53, 0x48, 0x49, 0x41, 0x55, 0x54,
-            0x48, 0x55, 0x53, 0x45, 0x52, 0x49, 0x44, 0x73,
-        ]
-        for byte in id.utf8 {
-            // FNV-1a-ish 8-bit mix into a 16-byte rolling state.
-            let idx = Int(byte) % 16
-            bytes[idx] = bytes[idx] &+ byte
-            bytes[idx] ^= UInt8((Int(bytes[idx]) &* 31 + Int(byte)) & 0xFF)
-        }
-        // Stir again with the full string length so short inputs don't
-        // collapse onto each other.
-        let len = UInt32(id.utf8.count)
-        bytes[0] ^= UInt8(len & 0xFF)
-        bytes[1] ^= UInt8((len >> 8) & 0xFF)
-        bytes[2] ^= UInt8((len >> 16) & 0xFF)
-        bytes[3] ^= UInt8((len >> 24) & 0xFF)
-        // Set version (5) and variant (RFC 4122) per UUIDv5 layout.
-        bytes[6] = (bytes[6] & 0x0F) | 0x50
-        bytes[8] = (bytes[8] & 0x3F) | 0x80
-        return UUID(uuid: (
-            bytes[0],  bytes[1],  bytes[2],  bytes[3],
-            bytes[4],  bytes[5],  bytes[6],  bytes[7],
-            bytes[8],  bytes[9],  bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
     }
 }
