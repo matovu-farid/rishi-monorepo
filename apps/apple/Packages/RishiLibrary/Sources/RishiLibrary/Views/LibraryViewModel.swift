@@ -142,7 +142,7 @@ public final class LibraryViewModel {
     public func delete(_ book: Book) async {
         do {
             try await storage.delete(book)
-            books.removeAll { $0.id == book.id }
+            books.removeAll { existing in existing.id == book.id }
             positionsByBookId[book.id] = nil
             coverURLs[book.id] = nil
             readingNow = Self.deriveReadingNow(books: books, positions: positionsByBookId)

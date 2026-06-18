@@ -205,8 +205,8 @@ public struct LibraryRootView: View {
         LibraryView(
             books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
             readingNow: vm.readingNow,
-            positionLookup: { vm.position(for: $0) },
-            coverURL: { vm.coverURLs[$0.id] },
+            positionLookup: { bookID in vm.position(for: bookID) },
+            coverURL: { book in vm.coverURLs[book.id] },
             onOpen: onOpenBook,
             // KEEP: vm.delete is @MainActor (LibraryViewModel @MainActor); the
             // BookFileStorage delete inside it hops to its own actor executor.
@@ -255,7 +255,7 @@ private actor LibraryRootPreviewBookStore: BookStore {
     }
 
     func books(for userId: UserID) async throws -> [Book] {
-        byId.values.filter { $0.userId == userId }.sorted { $0.title < $1.title }
+        byId.values.filter { book in book.userId == userId }.sorted { left, right in left.title < right.title }
     }
 
     func book(_ id: BookID) async throws -> Book? { byId[id] }
@@ -277,7 +277,7 @@ private actor LibraryRootPreviewPositionStore: PositionStore {
     func upsert(_ position: Position) async throws { byBook[position.bookId] = position }
 
     func delete(_ id: PositionID) async throws {
-        if let key = byBook.first(where: { $0.value.id == id })?.key {
+        if let key = byBook.first(where: { entry in entry.value.id == id })?.key {
             byBook[key] = nil
         }
     }

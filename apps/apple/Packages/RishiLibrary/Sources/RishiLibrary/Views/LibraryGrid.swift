@@ -46,7 +46,7 @@ struct LibraryGrid: View {
     }
 
     public var body: some View {
-        ScrollView {
+        VStack {
             LazyVGrid(columns: columns, spacing: RishiSpacing.xl) {
                 ForEach(books) { book in
                     cell(for: book)
@@ -60,7 +60,7 @@ struct LibraryGrid: View {
             "Delete book?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
-                set: { if !$0 { pendingDelete = nil } }
+                set: { isPresented in if !isPresented { pendingDelete = nil } }
             ),
             presenting: pendingDelete
         ) { book in

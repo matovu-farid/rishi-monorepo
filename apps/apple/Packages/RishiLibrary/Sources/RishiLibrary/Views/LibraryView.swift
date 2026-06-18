@@ -36,7 +36,7 @@ struct LibraryView: View {
             if books.isEmpty {
                 LibraryEmptyStateView()
             } else {
-                VStack(spacing: 0) {
+                ScrollView{
                     if !readingNow.isEmpty {
                         ReadingNowShelf(
                             entries: readingNow,
