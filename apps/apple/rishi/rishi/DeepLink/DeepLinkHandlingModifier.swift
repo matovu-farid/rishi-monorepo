@@ -13,15 +13,16 @@ import RishiLibrary
 
 struct DeepLinkHandlingModifier: ViewModifier {
 
-    let services: BootstrappedServices
     let model: SignedInViewModel
     let libraryVM: LibraryViewModel
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.services) private var servicesEnv
 
     func body(content: Content) -> some View {
         content
             .onOpenURL { url in
+                guard let services = servicesEnv else { return }
                 router.onBookResolved = { book in
                     model.hint(book)
                 }
@@ -45,7 +46,7 @@ struct DeepLinkHandlingModifier: ViewModifier {
 }
 
 extension View {
-    func deepLinkHandling(services: BootstrappedServices, model: SignedInViewModel, libraryVM: LibraryViewModel) -> some View {
-        modifier(DeepLinkHandlingModifier(services: services, model: model, libraryVM: libraryVM))
+    func deepLinkHandling(model: SignedInViewModel, libraryVM: LibraryViewModel) -> some View {
+        modifier(DeepLinkHandlingModifier(model: model, libraryVM: libraryVM))
     }
 }
