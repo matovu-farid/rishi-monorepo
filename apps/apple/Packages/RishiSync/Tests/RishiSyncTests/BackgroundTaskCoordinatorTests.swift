@@ -70,6 +70,7 @@ struct BackgroundTaskCoordinatorTests {
         let highlightUploader = HighlightUploader(workerClient: client, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: client, conversationStore: NoopConversationStore(), metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: client, messageStore: NoopMessageStore(), metadataStore: metadata)
+        let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
 
@@ -82,6 +83,7 @@ struct BackgroundTaskCoordinatorTests {
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
+            bookmarkUploader: bookmarkUploader,
             fetcher: fetcher,
             applier: applier
         )
@@ -113,6 +115,12 @@ struct BackgroundTaskCoordinatorTests {
         func highlight(_ id: HighlightID) async throws -> Highlight? { nil }
         func upsert(_ highlight: Highlight) async throws {}
         func delete(_ id: HighlightID) async throws {}
+    }
+    private actor NoopBookmarkStore: BookmarkStore {
+        func bookmarks(for bookId: BookID) async throws -> [Bookmark] { [] }
+        func bookmark(_ id: BookmarkID) async throws -> Bookmark? { nil }
+        func upsert(_ bookmark: Bookmark) async throws {}
+        func delete(_ id: BookmarkID) async throws {}
     }
     private actor NoopConversationStore: ConversationStore {
         func conversations(for userId: UserID) async throws -> [Conversation] { [] }

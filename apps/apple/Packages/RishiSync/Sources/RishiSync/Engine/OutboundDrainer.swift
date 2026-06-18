@@ -23,6 +23,7 @@ struct OutboundDrainer: Sendable {
         var highlightsPushed: Int = 0
         var conversationsPushed: Int = 0
         var messagesPushed: Int = 0
+        var bookmarksPushed: Int = 0
         var errors: [String] = []
         init() {}
     }
@@ -35,6 +36,7 @@ struct OutboundDrainer: Sendable {
     private let highlightUploader: HighlightUploader
     private let conversationUploader: ConversationUploader
     private let messageUploader: MessageUploader
+    private let bookmarkUploader: BookmarkUploader
 
     init(
         queue: SyncQueue,
@@ -44,7 +46,8 @@ struct OutboundDrainer: Sendable {
         positionUploader: PositionUploader,
         highlightUploader: HighlightUploader,
         conversationUploader: ConversationUploader,
-        messageUploader: MessageUploader
+        messageUploader: MessageUploader,
+        bookmarkUploader: BookmarkUploader
     ) {
         self.queue = queue
         self.bookStore = bookStore
@@ -54,6 +57,7 @@ struct OutboundDrainer: Sendable {
         self.highlightUploader = highlightUploader
         self.conversationUploader = conversationUploader
         self.messageUploader = messageUploader
+        self.bookmarkUploader = bookmarkUploader
     }
 
     /// Drain up to `limit` queue items and push them by kind.
@@ -133,6 +137,16 @@ struct OutboundDrainer: Sendable {
             } catch {
                 result.errors.append("message.push: \(error)")
                 for item in messagesBucket { await queue.enqueue(item) }
+            }
+        }
+
+        // Bookmarks — batch push (live + tombstones), Phase 37-08.
+        if !bookmarksBucket.isEmpty {
+            do {
+                result.bookmarksPushed = try await bookmarkUploader.pushPending(items: bookmarksBucket)
+            } catch {
+                result.errors.append("bookmark.push: \(error)")
+                for item in bookmarksBucket { await queue.enqueue(item) }
             }
         }
 

@@ -120,6 +120,16 @@ final class HighlightUploaderMockURLProtocol: MockURLProtocolBase, @unchecked Se
     static func capturedSnapshot() -> [URLRequest] { _storage.captured }
 }
 
+final class BookmarkUploaderMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
+    nonisolated(unsafe) static let _storage = MockURLProtocolStorage()
+    override class var storage: MockURLProtocolStorage { _storage }
+    static var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))? {
+        get { _storage.handler } set { _storage.handler = newValue }
+    }
+    static func reset() { _storage.reset() }
+    static func capturedSnapshot() -> [URLRequest] { _storage.captured }
+}
+
 final class RemoteChangeFetcherMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
     nonisolated(unsafe) static let _storage = MockURLProtocolStorage()
     override class var storage: MockURLProtocolStorage { _storage }

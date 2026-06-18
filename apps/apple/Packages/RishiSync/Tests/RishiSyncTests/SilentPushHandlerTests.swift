@@ -42,6 +42,12 @@ struct SilentPushHandlerTests {
         func upsert(_ highlight: Highlight) async throws {}
         func delete(_ id: HighlightID) async throws {}
     }
+    private actor StubBookmarkStore: BookmarkStore {
+        func bookmarks(for bookId: BookID) async throws -> [Bookmark] { [] }
+        func bookmark(_ id: BookmarkID) async throws -> Bookmark? { nil }
+        func upsert(_ bookmark: Bookmark) async throws {}
+        func delete(_ id: BookmarkID) async throws {}
+    }
     private actor StubConversationStore: ConversationStore {
         func conversations(for userId: UserID) async throws -> [Conversation] { [] }
         func conversation(_ id: ConversationID) async throws -> Conversation? { nil }
@@ -101,6 +107,7 @@ struct SilentPushHandlerTests {
         let highlightUploader = HighlightUploader(workerClient: client, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: client, conversationStore: StubConversationStore(), metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: client, messageStore: StubMessageStore(), metadataStore: metadata)
+        let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
         return SyncEngine(
@@ -112,6 +119,7 @@ struct SilentPushHandlerTests {
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
+            bookmarkUploader: bookmarkUploader,
             fetcher: fetcher,
             applier: applier
         )
@@ -190,6 +198,89 @@ struct SilentPushHandlerTests {
             }
         }
         #expect(result == .noData)
+    }
+
+    // MARK: - Entitlement-change routing
+
+    /// Records how many times the entitlement-changed closure ran. The
+    /// closure is `@Sendable () async -> Void`, so a counting actor is the
+    /// minimal Sendable spy.
+    private actor EntitlementSpy {
+        private(set) var count = 0
+        func bump() { count += 1 }
+    }
+
+    @Test("rishi.kind == entitlement.changed → onEntitlementChanged runs once, completion(.newData), engine untouched")
+    func entitlementChangedRefreshesAndReportsNewData() async throws {
+        let engine = try await makeEngine(changesResponseBody: emptyChanges())
+        let spy = EntitlementSpy()
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["content-available": 1],
+            "rishi": ["kind": "entitlement.changed"]
+        ]
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<UIBackgroundFetchResult, Never>) in
+            SilentPushHandler.handle(
+                userInfo,
+                engine: engine,
+                onEntitlementChanged: { await spy.bump() }
+            ) { outcome in
+                cont.resume(returning: outcome)
+            }
+        }
+        #expect(result == .newData)
+        #expect(await spy.count == 1)
+        // Engine must NOT have run — no /api/sync/changes call captured.
+        let captured = SilentPushMockURLProtocol.capturedSnapshot()
+        let touchedChanges = captured.contains { $0.url?.path == "/api/sync/changes" }
+        #expect(!touchedChanges)
+    }
+
+    @Test("rishi.kind == sync.changed → onEntitlementChanged NOT called, engine runs")
+    func syncChangedDoesNotRefreshEntitlement() async throws {
+        let engine = try await makeEngine(changesResponseBody: emptyChanges())
+        let spy = EntitlementSpy()
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["content-available": 1],
+            "rishi": ["kind": "sync.changed"]
+        ]
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<UIBackgroundFetchResult, Never>) in
+            SilentPushHandler.handle(
+                userInfo,
+                engine: engine,
+                onEntitlementChanged: { await spy.bump() }
+            ) { outcome in
+                cont.resume(returning: outcome)
+            }
+        }
+        #expect(result == .noData)
+        #expect(await spy.count == 0)
+        // Engine SHOULD have run the sync wave.
+        let captured = SilentPushMockURLProtocol.capturedSnapshot()
+        let touchedChanges = captured.contains { $0.url?.path == "/api/sync/changes" }
+        #expect(touchedChanges)
+    }
+
+    @Test("Unknown kind with onEntitlementChanged supplied → completion(.noData), neither runs")
+    func unknownKindWithEntitlementClosureRunsNothing() async throws {
+        let engine = try await makeEngine(changesResponseBody: emptyChanges())
+        let spy = EntitlementSpy()
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["content-available": 1],
+            "rishi": ["kind": "something.else"]
+        ]
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<UIBackgroundFetchResult, Never>) in
+            SilentPushHandler.handle(
+                userInfo,
+                engine: engine,
+                onEntitlementChanged: { await spy.bump() }
+            ) { outcome in
+                cont.resume(returning: outcome)
+            }
+        }
+        #expect(result == .noData)
+        #expect(await spy.count == 0)
+        let captured = SilentPushMockURLProtocol.capturedSnapshot()
+        #expect(captured.isEmpty)
     }
 }
 

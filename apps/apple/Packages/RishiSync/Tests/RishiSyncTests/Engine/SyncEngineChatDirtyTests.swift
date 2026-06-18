@@ -73,6 +73,16 @@ struct SyncEngineChatDirtyTests {
         func delete(_ id: HighlightID) async throws { rows[id] = nil }
     }
 
+    private actor StubBookmarkStore: BookmarkStore {
+        var rows: [BookmarkID: Bookmark] = [:]
+        func bookmarks(for bookId: BookID) async throws -> [Bookmark] {
+            rows.values.filter { $0.bookId == bookId }
+        }
+        func bookmark(_ id: BookmarkID) async throws -> Bookmark? { rows[id] }
+        func upsert(_ bookmark: Bookmark) async throws { rows[bookmark.id] = bookmark }
+        func delete(_ id: BookmarkID) async throws { rows[id] = nil }
+    }
+
     private actor StubConversationStore: ConversationStore {
         func conversations(for userId: UserID) async throws -> [Conversation] { [] }
         func conversation(_ id: ConversationID) async throws -> Conversation? { nil }
@@ -110,6 +120,7 @@ struct SyncEngineChatDirtyTests {
         let messageStore = StubMessageStore()
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
+        let bookmarkUploader = BookmarkUploader(workerClient: workerClient, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
         // Phase 16-05 — dedicated chat-sync fetchers.
@@ -125,6 +136,7 @@ struct SyncEngineChatDirtyTests {
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
+            bookmarkUploader: bookmarkUploader,
             fetcher: fetcher,
             applier: applier,
             conversationsFetcher: conversationsFetcher,

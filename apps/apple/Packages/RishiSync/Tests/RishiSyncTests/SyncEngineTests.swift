@@ -108,6 +108,16 @@ struct SyncEngineTests {
         func delete(_ id: MessageID) async throws { rows.removeValue(forKey: id) }
     }
 
+    private actor EngineStubBookmarkStore: BookmarkStore {
+        var rows: [BookmarkID: Bookmark] = [:]
+        func bookmarks(for bookId: BookID) async throws -> [Bookmark] {
+            rows.values.filter { $0.bookId == bookId }
+        }
+        func bookmark(_ id: BookmarkID) async throws -> Bookmark? { rows[id] }
+        func upsert(_ bookmark: Bookmark) async throws { rows[bookmark.id] = bookmark }
+        func delete(_ id: BookmarkID) async throws { rows[id] = nil }
+    }
+
     // MARK: - URLProtocol for fetcher/uploaders
 
     final class EngineMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
@@ -154,6 +164,7 @@ struct SyncEngineTests {
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
+        let bookmarkUploader = BookmarkUploader(workerClient: workerClient, bookmarkStore: EngineStubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
         let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
@@ -168,6 +179,7 @@ struct SyncEngineTests {
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
+            bookmarkUploader: bookmarkUploader,
             fetcher: fetcher,
             applier: applier,
             conversationsFetcher: conversationsFetcher,

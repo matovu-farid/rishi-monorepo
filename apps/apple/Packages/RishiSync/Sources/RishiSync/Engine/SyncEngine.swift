@@ -40,6 +40,7 @@ public actor SyncEngine {
         public var highlightsPushed: Int = 0
         public var conversationsPushed: Int = 0
         public var messagesPushed: Int = 0
+        public var bookmarksPushed: Int = 0
         public var errors: [String] = []
 
         public init() {}
@@ -55,6 +56,7 @@ public actor SyncEngine {
     private let highlightUploader: HighlightUploader
     private let conversationUploader: ConversationUploader
     private let messageUploader: MessageUploader
+    private let bookmarkUploader: BookmarkUploader
     private let fetcher: RemoteChangeFetcher
     private let applier: ChangeApplier
 
@@ -86,6 +88,7 @@ public actor SyncEngine {
         highlightUploader: HighlightUploader,
         conversationUploader: ConversationUploader,
         messageUploader: MessageUploader,
+        bookmarkUploader: BookmarkUploader,
         fetcher: RemoteChangeFetcher,
         applier: ChangeApplier,
         conversationsFetcher: ConversationsFetcher,
@@ -103,6 +106,7 @@ public actor SyncEngine {
         self.highlightUploader = highlightUploader
         self.conversationUploader = conversationUploader
         self.messageUploader = messageUploader
+        self.bookmarkUploader = bookmarkUploader
         self.fetcher = fetcher
         self.applier = applier
         self.conversationsFetcher = conversationsFetcher
@@ -129,7 +133,8 @@ public actor SyncEngine {
             positionUploader: positionUploader,
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
-            messageUploader: messageUploader
+            messageUploader: messageUploader,
+            bookmarkUploader: bookmarkUploader
         )
         self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
 
@@ -183,6 +188,18 @@ public actor SyncEngine {
             await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markHighlightDirty.failed", error: error)
+        }
+    }
+
+    /// Phase 37-08 (BMK-05) — flag a Bookmark row for outbound sync. Called by
+    /// the EPUB/PDF bookmark toggle sites after `bookmarkStore.upsert`/`delete`.
+    public func markBookmarkDirty(_ id: BookmarkID) async {
+        do {
+            try await metadataStore.markDirty(entityId: id, kind: .bookmark)
+            await queue.enqueue(SyncQueueItem(entityId: id, kind: .bookmark))
+            await statusReporter.refreshPendingCount(on: status)
+        } catch {
+            Log.error("sync.markBookmarkDirty.failed", error: error)
         }
     }
 
@@ -282,6 +299,7 @@ public actor SyncEngine {
         wave.highlightsPushed = drain.highlightsPushed
         wave.conversationsPushed = drain.conversationsPushed
         wave.messagesPushed = drain.messagesPushed
+        wave.bookmarksPushed = drain.bookmarksPushed
         wave.errors.append(contentsOf: drain.errors)
 
         // 3. Snapshot SyncStatus for the UI.
@@ -306,6 +324,7 @@ public actor SyncEngine {
             "highlights_pushed": String(wave.highlightsPushed),
             "conversations_pushed": String(wave.conversationsPushed),
             "messages_pushed": String(wave.messagesPushed),
+            "bookmarks_pushed": String(wave.bookmarksPushed),
             "errors": String(wave.errors.count),
         ])
         return wave
