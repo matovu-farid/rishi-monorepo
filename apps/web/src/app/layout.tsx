@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Header } from "@/components/header";
 import { AuthButtons } from "@/components/auth-buttons";
+import { HeaderGate } from "@/components/header-gate";
 import { DesktopHandoffListener } from "@/components/desktop-handoff-listener";
 
 const geistSans = Geist({
@@ -34,10 +35,12 @@ export default function RootLayout({
         <Suspense fallback={null}>
           <DesktopHandoffListener />
         </Suspense>
-        <header className="flex justify-end bg-background/80 border-b   items-center p-4 gap-4 h-16 sticky top-0 z-100 ">
-          <Header />
-          <AuthButtons />
-        </header>
+        <HeaderGate>
+          <header className="flex justify-end bg-background/80 border-b   items-center p-4 gap-4 h-16 sticky top-0 z-100 ">
+            <Header />
+            <AuthButtons />
+          </header>
+        </HeaderGate>
 
         {children}
       </body>
