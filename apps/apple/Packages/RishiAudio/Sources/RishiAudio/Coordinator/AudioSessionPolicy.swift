@@ -41,7 +41,7 @@ public struct AudioSessionPolicy: Sendable {
 
     private static let voiceConfigure: AudioSessionEffect = .configure(
         category: .playAndRecord,
-        mode: .voiceChat,
+        mode: .videoChat,
         options: [.defaultToSpeaker, .allowBluetooth]
     )
 

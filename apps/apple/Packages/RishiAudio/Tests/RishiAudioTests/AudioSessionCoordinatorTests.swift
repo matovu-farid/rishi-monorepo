@@ -50,10 +50,21 @@ struct AudioSessionCoordinatorTests {
         // configure(.playAndRecord), setActive(true)
         #expect(fake.configureCalls.count == 2)
         #expect(fake.configureCalls[1].category == .playAndRecord)
-        #expect(fake.configureCalls[1].mode == .voiceChat)
+        #expect(fake.configureCalls[1].mode == .videoChat)
         // setActive false appears between configures
         let actives = fake.activeCalls.map(\.active)
         #expect(actives == [true, false, true])
+    }
+
+    @Test("Voice mode configures .videoChat for the loud speakerphone path")
+    func voiceUsesVideoChatForLoudSpeaker() async {
+        let fake = FakeAudioSessionConfigurator()
+        let coord = AudioSessionCoordinator(configurator: fake)
+        await coord.requestActiveMode(.voice)
+        let voice = fake.configureCalls.last
+        #expect(voice?.category == .playAndRecord)
+        #expect(voice?.mode == .videoChat)
+        #expect(voice?.options.contains(.defaultToSpeaker) == true)
     }
 
     @Test("releaseActiveMode(.tts) while in .voice is a no-op")

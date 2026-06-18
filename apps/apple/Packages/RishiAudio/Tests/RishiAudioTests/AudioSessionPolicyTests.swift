@@ -8,7 +8,7 @@ struct AudioSessionPolicyTests {
         .configure(category: .playback, mode: .spokenAudio, options: [.allowBluetooth, .allowAirPlay])
     }
     private var voiceConfigure: AudioSessionEffect {
-        .configure(category: .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        .configure(category: .playAndRecord, mode: .videoChat, options: [.defaultToSpeaker, .allowBluetooth])
     }
 
     @Test("From idle, beginPassage configures TTS and activates")

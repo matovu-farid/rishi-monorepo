@@ -14,6 +14,10 @@ public enum AudioSessionCategory: String, Sendable, Equatable, CaseIterable {
 public enum AudioSessionMode: String, Sendable, Equatable, CaseIterable {
     case spokenAudio
     case voiceChat
+    // Speakerphone-style duplex path. Same voice-processing audio unit as
+    // .voiceChat (echo cancellation, two-way), but routes to the loud
+    // built-in speaker instead of the quiet handset path.
+    case videoChat
 }
 
 public struct AudioSessionOptions: OptionSet, Sendable, Equatable {
@@ -126,7 +130,12 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
         options: AudioSessionOptions
     ) throws {
         let avCategory: AVAudioSession.Category = (category == .playback) ? .playback : .playAndRecord
-        let avMode: AVAudioSession.Mode = (mode == .spokenAudio) ? .spokenAudio : .voiceChat
+        let avMode: AVAudioSession.Mode
+        switch mode {
+        case .spokenAudio: avMode = .spokenAudio
+        case .voiceChat:   avMode = .voiceChat
+        case .videoChat:   avMode = .videoChat
+        }
         var avOptions: AVAudioSession.CategoryOptions = []
         // Map our generic `.allowBluetooth` to the profile valid for the
         // category. HFP (`.allowBluetooth`) with `.playback` throws -50; output

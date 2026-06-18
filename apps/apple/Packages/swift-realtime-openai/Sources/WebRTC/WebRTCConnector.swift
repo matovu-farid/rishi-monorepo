@@ -138,7 +138,7 @@ private extension WebRTCConnector {
 			#else
 			try audioSession.setCategory(.playAndRecord, options: [.defaultToSpeaker])
 			#endif
-			try audioSession.setMode(.voiceChat)
+			try audioSession.setMode(.videoChat)
 			try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 		} catch {
 			print("Failed to configure AVAudioSession: \(error)")
