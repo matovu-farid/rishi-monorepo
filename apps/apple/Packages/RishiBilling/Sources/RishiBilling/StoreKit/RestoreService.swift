@@ -120,6 +120,27 @@ public actor RestoreService {
         return .restored(productIds: granted)
     }
 
+    /// Launch-time on-device entitlement reconciliation. Walks
+    /// `Transaction.currentEntitlements` (NO `AppStore.sync()`, so no Apple ID
+    /// prompt) and flips the reconciler to `.pro` if a verified, non-revoked
+    /// Rishi Pro entitlement is present. This is the "startup path" referenced
+    /// in this file's header: it restores Pro from the device on a cold launch
+    /// independent of the server signal (which can be stale, or — for local
+    /// StoreKit-test purchases — never aware of the purchase at all). Safe to
+    /// call unconditionally at launch. No-op when `StoreKitIAPFlag` is OFF
+    /// (the flip goes through `setOnDevice`, which is flag-gated).
+    public func refreshOnDeviceEntitlementAtLaunch() async {
+        let granted = await readActiveProductIds()
+        guard !granted.isEmpty else {
+            Log.event("iap.launch_reconcile.none", level: .info)
+            return
+        }
+        await MainActor.run { self.reconciler.setOnDevice(.pro) }
+        Log.event("iap.launch_reconcile.granted", level: .info,
+                  data: ["count": "\(granted.count)",
+                         "ids": granted.joined(separator: ",")])
+    }
+
     /// Walks `Transaction.currentEntitlements`, filters to verified +
     /// non-revoked + Rishi Pro tier product IDs. Returns the matching ids.
     ///

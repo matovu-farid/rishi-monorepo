@@ -179,6 +179,61 @@ struct RestoreServiceTests {
         }
     }
 
+    // MARK: - Launch-time on-device reconciliation (no AppStore.sync prompt)
+
+    @Test
+    func testRefreshOnDeviceEntitlementAtLaunch_activeSubscription_flipsToPro() async throws {
+        try await withSKTestDaemon {
+            let previousFlag = StoreKitIAPFlag.isEnabled
+            StoreKitIAPFlag.setEnabled(true)
+            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+
+            // Drive a sandbox buy so currentEntitlements surfaces the monthly
+            // tier as active. The launch reconciler must detect it WITHOUT
+            // AppStore.sync() (which is never called in this path).
+            _ = try await self.session.buyProduct(identifier: self.monthlyId)
+
+            let reconciler = self.makeReconciler()
+            let service = RestoreService(reconciler: reconciler)
+            await service.refreshOnDeviceEntitlementAtLaunch()
+
+            #expect(reconciler.level == .pro)
+        }
+    }
+
+    @Test
+    func testRefreshOnDeviceEntitlementAtLaunch_flagOff_doesNotFlip() async throws {
+        try await withSKTestDaemon {
+            let previousFlag = StoreKitIAPFlag.isEnabled
+            StoreKitIAPFlag.setEnabled(false)
+            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+
+            _ = try await self.session.buyProduct(identifier: self.monthlyId)
+
+            let reconciler = self.makeReconciler()
+            let service = RestoreService(reconciler: reconciler)
+            await service.refreshOnDeviceEntitlementAtLaunch()
+
+            #expect(reconciler.level == .free,
+                    "StoreKitIAPFlag OFF — setOnDevice must no-op")
+        }
+    }
+
+    @Test
+    func testRefreshOnDeviceEntitlementAtLaunch_noEntitlements_doesNotFlip() async throws {
+        // Daemon-independent: a fresh SKTestSession with cleared transactions
+        // has no entitlements, so the launch reconciler must leave .free intact.
+        let previousFlag = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(true)
+        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+
+        let reconciler = makeReconciler()
+        let service = RestoreService(reconciler: reconciler)
+        await service.refreshOnDeviceEntitlementAtLaunch()
+
+        #expect(reconciler.level == .free)
+    }
+
     // MARK: - AppStore.sync() failure throws RestoreError.syncFailed
 
     @Test(.disabled("Manual-only: simulate Apple-side outage via airplane mode. AppStore.sync() is a static; injectability is impractical at the StoreKit API boundary."))
