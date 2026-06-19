@@ -70,15 +70,23 @@ struct PurchaseServiceTests {
         return try #require(products.first)
     }
 
+    /// Build a fresh `.free` reconciler on MainActor (mirrors
+    /// RestoreServiceTests.makeReconciler).
+    private func makeReconciler() async -> EntitlementReconciler {
+        await MainActor.run { EntitlementReconciler(initial: .free) }
+    }
+
     private func makeService(
         verifier: any ReceiptVerifier,
         product: Product,
+        reconciler: EntitlementReconciler,
         purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil
     ) -> PurchaseService {
         let fetcher = SingleProductFetcher(product: product)
         return PurchaseService(
             productFetcher: fetcher,
             verifier: verifier,
+            reconciler: reconciler,
             purchaseClosure: purchaseClosure
         )
     }
@@ -93,7 +101,8 @@ struct PurchaseServiceTests {
             let verifier = StubReceiptVerifier(result: .success(
                 .init(verified: true, premiumUntil: until, reason: nil)
             ))
-            let service = self.makeService(verifier: verifier, product: product)
+            let reconciler = await self.makeReconciler()
+            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
 
             let outcome = try await service.purchase(productId: self.monthlyId)
             guard case .granted(let returnedUntil) = outcome else {
@@ -115,6 +124,65 @@ struct PurchaseServiceTests {
         }
     }
 
+    // MARK: - Stuck-on-paywall fix: verified grant flips reconciler to .pro
+
+    /// Same-session verified purchase flips the injected reconciler to
+    /// `.pro` (with `StoreKitIAPFlag` ON), so `AppGate.resolve` routes the
+    /// user into the app instead of leaving them stuck on the paywall.
+    /// Mirrors RestoreServiceTests' active-subscription assertion.
+    @Test
+    func testVerifiedPurchase_flagOn_flipsReconcilerToPro() async throws {
+        try await withSKTestDaemon {
+            let previousFlag = StoreKitIAPFlag.isEnabled
+            StoreKitIAPFlag.setEnabled(true)
+            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier(result: .success(
+                .init(verified: true, premiumUntil: .distantFuture, reason: nil)
+            ))
+            let reconciler = await self.makeReconciler()
+            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            guard case .granted = outcome else {
+                Issue.record("expected .granted, got \(outcome)")
+                return
+            }
+            let level = await MainActor.run { reconciler.level }
+            #expect(level == .pro,
+                    "verified purchase did not flip reconciler to .pro — user stays stuck on paywall")
+        }
+    }
+
+    /// With `StoreKitIAPFlag` OFF, `setOnDevice` must no-op so the reconciler
+    /// stays `.free` even on a verified grant — mirrors
+    /// RestoreServiceTests.testRestore_flagOff_setOnDeviceIsNoOp.
+    @Test
+    func testVerifiedPurchase_flagOff_reconcilerStaysFree() async throws {
+        try await withSKTestDaemon {
+            let previousFlag = StoreKitIAPFlag.isEnabled
+            StoreKitIAPFlag.setEnabled(false)
+            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier(result: .success(
+                .init(verified: true, premiumUntil: .distantFuture, reason: nil)
+            ))
+            let reconciler = await self.makeReconciler()
+            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            guard case .granted = outcome else {
+                Issue.record("expected .granted, got \(outcome)")
+                return
+            }
+            let level = await MainActor.run { reconciler.level }
+            #expect(level == .free,
+                    "StoreKitIAPFlag OFF — setOnDevice must no-op")
+        }
+    }
+
     // MARK: - IAP-03 worker network failure → leave UNFINISHED
 
     @Test
@@ -124,7 +192,8 @@ struct PurchaseServiceTests {
             let verifier = StubReceiptVerifier(result: .failure(
                 VerifyReceiptError.network("offline")
             ))
-            let service = self.makeService(verifier: verifier, product: product)
+            let reconciler = await self.makeReconciler()
+            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
 
             await #expect(throws: PurchaseError.self) {
                 _ = try await service.purchase(productId: self.monthlyId)
@@ -149,7 +218,8 @@ struct PurchaseServiceTests {
             let verifier = StubReceiptVerifier(result: .success(
                 .init(verified: false, premiumUntil: nil, reason: "replay_detected")
             ))
-            let service = self.makeService(verifier: verifier, product: product)
+            let reconciler = await self.makeReconciler()
+            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
 
             let outcome = try await service.purchase(productId: self.monthlyId)
             guard case .rejected(let reason) = outcome else {
@@ -176,9 +246,11 @@ struct PurchaseServiceTests {
         try await withSKTestDaemon {
             let product = try await self.monthlyProduct()
             let verifier = StubReceiptVerifier()
+            let reconciler = await self.makeReconciler()
             let service = self.makeService(
                 verifier: verifier,
                 product: product,
+                reconciler: reconciler,
                 purchaseClosure: { _ in .userCancelled }
             )
 
@@ -195,9 +267,11 @@ struct PurchaseServiceTests {
         try await withSKTestDaemon {
             let product = try await self.monthlyProduct()
             let verifier = StubReceiptVerifier()
+            let reconciler = await self.makeReconciler()
             let service = self.makeService(
                 verifier: verifier,
                 product: product,
+                reconciler: reconciler,
                 purchaseClosure: { _ in .pending }
             )
 
@@ -215,9 +289,11 @@ struct PurchaseServiceTests {
         // returns nil for the missing id. Runs unconditionally.
         let verifier = StubReceiptVerifier()
         let fetcher = AlwaysNilProductFetcher()
+        let reconciler = await makeReconciler()
         let service = PurchaseService(
             productFetcher: fetcher,
             verifier: verifier,
+            reconciler: reconciler,
             purchaseClosure: nil
         )
 
@@ -236,14 +312,16 @@ struct PurchaseServiceTests {
             let failVerifier = StubReceiptVerifier(result: .failure(
                 VerifyReceiptError.network("offline")
             ))
-            let firstService = self.makeService(verifier: failVerifier, product: product)
+            let firstReconciler = await self.makeReconciler()
+            let firstService = self.makeService(verifier: failVerifier, product: product, reconciler: firstReconciler)
             _ = try? await firstService.purchase(productId: self.monthlyId)
             #expect(failVerifier.calls.count == 1)
 
             let recoverVerifier = StubReceiptVerifier(result: .success(
                 .init(verified: true, premiumUntil: .distantFuture, reason: nil)
             ))
-            let secondService = self.makeService(verifier: recoverVerifier, product: product)
+            let secondReconciler = await self.makeReconciler()
+            let secondService = self.makeService(verifier: recoverVerifier, product: product, reconciler: secondReconciler)
             await secondService.replayUnfinished()
             #expect(recoverVerifier.calls.count >= 1,
                     "expected replayUnfinished to invoke the verifier at least once")
@@ -257,7 +335,8 @@ struct PurchaseServiceTests {
         try await withSKTestDaemon {
             let product = try await self.monthlyProduct()
             let blockingVerifier = BlockingStubReceiptVerifier()
-            let service = self.makeService(verifier: blockingVerifier, product: product)
+            let reconciler = await self.makeReconciler()
+            let service = self.makeService(verifier: blockingVerifier, product: product, reconciler: reconciler)
 
             let purchaseTask = Task { try await service.purchase(productId: self.monthlyId) }
 

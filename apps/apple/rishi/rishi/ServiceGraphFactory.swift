@@ -496,11 +496,6 @@ enum ServiceGraphFactory {
             #endif
             return WorkerReceiptVerifier(client: workerClient)
         }()
-        let purchaseService = PurchaseService(
-            productFetcher: productService,
-            verifier: receiptVerifier
-        )
-        let listener = TransactionListener(forwarder: purchaseService)
         // Phase 36 — seed the reconciler SYNCHRONOUSLY from the hydrated
         // entitlement cache so a returning Pro / active-trial subscriber's
         // `reconciler.level` already reads `.pro` the first time `RootView`
@@ -516,6 +511,12 @@ enum ServiceGraphFactory {
             reconciler.setServer(cachedEntitlement)
             return reconciler
         }
+        let purchaseService = PurchaseService(
+            productFetcher: productService,
+            verifier: receiptVerifier,
+            reconciler: reconciler
+        )
+        let listener = TransactionListener(forwarder: purchaseService)
         let entitlementFlag = await MainActor.run {
             ReaderAppEntitlementFlag(reconciler: reconciler)
         }

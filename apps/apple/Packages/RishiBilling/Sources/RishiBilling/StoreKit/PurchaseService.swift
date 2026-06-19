@@ -69,6 +69,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 
     private let productFetcher: any ProductFetching
     private let verifier: any ReceiptVerifier
+    private let reconciler: EntitlementReconciler
     private let purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)
 
     // MARK: State
@@ -85,6 +86,10 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 
     /// Designated initializer.
     ///
+    /// - Parameter reconciler: Flipped to `.pro` after a verified grant so
+    ///   the app gate routes into the app instead of leaving the user
+    ///   stuck on the paywall. Mirrors ``RestoreService``. The flip is
+    ///   gated by `StoreKitIAPFlag` inside `setOnDevice`.
     /// - Parameter purchaseClosure: Test seam. Production callers pass `nil`
     ///   (default = `{ try await $0.purchase() }`). PurchaseServiceTests
     ///   injects closures returning `.userCancelled` or `.pending` because
@@ -92,10 +97,12 @@ public actor PurchaseService: PurchaseUpdateForwarder {
     public init(
         productFetcher: any ProductFetching,
         verifier: any ReceiptVerifier,
+        reconciler: EntitlementReconciler,
         purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil
     ) {
         self.productFetcher = productFetcher
         self.verifier = verifier
+        self.reconciler = reconciler
         self.purchaseClosure = purchaseClosure ?? { product in try await product.purchase() }
     }
 
@@ -173,6 +180,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
             )
             if resp.verified {
                 await tx.finish()
+                await MainActor.run { self.reconciler.setOnDevice(.pro) }
                 Log.event("iap.update.granted_and_finished", level: .info,
                           data: ["tx": "\(tx.id)", "source": source])
             } else {
@@ -232,6 +240,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 
         if resp.verified {
             await tx.finish()
+            await MainActor.run { self.reconciler.setOnDevice(.pro) }
             Log.event("iap.purchase.granted", level: .info,
                       data: ["tx": "\(tx.id)", "productId": productId])
             return .granted(premiumUntil: resp.premiumUntil)
