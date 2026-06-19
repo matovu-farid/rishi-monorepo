@@ -22,7 +22,7 @@ public enum StoreKitIAPFlag {
         UserDefaults.standard.set(value, forKey: key)
     }
     #else
-    public static let isEnabled: Bool = false
+    public static let isEnabled: Bool = true
     #endif
 }
 
