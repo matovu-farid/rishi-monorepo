@@ -38,6 +38,10 @@ struct RootView: View {
     /// completion of the auth probe so a cold launch with a valid keychain
     /// session doesn't flash the sign-in UI.
     @State private var authProbeComplete = false
+    /// Whether the first server entitlement answer has arrived this session.
+    /// Until true, a signed-in `.free` user shows loading (not the paywall) so
+    /// a Pro/trial user does not flash the gate before get-session resolves.
+    @State private var entitlementResolved = false
 
     // MARK: - Phase 11 (Onboarding) state
     //
@@ -100,6 +104,7 @@ struct RootView: View {
             switch AppGate.resolve(
                 authProbeComplete: authProbeComplete,
                 isSignedIn: currentUser != nil,
+                entitlementResolved: entitlementResolved,
                 level: deps.entitlementReconciler.level
             ) {
             case .loading:
@@ -178,7 +183,14 @@ struct RootView: View {
             if probedUser != nil {
                 async let completedAsync = deps.onboardingState.hasCompletedOnboarding()
                 async let entitlementAsync = deps.entitlementService.refresh()
-                let (completed, _) = await (completedAsync, entitlementAsync)
+                let (completed, entitlementResult) = await (completedAsync, entitlementAsync)
+                // Seed the reconciler's server signal directly from the launch
+                // refresh so the gate decision is deterministic the instant
+                // `entitlementResolved` flips (don't race the async bridge).
+                if case .success(let level) = entitlementResult {
+                    deps.entitlementReconciler.setServer(level)
+                }
+                entitlementResolved = true
                 showOnboarding = !completed
             } else {
                 let completed = await deps.onboardingState.hasCompletedOnboarding()
