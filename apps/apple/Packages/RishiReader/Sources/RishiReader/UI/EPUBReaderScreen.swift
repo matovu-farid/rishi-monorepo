@@ -521,76 +521,7 @@ public struct EPUBReaderScreen: View {
         // bottom-bar items today and the platform would otherwise reserve
         // safe-area space for one when the nav bar is visible.
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                // Premium AI actions are DIRECT trailing buttons (and first) so
-                // they are always visible: the app is premium-only and Read
-                // Aloud / Voice Chat are flagship features.
-                if onReadAloud != nil {
-                    Button(action: readAloudAction) {
-                        Image(systemName: "speaker.wave.2.fill")
-                    }
-                    .accessibilityIdentifier("reader.toolbar.readAloud")
-                    .accessibilityLabel(A11yLabel.readerReadAloud)
-                }
-
-                if voicePresenter != nil {
-                    Button(action: voiceAction) {
-                        Image(systemName: "waveform.circle")
-                    }
-                    .accessibilityIdentifier("reader.toolbar.voice")
-                    .accessibilityLabel(A11yLabel.readerOpenVoice)
-                }
-
-                Button(action: showTypographyAction) {
-                    Image(systemName: "textformat.size")
-                }
-                .accessibilityIdentifier("reader.toolbar.typography")
-                .accessibilityLabel(A11yLabel.readerOpenTypography)
-
-                Button(action: showThemeAction) {
-                    Image(systemName: "circle.lefthalf.filled")
-                }
-                .accessibilityIdentifier("reader.toolbar.theme")
-                .accessibilityLabel(A11yLabel.readerOpenTheme)
-
-                // Secondary actions live in ONE explicit native Menu we
-                // control. The iOS 26 system overflow ("···") fails to surface
-                // extra ToolbarItems, so an explicit Menu guarantees they stay
-                // reachable instead of vanishing into an empty overflow.
-                Menu {
-                    Button(action: showTOCAction) {
-                        Label("Contents", systemImage: "list.bullet.indent")
-                    }
-                    .accessibilityIdentifier("reader.toolbar.toc")
-
-                    // Phase 37 Plan 37-03 — bookmark toggle. Filled SF Symbol
-                    // when the current EPUB locator is bookmarked; tapping
-                    // adds/removes via the toggle model.
-                    Button(action: bookmarkToggleAction) {
-                        Label(
-                            (bookmarkToggle?.isBookmarked ?? false) ? "Remove Bookmark" : "Add Bookmark",
-                            systemImage: (bookmarkToggle?.isBookmarked ?? false) ? "bookmark.fill" : "bookmark"
-                        )
-                    }
-                    .accessibilityIdentifier("reader.toolbar.bookmark")
-
-                    // Phase 37 Plan 37-03 — open the saved-bookmarks list sheet.
-                    Button(action: showBookmarksAction) {
-                        Label("Bookmarks", systemImage: "bookmark.circle")
-                    }
-                    .accessibilityIdentifier("reader.toolbar.bookmarksList")
-
-                    // Phase 37 Plan 37-05 — open the in-book full-text search sheet.
-                    Button(action: showSearchAction) {
-                        Label("Search", systemImage: "magnifyingglass")
-                    }
-                    .accessibilityIdentifier("reader.toolbar.search")
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityIdentifier("reader.toolbar.more")
-                .accessibilityLabel("More")
-            }
+            trailingToolbarContent
         }
         // Phase 18 Plan 18-01 (F-P0-04) + Plan 18-07 (F-P1-05) — gate the
         // nav bar AND the bottom bar on chrome visibility. When chrome is
@@ -791,6 +722,92 @@ public struct EPUBReaderScreen: View {
         case .dark:  return RishiColor.readerBackgroundDark
         }
     }
+
+    #if !os(macOS)
+    /// Whether the current locator is bookmarked. Hoisted out of the toolbar
+    /// menu so the ternary labels don't compound the builder's type-checking
+    /// cost.
+    private var isCurrentLocatorBookmarked: Bool {
+        bookmarkToggle?.isBookmarked ?? false
+    }
+
+    /// Secondary reader actions in one explicit native Menu. Extracted so the
+    /// trailing toolbar builder stays within the Swift type-checker's
+    /// complexity budget.
+    @ViewBuilder
+    private var readerMoreMenu: some View {
+        Menu {
+            Button(action: showTOCAction) {
+                Label("Contents", systemImage: "list.bullet.indent")
+            }
+            .accessibilityIdentifier("reader.toolbar.toc")
+
+            Button(action: bookmarkToggleAction) {
+                Label(
+                    isCurrentLocatorBookmarked ? "Remove Bookmark" : "Add Bookmark",
+                    systemImage: isCurrentLocatorBookmarked ? "bookmark.fill" : "bookmark"
+                )
+            }
+            .accessibilityIdentifier("reader.toolbar.bookmark")
+
+            Button(action: showBookmarksAction) {
+                Label("Bookmarks", systemImage: "bookmark.circle")
+            }
+            .accessibilityIdentifier("reader.toolbar.bookmarksList")
+
+            Button(action: showSearchAction) {
+                Label("Search", systemImage: "magnifyingglass")
+            }
+            .accessibilityIdentifier("reader.toolbar.search")
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityIdentifier("reader.toolbar.more")
+        .accessibilityLabel("More")
+    }
+
+    /// Trailing nav-bar items (AI actions, typography, theme, overflow menu).
+    /// Extracted into a dedicated `ToolbarContent` builder so the body stays
+    /// within the Swift type-checker's complexity budget — the inline group
+    /// failed to type-check in reasonable time under Release/WMO in CI.
+    @ToolbarContentBuilder
+    private var trailingToolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            // Premium AI actions are DIRECT trailing buttons (and first) so
+            // they are always visible: the app is premium-only and Read
+            // Aloud / Voice Chat are flagship features.
+            if onReadAloud != nil {
+                Button(action: readAloudAction) {
+                    Image(systemName: "speaker.wave.2.fill")
+                }
+                .accessibilityIdentifier("reader.toolbar.readAloud")
+                .accessibilityLabel(A11yLabel.readerReadAloud)
+            }
+
+            if voicePresenter != nil {
+                Button(action: voiceAction) {
+                    Image(systemName: "waveform.circle")
+                }
+                .accessibilityIdentifier("reader.toolbar.voice")
+                .accessibilityLabel(A11yLabel.readerOpenVoice)
+            }
+
+            Button(action: showTypographyAction) {
+                Image(systemName: "textformat.size")
+            }
+            .accessibilityIdentifier("reader.toolbar.typography")
+            .accessibilityLabel(A11yLabel.readerOpenTypography)
+
+            Button(action: showThemeAction) {
+                Image(systemName: "circle.lefthalf.filled")
+            }
+            .accessibilityIdentifier("reader.toolbar.theme")
+            .accessibilityLabel(A11yLabel.readerOpenTheme)
+
+            readerMoreMenu
+        }
+    }
+    #endif
 
     #if canImport(UIKit)
     /// Content for the single `.readerSheet(item:)`. Extracted from `body` so
