@@ -196,10 +196,14 @@ public actor WorkerClient {
         return components.url ?? url
     }
 
-    private func buildRequest<E: WorkerEndpoint>(for endpoint: E) async throws -> URLRequest {
+    func buildRequest<E: WorkerEndpoint>(for endpoint: E) async throws -> URLRequest {
         let url = makeURL(path: endpoint.path)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
+        // Native bearer-token client: never attach or store cookies. Better Auth's
+        // origin check only fires when a Cookie header is present, so a stray stored
+        // session cookie would trip a 403 MISSING_OR_NULL_ORIGIN on Bearer requests.
+        request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if let token = await tokenProvider.token() {
@@ -212,8 +216,12 @@ public actor WorkerClient {
         }
         #endif
 
-        if let bodied = endpoint as? (any WorkerEndpointWithBody) {
+        // Any non-GET request declares JSON, even bodyless ones (e.g. sign-out),
+        // otherwise Better Auth rejects the bodyless POST with 415.
+        if endpoint.method.rawValue != "GET" {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        if let bodied = endpoint as? (any WorkerEndpointWithBody) {
             request.httpBody = try JSONEncoder().encode(AnyEncodable(bodied.body))
         }
         return request
@@ -225,6 +233,8 @@ public actor WorkerClient {
         let url = makeURL(path: endpoint.path)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
+        // Native bearer-token client: never attach/store cookies (see buildRequest).
+        request.httpShouldHandleCookies = false
 
         if let token = await tokenProvider.token() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

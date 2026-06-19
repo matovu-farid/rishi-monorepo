@@ -24,6 +24,12 @@ struct WorkerClientTests {
         let path: String = "/post-thing"
         let body: PostBody
     }
+    /// Bodyless POST (e.g. /api/auth/sign-out) — no `WorkerEndpointWithBody` conformance.
+    private struct BodylessPostEndpoint: WorkerEndpoint {
+        typealias Response = PingResponse
+        let method: HTTPMethod = .POST
+        let path: String = "/sign-out"
+    }
 
     private func makeClient(
         token: String? = "test-token",
@@ -192,6 +198,34 @@ struct WorkerClientTests {
         #expect(!url.absoluteString.contains("%3F"))
         #expect(url.path == "/api/sync/changes")
         #expect(url.query?.hasPrefix("since=") == true)
+    }
+
+    // MARK: - Bearer-only / Content-Type request-building
+
+    @Test func bodylessPostStillSetsJSONContentType() async throws {
+        let (client, _) = makeClient()
+        let req = try await client.buildRequest(for: BodylessPostEndpoint())
+        #expect(req.value(forHTTPHeaderField: "Content-Type") == "application/json")
+    }
+
+    @Test func postRequestDisablesCookieHandling() async throws {
+        let (client, _) = makeClient()
+        let req = try await client.buildRequest(for: BodylessPostEndpoint())
+        #expect(req.httpShouldHandleCookies == false)
+    }
+
+    @Test func getRequestHasNoContentTypeAndDisablesCookies() async throws {
+        let (client, _) = makeClient()
+        let req = try await client.buildRequest(for: PingEndpoint())
+        #expect(req.value(forHTTPHeaderField: "Content-Type") == nil)
+        #expect(req.httpShouldHandleCookies == false)
+    }
+
+    @Test func bodiedPostKeepsContentTypeAndBody() async throws {
+        let (client, _) = makeClient()
+        let req = try await client.buildRequest(for: PostEndpoint(body: PostBody(hello: "world")))
+        #expect(req.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        #expect(req.httpBody != nil)
     }
 
     @Test func decodeFailureThrowsRishiErrorDecoding() async {
