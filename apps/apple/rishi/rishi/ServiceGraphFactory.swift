@@ -524,8 +524,9 @@ enum ServiceGraphFactory {
         signposter.endInterval("storekit.ready", storekitState)
 
         // Launch hooks: replay any unfinished transactions FIRST.
-        Task.detached(priority: .background) { [purchaseService, listener] in
+        Task.detached(priority: .background) { [purchaseService, listener, restoreService] in
             await purchaseService.replayUnfinished()
+            await restoreService.refreshOnDeviceEntitlementAtLaunch()
             await listener.start()
         }
         if StoreKitIAPFlag.isEnabled {
