@@ -56,6 +56,14 @@ public struct PaywallView: View {
     private let liveFeature: String
     private let liveOnDismiss: () -> Void
 
+    /// Optional caller-supplied view rendered inside the centered content
+    /// column, directly beneath the legal footer links (live body only).
+    /// Used by `PaywallGateView` to place its "Sign out" escape with the
+    /// content instead of pinned to the window's bottom edge. Erased to
+    /// `AnyView` so `PaywallView` stays non-generic for the legacy init and
+    /// existing call sites.
+    private let footerAccessory: AnyView?
+
     // VM-driven mode state. SwiftUI re-evaluates this view when the
     // observed VM publishes a change.
     @State private var sheetURL: IdentifiedURL?
@@ -74,6 +82,21 @@ public struct PaywallView: View {
         self.mode = .live(viewModel)
         self.liveFeature = feature
         self.liveOnDismiss = onDismiss
+        self.footerAccessory = nil
+    }
+
+    /// Variant of the Wave-3 init that accepts a `footerAccessory` rendered
+    /// inside the centered content column, beneath the legal footer links.
+    public init<Accessory: View>(
+        viewModel: PaywallViewModel,
+        feature: String = "Rishi Pro",
+        onDismiss: @escaping () -> Void = {},
+        @ViewBuilder footerAccessory: () -> Accessory
+    ) {
+        self.mode = .live(viewModel)
+        self.liveFeature = feature
+        self.liveOnDismiss = onDismiss
+        self.footerAccessory = AnyView(footerAccessory())
     }
 
     /// Phase-11 carry-over. Renders the neutral fallback body (no
@@ -95,6 +118,7 @@ public struct PaywallView: View {
         // must be initialised to satisfy Swift's stored-property rules.
         self.liveFeature = feature
         self.liveOnDismiss = onDismiss
+        self.footerAccessory = nil
     }
 
     // MARK: - Body
@@ -124,19 +148,42 @@ public struct PaywallView: View {
 
     // MARK: - Live (flag ON)
 
+    /// Max width of the centered content column. Wider than any iPhone, so
+    /// the compact (phone) layout stays effectively full-width with its
+    /// existing padding while Mac / iPad regular widths get a constrained,
+    /// centered column instead of edge-to-edge stretch. A plain maxWidth cap
+    /// avoids any `#if os` branching.
+    private static let contentMaxWidth: CGFloat = 520
+
     private func liveBody(vm: PaywallViewModel) -> some View {
-        ScrollView {
-            VStack(spacing: RishiSpacing.l) {
-                hero
-                tierSelector(vm: vm)
-                subscribeButton(vm: vm)
-                restoreButton(vm: vm)
-                disclosure3_1_2(vm: vm)
-                Divider().padding(.vertical, RishiSpacing.m)
-                manageRow(vm: vm)
-                footerLinks
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: RishiSpacing.l) {
+                    hero
+                    tierSelector(vm: vm)
+                    subscribeButton(vm: vm)
+                    restoreButton(vm: vm)
+                    disclosure3_1_2(vm: vm)
+                    Divider().padding(.vertical, RishiSpacing.m)
+                    manageRow(vm: vm)
+                    footerLinks
+                    if let footerAccessory {
+                        footerAccessory
+                    }
+                }
+                .padding(RishiSpacing.l)
+                // Constrain to a centered column. On the phone the available
+                // width is below 520, so this is a no-op and the layout stays
+                // full-width; on Mac / iPad it caps and centers horizontally.
+                .frame(maxWidth: Self.contentMaxWidth)
+                .frame(maxWidth: .infinity)
+                // Make the scroll content at least as tall as the viewport so
+                // the column is vertically centered (removes the bottom void
+                // on tall Mac windows). When the natural content height
+                // exceeds the viewport, minHeight is satisfied by the larger
+                // intrinsic size and the ScrollView scrolls normally.
+                .frame(minHeight: proxy.size.height, alignment: .center)
             }
-            .padding(RishiSpacing.l)
         }
         #if canImport(SafariServices) && canImport(UIKit)
         .sheet(item: $sheetURL) { wrapper in

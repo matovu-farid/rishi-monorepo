@@ -22,24 +22,26 @@ struct PaywallGateView: View {
     var body: some View {
         Group {
             if let viewModel {
-                PaywallView(viewModel: viewModel, feature: "Rishi Pro", onDismiss: {})
+                // The Sign out escape rides inside the paywall's centered
+                // content column (rendered beneath the footer links) so it
+                // sits with the content on Mac / iPad instead of pinned to
+                // the window's bottom edge.
+                PaywallView(viewModel: viewModel, feature: "Rishi Pro", onDismiss: {}) {
+                    Button("Sign out", role: .cancel) {
+                        // Revoke the worker + keychain session FIRST, then run
+                        // the local `\.signOut` chokepoint on the main actor.
+                        // Ordering matters: without the `auth?.signOut()` await
+                        // the session survives and a cold relaunch re-lands here.
+                        Task {
+                            try? await auth?.signOut()
+                            await MainActor.run { signOut() }
+                        }
+                    }
+                    .accessibilityIdentifier("paywallGate.signOut")
+                }
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Button("Sign out", role: .cancel) {
-                // Revoke the worker + keychain session FIRST, then run the
-                // local `\.signOut` chokepoint on the main actor. Ordering
-                // matters: without the `auth?.signOut()` await the session
-                // survives and a cold relaunch re-lands here.
-                Task {
-                    try? await auth?.signOut()
-                    await MainActor.run { signOut() }
-                }
-            }
-                .padding(.bottom, 8)
-                .accessibilityIdentifier("paywallGate.signOut")
         }
         .task {
             if viewModel == nil {
