@@ -522,47 +522,9 @@ public struct EPUBReaderScreen: View {
         // safe-area space for one when the nav bar is visible.
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button(action: showTOCAction) {
-                    Image(systemName: "list.bullet.indent")
-                }
-                .accessibilityIdentifier("reader.toolbar.toc")
-                .accessibilityLabel(A11yLabel.readerOpenTOC)
-
-                Button(action: showTypographyAction) {
-                    Image(systemName: "textformat.size")
-                }
-                .accessibilityIdentifier("reader.toolbar.typography")
-                .accessibilityLabel(A11yLabel.readerOpenTypography)
-
-                Button(action: showThemeAction) {
-                    Image(systemName: "circle.lefthalf.filled")
-                }
-                .accessibilityIdentifier("reader.toolbar.theme")
-                .accessibilityLabel(A11yLabel.readerOpenTheme)
-
-                // Phase 37 Plan 37-03 — bookmark toggle. Filled SF Symbol when
-                // the current EPUB locator is bookmarked; tapping adds/removes
-                // via the toggle model (persisted through `bookmarkStore`).
-                Button(action: bookmarkToggleAction) {
-                    Image(systemName: (bookmarkToggle?.isBookmarked ?? false) ? "bookmark.fill" : "bookmark")
-                }
-                .accessibilityIdentifier("reader.toolbar.bookmark")
-                .accessibilityLabel(A11yLabel.readerToggleBookmark)
-
-                // Phase 37 Plan 37-03 — open the saved-bookmarks list sheet.
-                Button(action: showBookmarksAction) {
-                    Image(systemName: "bookmark.circle")
-                }
-                .accessibilityIdentifier("reader.toolbar.bookmarksList")
-                .accessibilityLabel(A11yLabel.readerOpenBookmarks)
-
-                // Phase 37 Plan 37-05 — open the in-book full-text search sheet.
-                Button(action: showSearchAction) {
-                    Image(systemName: "magnifyingglass")
-                }
-                .accessibilityIdentifier("reader.toolbar.search")
-                .accessibilityLabel(A11yLabel.readerSearch)
-
+                // Premium AI actions are DIRECT trailing buttons (and first) so
+                // they are always visible: the app is premium-only and Read
+                // Aloud / Voice Chat are flagship features.
                 if onReadAloud != nil {
                     Button(action: readAloudAction) {
                         Image(systemName: "speaker.wave.2.fill")
@@ -578,6 +540,56 @@ public struct EPUBReaderScreen: View {
                     .accessibilityIdentifier("reader.toolbar.voice")
                     .accessibilityLabel(A11yLabel.readerOpenVoice)
                 }
+
+                Button(action: showTypographyAction) {
+                    Image(systemName: "textformat.size")
+                }
+                .accessibilityIdentifier("reader.toolbar.typography")
+                .accessibilityLabel(A11yLabel.readerOpenTypography)
+
+                Button(action: showThemeAction) {
+                    Image(systemName: "circle.lefthalf.filled")
+                }
+                .accessibilityIdentifier("reader.toolbar.theme")
+                .accessibilityLabel(A11yLabel.readerOpenTheme)
+
+                // Secondary actions live in ONE explicit native Menu we
+                // control. The iOS 26 system overflow ("···") fails to surface
+                // extra ToolbarItems, so an explicit Menu guarantees they stay
+                // reachable instead of vanishing into an empty overflow.
+                Menu {
+                    Button(action: showTOCAction) {
+                        Label("Contents", systemImage: "list.bullet.indent")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.toc")
+
+                    // Phase 37 Plan 37-03 — bookmark toggle. Filled SF Symbol
+                    // when the current EPUB locator is bookmarked; tapping
+                    // adds/removes via the toggle model.
+                    Button(action: bookmarkToggleAction) {
+                        Label(
+                            (bookmarkToggle?.isBookmarked ?? false) ? "Remove Bookmark" : "Add Bookmark",
+                            systemImage: (bookmarkToggle?.isBookmarked ?? false) ? "bookmark.fill" : "bookmark"
+                        )
+                    }
+                    .accessibilityIdentifier("reader.toolbar.bookmark")
+
+                    // Phase 37 Plan 37-03 — open the saved-bookmarks list sheet.
+                    Button(action: showBookmarksAction) {
+                        Label("Bookmarks", systemImage: "bookmark.circle")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.bookmarksList")
+
+                    // Phase 37 Plan 37-05 — open the in-book full-text search sheet.
+                    Button(action: showSearchAction) {
+                        Label("Search", systemImage: "magnifyingglass")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.search")
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("reader.toolbar.more")
+                .accessibilityLabel("More")
             }
         }
         // Phase 18 Plan 18-01 (F-P0-04) + Plan 18-07 (F-P1-05) — gate the
