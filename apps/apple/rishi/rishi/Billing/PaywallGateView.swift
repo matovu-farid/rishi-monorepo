@@ -1,4 +1,6 @@
 import SwiftUI
+import RishiCore
+import RishiAuth
 import RishiBilling
 
 /// Full-screen, non-dismissible paywall shown to signed-in users who are not
