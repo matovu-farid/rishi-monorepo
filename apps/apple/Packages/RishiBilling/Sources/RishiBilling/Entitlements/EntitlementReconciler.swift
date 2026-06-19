@@ -110,7 +110,8 @@ public final class EntitlementReconciler {
                       data: ["from": "\(level)",
                              "to": "\(next)",
                              "onDevice": "\(onDevice)",
-                             "server": "\(server)"])
+                             "server": "\(server)",
+                             "id": "\(ObjectIdentifier(self))"])
             level = next
         }
     }

@@ -17,6 +17,7 @@ import RishiCore
 import RishiAuth
 import RishiBilling
 import RishiOnboarding
+import RishiLogging
 
 struct RootView: View {
 
@@ -92,6 +93,28 @@ struct RootView: View {
             })
     }
 
+    /// TEMP DIAGNOSTIC (purchase-stuck-on-paywall): compute the gate and log
+    /// the resolved case + the reconciler instance identity, so we can tell
+    /// whether the gate re-evaluates after a purchase flip and whether the
+    /// instance RootView reads matches the one PurchaseService flips.
+    private func resolvedGate(deps: AppDependencies) -> AppGate {
+        let gate = AppGate.resolve(
+            authProbeComplete: authProbeComplete,
+            isSignedIn: currentUser != nil,
+            entitlementResolved: entitlementResolved,
+            level: deps.entitlementReconciler.level
+        )
+        Log.event("approuter.gate.resolved", level: .info, data: [
+            "case": "\(gate)",
+            "level": "\(deps.entitlementReconciler.level)",
+            "authProbe": "\(authProbeComplete)",
+            "signedIn": "\(currentUser != nil)",
+            "resolved": "\(entitlementResolved)",
+            "id": "\(ObjectIdentifier(deps.entitlementReconciler))",
+        ])
+        return gate
+    }
+
     @ViewBuilder
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
@@ -101,12 +124,7 @@ struct RootView: View {
             // `deps.entitlementReconciler.level` here is intentional: it makes
             // SwiftUI Observation re-render this Group when the entitlement
             // flips (gate -> app after a successful purchase / trial start).
-            switch AppGate.resolve(
-                authProbeComplete: authProbeComplete,
-                isSignedIn: currentUser != nil,
-                entitlementResolved: entitlementResolved,
-                level: deps.entitlementReconciler.level
-            ) {
+            switch resolvedGate(deps: deps) {
             case .loading:
                 // Phase 21 perf — first paint while the keychain probe runs.
                 // Painting `signedOutView` here would flash sign-in UI for
@@ -240,10 +258,20 @@ struct RootView: View {
         SignedOutView(onSignedIn: { user in
             currentUser = user
             if let deps {
-                // KEEP: fire-and-forget actor hop — entitlementService is an
-                // actor and refresh() awaits the worker on its own executor;
-                // the outer Task only chains the await.
-                Task { _ = await deps.entitlementService.refresh() }
+                // Resolve entitlement for the freshly signed-in user, seed the
+                // reconciler's server signal, then flip `entitlementResolved`.
+                // Without the final flip the gate stays at `.loading` (a blank
+                // background that reads as a black screen on macOS dark mode)
+                // for a signed-in `.free` user, because the one-shot bootstrap
+                // `.task` already ran while signed-out and won't run again.
+                // Mirrors the bootstrap branch's resolution.
+                Task {
+                    let result = await deps.entitlementService.refresh()
+                    if case .success(let level) = result {
+                        deps.entitlementReconciler.setServer(level)
+                    }
+                    entitlementResolved = true
+                }
             }
         })
     }
