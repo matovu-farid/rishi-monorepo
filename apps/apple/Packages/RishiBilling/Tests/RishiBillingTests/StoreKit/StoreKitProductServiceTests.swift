@@ -74,11 +74,11 @@ struct StoreKitProductServiceTests {
             let service = StoreKitProductService()
             let catalog = try await service.load()
             // SKTestSession pinned to _storefront=USA, _locale=en_US so prices
-            // localize as "$4.99" / "$39.99". Substring match on the numeric
+            // localize as "$7.99" / "$74.99". Substring match on the numeric
             // portion tolerates host-locale variance.
-            #expect(catalog.monthly?.displayPrice.contains("4.99") == true,
+            #expect(catalog.monthly?.displayPrice.contains("7.99") == true,
                     "monthly displayPrice was \(catalog.monthly?.displayPrice ?? "nil")")
-            #expect(catalog.annual?.displayPrice.contains("39.99") == true,
+            #expect(catalog.annual?.displayPrice.contains("74.99") == true,
                     "annual displayPrice was \(catalog.annual?.displayPrice ?? "nil")")
         }
     }
