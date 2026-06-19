@@ -501,7 +501,21 @@ enum ServiceGraphFactory {
             verifier: receiptVerifier
         )
         let listener = TransactionListener(forwarder: purchaseService)
-        let reconciler = await MainActor.run { EntitlementReconciler() }
+        // Phase 36 — seed the reconciler SYNCHRONOUSLY from the hydrated
+        // entitlement cache so a returning Pro / active-trial subscriber's
+        // `reconciler.level` already reads `.pro` the first time `RootView`
+        // (and `AppGate.resolve`) renders. Without this seed the reconciler
+        // starts `.free` and only flips later via the async
+        // `EntitlementServerBridge`, which races `authProbeComplete` and can
+        // paint the full-screen paywall gate for a frame. The cache is
+        // server-derived, so we feed the SERVER signal; the bridge then only
+        // delivers subsequent updates.
+        let cachedEntitlement = await entitlementService.snapshot()
+        let reconciler = await MainActor.run {
+            let reconciler = EntitlementReconciler()
+            reconciler.setServer(cachedEntitlement)
+            return reconciler
+        }
         let entitlementFlag = await MainActor.run {
             ReaderAppEntitlementFlag(reconciler: reconciler)
         }
