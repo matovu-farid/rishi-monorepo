@@ -91,7 +91,18 @@ struct RootView: View {
     @ViewBuilder
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
-            if !authProbeComplete {
+            // Phase 36 — single routing decision via the pure, testable
+            // `AppGate`. A signed-in `.free` user now gets the full-screen
+            // paywall instead of the app. Reading
+            // `deps.entitlementReconciler.level` here is intentional: it makes
+            // SwiftUI Observation re-render this Group when the entitlement
+            // flips (gate -> app after a successful purchase / trial start).
+            switch AppGate.resolve(
+                authProbeComplete: authProbeComplete,
+                isSignedIn: currentUser != nil,
+                level: deps.entitlementReconciler.level
+            ) {
+            case .loading:
                 // Phase 21 perf — first paint while the keychain probe runs.
                 // Painting `signedOutView` here would flash sign-in UI for
                 // users who ARE signed in (the `.task` below hasn't resolved
@@ -107,26 +118,41 @@ struct RootView: View {
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
                 #endif
-            } else if let user = currentUser {
+            case .signedOut:
+                signedOutView
+            case .paywall:
+                // Signed in but not entitled (.free). Non-dismissible paywall;
+                // the only escapes are a successful purchase (entitlement
+                // flips, this Group re-renders into `.app`) or Sign out.
+                PaywallGateView(services: deps.services!)
+            case .app:
                 // Entire signed-in composition lives in SignedInView.
                 // It owns the library tab, reader destinations, all
                 // signed-in sheets, read-aloud controls, deep-link
                 // wiring, scene restore, and Mac-command dispatch.
                 SignedInView(
                     services: deps.services!,
-                    user: user,
+                    user: currentUser!,
                     selectedTabRaw: $selectedTabRaw,
                     openBookIdRaw: $openBookIdRaw,
                     onSignedOut: { currentUser = nil },
                     onCacheUserId: { [deps] id in deps.cachedUserId = id }
                 )
-            } else {
-                signedOutView
             }
         }
         .task {
             guard !bootstrapped else { return }
             bootstrapped = true
+            // Phase 36 — start the server -> reconciler entitlement bridge
+            // exactly once. Without it `reconciler.level` only reflects
+            // on-device StoreKit and ignores the worker's has_pro / trial
+            // state, so the AppGate above would wrongly paywall paying users.
+            // `currentLevel` is `nonisolated` (no await to read the stream).
+            let entitlementLevels = deps.entitlementService.currentLevel
+            let reconciler = deps.entitlementReconciler
+            Task { @MainActor in
+                await EntitlementServerBridge.run(levels: entitlementLevels, into: reconciler)
+            }
             // Phase 21 perf — order matters: probe the keychain FIRST and
             // flip `authProbeComplete` so the body swaps from the blank
             // loading background straight into the library (or sign-in)
