@@ -266,4 +266,49 @@ struct PaywallViewModelTests {
         #expect(PaywallViewModel.Tier.annual.productId
                 == StoreKitProductService.annualProductId)
     }
+
+    // MARK: - Subscribe CTA title (trial-forward copy)
+
+    /// Build a `ProductSnapshot` for the annual tier with the given
+    /// intro-offer eligibility. Uses the public `ProductSnapshot` init so
+    /// we avoid driving a real `Product.products(for:)` call.
+    private func annualSnapshot(eligible: Bool) -> ProductSnapshot {
+        ProductSnapshot(
+            id: annualId,
+            displayName: "Rishi Pro (Annual)",
+            displayPrice: "$49.99",
+            period: .year,
+            periodLocalized: "year",
+            isEligibleForIntroOffer: eligible,
+            introOfferDescription: eligible ? "7-day free trial" : nil
+        )
+    }
+
+    @Test
+    func testSubscribeCTATitle_eligibleForIntroOffer_isStartFreeTrial() {
+        let vm = makeVM()
+        vm.setLoadStateForTesting(
+            .loaded(ProductCatalog(monthly: nil,
+                                   annual: annualSnapshot(eligible: true)))
+        )
+        #expect(vm.subscribeCTATitle == "Start Free Trial")
+    }
+
+    @Test
+    func testSubscribeCTATitle_notEligible_isSubscribe() {
+        let vm = makeVM()
+        vm.setLoadStateForTesting(
+            .loaded(ProductCatalog(monthly: nil,
+                                   annual: annualSnapshot(eligible: false)))
+        )
+        #expect(vm.subscribeCTATitle == "Subscribe")
+    }
+
+    @Test
+    func testSubscribeCTATitle_noProductsLoaded_isSubscribe() {
+        let vm = makeVM()
+        // loadState defaults to .idle -> selectedSnapshot == nil.
+        #expect(vm.selectedSnapshot == nil)
+        #expect(vm.subscribeCTATitle == "Subscribe")
+    }
 }

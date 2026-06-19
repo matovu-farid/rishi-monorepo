@@ -167,4 +167,28 @@ public final class PaywallViewModel {
         case .annual:  return catalog.annual
         }
     }
+
+    /// Title for the primary CTA. Trial-forward when the selected tier is
+    /// eligible for an introductory free-trial offer; otherwise the neutral
+    /// "Subscribe". Eligibility is per-Apple-ID (StoreKit reports it via
+    /// `ProductSnapshot.isEligibleForIntroOffer`), so a user who already used
+    /// the trial correctly sees "Subscribe" rather than misleading copy.
+    public var subscribeCTATitle: String {
+        if selectedSnapshot?.isEligibleForIntroOffer == true {
+            return "Start Free Trial"
+        }
+        return "Subscribe"
+    }
+
+    // MARK: - Test seams
+
+    /// Inject a `LoadState` directly. The production setter is `private(set)`
+    /// so the only way to drive `.loaded(catalog)` is through `loadProducts()`,
+    /// which requires a reachable StoreKit daemon. This internal seam lets
+    /// unit tests place a known catalog into the view model to exercise the
+    /// derived `selectedSnapshot` / `subscribeCTATitle` properties without
+    /// the daemon.
+    func setLoadStateForTesting(_ state: LoadState) {
+        loadState = state
+    }
 }

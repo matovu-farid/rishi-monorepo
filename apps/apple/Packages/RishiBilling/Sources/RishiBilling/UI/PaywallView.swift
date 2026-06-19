@@ -243,7 +243,7 @@ public struct PaywallView: View {
                 if vm.purchaseState == .purchasing {
                     ProgressView().progressViewStyle(.circular)
                 } else {
-                    Text("Subscribe")
+                    Text(vm.subscribeCTATitle)
                         .font(RishiTypography.body)
                 }
             }
