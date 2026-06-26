@@ -1,31 +1,31 @@
-//
-//  PDFReadAloudPageBoundaryUITests.swift
-//  rishiUITests
-//
-//  PDF analog of ReadAloudNextParagraphUITests.testCrossingPageBoundaryKeepsPlaying
-//  (the EPUB "Bug 4" guard). Read-aloud must continue onto the next page when it
-//  reaches the last paragraph of a page, rather than HALTING at the boundary.
-//
-//  Run against TWO fixtures, both asserting the live PDF PAGE NUMBER actually
-//  advances (proof narration moved onto the next page, not merely that the
-//  session survived):
-//    - the seeded sample.pdf (light, 3-page tour), and
-//    - a synthesized TEXT-DENSE PDF ("uitest-dense", seeded under RISHI_UITEST).
-//
-//  The dense fixture matters: the real-app halt only reproduces on text-dense
-//  pages, whose off-main `selectionsByLine` extraction is slow enough to race
-//  the main-thread PDFView reading the SAME PDFDocument and return empty text
-//  (PDFKit's PDFDocument is not safe for concurrent access). The light sample
-//  page is too fast to overlap. We cannot ship the copyrighted real book that
-//  surfaced this (Velleman's "How to Prove It"), so UITestDensePDF synthesizes a
-//  comparably dense PDF. The fix gives read-aloud its own PDFDocument instance.
-//
-//  Crossing modes:
-//    - …CrossesPDFPageBoundary: press Next until the page advances.
-//    - …AutoAdvanceCrosses…: let playback auto-advance to the end of the page
-//      and confirm it crosses on its own (the user's literal symptom — "let it
-//      read to the end and it just stops").
-//
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import XCTest
 
@@ -35,30 +35,30 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    // MARK: - Next-button crossing
-    //
-    // Only the DENSE fixture is used for the Next-button test. The light
-    // sample.pdf has ~2 short paragraphs on page 1, so auto-advance crosses the
-    // boundary within a few seconds — before the test can read the start page or
-    // press Next — making a "press Next to cross" assertion inherently racy.
-    // sample.pdf crossing is covered by the auto-advance test below; the dense
-    // fixture (many paragraphs per page) is where pressing Next deterministically
-    // drives the crossing.
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     @MainActor
     func testNextButtonCrossesDensePDFPageBoundary() throws {
         try crossViaNextButton(titleContains: "dense", maxPresses: 30)
     }
 
-    // MARK: - Within-page Next under latent (production-like) TTS
-    //
-    // Reproduces the user's actual report: pressing Next stops the audio even
-    // WITHIN a page, while auto-advance keeps playing. Uses the latent + cached
-    // TTS fixture (RISHI_UITEST_TTS_LATENT) so prewarm-vs-replay timing matches
-    // production. `next()` (jump) cancels the in-flight prewarm of the target
-    // paragraph and re-requests it; under real synthesis latency the audio
-    // halts. We press Next several times within the dense page (well short of
-    // the page boundary) and require playback to come back to Playing.
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     @MainActor
     func testWithinPageNextUnderLatentTTSKeepsPlaying() throws {
@@ -71,18 +71,18 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
 
         let startPage = pageNumber(app) ?? 1
 
-        // Press Next a few times within the page (the dense page has many
-        // paragraphs, so this stays well short of a page boundary).
+        
+        
         for _ in 0..<3 {
             robustTap(next)
             usleep(400_000)
-            // Stay within the page — abort if we somehow crossed (not the point).
+            
             if let p = pageNumber(app), p != startPage { break }
         }
 
-        // The audio must come back to Playing. A within-page Next that stalls
-        // leaves the toggle on "tts-play" (loading) and "tts-pause" never
-        // reappears — the reported "audio stops".
+        
+        
+        
         let pause = app.descendants(matching: .any)
             .matching(identifier: "tts-pause").firstMatch
         if !pause.waitForExistence(timeout: 12) {
@@ -96,7 +96,7 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         XCTAssertTrue(stop.exists, "Read-aloud session was torn down during within-page Next.")
     }
 
-    // MARK: - Auto-advance crossing (the user's literal symptom)
+    
 
     @MainActor
     func testAutoAdvanceCrossesSamplePDFPageBoundary() throws {
@@ -108,7 +108,7 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         try crossViaAutoAdvance(titleContains: "dense", timeout: 120)
     }
 
-    // MARK: - Shared crossing flows
+    
 
     @MainActor
     private func crossViaNextButton(titleContains: String, maxPresses: Int) throws {
@@ -124,7 +124,7 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         var crossed = false
         for press in 1...maxPresses {
             robustTap(next)
-            usleep(1_800_000) // passage switch + any delayed page-turn callback
+            usleep(1_800_000) 
             if !stop.waitForExistence(timeout: 6) {
                 attachHierarchy(app, name: "\(titleContains)-next-halt-\(press)")
             }
@@ -151,10 +151,10 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
 
         let startPage = try requirePageNumber(app)
 
-        // Do NOT press Next. Let playback auto-advance through the page's
-        // paragraphs; when it finishes the last one it must cross onto the next
-        // page on its own. Poll the page number while requiring the session to
-        // stay alive: a boundary halt tears down "tts-stop" before crossing.
+        
+        
+        
+        
         let deadline = Date().addingTimeInterval(timeout)
         var crossed = false
         while Date() < deadline {
@@ -178,20 +178,20 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         )
     }
 
-    // MARK: - Bootstrap
+    
 
-    /// Launches under RISHI_UITEST and opens the seeded PDF whose library cell
-    /// label contains `titleContains` ("sample" -> sample.pdf, "dense" ->
-    /// the synthesized dense PDF). Under RISHI_UITEST the reader opens at page 1
-    /// (position restore is skipped), so every test starts with a real page
-    /// boundary ahead — no rewind needed.
+    
+    
+    
+    
+    
     @MainActor
     private func launchAndOpenPDF(titleContains: String, latentTTS: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["RISHI_UITEST"] = "1"
         if latentTTS {
-            // Wrap the fixture TTS in a real cache + add a synthesis delay so the
-            // prewarm-vs-Next timing matches the production network path.
+            
+            
             app.launchEnvironment["RISHI_UITEST_TTS_LATENT"] = "1"
         }
         app.launch()
@@ -207,8 +207,8 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         return app
     }
 
-    /// Starts a Read Aloud session and returns once playback reaches Playing.
-    /// Returns the stable "tts-stop" element and the play/pause toggle.
+    
+    
     @MainActor
     private func startSession(_ app: XCUIApplication) -> (XCUIElement, XCUIElement) {
         let readAloud = app.descendants(matching: .any)
@@ -247,10 +247,10 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         return (stop, toggle)
     }
 
-    // MARK: - Helpers
+    
 
-    /// Reads the live page number from the "reader.pdf.pageIndicator" label
-    /// ("Page X of Y"); nil if the indicator or a leading integer is absent.
+    
+    
     @MainActor
     private func pageNumber(_ app: XCUIApplication) -> Int? {
         let indicator = app.descendants(matching: .any)
@@ -280,17 +280,17 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         add(snap)
     }
 
-    /// Coordinate tap — SwiftUI buttons in overlays often report isHittable=false;
-    /// a coordinate tap does no hittability check and is reliable for a visible
-    /// element. Settles briefly first so the frame is stable.
+    
+    
+    
     @MainActor
     private func robustTap(_ element: XCUIElement) {
         usleep(300_000)
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
-    /// Turns the PDF forward one page by tapping the right region, which
-    /// PDFReaderScreen.onTap maps to `viewModel.seek(toPage: pageIndex + 1)`.
+    
+    
     @MainActor
     private func turnPageForward(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()

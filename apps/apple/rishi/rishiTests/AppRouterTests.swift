@@ -1,12 +1,4 @@
-//
-//  AppRouterTests.swift
-//  rishiTests
-//
-//  TDD coverage for AppRouter — navigation, deep-link dispatch, and
-//  scene-restoration helpers extracted from RootView.
-//
-//  Swift Testing only (no XCTest).
-//
+
 
 import Testing
 import Foundation
@@ -16,13 +8,13 @@ import RishiReader
 import RishiTesting
 @testable import rishi
 
-// MARK: - Suite
+
 
 @MainActor
 @Suite("AppRouter")
 struct AppRouterTests {
 
-    // MARK: - Navigation helpers
+    
 
     @Test("showLibraryRoot clears the navigation path")
     func showLibraryRootClearsPath() {
@@ -49,7 +41,7 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
-    // MARK: - Deep-link: path-only cases (no stores needed)
+    
 
     @Test("Unknown/garbage deep link leaves path empty")
     func unknownDeepLinkNoOp() {
@@ -84,7 +76,7 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
-    // MARK: - Deep-link happy paths
+    
 
     @Test("openBook deep link resolves book, fires onBookResolved, replaces path")
     func openBookHappyPath() async {
@@ -98,7 +90,7 @@ struct AppRouterTests {
         )
         let store = InMemoryBookStore(initial: [book])
         let router = AppRouter()
-        // Pre-load a stale path entry to verify REPLACE (not append) semantics.
+        
         router.path.append(ReaderRoute.epub(UUID()))
         #expect(router.path.count == 1)
 
@@ -108,13 +100,13 @@ struct AppRouterTests {
         let url = URL(string: "rishi://book/\(bookId.uuidString)")!
         router.handle(url: url, bookStore: store, conversationStore: nil)
 
-        // Await the spawned Task by draining the cooperative thread pool.
+        
         await Task.yield()
         await Task.yield()
         await Task.yield()
 
         #expect(resolvedBook?.id == bookId)
-        // Path is replaced with a single entry (the resolved route), not appended.
+        
         #expect(router.path.count == 1)
     }
 
@@ -140,7 +132,7 @@ struct AppRouterTests {
         await Task.yield()
 
         #expect(resolvedConvo?.id == convoId)
-        // openConversation does not mutate the navigation path.
+        
         #expect(router.path.isEmpty)
     }
 
@@ -152,15 +144,15 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
-    // MARK: - Deep-link: persistCells round-trip
+    
 
     @Test("persistCells returns non-empty tabRaw (schema continuity)")
     func persistCellsTabRawNonEmpty() {
         let router = AppRouter()
         let cells = router.persistCells()
-        // tabRaw always encodes .library for schema continuity; must be non-empty.
+        
         #expect(!cells.tabRaw.isEmpty)
-        // Confirm it decodes back to the expected tab.
+        
         let state = RishiSceneState.decodeSceneRestoreCells(
             tabRaw: cells.tabRaw,
             openBookIdRaw: ""
@@ -173,8 +165,8 @@ struct AppRouterTests {
         let router = AppRouter()
         router.showLibraryRoot()
         let cells = router.persistCells()
-        // An empty NavigationPath encodes to "" so the scene-restore branch
-        // treats it as "no book open".
+        
+        
         let decoded = NavigationPath.decodeFromStorage(cells.openBookIdRaw)
         #expect(decoded.isEmpty)
     }
@@ -189,21 +181,21 @@ struct AppRouterTests {
         let decoded = NavigationPath.decodeFromStorage(cells.openBookIdRaw)
         #expect(decoded.count == 1)
 
-        // Verify UUID identity round-trips through the encoded representation.
-        // Re-encode via applyRestored (sync path decode) to confirm the route
-        // carries the same ID after a full cycle.
+        
+        
+        
         let rawRoute = ReaderRoute.encodeForStorage(.epub(id))
         let roundTripped = ReaderRoute.decodeFromStorage(rawRoute)
         #expect(roundTripped == .epub(id))
     }
 
-    // MARK: - Scene restoration: applyRestored
+    
     //
-    // The app always launches into the Library home. `applyRestored` no longer
-    // reopens the last-open book — regardless of what the persisted scene cells
-    // contain, the navigation path is left at the Library root. A reader route
-    // pushed by a cold-launch deep link (via `handle(url:)`) before this runs is
-    // preserved, since `applyRestored` never mutates `path`.
+    
+    
+    
+    
+    
 
     @Test("applyRestored with empty cells leaves path empty")
     func applyRestoredEmptyCells() async {
@@ -215,7 +207,7 @@ struct AppRouterTests {
     @Test("applyRestored ignores a stored full NavigationPath and starts at the library")
     func applyRestoredIgnoresFullPath() async {
         let router = AppRouter()
-        // A path with one ReaderRoute persisted from a previous session.
+        
         var src = NavigationPath()
         src.append(ReaderRoute.epub(UUID()))
         let rawPath = NavigationPath.encodeForStorage(src)
@@ -257,7 +249,7 @@ struct AppRouterTests {
             bookStore: store
         )
 
-        // The book is never reopened, so onBookResolved must not fire.
+        
         #expect(resolvedBook == nil)
         #expect(router.path.isEmpty)
     }
@@ -265,8 +257,8 @@ struct AppRouterTests {
     @Test("applyRestored preserves a reader route already pushed by a deep link")
     func applyRestoredPreservesDeepLinkRoute() async {
         let router = AppRouter()
-        // Simulate a cold-launch deep link having pushed a route before the
-        // scene-restoration task runs.
+        
+        
         router.path.append(ReaderRoute.epub(UUID()))
         #expect(router.path.count == 1)
 
@@ -275,15 +267,15 @@ struct AppRouterTests {
         let rawPath = NavigationPath.encodeForStorage(src)
 
         await router.applyRestored(tabRaw: "", openBookIdRaw: rawPath, bookStore: nil)
-        // The deep-link route is untouched — restoration does not clobber it.
+        
         #expect(router.path.count == 1)
     }
 
     @Test("Bare-UUID legacy cell does NOT decode as ReaderRoute (guards legacy B branch)")
     func bareUUIDNotDecodedAsReaderRoute() {
-        // Mirrors RootViewSceneRestorationTests.readerRouteForwardCompatLegacyBareUuid.
-        // If this returns non-nil the Legacy B branch would be skipped — that
-        // would silently drop the bare-UUID restore for v0 upgrades.
+        
+        
+        
         let bare = UUID().uuidString
         #expect(ReaderRoute.decodeFromStorage(bare) == nil)
     }

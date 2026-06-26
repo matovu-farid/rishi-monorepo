@@ -25,9 +25,9 @@ public struct PremiumGateModifier: ViewModifier {
 
     public func body(content: Content) -> some View {
         switch entitlement {
-        case .pro:
+        case .subscribed:
             content
-        case .free:
+        case .unsubscribed:
             PaywallView(
                 feature: feature,
                 entitlement: entitlementFlag,

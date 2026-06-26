@@ -1,19 +1,19 @@
-//
-//  SceneRestorationStateTests.swift
-//  rishiTests
-//
-//  Phase 12 Plan 12-02 — covers the Codable codec + storage-key contract
-//  for `RishiSceneState`. Swift Testing only (no XCTest).
-//
-//  Why these tests exist:
-//  - @SceneStorage only persists primitives (String/Int/Bool/Data/URL), so
-//    the codec MUST round-trip through a `String` cell. Tests 1–3 pin that
-//    contract — including the empty + garbage cases that happen on first
-//    launch and on a JSON-shape break across app updates.
-//  - Tests 4 pins the storage keys as compile-time string constants so a
-//    rename can never silently invalidate every existing user's restored
-//    state.
-//
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import Testing
 import Foundation

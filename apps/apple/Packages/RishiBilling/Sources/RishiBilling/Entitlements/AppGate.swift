@@ -18,7 +18,7 @@ public enum AppGate: Equatable, Sendable {
     ) -> AppGate {
         guard authProbeComplete else { return .loading }
         guard isSignedIn else { return .signedOut }
-        if level == .pro { return .app }
+        if level == .subscribed { return .app }
         return entitlementResolved ? .paywall : .loading
     }
 }

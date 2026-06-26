@@ -1,21 +1,21 @@
-//
-//  MacReaderPrefsMenuViewModelTests.swift
-//  rishiTests
-//
-//  Phase 34 Plan 34-09 (SRP) — direct coverage for the view-model extracted
-//  from the Catalyst `ReaderPrefsMenuPublisher` ViewModifier. The modifier
-//  previously did service work inline (auth sign-out, StoreKit present, manual
-//  sync, TTS-settings seed/persist) and had no unit tests; this pins the
-//  decision logic the VM now owns:
-//   - seed loads the live voice/speed holder and arms write-back,
-//   - persist is guarded until the seed completes (no echoed save),
-//   - the menu-model voice/speed bindings persist on change,
-//   - the account payload routes each action to the right service and resolves
-//     the email (nil when empty so the submenu falls back to "Not signed in"),
-//   - manual "Sync Now" fires the sync closure.
-//
-//  Catalyst-gated to match the VM (the focused-value menu surface is Mac-only).
-//
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #if targetEnvironment(macCatalyst)
 
@@ -30,8 +30,8 @@ import RishiSync
 @Suite("MacReaderPrefsMenuViewModel decision logic")
 struct MacReaderPrefsMenuViewModelTests {
 
-    /// Records the service calls the VM fans out to, so tests assert the VM
-    /// routes UI intent to the right service without any real engine.
+    
+    
     @MainActor
     final class Spy {
         var loaded = TTSSettings(voice: "nova", speed: 1.5)
@@ -43,8 +43,8 @@ struct MacReaderPrefsMenuViewModelTests {
         var opened: [URL] = []
     }
 
-    /// Build a VM wired to a spy. Reader-default bindings target local boxes so
-    /// pass-through is observable; default email is a real address.
+    
+    
     private func makeVM(
         spy: Spy,
         email: String? = "a@b.com"
@@ -87,7 +87,7 @@ struct MacReaderPrefsMenuViewModelTests {
     func persistGuardedBeforeSeed() async {
         let spy = Spy()
         let (vm, _, _) = makeVM(spy: spy)
-        // Not seeded yet — the guard must skip the write entirely.
+        
         vm.persistAudio()
         await Task.yield()
         #expect(spy.saved.isEmpty)
@@ -101,7 +101,7 @@ struct MacReaderPrefsMenuViewModelTests {
         spy.saved.removeAll()
         vm.audioPrefs.voice = "shimmer"
         vm.persistAudio()
-        // The save is spun off in a Task; drain it.
+        
         await drain()
         #expect(spy.saved.count == 1)
         #expect(spy.saved.first?.voice == "shimmer")
@@ -138,7 +138,7 @@ struct MacReaderPrefsMenuViewModelTests {
     func syncNowFires() async {
         let spy = Spy()
         let (vm, _, autoSync) = makeVM(spy: spy)
-        autoSync.value = false   // manual sync must ignore this
+        autoSync.value = false   
         let model = vm.makeModel()
         model.onSyncNow()
         await drain()
@@ -171,7 +171,7 @@ struct MacReaderPrefsMenuViewModelTests {
         #expect(vm.makeAccountPayload().userEmail == nil)
     }
 
-    /// Drain spun-off `Task { ... }` work scheduled on the main actor.
+    
     private func drain() async {
         for _ in 0..<5 { await Task.yield() }
     }

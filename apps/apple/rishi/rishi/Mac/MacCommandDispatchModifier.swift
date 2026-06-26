@@ -1,12 +1,4 @@
-//
-//  MacCommandDispatchModifier.swift
-//  rishi
-//
-//  Phase D5 refactor — extracts the Mac command intent dispatch block from
-//  SignedInView into a self-contained ViewModifier. Reads the
-//  macCommandRouter from the SwiftUI environment and fires on every
-//  pendingIntent change via `.task(id:)`.
-//
+
 
 import SwiftUI
 import RishiReader
@@ -25,7 +17,7 @@ struct MacCommandDispatchModifier: ViewModifier {
             }
     }
 
-    // MARK: - Private
+    
 
     private func consume() {
         guard let cmdRouter = commandRouter, let intent = cmdRouter.pendingIntent else { return }
@@ -44,10 +36,10 @@ struct MacCommandDispatchModifier: ViewModifier {
             NotificationCenter.default.post(name: RishiCommand.focusSearch, object: nil)
 
         case .addBookmark:
-            // Phase 37 Plan 37-06 — reader-only command: post the notification
-            // and let the open reader screen toggle its current bookmark. No
-            // library navigation (unlike focusSearch, which also focuses the
-            // library search field when no reader is open).
+            
+            
+            
+            
             NotificationCenter.default.post(name: RishiCommand.addBookmark, object: nil)
 
         case .fontIncrease:

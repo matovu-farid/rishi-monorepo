@@ -24,7 +24,7 @@ public final class ReaderAppEntitlementFlag {
 
     /// Mirrors `reconciler.level == .pro`. Reading registers with the
     /// Observation framework so SwiftUI views update on change.
-    public var isGranted: Bool { reconciler.level == .pro }
+    public var isGranted: Bool { reconciler.level == .subscribed }
 
     /// Direct access to the reconciled level for callers that need to
     /// differentiate `.free` vs `.pro` (vs future `.trial` / `.team`).

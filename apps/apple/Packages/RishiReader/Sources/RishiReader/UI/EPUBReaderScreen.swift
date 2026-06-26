@@ -240,6 +240,37 @@ public struct EPUBReaderScreen: View {
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
     }
+    private var Reader: some View {
+        EPUBReaderView(
+            viewModel: viewModel,
+            onSelectionChange: { selection in
+                highlightInteractor.handleSelectionChange(selection)
+            },
+            onTap: { location in
+                let resolver = ReaderTapRegionResolver()
+                let decision = resolver.decide(
+                    at: location,
+                    in: readerAreaSize
+                )
+                switch decision {
+                case .toggleChrome:
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        chrome.toggle()
+                    }
+                case .nextPage:
+                    // Phase 18 Plan 18-02 — F-P1-01: the navigator
+                    // helper bumps the SwiftUI `.sensoryFeedback`
+                    // trigger and drives Readium forward. Readium
+                    // owns the real position; the counter is synthetic.
+                    pageNavigator.goNext()
+                case .previousPage:
+                    pageNavigator.goPrev()
+                }
+            },
+      
+            coordinatorRef: coordinatorRef
+        )
+    }
 
     public var body: some View {
         ZStack {
@@ -268,36 +299,7 @@ public struct EPUBReaderScreen: View {
             // recognizer fails-fast on pan slop, so horizontal swipes
             // flow uninterrupted to the engine's pan recognizer.
             GeometryReader { proxy in
-                EPUBReaderView(
-                    viewModel: viewModel,
-                    onSelectionChange: { selection in
-                        highlightInteractor.handleSelectionChange(selection)
-                    },
-                    onTap: { location in
-                        let resolver = ReaderTapRegionResolver()
-                        let decision = resolver.decide(
-                            at: location,
-                            in: readerAreaSize
-                        )
-                        switch decision {
-                        case .toggleChrome:
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                chrome.toggle()
-                            }
-                        case .nextPage:
-                            // Phase 18 Plan 18-02 — F-P1-01: the navigator
-                            // helper bumps the SwiftUI `.sensoryFeedback`
-                            // trigger and drives Readium forward. Readium
-                            // owns the real position; the counter is synthetic.
-                            pageNavigator.goNext()
-                        case .previousPage:
-                            pageNavigator.goPrev()
-                        }
-                    },
-                    onPageForward: { pageNavigator.goNext() },
-                    onPageBackward: { pageNavigator.goPrev() },
-                    coordinatorRef: coordinatorRef
-                )
+                Reader
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }

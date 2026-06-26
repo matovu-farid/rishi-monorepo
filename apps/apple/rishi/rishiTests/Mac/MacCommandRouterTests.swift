@@ -1,10 +1,10 @@
-//
-//  MacCommandRouterTests.swift
-//  rishiTests
-//
-//  Phase 12 Plan 12-01 — covers the Mac Catalyst command router and the
-//  centralised keyboard-shortcut table. Swift Testing only (no XCTest).
-//
+
+
+
+
+
+
+
 
 import Testing
 import SwiftUI
@@ -54,10 +54,10 @@ struct MacCommandRouterTests {
         }
     }
 
-    // Phase 37 Plan 37-06 — ⌘D add-bookmark. The shortcut binds to ⌘D and the
-    // `.addBookmark` intent round-trips through the router like every other
-    // menu command (the router-to-notification dispatch lives in
-    // MacCommandDispatchModifier and is hardware-verified).
+    
+    
+    
+    
     @Test("addBookmark shortcut is ⌘D and the intent round-trips through the router")
     func addBookmarkShortcutAndIntent() {
         #expect(RishiKeyboardShortcut.addBookmark.key == "d")

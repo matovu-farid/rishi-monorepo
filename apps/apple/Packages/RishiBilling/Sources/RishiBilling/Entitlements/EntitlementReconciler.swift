@@ -53,7 +53,7 @@ public final class EntitlementReconciler {
     private var onDevice: EntitlementLevel
     private var server: EntitlementLevel
 
-    public init(initial: EntitlementLevel = .free) {
+    public init(initial: EntitlementLevel = .unsubscribed) {
         self.onDevice = initial
         self.server = initial
         self.level = initial
@@ -96,14 +96,14 @@ public final class EntitlementReconciler {
     /// `recompute()` so the `@Observable` `level` publishes the change to
     /// any SwiftUI binding exactly once.
     public func reset() {
-        onDevice = .free
-        server = .free
+        onDevice = .unsubscribed
+        server = .unsubscribed
         recompute()
     }
 
     private func recompute() {
         // Most permissive wins (RESEARCH §3.4).
-        let next: EntitlementLevel = (onDevice == .pro || server == .pro) ? .pro : .free
+        let next: EntitlementLevel = (onDevice == .subscribed || server == .subscribed) ? .subscribed : .unsubscribed
         if next != level {
             Log.event("iap.reconciler.level_changed",
                       level: .info,

@@ -1,30 +1,14 @@
 //
-//  PositionSyncBindingSignpostTests.swift
-//  rishiTests
+
+
 //
-//  Phase 19 Plan 19-06 — F-P0-07 + F-P1-02 instrumentation.
+
 //
-//  Locked decision #4 keeps the 250ms poll for v1; this plan adds OSSignposter
-//  markers around each poll tick so Instruments can attribute the wake rate
-//  during cold-launch / reader-running captures. The push-based AsyncStream
-//  variant is documented as v1.1 backlog inside the binding source.
-//
-//  OSSignposter has no public read-side introspection API, so runtime
-//  "signpost-fires" assertions are not possible. The actionable contract is
-//  that each binding source file:
-//    1. imports os.signpost,
-//    2. declares the shared positionSyncSignposter (subsystem org.fidexa.rishi,
-//       category position-sync),
-//    3. calls beginInterval / endInterval with the named tick event inside the
-//       poll loop, and
-//    4. carries the single-line "v1.1 backlog" comment pointing at the ADR.
-//
-//  This test suite enforces those invariants via source-text reads — if a
-//  future refactor strips the signposter or the backlog pointer, the test
-//  goes red.
-//
-//  Swift Testing only.
-//
+
+
+
+
+
 
 import Testing
 import Foundation
@@ -32,11 +16,8 @@ import Foundation
 @Suite("PositionSyncBinding signpost instrumentation")
 struct PositionSyncBindingSignpostTests {
 
-    // MARK: - File locations
+    
 
-    /// Locate the binding source files relative to the test bundle. Tests run
-    /// from DerivedData, so we walk up from #filePath (the test file itself)
-    /// to find the sibling Reader/ directory.
     private static func bindingSource(_ name: String) throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
         let rishiTestsDir = testFile.deletingLastPathComponent()
@@ -46,7 +27,7 @@ struct PositionSyncBindingSignpostTests {
         return try String(contentsOf: fileURL, encoding: .utf8)
     }
 
-    // MARK: - EPUB binding
+    
 
     @Test("EPUB binding imports os.signpost + declares positionSyncSignposter")
     func test_epubBindingDeclaresSignposter() throws {
@@ -65,7 +46,7 @@ struct PositionSyncBindingSignpostTests {
         #expect(source.contains("endInterval"))
     }
 
-    // MARK: - PDF binding
+    
 
     @Test("PDF binding imports os.signpost + declares positionSyncSignposter")
     func test_pdfBindingDeclaresSignposter() throws {
@@ -84,7 +65,7 @@ struct PositionSyncBindingSignpostTests {
         #expect(source.contains("endInterval"))
     }
 
-    // MARK: - Backlog pointer
+    
 
     @Test("Both binding files carry the v1.1 backlog comment pointing at the ADR")
     func test_filesContainBacklogPointer() throws {
@@ -96,7 +77,7 @@ struct PositionSyncBindingSignpostTests {
         #expect(pdfSource.contains("SWIFT-CONCURRENCY-RULES.md"))
     }
 
-    // MARK: - 250ms cadence preservation (locked decision #4)
+    
 
     @Test("Both binding files preserve the 250ms poll cadence (v1 behavior)")
     func test_pollCadencePreserved() throws {

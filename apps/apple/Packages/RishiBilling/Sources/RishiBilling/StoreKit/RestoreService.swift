@@ -107,7 +107,7 @@ public actor RestoreService {
         }
 
         await MainActor.run {
-            self.reconciler.setOnDevice(.pro)
+            self.reconciler.setOnDevice(.subscribed)
         }
         Log.event(
             "iap.restore.granted",
@@ -135,7 +135,7 @@ public actor RestoreService {
             Log.event("iap.launch_reconcile.none", level: .info)
             return
         }
-        await MainActor.run { self.reconciler.setOnDevice(.pro) }
+        await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
         Log.event("iap.launch_reconcile.granted", level: .info,
                   data: ["count": "\(granted.count)",
                          "ids": granted.joined(separator: ",")])

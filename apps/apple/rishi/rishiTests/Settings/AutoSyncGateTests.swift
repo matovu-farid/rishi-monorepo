@@ -1,13 +1,13 @@
-//
-//  AutoSyncGateTests.swift
-//  rishiTests
-//
-//  Phase 33 Plan 33-01 — pins the pure auto-sync gate decision the three
-//  automatic-sync entry points read in Wave 2. `shouldRunAutoSync(_:)` is a
-//  #if-free free function (lives OUTSIDE the macCatalyst gate in
-//  ReaderPrefsMenuModel.swift) so it is testable on every target. Manual
-//  "Sync Now" never consults this gate. Swift Testing only.
-//
+
+
+
+
+
+
+
+
+
+
 
 import Testing
 @testable import rishi

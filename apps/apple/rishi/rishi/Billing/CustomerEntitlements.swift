@@ -1,0 +1,196 @@
+
+
+
+
+
+
+
+import Foundation
+
+
+import OSLog
+import StoreKit
+import RishiBilling
+
+private let logger = Logger(subsystem: "Rishi", category: "CustomerEntitlements")
+import Foundation
+
+public typealias SubscriptionGroupID = String
+
+
+@available(iOS 18.4, *)
+@MainActor @Observable
+public final class CustomerEntitlements {
+    
+    private var transactionUpdatesTask: Task<Void, any Error>?
+    private var statusUpdatesTask: Task<Void, any Error>?
+    
+    isolated deinit {
+        transactionUpdatesTask?.cancel()
+        statusUpdatesTask?.cancel()
+    }
+    
+    
+    
+    public static let shared: CustomerEntitlements = .init()
+    
+    public private(set) var ownedNonConsumables: Set<Product.ID> = []
+    
+    public private(set) var subscriptionStatuses: [SubscriptionGroupID: [SubscriptionStatus]] = [:]
+    
+    public private(set) var error: CustomerEntitlementsError?
+    
+    public func process(transaction: Transaction) async {
+            await transaction.finish()
+    }
+    
+    
+    
+    public func observeTransactionUpdates() {
+        transactionUpdatesTask = Task { [weak self] in
+            logger.debug("Observing transaction updates")
+            for await update in Transaction.updates {
+                guard let self else { return }
+                guard let transaction = await unwrapVerificationResult(update) else { continue }
+                await self.process(transaction: transaction)
+            }
+        }
+    }
+    
+    public func checkForCurrentEntitlements() async {
+        logger.debug("Checking for current entitlements")
+        for await transaction in Transaction.currentEntitlements {
+            guard let transaction = await unwrapVerificationResult(transaction) else {
+                logger.error("Encountered error while checking for current entitlements")
+                return
+            }
+            logger.log("""
+            Processing current entitlement \(transaction.id) for \
+            \(transaction.productID)
+            """)
+            Task.detached(priority: .background) {
+                await self.process(transaction: transaction)
+            }
+        }
+        logger.debug("Finished checking for current entitlements")
+    }
+    
+    public func checkForUnfinishedTransactions() async {
+        logger.debug("Checking for unfinished transactions")
+        for await transaction in Transaction.unfinished {
+            guard let transaction = await unwrapVerificationResult(transaction) else {
+                logger.error("Encountered error while checking for unfinished transactions")
+                return
+            }
+            logger.log("""
+            Processing unfinished transaction ID \(transaction.id) for \
+            \(transaction.productID)
+            """)
+            Task.detached(priority: .background) {
+                await self.process(transaction: transaction)
+            }
+        }
+        logger.debug("Finished checking for unfinished transactions")
+    }
+    
+    
+    
+    public func observeStatusUpdates() {
+        statusUpdatesTask = Task { [weak self] in
+            logger.debug("Observing status updates")
+            for await status in SubscriptionStatus.updates {
+                guard let self,
+                      let transaction = await unwrapVerificationResult(status.transaction),
+                      let subscriptionGroupID = transaction.subscriptionGroupID
+                else {
+                    continue
+                }
+                
+                let updatedStatuses: [SubscriptionStatus]
+                let currentStatuses = self.subscriptionStatuses[subscriptionGroupID]
+                if let currentStatuses {
+                    if let currentStatus = currentStatuses.first(where: {
+                        $0.transaction.unsafePayloadValue.ownershipType == transaction.ownershipType
+                    }) {
+                        updatedStatuses = currentStatuses.filter { $0 != currentStatus } + [status]
+                    } else {
+                        updatedStatuses = currentStatuses + [status]
+                    }
+                } else {
+                    updatedStatuses = [status]
+                }
+                
+                self.updateSubscriptionStatuses(for: subscriptionGroupID, statuses: updatedStatuses)
+            }
+        }
+    }
+    
+    public func checkCurrentStatuses() async {
+        logger.debug("Checking current statuses")
+        for await (subscriptionGroupID, statuses) in SubscriptionStatus.all {
+            updateSubscriptionStatuses(for: subscriptionGroupID, statuses: statuses)
+        }
+        logger.debug("Finished checking current statuses")
+    }
+    
+    
+    
+ 
+    private func unwrapVerificationResult(
+        _ verificationResult: VerificationResult<Transaction>
+    ) async -> Transaction? {
+        
+        
+        switch verificationResult {
+        case .verified(let t):
+            logger.debug("""
+            Transaction ID \(t.id) for \(t.productID) is verified
+            """)
+            return t
+        case .unverified(let t, let error):
+            
+            logger.error("""
+            Transaction ID \(t.id) for \(t.productID) is unverified: \(error)
+            """)
+            updateError(.invalidTransaction)
+            return nil
+        }
+    }
+    
+
+    private func updateSubscriptionStatuses(for subscriptionGroupID: String, statuses: [SubscriptionStatus]) {
+        self.subscriptionStatuses[subscriptionGroupID] = statuses
+    }
+    
+    private func updateError(_ error: CustomerEntitlementsError) {
+        self.error = error
+    }
+}
+
+public enum CustomerEntitlementsError: Error, Equatable {
+    case invalidTransaction
+    case failedToFetchPersistedData
+    case failedToUpdatePersistedData
+}
+
+
+@available(iOS 18.4, *)
+extension Sequence where Element == SubscriptionStatus {
+    var activeSubscriptionStatuses: [SubscriptionStatus] {
+        filter {
+            $0.state == .subscribed || $0.state == .inGracePeriod || $0.state == .inBillingRetryPeriod
+        }
+    }
+    
+    var highestSubscriptionStatus: SubscriptionStatus? {
+        get throws {
+
+            return self.first(where: {
+                EntitlementLevel.initialize(productId: $0.transaction.unsafePayloadValue.productID) == .subscribed
+
+            })
+        }
+    }
+    
+ 
+}

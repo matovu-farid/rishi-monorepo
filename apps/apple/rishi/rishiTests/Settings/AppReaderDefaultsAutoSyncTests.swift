@@ -1,12 +1,12 @@
-//
-//  AppReaderDefaultsAutoSyncTests.swift
-//  rishiTests
-//
-//  Phase 33 Plan 33-01 — pins the NEW persisted Auto Sync flag on
-//  `AppReaderDefaults`. Auto Sync defaults ON so existing users keep
-//  syncing on upgrade: an ABSENT UserDefaults key must read `true`, NOT
-//  the `bool(forKey:)` default of `false` (Pitfall 4). Swift Testing only.
-//
+
+
+
+
+
+
+
+
+
 
 import Testing
 import Foundation
@@ -16,8 +16,8 @@ import Foundation
 @Suite("AppReaderDefaults.autoSync")
 struct AppReaderDefaultsAutoSyncTests {
 
-    /// Build a fresh, isolated UserDefaults suite per test so the absent /
-    /// explicit-false / explicit-true cases never bleed into one another.
+    
+    
     private func makeSuite() -> (UserDefaults, String) {
         let name = "test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -31,8 +31,8 @@ struct AppReaderDefaultsAutoSyncTests {
 
         let prefs = AppReaderDefaults(defaults: defaults)
 
-        // No write has happened — the key is absent. Must read true, NOT the
-        // bool(forKey:) default of false.
+        
+        
         #expect(prefs.autoSync == true)
     }
 

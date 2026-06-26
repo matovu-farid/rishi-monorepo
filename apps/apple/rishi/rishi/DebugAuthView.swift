@@ -3,12 +3,12 @@ import SwiftUI
 import RishiCore
 import RishiAuth
 
-/// Debug-only verification view for Phase 3 wiring.
-///
-/// Renders buttons that exercise the ``AuthService`` methods + a status
-/// label bound to ``AuthService/currentUser``. NOT shipped in Release —
-/// the entire file is wrapped in `#if DEBUG`. Phase 15 plan 15-03 trimmed
-/// this surface down to the SIWA-only Apple-v1 contract.
+
+
+
+
+
+
 struct DebugAuthView: View {
 
     @Environment(\.rishiAuthService) private var authService: (any AuthService)?
@@ -69,9 +69,9 @@ struct DebugAuthView: View {
     }
 
     private func runAction(_ block: @escaping () async throws -> Void) {
-        // KEEP: DEBUG-only auth tool; isBusy is @State, refreshStatus
-        // touches UI state — must run on MainActor. Body chains awaits
-        // through the auth actor (signOut / deleteAccount).
+        
+        
+        
         Task {
             isBusy = true
             lastError = nil

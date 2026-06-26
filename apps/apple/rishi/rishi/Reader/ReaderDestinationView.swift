@@ -1,14 +1,14 @@
-//
-//  ReaderDestinationView.swift
-//  rishi
-//
-//  Phase 29 refactor — promotes destinationView(for:services:userId:) from
-//  SignedInView into its own View struct. Switches on ReaderRoute and wraps
-//  each case in NavigationLazyBook so the BookID->Book resolution stays lazy.
-//
-//  ReaderRoute.bookId already exists on the public enum (RishiReader package),
-//  so no local extension is needed.
-//
+
+
+
+
+
+
+
+
+
+
+
 
 import SwiftUI
 import RishiCore
@@ -24,10 +24,10 @@ struct ReaderDestinationView: View {
     @Environment(\.currentUser) private var currentUser
 
     var body: some View {
-        // Force-unwrap under the RootView.realBody non-nil guard contract:
-        // ReaderDestinationView is only mounted in LibraryTabView's
-        // .navigationDestination, which lives under the signed-in subtree where
-        // both env values are guaranteed present (RESEARCH Risk #1).
+        
+        
+        
+        
         let services = servicesEnv!
         let userId = currentUser!.id
         switch route {

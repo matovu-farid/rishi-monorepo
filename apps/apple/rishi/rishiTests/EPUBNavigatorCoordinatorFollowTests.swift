@@ -5,22 +5,6 @@ import ReadiumShared
 import RishiCore
 import RishiReader
 
-/// Deterministic guard for the read-aloud page-boundary halt (Bug 4).
-///
-/// When read-aloud auto-advances or the user presses Next across a Readium page
-/// boundary, the coordinator programmatically turns the page
-/// (`navigateToReadAloudParagraph`). An animated `go(to:)` delivers its
-/// `locationDidChange` ~300ms AFTER it returns, and the read-aloud target
-/// locator has no progression, so a single callback cannot be classified as
-/// programmatic-vs-user. The old code reset a per-call flag synchronously after
-/// `go(to:)`, so the delayed callback was read as a USER page-turn and fired
-/// `onUserNavigation -> stopReadAloud`, halting playback at the boundary.
-///
-/// The fix is session-scoped: while a read-aloud session is following the text
-/// (`isFollowingReadAloud == true`), every navigator location change is
-/// auto-follow and must NOT fire `onUserNavigation`. These tests drive the
-/// coordinator's location-change handling directly (no live `Navigator`
-/// needed) and assert that invariant in both states.
 @Suite("EPUB read-aloud page-boundary follow (Bug 4)", .serialized)
 @MainActor
 struct EPUBNavigatorCoordinatorFollowTests {

@@ -180,7 +180,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
             )
             if resp.verified {
                 await tx.finish()
-                await MainActor.run { self.reconciler.setOnDevice(.pro) }
+                await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
                 Log.event("iap.update.granted_and_finished", level: .info,
                           data: ["tx": "\(tx.id)", "source": source])
             } else {
@@ -240,7 +240,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 
         if resp.verified {
             await tx.finish()
-            await MainActor.run { self.reconciler.setOnDevice(.pro) }
+            await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
             Log.event("iap.purchase.granted", level: .info,
                       data: ["tx": "\(tx.id)", "productId": productId])
             return .granted(premiumUntil: resp.premiumUntil)

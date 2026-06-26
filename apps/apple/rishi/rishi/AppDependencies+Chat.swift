@@ -3,7 +3,7 @@ import RishiCore
 import RishiChat
 import RishiVoice
 
-// MARK: - Chat / voice forwarder accessors
+
 
 extension AppDependencies {
     var conversationStore: any ConversationStore { services!.conversationStore }

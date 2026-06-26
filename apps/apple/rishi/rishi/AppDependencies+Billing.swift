@@ -1,7 +1,7 @@
 import Foundation
 import RishiBilling
 
-// MARK: - Billing forwarder accessors
+
 
 extension AppDependencies {
     var entitlementService: EntitlementService { services!.entitlementService }

@@ -6,7 +6,7 @@ import RishiReader
 import RishiSearch
 import GRDB
 
-// MARK: - Persistence / library forwarder accessors
+
 
 extension AppDependencies {
     var dbQueue: any DatabaseWriter { services!.dbQueue }

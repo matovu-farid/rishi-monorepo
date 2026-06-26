@@ -1,22 +1,22 @@
-//
-//  PDFReadAloudNextCrossesPageTests.swift
-//  rishiTests
-//
-//  PDF analog of ReaderTTSBridgeNextPrevTests.nextAtEndCrossesChapter /
-//  nextAtEndOfBookStops. The EPUB tests prove that pressing Next on the LAST
-//  paragraph of a chapter crosses into the next chapter (reusing the same
-//  continuation source auto-advance uses) rather than clamping/stopping. PDFs
-//  had NO continuation source, so the reported bug was: pressing Next on the
-//  last paragraph of a PDF page just stopped at the page boundary.
-//
-//  These tests drive the real ReaderTTSBridge.next() with a REAL multi-page
-//  PDFReaderViewModel wired as the exhaustion source
-//  (`vm.paragraphsForFollowingPage()`) — the exact wiring
-//  ReadAloudController.startPDF installs — so the page-boundary crossing is
-//  exercised end-to-end, not via a stub. The FakeTTSEngine `.holds` script
-//  keeps the engine `.playing` so only the explicit next() calls move the play
-//  head (no auto-advance race), mirroring the EPUB bridge tests.
-//
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import Foundation
 import Testing
@@ -42,9 +42,9 @@ struct PDFReadAloudNextCrossesPageTests {
         let fontSize: CGFloat
     }
 
-    /// Two vertically-separated text blocks -> two paragraphs on one page, so a
-    /// page has a real "last paragraph" to press Next on (parity with the EPUB
-    /// test's two-paragraph chapter).
+    
+    
+    
     private func twoParagraphPage(_ marker: String) -> [Line] {
         [
             Line(text: "\(marker) first paragraph opens here", x: 72, y: 720, fontSize: 12),
@@ -90,11 +90,11 @@ struct PDFReadAloudNextCrossesPageTests {
         return vm
     }
 
-    /// Parity with auto-advance: pressing Next on the LAST paragraph of a PDF
-    /// page must cross into the next page (its index resets to "0"), reusing the
-    /// same continuation source auto-advance uses, not clamp at the page's last
-    /// paragraph. Reproduces the reported bug where the forward button refused
-    /// to cross the PDF page boundary.
+    
+    
+    
+    
+    
     @Test("next() at the last paragraph of a page crosses into the next page")
     func nextAtEndCrossesPage() async throws {
         let url = makeTempURL("bridge-cross")
@@ -116,8 +116,8 @@ struct PDFReadAloudNextCrossesPageTests {
         await env.bridge.next()
         await waitUntil(timeout: 2) { startedPassageIds(env.engine).last == "1" }
 
-        // At the last paragraph of page 0: cross into page 1 (its index resets to
-        // "0"), rather than clamping at "1".
+        
+        
         await env.bridge.next()
         await waitUntil(timeout: 3) { startedPassageIds(env.engine) == ["0", "1", "0"] }
 
@@ -127,14 +127,14 @@ struct PDFReadAloudNextCrossesPageTests {
         #expect(vm.pageIndex == 1, "the live page must follow narration onto page 1, was \(vm.pageIndex)")
     }
 
-    /// At the last paragraph of the LAST page (continuation source dry), Next
-    /// must not fabricate an out-of-range passage; it stops cleanly. Mirrors
-    /// nextAtEndOfBookStops.
+    
+    
+    
     @Test("next() at the last paragraph of the last page does not start out-of-range")
     func nextAtEndOfDocumentStops() async throws {
         let url = makeTempURL("bridge-end")
         defer { try? FileManager.default.removeItem(at: url) }
-        try writeMultiPageTextPDF(to: url, pages: [twoParagraphPage("Alpha")]) // single page
+        try writeMultiPageTextPDF(to: url, pages: [twoParagraphPage("Alpha")]) 
 
         let vm = await loadedVM(url: url)
         let doc = try #require(vm.document)
@@ -152,7 +152,7 @@ struct PDFReadAloudNextCrossesPageTests {
         await waitUntil(timeout: 2) { startedPassageIds(env.engine).last == "1" }
 
         await env.bridge.next()
-        // Give the exhaustion path time to query the (empty) following page.
+        
         await waitUntil(timeout: 2) { false }
 
         await env.bridge.stop()

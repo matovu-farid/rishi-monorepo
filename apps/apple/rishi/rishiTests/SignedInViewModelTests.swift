@@ -1,7 +1,7 @@
-//
-//  SignedInViewModelTests.swift
-//  rishiTests
-//
+
+
+
+
 
 import Testing
 import RishiCore
@@ -43,12 +43,12 @@ struct SignedInViewModelTests {
         #expect(model.showSettings == true)
     }
 
-    // Phase 32 Plan 32-04 — the in-app gear + Settings sheet are gated OFF on
-    // Mac (the native menu-bar window from 32-03 is the sole Mac entry point),
-    // but the iOS Settings flow must stay byte-identical: the gear callback
-    // still calls requestSettings(), which flips showSettings so LibraryTabView
-    // presents the SettingsSheet (gated `#if !targetEnvironment(macCatalyst)`).
-    // This pins that iOS seam so the Mac gating can't silently break iOS.
+    
+    
+    
+    
+    
+    
     @Test("iOS Settings flow stays wired: requestSettings() flips showSettings")
     func iosSettingsFlowStaysWired() {
         let model = SignedInViewModel()
@@ -65,9 +65,9 @@ struct SignedInViewModelTests {
         #expect(model.selectedConversation?.id == convo.id)
     }
 
-    // SYNC: on signed-in shell appearance we must show cached rows first,
-    // then pull the remote library, then re-read the local store so freshly
-    // synced books appear. Locks the refresh -> sync -> refresh ordering.
+    
+    
+    
     @Test("performInitialLibrarySync refreshes, syncs, then refreshes again")
     func initialLibrarySyncOrder() async {
         let model = SignedInViewModel()

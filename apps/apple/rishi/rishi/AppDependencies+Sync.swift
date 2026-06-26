@@ -2,7 +2,7 @@ import Foundation
 import RishiSync
 import RishiDB
 
-// MARK: - Sync forwarder accessors
+
 
 extension AppDependencies {
     var syncMetadataStore: GRDBSyncMetadataStore { services!.syncMetadataStore }

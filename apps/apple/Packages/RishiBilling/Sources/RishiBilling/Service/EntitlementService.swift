@@ -38,7 +38,7 @@ public actor EntitlementService {
 
         // Hydrate from cache. Missing / unknown rawValue → .free.
         let cachedRaw = defaults.string(forKey: Self.defaultsKey)
-        let cached = cachedRaw.flatMap(EntitlementLevel.init(rawValue:)) ?? .free
+        let cached = cachedRaw.flatMap(EntitlementLevel.init(rawValue:)) ?? .unsubscribed
         self.latest = cached
 
         var continuation: AsyncStream<EntitlementLevel>.Continuation!
@@ -89,9 +89,9 @@ public actor EntitlementService {
     /// shows free), and yields `.free` to the stream. Always emits even when
     /// already `.free`, since sign-out must guarantee a clean baseline.
     public func clearCache() {
-        latest = .free
-        defaults.set(EntitlementLevel.free.rawValue, forKey: Self.defaultsKey)
-        continuation.yield(.free)
+        latest = .unsubscribed
+        defaults.set(EntitlementLevel.unsubscribed.rawValue, forKey: Self.defaultsKey)
+        continuation.yield(.unsubscribed)
         Log.event("billing.entitlement.cleared", level: .info)
     }
 

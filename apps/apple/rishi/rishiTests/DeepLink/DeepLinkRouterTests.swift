@@ -1,14 +1,4 @@
-//
-//  DeepLinkRouterTests.swift
-//  rishiTests
-//
-//  Phase 12 Plan 12-03 — exhaustive URL → DeepLinkDestination resolution
-//  tests covering both the `rishi://` custom scheme and the
-//  `https://rishi.fidexa.org/...` Universal Link variant.
-//
-//  Pure-Swift, no IO, no actors. Mirrors WORKER-TICKETS Ticket 2 for the
-//  Universal Link path layout.
-//
+
 
 import Testing
 import Foundation

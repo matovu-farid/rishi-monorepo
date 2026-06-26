@@ -1,11 +1,4 @@
-//
-//  DeepLinkHandlingModifier.swift
-//  rishi
-//
-//  Phase D5 refactor — extracts the `.onOpenURL` deep-link wiring block from
-//  LibraryTabView into a self-contained ViewModifier. Sets the three router
-//  callbacks and calls router.handle(url:bookStore:conversationStore:).
-//
+
 
 import SwiftUI
 import RishiCore
@@ -30,7 +23,7 @@ struct DeepLinkHandlingModifier: ViewModifier {
                     model.present(conversation: convo)
                 }
                 router.onFileURL = { [libraryVM] fileURL in
-                    // KEEP: import dropped file then refresh library; MainActor
+                    
                     Task {
                         _ = await services.importCoordinator.importBooks([fileURL])
                         await libraryVM.refresh()

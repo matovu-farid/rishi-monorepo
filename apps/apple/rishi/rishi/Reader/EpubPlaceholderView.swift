@@ -1,14 +1,8 @@
-//
-//  EpubPlaceholderView.swift
-//  rishi
-//
 
 import SwiftUI
 import RishiCore
 
-/// Catches `.mobi` / `.azw3` taps — those formats need a converter step
-/// that isn't on the v1 milestone. Shipped here so the library never
-/// silently no-ops when the user taps an unsupported book.
+
 struct EpubPlaceholderView: View {
     let book: Book
     let onClose: () -> Void

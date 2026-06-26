@@ -1,7 +1,7 @@
 import Foundation
 import RishiAudio
 
-// MARK: - Audio / TTS forwarder accessors
+
 
 extension AppDependencies {
     var audioCoordinator: AudioSessionCoordinator { services!.audioCoordinator }

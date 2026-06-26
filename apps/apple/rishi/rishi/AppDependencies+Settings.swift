@@ -2,7 +2,7 @@ import Foundation
 import RishiSettings
 import RishiOnboarding
 
-// MARK: - Settings / onboarding / telemetry forwarder accessors
+
 
 extension AppDependencies {
     var telemetryStore: any TelemetryStore { services!.telemetryStore }

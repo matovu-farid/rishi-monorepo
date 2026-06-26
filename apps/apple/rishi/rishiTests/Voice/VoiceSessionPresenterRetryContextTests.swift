@@ -1,18 +1,4 @@
-//
-//  VoiceSessionPresenterRetryContextTests.swift
-//  rishiTests
-//
-//  Regression test for the voice-retry context-loss bug. When a session
-//  fails and the user taps Retry, the retried session must preserve the
-//  book-context snapshot (title/author/page) and the prefilled quote that the
-//  original `start(bookId:initialQuote:bookContext:)` was given — not restart
-//  with only `bookId`, which produced a degraded session.
-//
-//  Drives the deterministic, no-network failure path: a `userIdProvider`
-//  that returns `nil` makes `start` set status `.failed` and return early
-//  AFTER storing the three context fields, so the test can assert they survive
-//  across `retry()` without touching the conversation lookup or the worker.
-//
+
 
 import Testing
 import Foundation
@@ -50,8 +36,8 @@ struct VoiceSessionPresenterRetryContextTests {
         func messageDidUpdate(_ id: MessageID) async {}
     }
 
-    /// Presenter whose `userIdProvider` returns `nil`, so `start` fails
-    /// synchronously (no network, no lookup) right after storing context.
+    
+    
     private func makeSignedOutPresenter() -> VoiceSessionPresenter {
         let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
         let worker = WorkerClient(
@@ -111,8 +97,8 @@ struct VoiceSessionPresenterRetryContextTests {
 
         await presenter.retry()
 
-        // The retried (also-failing) session must have re-applied the same
-        // context, not dropped it back to bookId-only.
+        
+        
         #expect(presenter.currentBookContext == snapshot)
         #expect(presenter.pendingInitialQuote == quote)
         #expect(presenter.currentBookId == bookId)

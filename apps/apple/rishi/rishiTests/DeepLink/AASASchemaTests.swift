@@ -1,11 +1,4 @@
-//
-//  AASASchemaTests.swift
-//  rishiTests
-//
-//  Phase 12 Plan 12-03 — round-trip + decode tests for the AASA Codable
-//  shape, pinned against the WORKER-TICKETS Ticket 2 canonical JSON so
-//  the iOS-side parser and the worker-hosted file cannot drift.
-//
+
 
 import Testing
 import Foundation
@@ -15,9 +8,7 @@ import Foundation
 @Suite("AASA schema parity with worker ticket")
 struct AASASchemaTests {
 
-    /// EXACT shape from WORKER-TICKETS Ticket 2. Any drift between this
-    /// fixture and what `rishi.fidexa.org/.well-known/apple-app-site-association`
-    /// returns means Universal Links will silently fail.
+
     static let canonicalJSON = """
     {
       "applinks": {

@@ -1,18 +1,18 @@
 //
-//  VoiceSessionPresenterFailureAlertTests.swift
-//  rishiTests
+
+
 //
-//  Regression for the native-alert migration: a startup failure (e.g. mic
-//  permission already denied, which `RealtimeVoiceSession.start()` reports
-//  SYNCHRONOUSLY) must dismiss the voice cover AND must never leave the cover
-//  stranded on a repeat attempt.
+
+
+
+
 //
-//  The bug: `enterFailure` keyed its idempotency guard off `failure` (the
-//  alert binding). On the first failure the alert never actually presented
-//  (it collided with the cover dismissal on the same view), so `clearFailure`
-//  never ran and `failure` stayed non-nil. The SECOND press then hit the
-//  `guard failure == nil` early-return BEFORE flipping `isPresenting` off,
-//  leaving the cover mounted over a blank `Color.clear` — the "black screen".
+
+
+
+
+
+
 //
 
 import Testing
@@ -88,13 +88,13 @@ struct VoiceSessionPresenterFailureAlertTests {
     func repeatedMicDenied_doesNotStrandCover() async {
         let presenter = makePresenter()
 
-        // Press 1.
+        
         await presenter.start(bookId: UUID())
         #expect(presenter.isPresenting == false)
 
-        // Press 2, WITHOUT the alert having been dismissed (in the bug the
-        // alert never showed, so clearFailure() never ran). The cover must
-        // still end up dismissed rather than stuck on a blank screen.
+        
+        
+        
         await presenter.start(bookId: UUID())
         #expect(presenter.isPresenting == false)
     }
