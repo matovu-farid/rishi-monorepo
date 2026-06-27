@@ -167,6 +167,8 @@ public actor USearchBookSearch: BookSearch {
         case let .indexing(d, t): return "indexing(\(d)/\(t))"
         case .ready: return "ready"
         case let .failed(reason): return "failed(\(reason))"
+        case .staleIndexing:
+            return "stale indexing"
         }
     }
 }

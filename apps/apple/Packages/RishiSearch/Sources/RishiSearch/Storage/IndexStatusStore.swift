@@ -13,6 +13,7 @@ import Foundation
 /// also `.notIndexed` (treated as "no usable index yet") rather than
 /// throwing, because the search path needs a single sentinel to fall back
 /// to without exception handling on the read path.
+
 public struct IndexStatusStore: Sendable {
     public let url: URL
 
@@ -58,6 +59,11 @@ public struct IndexStatusStore: Sendable {
                 self.chunksDone = nil
                 self.chunksTotal = nil
                 self.reason = nil
+            case .staleIndexing:
+                self.state = "notIndexed"
+                self.chunksDone = nil
+                self.chunksTotal = nil
+                self.reason = "Stale indexing"
             case let .indexing(done, total):
                 self.state = "indexing"
                 self.chunksDone = done
@@ -73,12 +79,29 @@ public struct IndexStatusStore: Sendable {
                 self.chunksDone = nil
                 self.chunksTotal = nil
                 self.reason = reason
+                
             }
+        }
+        
+        private enum StatusError:Error, CustomStringConvertible {
+            var description: String {
+                switch self {
+                case .FailedToParseISO8601String:
+                    "Failed to parse ISO8601 String to a date"
+                }
+            }
+            
+            case FailedToParseISO8601String
+            
         }
 
         func toStatus() -> BookSearchStatus {
             switch state {
             case "indexing":
+                if let timeInterval = ISO8601DateFormatter().date(from: updatedAt)?.distance(to: Date.now), timeInterval > 5 * 60 {
+                    return .staleIndexing
+                }
+
                 return .indexing(
                     chunksDone: chunksDone ?? 0,
                     chunksTotal: chunksTotal ?? 0

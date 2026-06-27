@@ -14,6 +14,9 @@ public enum BookSearchStatus: Sendable, Equatable {
     /// Index build is in progress. `chunksDone` / `chunksTotal` lets the
     /// UI render a progress hint without coupling to the indexer's internals.
     case indexing(chunksDone: Int, chunksTotal: Int)
+    
+    /// Indexing process was killed previously and did not complete
+    case staleIndexing
 
     /// Index is on disk and ready for queries.
     case ready
@@ -32,8 +35,14 @@ public extension BookSearchStatus {
     /// be restarted, a `.failed` build must not be retried on every open
     /// (avoids thrash), and `.ready` needs no work.
     var shouldBackfillIndex: Bool {
-        if case .notIndexed = self { return true }
-        return false
+        switch self {
+        case .notIndexed, .staleIndexing:
+            return true
+        default:
+            return false
+            
+        }
+   
     }
 
     /// Integer completion percent for an in-progress build, else nil.

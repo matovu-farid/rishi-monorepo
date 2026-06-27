@@ -43,14 +43,7 @@ struct IndexingIndicatorChip: View {
         .animation(.easeInOut(duration: 0.25), value: status.indicatorText)
         .task(id: bookId) {
             
-            
-            
-            
-            
-            
-            
-            
-            
+      
             
             let maxConsecutiveNotIndexed = 10
             var consecutiveNotIndexed = 0
@@ -58,7 +51,7 @@ struct IndexingIndicatorChip: View {
                 let current = await bookSearch.status(bookId: bookId)
                 status = current
                 switch current {
-                case .ready, .failed:
+                case .ready, .failed, .staleIndexing:
                     return
                 case .indexing:
                     consecutiveNotIndexed = 0
