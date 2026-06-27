@@ -35,7 +35,7 @@ struct ReadingNowShelf: View {
             }
         }
         .padding(.vertical, RishiSpacing.m)
-        .background(RishiColor.surface)
+       
     }
 
     @ViewBuilder

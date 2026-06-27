@@ -32,31 +32,37 @@ struct LibraryView: View {
     }
 
     public var body: some View {
-        Group {
-            if books.isEmpty {
-                LibraryEmptyStateView()
-            } else {
-                ScrollView {
-                    if !readingNow.isEmpty {
-                        ReadingNowShelf(
-                            entries: readingNow,
+        ZStack{
+            Color(RishiColor.accent)
+                .opacity(0.1)
+                .ignoresSafeArea()
+            
+            Group {
+                if books.isEmpty {
+                    LibraryEmptyStateView()
+                } else {
+                    ScrollView {
+                        if !readingNow.isEmpty {
+                            ReadingNowShelf(
+                                entries: readingNow,
+                                coverURL: coverURL,
+                                onOpen: onOpen
+                            )
+                        }
+                        LibraryGrid(
+                            books: books,
+                            positionLookup: positionLookup,
                             coverURL: coverURL,
-                            onOpen: onOpen
+                            onOpen: onOpen,
+                            onDelete: onDelete
                         )
                     }
-                    LibraryGrid(
-                        books: books,
-                        positionLookup: positionLookup,
-                        coverURL: coverURL,
-                        onOpen: onOpen,
-                        onDelete: onDelete
-                    )
+                    .tint(RishiColor.accent)
+                    
                 }
-                .tint(RishiColor.accent)
-                
             }
+            .navigationTitle("Library")
         }
-        .navigationTitle("Library")
     }
 }
 
