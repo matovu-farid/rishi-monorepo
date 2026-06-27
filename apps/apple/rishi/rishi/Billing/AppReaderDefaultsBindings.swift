@@ -1,24 +1,16 @@
-
-
 import Foundation
-import SwiftUI
 import RishiReader
-
+import SwiftUI
 
 @MainActor
 @Observable
 final class AppReaderDefaults {
 
     private static let themeKey = "reader.defaults.theme"
-    private static let fontKey  = "reader.defaults.fontFamily"
-    
-    
-    
-    
+    private static let fontKey = "reader.defaults.fontFamily"
+
     private static let pdfViewModeKey = "reader.defaults.pdfViewMode"
-    
-    
-    
+
     private static let autoSyncKey = "reader.defaults.autoSync"
 
     private let defaults: UserDefaults
@@ -30,7 +22,8 @@ final class AppReaderDefaults {
     var theme: ReaderTheme {
         get {
             guard let raw = defaults.string(forKey: Self.themeKey),
-                  let theme = ReaderTheme(rawValue: raw) else { return .light }
+                let theme = ReaderTheme(rawValue: raw)
+            else { return .light }
             return theme
         }
         set { defaults.set(newValue.rawValue, forKey: Self.themeKey) }
@@ -39,26 +32,28 @@ final class AppReaderDefaults {
     var fontFamily: ReaderFontFamily {
         get {
             guard let raw = defaults.string(forKey: Self.fontKey),
-                  let font = ReaderFontFamily(rawValue: raw) else { return .system }
+                let font = ReaderFontFamily(rawValue: raw)
+            else { return .system }
             return font
         }
         set { defaults.set(newValue.rawValue, forKey: Self.fontKey) }
     }
 
- 
     var pdfViewMode: PDFViewModeSetting {
         get {
             guard let raw = defaults.string(forKey: Self.pdfViewModeKey),
-                  let mode = PDFViewModeSetting(rawValue: raw) else { return .automatic }
+                let mode = PDFViewModeSetting(rawValue: raw)
+            else { return .automatic }
             return mode
         }
         set { defaults.set(newValue.rawValue, forKey: Self.pdfViewModeKey) }
     }
 
-
     var autoSync: Bool {
         get {
-            guard defaults.object(forKey: Self.autoSyncKey) != nil else { return true }
+            guard defaults.object(forKey: Self.autoSyncKey) != nil else {
+                return true
+            }
             return defaults.bool(forKey: Self.autoSyncKey)
         }
         set { defaults.set(newValue, forKey: Self.autoSyncKey) }

@@ -386,7 +386,7 @@ enum ServiceGraphFactory {
 
         
         let entitlementService = EntitlementService(workerClient: workerClient)
-        let manageSubscriptionPresenter = await MainActor.run {
+        let _ = await MainActor.run {
             ManageSubscriptionPresenter()
         }
 
@@ -397,15 +397,9 @@ enum ServiceGraphFactory {
             return WorkerReceiptVerifier(client: workerClient)
         }()
         
+
         
-        
-        
-        
-        
-        
-        
-        
-        let cachedEntitlement = await entitlementService.snapshot()
+        let _ = await entitlementService.snapshot()
         let reconciler = await MainActor.run {
             let reconciler = EntitlementReconciler()
 //            reconciler.setServer(cachedEntitlement)

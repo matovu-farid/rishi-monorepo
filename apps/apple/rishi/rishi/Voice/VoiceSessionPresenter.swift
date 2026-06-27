@@ -1,96 +1,32 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import Foundation
 import Observation
-import RishiCore
-import RishiAudio
 import RishiAPI
+import RishiAudio
 import RishiChat
+import RishiCore
+import RishiLogging
 import RishiSearch
 import RishiVoice
-import RishiLogging
-
-
 
 @MainActor
 @Observable
 final class VoiceSessionPresenter {
 
-    
-    
     let state: VoiceSessionState
 
-    
-    
-    
-    
-    
     private(set) var isPresenting: Bool = false
 
-    
-    
-    
-    
-    
-    
     private(set) var failure: VoiceFailureAlert?
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private(set) var pendingFailure: VoiceFailureAlert?
 
-    
     private(set) var session: RealtimeVoiceSession?
 
-    
-    
-    
-    
     private(set) var currentBookId: BookID?
 
-    
-    
-    
-    
     private(set) var pendingInitialQuote: String?
 
-    
-    
-    
-    
-    
     private(set) var currentBookContext: BookContextSnapshot?
-
-    
 
     private let coordinator: AudioSessionCoordinator
     private let workerClient: WorkerClient
@@ -100,26 +36,11 @@ final class VoiceSessionPresenter {
     private let dirtyHook: any VoiceTranscriptDirtyHook
     private let micGate: any MicPermissionGate
 
-    
-    
-    
-    
-    
     private let bookSearch: (any BookSearch)?
     private let embedderPrewarm: (@Sendable () async -> Void)?
 
-    
-    
-    
-    
-    
-    
-    
-    
     private let clientFactory: @MainActor () -> any RealtimeClientAPI
     private let keyFetcherFactory: @MainActor () -> any EphemeralKeyFetching
-
-    
 
     private var bridgeTask: Task<Void, Never>?
 
@@ -146,39 +67,23 @@ final class VoiceSessionPresenter {
         self.micGate = micGate
         self.bookSearch = bookSearch
         self.embedderPrewarm = embedderPrewarm
-        
-        
-        
+
         self.clientFactory = clientFactory ?? { RealtimeAPIAdapter() }
-        self.keyFetcherFactory = keyFetcherFactory ?? { EphemeralKeyFetcher(workerClient: workerClient) }
+        self.keyFetcherFactory =
+            keyFetcherFactory ?? {
+                EphemeralKeyFetcher(workerClient: workerClient)
+            }
     }
 
-    
-
-    
-    
-    
-    
-    
     func start(
         bookId: BookID?,
         initialQuote: String? = nil,
         bookContext: BookContextSnapshot? = nil
     ) async {
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
         guard !isPresenting else { return }
         isPresenting = true
-        
-        
-        
+
         failure = nil
         pendingFailure = nil
         currentBookId = bookId
@@ -191,8 +96,6 @@ final class VoiceSessionPresenter {
             return
         }
 
-        
-        
         state.reset()
 
         let conversation: Conversation
@@ -202,19 +105,18 @@ final class VoiceSessionPresenter {
                 bookId: bookId
             )
         } catch {
-            Log.event("voice.presenter.lookup.failed", level: .error, data: [
-                "error": String(describing: error),
-            ])
+            Log.event(
+                "voice.presenter.lookup.failed",
+                level: .error,
+                data: [
+                    "error": String(describing: error)
+                ]
+            )
             state.recordError(String(describing: error))
             enterFailure(reason: .unknown(String(describing: error)))
             return
         }
 
-        
-        
-        
-        
-        
         let adapter = clientFactory()
         let fetcher = keyFetcherFactory()
         let bridge = VoiceTranscriptBridge(
@@ -222,20 +124,17 @@ final class VoiceSessionPresenter {
             dirtyHook: dirtyHook
         )
 
-        
-        
-        
-        
-        
-        let responderFactory: RealtimeVoiceSession.BookContextResponderFactory? = bookSearch.map { search in
-            return { @Sendable bookId in
-                BookContextResponder(
-                    client: adapter,
-                    search: search,
-                    bookId: bookId
-                )
+        let responderFactory:
+            RealtimeVoiceSession.BookContextResponderFactory? = bookSearch.map {
+                search in
+                return { @Sendable bookId in
+                    BookContextResponder(
+                        client: adapter,
+                        search: search,
+                        bookId: bookId
+                    )
+                }
             }
-        }
 
         let session = RealtimeVoiceSession(
             micGate: micGate,
@@ -248,17 +147,10 @@ final class VoiceSessionPresenter {
         )
         self.session = session
 
-        
-        
         let conversationId = conversation.id
         let presenterState = state
         bridgeTask?.cancel()
-        
-        
-        
-        
-        
-        
+
         bridgeTask = Task {
             await bridge.consume(
                 stream: adapter.transcriptStream(),
@@ -267,15 +159,6 @@ final class VoiceSessionPresenter {
             )
         }
 
-        
-        
-        
-        
-        
-        
-        
-        
-        
         await session.start(
             language: "en",
             bookId: bookId,
@@ -285,23 +168,11 @@ final class VoiceSessionPresenter {
             activeParagraphText: bookContext?.activeParagraphText
         )
 
-        
-        
-        
-        
-        
-        
-        
-        
-        
         if case .failed(let reason) = state.status {
             enterFailure(reason: reason)
         }
     }
 
-    
-    
-    
     func end() async {
         guard isPresenting else { return }
         await session?.end()
@@ -314,11 +185,6 @@ final class VoiceSessionPresenter {
         currentBookContext = nil
     }
 
-    
-    
-    
-    
-    
     func retry() async {
         let bookId = currentBookId
         let quote = pendingInitialQuote
@@ -327,11 +193,6 @@ final class VoiceSessionPresenter {
         await start(bookId: bookId, initialQuote: quote, bookContext: context)
     }
 
-    
-    
-    
-    
-    
     func clearFailure() {
         failure = nil
         pendingFailure = nil
@@ -345,37 +206,20 @@ final class VoiceSessionPresenter {
         state.reset()
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     func enterFailure(reason: VoiceSessionFailureReason) {
         guard failure == nil, pendingFailure == nil else { return }
         state.apply(status: .failed(reason: reason))
         let alert = VoiceFailureAlert(reason: reason, message: state.lastError)
         if isPresenting {
-            
-            
+
             pendingFailure = alert
             isPresenting = false
         } else {
-            
+
             failure = alert
         }
     }
 
-    
-    
-    
     func promotePendingFailure() {
         guard let pending = pendingFailure else { return }
         pendingFailure = nil

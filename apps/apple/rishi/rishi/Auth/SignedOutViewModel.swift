@@ -1,20 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import Foundation
 import Observation
 import RishiCore
@@ -27,20 +10,7 @@ final class SignedOutViewModel {
         case idle
         case loading
         case error(String)
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
         case signedIn
     }
 
@@ -51,15 +21,10 @@ final class SignedOutViewModel {
         return false
     }
 
-    
-    
-    
-    
-    
     var isSignInButtonDisabled: Bool {
         switch state {
         case .loading, .signedIn: return true
-        case .idle, .error:       return false
+        case .idle, .error: return false
         }
     }
 
@@ -70,35 +35,18 @@ final class SignedOutViewModel {
 
     private(set) var authService: (any AuthService)?
 
-    
-    
-    
-    
-    
-    
-    
     var onSignedIn: ((User) -> Void)?
 
     init(authService: (any AuthService)?) {
         self.authService = authService
     }
 
-    
-    
-    
-    
-    
-    
     func setAuthService(_ service: (any AuthService)?) {
         self.authService = service
     }
 
     func signInWithApple() async {
-        
-        
-        
-        
-        
+
         switch state {
         case .loading, .signedIn:
             return
@@ -110,19 +58,6 @@ final class SignedOutViewModel {
         }
     }
 
-    
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private func runSignIn(
         _ call: (any AuthService) async throws -> User
     ) async {
@@ -143,10 +78,6 @@ final class SignedOutViewModel {
         }
     }
 
-    
-    
-    
-    
     private static func humanReadable(_ error: any Error) -> String {
         let raw = String(describing: error)
         return raw.isEmpty ? "Sign-in failed." : raw

@@ -38,7 +38,7 @@ struct OnboardingHost: View {
     var body: some View {
         OnboardingFlowView(
             coordinator: services.onboardingCoordinator,
-            onSignIn: { [services] in
+            onSignIn: { 
                 
                 
                 

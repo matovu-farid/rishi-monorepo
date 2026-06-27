@@ -1,13 +1,12 @@
 import Foundation
-import Observation
 import OSLog
-import SwiftUI
-import RishiCore
+import Observation
 import RishiAPI
-import RishiAuth
 import RishiAudio
+import RishiAuth
 import RishiBilling
 import RishiChat
+import RishiCore
 import RishiDB
 import RishiLibrary
 import RishiLogging
@@ -17,164 +16,58 @@ import RishiSearch
 import RishiSettings
 import RishiSync
 import RishiVoice
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+import SwiftUI
 
 @MainActor
 @Observable
 final class AppDependencies {
 
-    
-
-    
-    
-    
-    
     private(set) var services: BootstrappedServices?
 
-    
-    
-    
     private var bootstrapTask: Task<Void, Never>?
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     nonisolated private static let signposter = OSSignposter(
         subsystem: "org.fidexa.rishi",
         category: "cold-launch"
     )
 
-    
-    
-    
-    
-    
-    
-
-    
-    
-    
-    
     let macCommandRouter = MacCommandRouter()
 
-    
-    
-    
     let macAccountMenu = MacAccountMenuModel()
 
-    
-    
-    
     var cachedUserId: UserID? {
         get { userIdBox.value }
         set { userIdBox.value = newValue }
     }
 
-    
-    
     private let userIdBox = UserIdBox()
 
-    
-
-    
-    
-    
-    
     @ObservationIgnored
-    private lazy var _backgroundSyncLifecycle = BackgroundSyncLifecycle(dependencies: self)
+    private lazy var _backgroundSyncLifecycle = BackgroundSyncLifecycle(
+        dependencies: self
+    )
 
-    
-    
-    var backgroundSyncLifecycle: BackgroundSyncLifecycle { _backgroundSyncLifecycle }
+    var backgroundSyncLifecycle: BackgroundSyncLifecycle {
+        _backgroundSyncLifecycle
+    }
 
-    
-
-    
-    
-    
-    
-    
     nonisolated init() {
-        
-        
 
     }
 
-    
-
-    
-    
-    
-    
-    
-    
     func bootstrap() async {
         if let inFlight = bootstrapTask {
             await inFlight.value
             return
         }
-        
-        
-        
-        
-        
+
         let task = Task { [weak self] in
             guard let self else { return }
             let signpostId = Self.signposter.makeSignpostID()
-            let state = Self.signposter.beginInterval("cold-launch.bootstrap", id: signpostId)
+            let state = Self.signposter.beginInterval(
+                "cold-launch.bootstrap",
+                id: signpostId
+            )
             let built = await Self.makeServices(userIdBox: self.userIdBox)
             self.services = built
             Self.signposter.endInterval("cold-launch.bootstrap", state)
@@ -183,13 +76,6 @@ final class AppDependencies {
         await task.value
     }
 
-    
-    
-    
-    
-    
-    
-    
     nonisolated private static func makeServices(
         userIdBox: UserIdBox
     ) async -> BootstrappedServices {
@@ -200,19 +86,8 @@ final class AppDependencies {
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
 struct BootstrappedServices: @unchecked Sendable {
-    
+
     let keychain: KeychainSessionStore
     let tokenProvider: RishiAuthTokenProvider
     let workerClient: WorkerClient
@@ -220,7 +95,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let siwaCoordinator: SignInWithAppleCoordinator
     let authService: RishiAuthService
 
-    
     let dbQueue: any DatabaseWriter
     let bookStore: any BookStore
     let positionStore: any PositionStore
@@ -232,7 +106,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let sampleReaderInstaller: SampleReaderInstaller
     let readerSettingsStore: any ReaderSettingsStore
 
-    
     let audioCoordinator: AudioSessionCoordinator
     let ttsState: TTSPlaybackState
     let ttsEngine: TTSEngine
@@ -240,7 +113,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let nowPlayingController: NowPlayingController
     let ttsPrewarmer: TTSPrewarmer
 
-    
     let syncMetadataStore: GRDBSyncMetadataStore
     let syncQueue: SyncQueue
     let syncStatus: SyncStatus
@@ -255,65 +127,42 @@ struct BootstrappedServices: @unchecked Sendable {
     let apnsDeviceRegistrar: APNsDeviceRegistrar
     let chatRefreshAdapter: AppChatRefreshAdapter
 
-    
     let conversationStore: any ConversationStore
     let messageStore: any MessageStore
     let conversationLookup: ConversationLookup
     let voiceDirtyAdapter: AppVoiceDirtyAdapter
     let chatService: RishiChatService
 
-    
     let voicePresenter: VoiceSessionPresenter
 
-    
-    
-    
-    
     let bookSearch: any BookSearch
-    
-    
+
     let indexingHook: any BookIndexingHook
 
-    
- //   let entitlementService: EntitlementService
- //   let manageSubscriptionPresenter: ManageSubscriptionPresenter
-//    let storeKitProductService: StoreKitProductService
-//    let purchaseService: PurchaseService
- //   let transactionListener: TransactionListener
+    //   let entitlementService: EntitlementService
+    //   let manageSubscriptionPresenter: ManageSubscriptionPresenter
+    //    let storeKitProductService: StoreKitProductService
+    //    let purchaseService: PurchaseService
+    //   let transactionListener: TransactionListener
     let entitlementReconciler: EntitlementReconciler
     let readerAppEntitlementFlag: ReaderAppEntitlementFlag
     let restoreService: RestoreService
     let workerReceiptVerifier: any ReceiptVerifier
 
-    
     let telemetryStore: any TelemetryStore
-    
-    
-    
-    
-    
+
     let footerDetectionStore: any FooterDetectionStore
     let onboardingState: any OnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
 }
 
-
-
-
-
-
 @MainActor
 final class UserIdBox {
     var value: UserID? = nil
 
-    
-    
-    
     nonisolated init() {}
 }
-
-
 
 private struct RishiAuthServiceKey: EnvironmentKey {
     static let defaultValue: (any AuthService)? = nil

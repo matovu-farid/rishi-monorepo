@@ -183,7 +183,7 @@ final class BackgroundSyncLifecycle {
             return wave.errors.isEmpty
         }
         task.expirationHandler = { runTask.cancel() }
-        let ok = (try? await runTask.value) ?? false
+        let ok =  await runTask.value
         task.setTaskCompleted(success: ok)
         services.backgroundTaskCoordinator.scheduleAll()
     }

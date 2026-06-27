@@ -93,7 +93,7 @@ enum AudioStackFactory {
             Log.event("tts.cache.init.failed", level: .error, data: ["error": "\(error)"])
             ttsCacheStore = nil
         }
-        var chunkSource: any TTSChunkSource = ttsCacheStore.map { store in
+        let chunkSource: any TTSChunkSource = ttsCacheStore.map { store in
             CachingTTSChunkSource(upstream: ttsUpstream, store: store)
         } ?? ttsUpstream
         
