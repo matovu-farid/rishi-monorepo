@@ -2,6 +2,37 @@ import Foundation
 import RishiCore
 import RishiLogging
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 struct BookImporter: Sendable {
     private let rootURL: URL
     private let booksDirURL: URL
@@ -10,6 +41,8 @@ struct BookImporter: Sendable {
     private let metadataExtractors: [String: any MetadataExtractor]
     private let bookIndexingHook: any BookIndexingHook
 
+    
+    
     private var fileManager: FileManager { .default }
 
     init(
@@ -28,6 +61,8 @@ struct BookImporter: Sendable {
         self.bookIndexingHook = bookIndexingHook
     }
 
+    
+    
     func importBook(from sourceURL: URL, ownerId: UserID) async throws -> Book {
         try ensureBooksDirExists()
 
@@ -36,29 +71,36 @@ struct BookImporter: Sendable {
             throw BookFileStorage.StorageError.unsupportedFormat(ext: ext)
         }
 
+        
+        
+        
+        
+        
+        
+        
         var metadata = BookMetadata()
         if let extractor = metadataExtractors[ext] {
             metadata = await extractor.extractMetadata(from: sourceURL)
         }
 
-        let bookId =
-            DeterministicBookID.make(
-                title: metadata.title,
-                author: metadata.author,
-                format: format
-            ) ?? UUID()
-        let bookDir = booksDirURL.appendingPathComponent(
-            bookId.uuidString,
-            isDirectory: true
-        )
-        try fileManager.createDirectory(
-            at: bookDir,
-            withIntermediateDirectories: true
-        )
+        
+        
+        
+        
+        let bookId = DeterministicBookID.make(
+            title: metadata.title,
+            author: metadata.author,
+            format: format
+        ) ?? UUID()
+        let bookDir = booksDirURL.appendingPathComponent(bookId.uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: bookDir, withIntermediateDirectories: true)
 
         let filename = sourceURL.lastPathComponent
         let destURL = bookDir.appendingPathComponent(filename)
 
+        
+        
+        
         if fileManager.fileExists(atPath: destURL.path) {
             try? fileManager.removeItem(at: destURL)
         }
@@ -68,6 +110,7 @@ struct BookImporter: Sendable {
             throw BookFileStorage.StorageError.copyFailed(underlying: error)
         }
 
+        
         var coverPath: String?
         if let extractor = coverExtractors[ext] {
             if let png = await extractor.extractCover(from: destURL) {
@@ -79,10 +122,7 @@ struct BookImporter: Sendable {
                     Log.event(
                         "cover.write.failed",
                         level: .info,
-                        data: [
-                            "book": bookId.uuidString,
-                            "error": String(describing: error),
-                        ]
+                        data: ["book": bookId.uuidString, "error": String(describing: error)]
                     )
                 }
             }
@@ -100,17 +140,20 @@ struct BookImporter: Sendable {
             coverPath: coverPath
         )
         try await bookStore.upsert(book)
-
+        
+        
+        
+        
+        
         await bookIndexingHook.scheduleIndexing(for: book, fileURL: destURL)
         return book
     }
 
+    
+
     private func ensureBooksDirExists() throws {
         if !fileManager.fileExists(atPath: booksDirURL.path) {
-            try fileManager.createDirectory(
-                at: booksDirURL,
-                withIntermediateDirectories: true
-            )
+            try fileManager.createDirectory(at: booksDirURL, withIntermediateDirectories: true)
         }
     }
 

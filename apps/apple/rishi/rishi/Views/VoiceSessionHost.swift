@@ -1,34 +1,7 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import SwiftUI
-import RishiCore
 import RishiChat
+import RishiCore
 import RishiVoice
-
-
-
-
-
-
-
-
-
-
+import SwiftUI
 
 struct VoiceSessionHost: View {
 
@@ -45,19 +18,12 @@ struct VoiceSessionHost: View {
                 textChatSheet
             }
             .onAppear {
-                
-                
+
                 if presenter.pendingInitialQuote != nil {
                     showTextChat = true
                 }
             }
-            
-            
-            
-            
-            
-            
-            
+
             .onChange(of: presenter.state.status, initial: true) { _, status in
                 if case .failed(let reason) = status {
                     presenter.enterFailure(reason: reason)
@@ -65,35 +31,23 @@ struct VoiceSessionHost: View {
             }
     }
 
-    
-    
-    
-    
-    
-    
-    
     @ViewBuilder
     private var voiceContent: some View {
         let state = presenter.state
         switch state.status {
         case .failed, .ended:
-            
-            
+
             Color.clear
         default:
             VoiceSessionView(
                 state: state,
-                
+
                 onEnd: { Task { await presenter.end() } },
                 onOpenTextChat: { showTextChat = true }
             )
         }
     }
 
-    
-    
-    
-    
     @ViewBuilder
     private var textChatSheet: some View {
         NavigationStack {
@@ -113,7 +67,10 @@ struct VoiceSessionHost: View {
                 userId: userId,
                 bookId: presenter.currentBookId
             ) {
-                textVM = ChatPanelViewModel.make(conversation: convo, services: services)
+                textVM = ChatPanelViewModel.make(
+                    conversation: convo,
+                    services: services
+                )
             }
         }
     }

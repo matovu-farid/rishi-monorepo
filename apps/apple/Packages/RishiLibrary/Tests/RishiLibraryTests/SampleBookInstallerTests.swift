@@ -4,24 +4,14 @@ import Foundation
 import RishiCore
 import RishiTesting
 
+
 @Suite("SampleBookInstaller")
 struct SampleBookInstallerTests {
 
-    static func makeRoot() -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("Sample-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
-    static func makeDefaults() -> UserDefaults {
-        let suite = "rishi.sample.tests.\(UUID().uuidString)"
-        return UserDefaults(suiteName: suite)!
-    }
 
     @Test("First run: copies alice.epub from bundle into the library")
     func firstRunInstalls() async throws {
-        let root = Self.makeRoot()
+        let root = makeRoot()
         let store = InMemoryBookStore()
         let storage = BookFileStorage(rootURL: root, bookStore: store,
                                       coverExtractors: ["epub": EpubCoverExtractor()])

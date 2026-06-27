@@ -58,8 +58,20 @@ public final class SampleBookInstaller: @unchecked Sendable {
         }
     }
 
+    public func sampleBook() async throws ->Book?{
+        guard let url = bundle.url(forResource: "alice", withExtension: "epub") else {
+            Log.event("library.sample.missing", level: .info,
+                      data: ["reason": "bundle_lookup_failed"])
+            return nil
+        }
+        let book = try? await storage.importBook(from: url, ownerId: UUID())
+        return book
+    }
     /// Test seam: reset the install flag.
     public func resetForTesting() {
         defaults.removeObject(forKey: Self.defaultsKey)
     }
 }
+
+
+ 

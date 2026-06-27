@@ -11,15 +11,16 @@ struct LibraryGrid: View {
 
     @State private var pendingDelete: Book?
 
-    static let coverWidth: CGFloat = 150
+    static let coverWidth: CGFloat = 145
     static let coverHeight: CGFloat = coverWidth * 1.5
 
     private let columns: [GridItem] = [
         GridItem(
-            .adaptive(minimum: coverWidth, maximum: coverWidth),
-            spacing: RishiSpacing.xl
+            .adaptive(minimum: coverWidth),
+            spacing: 20
         )
     ]
+
 
     public init(
         books: [Book],
@@ -34,12 +35,14 @@ struct LibraryGrid: View {
         self.onOpen = onOpen
         self.onDelete = onDelete
     }
+    
 
     public var body: some View {
         VStack {
-            LazyVGrid(columns: columns, spacing: RishiSpacing.xxl) {
+            LazyVGrid(columns: columns) {
                 ForEach(books) { book in
                     cell(for: book)
+                       
                 }
             }
             .padding(.horizontal, RishiSpacing.xl)
@@ -79,7 +82,7 @@ struct LibraryGrid: View {
         } label: {
 
             BookCoverImageView(book: book, coverURL: coverURL(book))
-                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                //.aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .frame(width: Self.coverWidth, height: Self.coverHeight)
         }
         .buttonStyle(.plain)

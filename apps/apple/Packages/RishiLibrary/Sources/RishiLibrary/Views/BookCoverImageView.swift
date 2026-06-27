@@ -38,9 +38,10 @@ struct BookCoverImageView: View {
         // aspect-ratio modifier in `LibraryGrid` is now load-bearing again.
         Group {
             if let url = coverURL {
-                AsyncImage(url: url) { phase in
+                AsyncImage(url: url) {phase in
                     switch phase {
                     case .success(let image):
+                
                         image
                             .resizable()
                             .scaledToFill()
@@ -49,7 +50,7 @@ struct BookCoverImageView: View {
                         gradientFallback
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                //.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 gradientFallback
             }

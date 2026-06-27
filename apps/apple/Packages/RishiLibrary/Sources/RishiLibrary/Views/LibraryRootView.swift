@@ -193,7 +193,6 @@ public struct LibraryRootView: View {
     private func libraryContent(vm: LibraryViewModel) -> some View {
         LibraryView(
             books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
-            readingNow: vm.readingNow,
             positionLookup: { bookID in vm.position(for: bookID) },
             coverURL: { book in vm.coverURLs[book.id] },
             onOpen: onOpenBook,

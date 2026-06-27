@@ -11,20 +11,17 @@ import RishiUIKit
 struct LibraryView: View {
 
     public let books: [Book]
-    public let readingNow: [ReadingNowEntry]
     public let positionLookup: (BookID) -> Position?
     public let coverURL: (Book) -> URL?
     public let onOpen: (Book) -> Void
     public let onDelete: (Book) -> Void
 
     public init(books: [Book],
-                readingNow: [ReadingNowEntry],
                 positionLookup: @escaping (BookID) -> Position?,
                 coverURL: @escaping (Book) -> URL?,
                 onOpen: @escaping (Book) -> Void,
                 onDelete: @escaping (Book) -> Void) {
         self.books = books
-        self.readingNow = readingNow
         self.positionLookup = positionLookup
         self.coverURL = coverURL
         self.onOpen = onOpen
@@ -42,13 +39,13 @@ struct LibraryView: View {
                     LibraryEmptyStateView()
                 } else {
                     ScrollView {
-                        if !readingNow.isEmpty {
-                            ReadingNowShelf(
-                                entries: readingNow,
-                                coverURL: coverURL,
-                                onOpen: onOpen
-                            )
-                        }
+//                        if !readingNow.isEmpty {
+//                            ReadingNowShelf(
+//                                entries: readingNow,
+//                                coverURL: coverURL,
+//                                onOpen: onOpen
+//                            )
+//                        }
                         LibraryGrid(
                             books: books,
                             positionLookup: positionLookup,
@@ -68,7 +65,7 @@ struct LibraryView: View {
 
 private enum LibraryViewPreviewFixtures {
     static let userId: UserID = UUID()
-
+    
     static func book(_ title: String, author: String? = "Preview Author") -> Book {
         Book(
             id: UUID(),
@@ -79,8 +76,8 @@ private enum LibraryViewPreviewFixtures {
             fileURL: "Books/\(UUID().uuidString)/\(title).epub"
         )
     }
-
-    static let populated: [Book] = [
+    
+    static  let  populated:[Book] = [
         book("Project Hail Mary", author: "Andy Weir"),
         book("Sapiens", author: "Yuval Noah Harari"),
         book("The Pragmatic Programmer", author: "Hunt and Thomas"),
@@ -89,42 +86,15 @@ private enum LibraryViewPreviewFixtures {
         book("Dune", author: "Frank Herbert"),
         book("1984", author: "George Orwell"),
         book("The Hobbit", author: "J.R.R. Tolkien"),
+        
     ]
-
-    static func readingNow(for books: [Book]) -> [ReadingNowEntry] {
-        books.prefix(3).map { b in
-            ReadingNowEntry(
-                book: b,
-                position: Position(
-                    id: UUID(),
-                    bookId: b.id,
-                    locator: "{\"page\":1}",
-                    percentComplete: 0.35,
-                    updatedAt: Date()
-                )
-            )
-        }
-    }
 }
 
-#Preview("Library - populated with shelf") {
-    NavigationStack {
-        LibraryView(
-            books: LibraryViewPreviewFixtures.populated,
-            readingNow: LibraryViewPreviewFixtures.readingNow(for: LibraryViewPreviewFixtures.populated),
-            positionLookup: { _ in nil },
-            coverURL: { _ in nil },
-            onOpen: { _ in },
-            onDelete: { _ in }
-        )
-    }
-}
 
 #Preview("Library - no shelf") {
     NavigationStack {
         LibraryView(
             books: LibraryViewPreviewFixtures.populated,
-            readingNow: [],
             positionLookup: { _ in nil },
             coverURL: { _ in nil },
             onOpen: { _ in },
@@ -137,7 +107,6 @@ private enum LibraryViewPreviewFixtures {
     NavigationStack {
         LibraryView(
             books: [],
-            readingNow: [],
             positionLookup: { _ in nil },
             coverURL: { _ in nil },
             onOpen: { _ in },
@@ -150,7 +119,6 @@ private enum LibraryViewPreviewFixtures {
     NavigationStack {
         LibraryView(
             books: LibraryViewPreviewFixtures.populated,
-            readingNow: LibraryViewPreviewFixtures.readingNow(for: LibraryViewPreviewFixtures.populated),
             positionLookup: { _ in nil },
             coverURL: { _ in nil },
             onOpen: { _ in },
