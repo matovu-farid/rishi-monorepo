@@ -1,13 +1,7 @@
-import SwiftUI
 import RishiCore
 import RishiUIKit
+import SwiftUI
 
-/// LIB-04: adaptive `LazyVGrid` of all books. Each cell carries a
-/// `.contextMenu` with "Continue Reading" (when a `Position` exists) and a
-/// destructive "Delete…" that opens a SwiftUI `.alert` confirmation.
-///
-/// The grid is intentionally state-light: it owns ONLY the pending-delete
-/// `Book?` for the confirmation alert. Everything else is upstream input.
 struct LibraryGrid: View {
     public let books: [Book]
     public let positionLookup: (BookID) -> Position?
@@ -17,27 +11,23 @@ struct LibraryGrid: View {
 
     @State private var pendingDelete: Book?
 
-    /// Fixed-size tile width, identical on iPhone, iPad, and Mac. A 2:3 book
-    /// cover at this width is `coverHeight` tall. Keeping the tile a constant
-    /// size (rather than flexible columns) is what stops a single cover from
-    /// expanding to fill a wide Mac window.
     static let coverWidth: CGFloat = 150
     static let coverHeight: CGFloat = coverWidth * 1.5
 
-    /// Adaptive grid of fixed-size tiles: as many `coverWidth`-wide columns as
-    /// fit, wrapping to the next row. This yields ~2 columns on iPhone and many
-    /// on a wide Mac window, while every tile stays the same size. The Phase 21
-    /// uneven-row problem came from per-tile *text labels*; tiles are now pure
-    /// fixed 2:3 cover art, so adaptive packing keeps rows uniform.
     private let columns: [GridItem] = [
-        GridItem(.adaptive(minimum: coverWidth, maximum: coverWidth), spacing: RishiSpacing.xl)
+        GridItem(
+            .adaptive(minimum: coverWidth, maximum: coverWidth),
+            spacing: RishiSpacing.xl
+        )
     ]
 
-    public init(books: [Book],
-                positionLookup: @escaping (BookID) -> Position?,
-                coverURL: @escaping (Book) -> URL?,
-                onOpen: @escaping (Book) -> Void,
-                onDelete: @escaping (Book) -> Void) {
+    public init(
+        books: [Book],
+        positionLookup: @escaping (BookID) -> Position?,
+        coverURL: @escaping (Book) -> URL?,
+        onOpen: @escaping (Book) -> Void,
+        onDelete: @escaping (Book) -> Void
+    ) {
         self.books = books
         self.positionLookup = positionLookup
         self.coverURL = coverURL
@@ -47,7 +37,7 @@ struct LibraryGrid: View {
 
     public var body: some View {
         VStack {
-            LazyVGrid(columns: columns, spacing: RishiSpacing.xl) {
+            LazyVGrid(columns: columns, spacing: RishiSpacing.xxl) {
                 ForEach(books) { book in
                     cell(for: book)
                 }
@@ -55,7 +45,8 @@ struct LibraryGrid: View {
             .padding(.horizontal, RishiSpacing.xl)
             .padding(.vertical, RishiSpacing.l)
         }
-        .background(RishiColor.background)
+
+        .tint(RishiColor.accent)
         .alert(
             "Delete book?",
             isPresented: Binding(
@@ -68,15 +59,15 @@ struct LibraryGrid: View {
                 onDelete(book)
                 pendingDelete = nil
             }
-            // Per-book label so VoiceOver users know which title is about
-            // to be deleted before they confirm. A11Y-01 — A11yLabel only
-            // ships the verb; we interpolate the book title here.
+
             .accessibilityLabel("Delete \(book.title)")
             Button("Cancel", role: .cancel) {
                 pendingDelete = nil
             }
         } message: { book in
-            Text("Are you sure you want to delete \"\(book.title)\"? This cannot be undone.")
+            Text(
+                "Are you sure you want to delete \"\(book.title)\"? This cannot be undone."
+            )
         }
     }
 
@@ -86,20 +77,14 @@ struct LibraryGrid: View {
         Button {
             onOpen(book)
         } label: {
-            // Plan 21-02 (LibraryCellAspectTests) locks .aspectRatio(2.0 / 3.0, contentMode: .fit) as the cell geometry contract — changing the ratio or dropping the modifier will fail the regression suite.
-            // Phase 21 UI pass: the tile is pure cover art at a fixed 2:3
-            // portrait aspect ratio (standard book-cover proportion). No
-            // title / author labels — they pushed multi-line text into the
-            // next row's tile and made the grid look ragged. Tap reveals
-            // the book; VoiceOver still announces "<title> by <author>"
-            // via the accessibility label below.
+
             BookCoverImageView(book: book, coverURL: coverURL(book))
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .frame(width: Self.coverWidth, height: Self.coverHeight)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        // UI tests tap the first cell by this identifier to open a book.
+
         .accessibilityIdentifier("library-book-cell")
         .accessibilityLabel(accessibilityText(for: book))
         .accessibilityHint("Double-tap to open. Long-press for actions.")
@@ -116,8 +101,7 @@ struct LibraryGrid: View {
             } label: {
                 Label("Delete\u{2026}", systemImage: "trash")
             }
-            // Per-book label so VoiceOver users hear which book the
-            // destructive action targets.
+
             .accessibilityLabel("Delete \(book.title)")
         }
     }
@@ -133,7 +117,11 @@ struct LibraryGrid: View {
 private enum LibraryGridPreviewFixtures {
     static let userId: UserID = UUID()
 
-    static func book(_ title: String, author: String? = "Preview Author", format: BookFormat = .epub) -> Book {
+    static func book(
+        _ title: String,
+        author: String? = "Preview Author",
+        format: BookFormat = .epub
+    ) -> Book {
         Book(
             id: UUID(),
             userId: userId,
@@ -149,14 +137,20 @@ private enum LibraryGridPreviewFixtures {
         book("Sapiens", author: "Yuval Noah Harari"),
         book("The Pragmatic Programmer", author: "Hunt and Thomas"),
         book("Norwegian Wood", author: "Haruki Murakami"),
-        book("Designing Data-Intensive Applications", author: "Martin Kleppmann"),
+        book(
+            "Designing Data-Intensive Applications",
+            author: "Martin Kleppmann"
+        ),
         book("Dune", author: "Frank Herbert"),
         book("1984", author: "George Orwell"),
         book("The Hobbit", author: "J.R.R. Tolkien"),
         book("Brave New World", author: "Aldous Huxley"),
         book("Ulysses", author: nil),
         book("PDF Reference", author: "Adobe", format: .pdf),
-        book("A Very Very Very Long Title That Wraps Three Lines Or More", author: "Anonymous"),
+        book(
+            "A Very Very Very Long Title That Wraps Three Lines Or More",
+            author: "Anonymous"
+        ),
     ]
 
     static let inProgressIds: Set<BookID> = Set(manyBooks.prefix(3).map(\.id))
@@ -197,7 +191,9 @@ private enum LibraryGridPreviewFixtures {
 
 #Preview("Grid - single book") {
     LibraryGrid(
-        books: [LibraryGridPreviewFixtures.book("Solo Title", author: "Lone Author")],
+        books: [
+            LibraryGridPreviewFixtures.book("Solo Title", author: "Lone Author")
+        ],
         positionLookup: { _ in nil },
         coverURL: { _ in nil },
         onOpen: { _ in },
@@ -217,3 +213,5 @@ private enum LibraryGridPreviewFixtures {
     .background(RishiColor.background)
     .preferredColorScheme(.dark)
 }
+
+

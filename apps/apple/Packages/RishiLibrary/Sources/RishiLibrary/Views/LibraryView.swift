@@ -52,7 +52,8 @@ struct LibraryView: View {
                         onDelete: onDelete
                     )
                 }
-                .background(RishiColor.background)
+                .tint(RishiColor.accent)
+                
             }
         }
         .navigationTitle("Library")

@@ -28,6 +28,6 @@ struct PreviewPlaceholder: View {
         }
         .padding(RishiSpacing.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.background)
+        
     }
 }

@@ -1,12 +1,10 @@
-
-
-import SwiftUI
+import RishiChat
 import RishiCore
 import RishiLibrary
-import RishiChat
 import RishiReader
 import RishiSettings
 import RishiSync
+import SwiftUI
 
 struct LibraryTabView: View {
 
@@ -29,9 +27,10 @@ struct LibraryTabView: View {
         self.user = user
         self.model = model
         self.onCacheUserId = onCacheUserId
-        _libraryVM = State(initialValue: LibraryViewModel.make(services: services, user: user))
+        _libraryVM = State(
+            initialValue: LibraryViewModel.make(services: services, user: user)
+        )
     }
-
 
     private var settingsHandler: (() -> Void) {
 
@@ -49,17 +48,12 @@ struct LibraryTabView: View {
                     model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
                 },
-                
-                
-                
-                
-                
-                
-                
+
                 onShowSettings: settingsHandler,
                 onImported: { outcomes in
                     let successes = outcomes.compactMap(\.book)
-                    guard successes.count == 1, let book = successes.first else { return }
+                    guard successes.count == 1, let book = successes.first
+                    else { return }
                     model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
                 }
@@ -80,34 +74,31 @@ struct LibraryTabView: View {
             }
             .task(id: user.id) {
                 onCacheUserId(user.id)
-                async let sample = services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-                async let reader = services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                async let sample = services.sampleBookInstaller.installIfNeeded(
+                    ownerId: user.id
+                )
+                async let reader = services.sampleReaderInstaller
+                    .installIfNeeded(ownerId: user.id)
                 _ = await (sample, reader)
- 
-                
-                
-                
-                
-                
-                
-                
-                
+
                 await model.performInitialLibrarySync(
                     refresh: { await libraryVM.refresh() },
-                    sync: { if services.readerDefaults.autoSync { _ = await services.syncEngine.runOnce() } }
+                    sync: {
+                        if services.readerDefaults.autoSync {
+                            _ = await services.syncEngine.runOnce()
+                        }
+                    }
                 )
             }
         }
-        
-        
-        
+
         #if !targetEnvironment(macCatalyst)
-        .sheet(isPresented: Bindable(model).showSettings) {
-            SettingsSheet(
-                services: services,
-                user: user
-            )
-        }
+            .sheet(isPresented: Bindable(model).showSettings) {
+                SettingsSheet(
+                    services: services,
+                    user: user
+                )
+            }
         #endif
         .deepLinkHandling(model: model, libraryVM: libraryVM)
     }
