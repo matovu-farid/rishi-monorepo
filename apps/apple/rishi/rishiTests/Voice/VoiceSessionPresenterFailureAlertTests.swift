@@ -70,8 +70,8 @@ struct VoiceSessionPresenterFailureAlertTests {
             userIdProvider: { userId },
             dirtyHook: StubDirtyHook(),
             micGate: DeniedMicGate(),
-            clientFactory: { UITestFakeRealtimeClient() },
-            keyFetcherFactory: { UITestFakeEphemeralKeyFetcher() }
+//            clientFactory: { UITestFakeRealtimeClient() },
+//            keyFetcherFactory: { UITestFakeEphemeralKeyFetcher() }
         )
     }
 

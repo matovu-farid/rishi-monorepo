@@ -50,7 +50,7 @@ struct SettingsContent: View {
             if audioLoaded {
                 let defaults = services.readerDefaults
                 let auth = services.authService
-                let presenter = services.manageSubscriptionPresenter
+//                let presenter = services.manageSubscriptionPresenter
                 let sync = services.syncEngine
                 SettingsScreen(
                     user: user,
@@ -93,9 +93,9 @@ struct SettingsContent: View {
                         
                         
                         
-                        Task { @MainActor in
-                            await presenter.present()
-                        }
+//                        Task { @MainActor in
+//                            await presenter.present()
+//                        }
                     },
                     onDismiss: { onDismiss() }
                 )

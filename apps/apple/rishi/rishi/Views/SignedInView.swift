@@ -129,13 +129,13 @@ struct SignedInView: View {
             Text(failure.message)
         }
         
-        .sheet(item: $model.paywallFeature) { feature in
-            PaywallHost(
-                feature: feature,
-                vm: PaywallViewModel.make(services: services),
-                onDismiss: { model.dismissPaywall() }
-            )
-        }
+//        .sheet(item: $model.paywallFeature) { feature in
+////            PaywallHost(
+////                feature: feature,
+////                vm: PaywallViewModel.make(services: services),
+////                onDismiss: { model.dismissPaywall() }
+////            )
+//        }
         
         .macCommandDispatch(readerDefaults: services.readerDefaults)
         

@@ -56,6 +56,7 @@ public protocol RestoreProtocol: Sendable {
 /// calling it on every cold start would annoy users to no end. The
 /// startup path reads `Transaction.currentEntitlements` directly (no
 /// prompt); restore is a discrete user-initiated operation.
+@available(iOS 18.4, *)
 public actor RestoreService {
 
     private let reconciler: EntitlementReconciler
@@ -165,4 +166,5 @@ public actor RestoreService {
 // Adopted via extension so the public protocol seam is wired without
 // editing the actor declaration line. PaywallViewModel + tests can take
 // `any RestoreProtocol`; production passes the concrete actor.
+@available(iOS 18.4, *)
 extension RestoreService: RestoreProtocol {}

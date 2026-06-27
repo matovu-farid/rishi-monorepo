@@ -100,28 +100,7 @@ enum AudioStackFactory {
         
         
         
-        #if DEBUG
-        if UITestBypass.isActive {
-            if UITestBypass.latentCachedTTS,
-               let store = try? TTSAudioCacheStore(
-                   directory: FileManager.default.temporaryDirectory
-                       .appendingPathComponent("uitest-tts-\(UUID().uuidString)", isDirectory: true)
-               ) {
-                
-                
-                
-                
-                chunkSource = CachingTTSChunkSource(
-                    upstream: FixtureTTSChunkSource(synthDelay: UITestBypass.ttsSynthDelay),
-                    store: store
-                )
-                Log.event("uitest.tts.source.latent_cached", level: .info)
-            } else {
-                chunkSource = FixtureTTSChunkSource()
-                Log.event("uitest.tts.source.swapped", level: .info)
-            }
-        }
-        #endif
+ 
         
         
         

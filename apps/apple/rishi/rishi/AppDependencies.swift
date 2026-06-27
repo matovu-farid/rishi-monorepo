@@ -149,19 +149,8 @@ final class AppDependencies {
     
     nonisolated init() {
         
+        
 
-        
-        
-        
-        
-        
-        
-        
-        #if DEBUG && targetEnvironment(simulator)
-        if let dumpSink = SimulatorDumpSink.make() {
-            Log.installSink(dumpSink)
-        }
-        #endif
     }
 
     
@@ -286,11 +275,11 @@ struct BootstrappedServices: @unchecked Sendable {
     let indexingHook: any BookIndexingHook
 
     
-    let entitlementService: EntitlementService
-    let manageSubscriptionPresenter: ManageSubscriptionPresenter
-    let storeKitProductService: StoreKitProductService
-    let purchaseService: PurchaseService
-    let transactionListener: TransactionListener
+ //   let entitlementService: EntitlementService
+ //   let manageSubscriptionPresenter: ManageSubscriptionPresenter
+//    let storeKitProductService: StoreKitProductService
+//    let purchaseService: PurchaseService
+ //   let transactionListener: TransactionListener
     let entitlementReconciler: EntitlementReconciler
     let readerAppEntitlementFlag: ReaderAppEntitlementFlag
     let restoreService: RestoreService

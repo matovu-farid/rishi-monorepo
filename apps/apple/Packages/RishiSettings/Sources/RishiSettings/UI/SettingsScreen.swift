@@ -13,6 +13,7 @@ import RishiBilling
 /// All section dependencies are passed in via init — the screen does not
 /// reach into any environment / singleton. 11-06 wires it into the app
 /// (replacing the legacy minimal SettingsSheet).
+@available(iOS 18.4, *)
 public struct SettingsScreen: View {
 
     public let user: User
@@ -191,6 +192,7 @@ public struct SettingsScreen: View {
     }
 }
 
+@available(iOS 18.4, *)
 private struct SettingsScreenPreviewHost: View {
     @State private var theme: ReaderTheme = .light
     @State private var font: ReaderFontFamily = .system
@@ -229,11 +231,19 @@ private struct SettingsScreenPreviewHost: View {
 }
 
 #Preview("Light") {
-    SettingsScreenPreviewHost()
-        .preferredColorScheme(.light)
+    if #available(iOS 18.4, *) {
+        SettingsScreenPreviewHost()
+            .preferredColorScheme(.light)
+    } else {
+        // Fallback on earlier versions
+    }
 }
 
 #Preview("Dark") {
-    SettingsScreenPreviewHost()
-        .preferredColorScheme(.dark)
+    if #available(iOS 18.4, *) {
+        SettingsScreenPreviewHost()
+            .preferredColorScheme(.dark)
+    } else {
+        // Fallback on earlier versions
+    }
 }

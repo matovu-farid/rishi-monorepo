@@ -53,6 +53,7 @@ public final class UserDefaultsOnboardingState: OnboardingState, @unchecked Send
     public func setPrimerShownNotifications(_ value: Bool) async {
         defaults.set(value, forKey: Self.keyPrimerNotifs)
     }
+    
 }
 
 /// Test/preview-only in-memory implementation.

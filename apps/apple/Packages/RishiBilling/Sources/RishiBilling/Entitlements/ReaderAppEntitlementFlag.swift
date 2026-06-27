@@ -13,11 +13,12 @@ import Observation
 /// the underlying reconciler level changes.
 ///
 /// The nested `Resolver` value type is preserved so the Phase-11 call
-/// sites in `PaywallView`, `ManageSubscriptionRow`, `PremiumGateModifier`,
+
 /// and `RishiSettings.BillingSection` / `SettingsScreen` continue to
 /// compile UNCHANGED. The value source is the only thing that moved:
 /// `Resolver.production` is now a Phase-11 baseline fallback (`false`);
 /// Wave-3 wiring will switch call sites to read the live reconciler.
+@available(iOS 18.4, *)
 @MainActor
 @Observable
 public final class ReaderAppEntitlementFlag {
@@ -46,7 +47,7 @@ public final class ReaderAppEntitlementFlag {
 
     /// Lightweight Sendable snapshot of `isGranted` for the Phase-11
     /// call-site contract (`PaywallView`, `ManageSubscriptionRow`,
-    /// `PremiumGateModifier`, RishiSettings). Existing call sites take
+    /// `RishiSettings). Existing call sites take
     /// `Resolver = .production` so the API survives.
     ///
     /// Wave-3 will switch the call sites to read `ReaderAppEntitlementFlag`

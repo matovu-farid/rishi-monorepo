@@ -244,11 +244,11 @@ final class BackgroundSyncLifecycle {
             completion(.noData)
             return
         }
-        let entitlementService = services.entitlementService
+//        let entitlementService = services.entitlementService
         SilentPushHandler.handle(
             userInfo,
             engine: services.syncEngine,
-            onEntitlementChanged: { await entitlementService.refresh() },
+       //     onEntitlementChanged: { await entitlementService.refresh() },
             completion: completion
         )
     }

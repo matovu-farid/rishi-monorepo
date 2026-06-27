@@ -53,36 +53,15 @@ enum ServiceGraphFactory {
         
         
         
-        
-        #if DEBUG
-        await UITestBypass.seedFakeSessionIfNeeded(into: keychain)
-        
-        
-        UITestBypass.seedProEntitlementIfNeeded()
-        #endif
 
         
         let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
 
-        
-        #if DEBUG
-        
-        
-        
-        
-        let devBypassEnabled = UITestBypass.isLiveVoiceActive || DevBypassConfig.isEnabled
-        let devBypassSecret: String? = UITestBypass.isLiveVoiceActive
-            ? UITestBypass.devBypassSecret
-            : nil
-        #else
-        let devBypassEnabled = false
-        let devBypassSecret: String? = nil
-        #endif
+ 
         let workerClient = WorkerClient(
             baseURL: baseURL,
             tokenProvider: tokenProvider,
-            devBypassEnabled: devBypassEnabled,
-            devBypassSecret: devBypassSecret
+          
         )
 
         
@@ -392,49 +371,7 @@ enum ServiceGraphFactory {
         
         
         let voicePresenter = await MainActor.run {
-            #if DEBUG
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            if UITestBypass.isLiveVoiceActive {
-                return VoiceSessionPresenter(
-                    coordinator: audioStack.coordinator,
-                    workerClient: workerClient,
-                    messageStore: messageStore,
-                    conversationLookup: conversationLookup,
-                    userIdProvider: { [userIdBox] in userIdBox.value },
-                    dirtyHook: voiceDirtyAdapter,
-                    bookSearch: bookSearch,
-                    embedderPrewarm: embedderPrewarm
-                )
-            }
-            
-            
-            
-            if UITestBypass.isActive {
-                return VoiceSessionPresenter(
-                    coordinator: audioStack.coordinator,
-                    workerClient: workerClient,
-                    messageStore: messageStore,
-                    conversationLookup: conversationLookup,
-                    userIdProvider: { [userIdBox] in userIdBox.value },
-                    dirtyHook: voiceDirtyAdapter,
-                    micGate: UITestGrantedMicGate(),
-                    bookSearch: bookSearch,
-                    embedderPrewarm: embedderPrewarm,
-                    clientFactory: { UITestFakeRealtimeClient() },
-                    keyFetcherFactory: { UITestFakeEphemeralKeyFetcher() }
-                )
-            }
-            #endif
+
             return VoiceSessionPresenter(
                 coordinator: audioStack.coordinator,
                 workerClient: workerClient,
@@ -454,14 +391,9 @@ enum ServiceGraphFactory {
         }
 
         let storekitState = signposter.beginInterval("storekit.ready")
-        let productService = StoreKitProductService()
+//        let productService = StoreKitProductService()
         let receiptVerifier: any ReceiptVerifier = {
-            #if DEBUG
-            if UserDefaults.standard.bool(forKey: "RishiUseStubReceiptVerifier") {
-                Log.event("iap.verifier.stub.enabled", level: .info)
-                return DebugStubReceiptVerifier()
-            }
-            #endif
+         
             return WorkerReceiptVerifier(client: workerClient)
         }()
         
@@ -476,15 +408,15 @@ enum ServiceGraphFactory {
         let cachedEntitlement = await entitlementService.snapshot()
         let reconciler = await MainActor.run {
             let reconciler = EntitlementReconciler()
-            reconciler.setServer(cachedEntitlement)
+//            reconciler.setServer(cachedEntitlement)
             return reconciler
         }
-        let purchaseService = PurchaseService(
-            productFetcher: productService,
-            verifier: receiptVerifier,
-            reconciler: reconciler
-        )
-        let listener = TransactionListener(forwarder: purchaseService)
+//        let purchaseService = PurchaseService(
+//            productFetcher: productService,
+//            verifier: receiptVerifier,
+//            reconciler: reconciler
+//        )
+     //   let listener = TransactionListener(forwarder: purchaseService)
         let entitlementFlag = await MainActor.run {
             ReaderAppEntitlementFlag(reconciler: reconciler)
         }
@@ -492,16 +424,16 @@ enum ServiceGraphFactory {
         signposter.endInterval("storekit.ready", storekitState)
 
         
-        Task.detached(priority: .background) { [purchaseService, listener, restoreService] in
-            await purchaseService.replayUnfinished()
-            await restoreService.refreshOnDeviceEntitlementAtLaunch()
-            await listener.start()
-        }
-        if StoreKitIAPFlag.isEnabled {
-            Task.detached(priority: .background) { [productService] in
-                _ = try? await productService.load()
-            }
-        }
+//        Task.detached(priority: .background) { [purchaseService, listener, restoreService] in
+//            await purchaseService.replayUnfinished()
+//            await restoreService.refreshOnDeviceEntitlementAtLaunch()
+//            await listener.start()
+//        }
+//        if StoreKitIAPFlag.isEnabled {
+//            Task.detached(priority: .background) { [productService] in
+//                _ = try? await productService.load()
+//            }
+//        }
 
         
         let telemetryStore = await MainActor.run {
@@ -561,11 +493,11 @@ enum ServiceGraphFactory {
             voicePresenter: voicePresenter,
             bookSearch: bookSearch,
             indexingHook: indexingHook,
-            entitlementService: entitlementService,
-            manageSubscriptionPresenter: manageSubscriptionPresenter,
-            storeKitProductService: productService,
-            purchaseService: purchaseService,
-            transactionListener: listener,
+//            entitlementService: entitlementService,
+//            manageSubscriptionPresenter: manageSubscriptionPresenter,
+//            storeKitProductService: productService,
+//            purchaseService: purchaseService,
+//            transactionListener: listener,
             entitlementReconciler: reconciler,
             readerAppEntitlementFlag: entitlementFlag,
             restoreService: restoreService,

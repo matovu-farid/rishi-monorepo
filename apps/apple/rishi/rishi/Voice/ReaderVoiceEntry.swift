@@ -27,16 +27,16 @@ import RishiReader
 final class ReaderVoiceEntry: ReaderVoicePresenter {
 
     private let voicePresenter: VoiceSessionPresenter
-    private let entitlementProvider: () async -> EntitlementLevel
+    //private let entitlementProvider: () async -> EntitlementLevel
     private let onRequestPaywall: (String) -> Void
 
     init(
         voicePresenter: VoiceSessionPresenter,
-        entitlementProvider: @escaping () async -> EntitlementLevel,
+//        entitlementProvider: @escaping () async -> EntitlementLevel,
         onRequestPaywall: @escaping (String) -> Void
     ) {
         self.voicePresenter = voicePresenter
-        self.entitlementProvider = entitlementProvider
+//        self.entitlementProvider = entitlementProvider
         self.onRequestPaywall = onRequestPaywall
     }
 
@@ -62,12 +62,10 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
         
         
         Task {
-            let level = await entitlementProvider()
-            var entitled = level == .subscribed
-            #if DEBUG
-            if UITestBypass.isActive { entitled = true }
-            #endif
-            guard entitled else { onRequestPaywall("Voice Chat"); return }
+//            let level = await entitlementProvider()
+//            var entitled = level == .subscribed
+//          
+//            guard entitled else { onRequestPaywall("Voice Chat"); return }
             await voicePresenter.start(
                 bookId: bookId,
                 initialQuote: initialQuote,

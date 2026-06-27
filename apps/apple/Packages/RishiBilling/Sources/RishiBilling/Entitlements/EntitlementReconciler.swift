@@ -40,22 +40,19 @@ public enum StoreKitIAPFlag {
 /// `@MainActor` because SwiftUI binds via Observation; setters are called
 /// from `PurchaseService` / `EntitlementService` continuation closures
 /// that already hop to `MainActor` for UI updates.
+@available(iOS 18.4, *)
 @MainActor
 @Observable
 public final class EntitlementReconciler {
 
-    /// Reconciled level — most permissive wins. SwiftUI views reading
-    /// this register with the Observation framework and update on change.
     public private(set) var level: EntitlementLevel
 
     // Source signals — separated so each updater can publish independently
     // without clobbering the other side. Recomputed via `recompute`.
-    private var onDevice: EntitlementLevel
-    private var server: EntitlementLevel
+    private var entitlementLevel: EntitlementLevel
 
     public init(initial: EntitlementLevel = .unsubscribed) {
-        self.onDevice = initial
-        self.server = initial
+        self.entitlementLevel = initial
         self.level = initial
     }
 
@@ -69,49 +66,26 @@ public final class EntitlementReconciler {
                       data: ["requested": "\(next)"])
             return
         }
-        self.onDevice = next
+        self.entitlementLevel = next
         recompute()
     }
 
-    /// Called by `EntitlementService` after the worker premium response.
-    /// Server signal is independent of `StoreKitIAPFlag` — the worker
-    /// remains authoritative regardless of StoreKit rollout.
-    public func setServer(_ next: EntitlementLevel) {
-        self.server = next
-        recompute()
-    }
 
-    /// Test-only seam: force-set both signals at once so the union
-    /// truth-table tests can exercise every quadrant without going
-    /// through StoreKit or the worker. Intentionally `internal` —
-    /// production code MUST go through `setOnDevice` / `setServer`.
-    func forceSet(onDevice: EntitlementLevel, server: EntitlementLevel) {
-        self.onDevice = onDevice
-        self.server = server
-        recompute()
-    }
 
     /// Clear both source signals on sign-out so the next user does not
     /// inherit the previous user's reconciled `.pro`. Goes through
     /// `recompute()` so the `@Observable` `level` publishes the change to
     /// any SwiftUI binding exactly once.
     public func reset() {
-        onDevice = .unsubscribed
-        server = .unsubscribed
+        entitlementLevel = .unsubscribed
         recompute()
     }
 
     private func recompute() {
         // Most permissive wins (RESEARCH §3.4).
-        let next: EntitlementLevel = (onDevice == .subscribed || server == .subscribed) ? .subscribed : .unsubscribed
+        let next: EntitlementLevel = (entitlementLevel == .subscribed ) ? .subscribed : .unsubscribed
         if next != level {
-            Log.event("iap.reconciler.level_changed",
-                      level: .info,
-                      data: ["from": "\(level)",
-                             "to": "\(next)",
-                             "onDevice": "\(onDevice)",
-                             "server": "\(server)",
-                             "id": "\(ObjectIdentifier(self))"])
+          
             level = next
         }
     }

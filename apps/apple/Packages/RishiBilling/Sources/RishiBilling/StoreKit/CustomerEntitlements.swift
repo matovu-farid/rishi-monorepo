@@ -176,13 +176,13 @@ public enum CustomerEntitlementsError: Error, Equatable {
 
 @available(iOS 18.4, *)
 extension Sequence where Element == SubscriptionStatus {
-    var activeSubscriptionStatuses: [SubscriptionStatus] {
+    public var activeSubscriptionStatuses: [SubscriptionStatus] {
         filter {
             $0.state == .subscribed || $0.state == .inGracePeriod || $0.state == .inBillingRetryPeriod
         }
     }
     
-    var highestSubscriptionStatus: SubscriptionStatus? {
+    public var highestSubscriptionStatus: SubscriptionStatus? {
         get throws {
 
             return self.first(where: {

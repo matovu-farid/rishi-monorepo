@@ -83,15 +83,7 @@ struct LibraryTabView: View {
                 async let sample = services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
                 async let reader = services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
                 _ = await (sample, reader)
-                #if DEBUG
-                
-                
-                
-                await UITestDensePDF.installIfNeeded(
-                    storage: services.bookFileStorage,
-                    ownerId: user.id
-                )
-                #endif
+ 
                 
                 
                 

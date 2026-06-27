@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "RishiBilling",
-    platforms: [.iOS(.v17), .macCatalyst(.v17), .macOS(.v14)],
+    platforms: [.iOS(.v18), .macCatalyst(.v17), .macOS(.v14)],
     products: [
         .library(name: "RishiBilling", targets: ["RishiBilling"]),
     ],

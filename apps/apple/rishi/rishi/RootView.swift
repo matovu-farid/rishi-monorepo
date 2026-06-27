@@ -5,6 +5,7 @@ import RishiLogging
 import RishiOnboarding
 import StoreKit
 import SwiftUI
+import RishiBilling
 
 struct RootView: View {
 
@@ -41,7 +42,7 @@ struct RootView: View {
     private func realBody(deps: AppDependencies) -> some View {
 
         realBodyContent(deps: deps)
-            .environment(deps.manageSubscriptionPresenter)
+//            .environment(deps.manageSubscriptionPresenter)
             .environment(\.services, deps.services)
             .environment(\.currentUser, currentUser)
             .environment(
@@ -49,12 +50,27 @@ struct RootView: View {
                 {
 
                     deps.entitlementReconciler.reset()
-                    let service = deps.entitlementService
-                    Task { await service.clearCache() }
+//                    let service = deps.entitlementService
+//                    Task { await service.clearCache() }
                     currentUser = nil
                 }
             )
-            .onInAppPurchaseCompletion { _, result in
+            .checkCustomerEntitlements()
+            .loadProducts()
+            .observeErrors()
+            .onInAppPurchaseStart { product in
+                print("START:", product.id)
+            }
+            .onInAppPurchaseCompletion { product, result in
+                print("COMPLETE:", product.id)
+                
+                switch result {
+                case .success(let purchase):
+                    print("SUCCESS", purchase)
+                    
+                case .failure(let error):
+                    print("FAILURE", error)
+                }
                 Task {
 
                     if let purchaseResult = try? result.get() {
@@ -65,13 +81,14 @@ struct RootView: View {
                 }
             }
     }
+     @Environment(SubscriptionService.self) private var subscriptionService
 
     private func resolvedGate(deps: AppDependencies) -> AppGate {
         let gate = AppGate.resolve(
             authProbeComplete: authProbeComplete,
             isSignedIn: currentUser != nil,
             entitlementResolved: entitlementResolved,
-            level: deps.entitlementReconciler.level
+            level: subscriptionService.currentSubscription
         )
         Log.event(
             "approuter.gate.resolved",
@@ -101,7 +118,7 @@ struct RootView: View {
                 signedOutView
             case .paywall:
 
-                PaywallGateView(services: deps.services!)
+                SubscriptionsView(color: .rishiBrown)
             case .app:
 
                 SignedInView(
@@ -114,18 +131,11 @@ struct RootView: View {
                 )
             }
         }
+        
         .task {
             guard !bootstrapped else { return }
             bootstrapped = true
 
-            let entitlementLevels = deps.entitlementService.currentLevel
-            let reconciler = deps.entitlementReconciler
-            Task { @MainActor in
-                await EntitlementServerBridge.run(
-                    levels: entitlementLevels,
-                    into: reconciler
-                )
-            }
 
             let probedUser = await auth?.currentUser
             currentUser = probedUser
@@ -134,14 +144,10 @@ struct RootView: View {
             if probedUser != nil {
                 async let completedAsync = deps.onboardingState
                     .hasCompletedOnboarding()
-                async let entitlementAsync = deps.entitlementService.refresh()
-                let (completed, entitlementResult) = await (
-                    completedAsync, entitlementAsync
-                )
+               
+                let completed = await completedAsync
+                
 
-                if case .success(let level) = entitlementResult {
-                    deps.entitlementReconciler.setServer(level)
-                }
                 entitlementResolved = true
                 showOnboarding = !completed
             } else {
@@ -149,6 +155,7 @@ struct RootView: View {
                     .hasCompletedOnboarding()
                 showOnboarding = !completed
             }
+            
         }
 
         #if canImport(UIKit)
@@ -172,16 +179,6 @@ struct RootView: View {
 
         SignedOutView(onSignedIn: { user in
             currentUser = user
-            if let deps {
-
-                Task {
-                    let result = await deps.entitlementService.refresh()
-                    if case .success(let level) = result {
-                        deps.entitlementReconciler.setServer(level)
-                    }
-                    entitlementResolved = true
-                }
-            }
         })
     }
 }

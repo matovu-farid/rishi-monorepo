@@ -25,6 +25,7 @@ private let logger = Logger(subsystem: "Rishi", category: "RishiProStatus")
 //
 // The numerical-level value matches the subscription's level that you configure in
 // the StoreKit configuration file or App Store Connect.
+@available(iOS 18.4, *)
 public enum EntitlementLevel: String, CaseIterable, Comparable, Sendable {
     case unsubscribed
     case subscribed
@@ -38,6 +39,12 @@ public enum EntitlementLevel: String, CaseIterable, Comparable, Sendable {
     }
     init(state: Self){
         self = state
+        
+    }
+    
+    public static func from(subscription:SubscriptionStatus)-> EntitlementLevel{
+        .initialize(productId: subscription.transaction.unsafePayloadValue.productID)
+        
         
     }
     

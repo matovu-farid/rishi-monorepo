@@ -48,7 +48,7 @@ struct EPUBReaderDestination: View {
         self.onRequestPaywall = onRequestPaywall
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
-            entitlementProvider: { await services.entitlementService.snapshot() },
+//           entitlementProvider: { await services.entitlementService.snapshot() },
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -64,15 +64,13 @@ struct EPUBReaderDestination: View {
             
             
             bookmarkMarkDirty: { [services] id in await services.syncEngine.markBookmarkDirty(id) },
-            onReadAloud: FeatureFlags.readAloud ? {
+            onReadAloud: {
                 
                 Task {
-                    let level = await services.entitlementService.snapshot()
-                    var entitled = level == .subscribed
-                    #if DEBUG
-                    if UITestBypass.isActive { entitled = true }
-                    #endif
-                    guard entitled else { onRequestPaywall("Read Aloud"); return }
+                  //  let level = await services.entitlementService.snapshot()
+                   // var entitled = level == .subscribed
+             
+                   // guard entitled else { onRequestPaywall("Read Aloud"); return }
                     if readAloud == nil {
                         readAloud = ReadAloudController(
                             ttsEngine: services.ttsEngine,
@@ -84,7 +82,7 @@ struct EPUBReaderDestination: View {
                     }
                     await readAloud?.startEPUB(vm: vm)
                 }
-            } : nil,
+            } ,
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph
         )

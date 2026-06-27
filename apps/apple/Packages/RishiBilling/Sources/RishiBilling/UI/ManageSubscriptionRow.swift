@@ -15,6 +15,7 @@ import RishiUIKit
 /// users with an entitlement see the tappable button (failure-mode plan,
 /// PITFALLS Pitfall 3). Phase-13 Wave-3 wiring (plan 13-05) switches the
 /// Resolver to the live reconciler.
+@available(iOS 18.4, *)
 public struct ManageSubscriptionRow: View {
 
     @Environment(ManageSubscriptionPresenter.self) private var presenter
@@ -76,11 +77,19 @@ public struct ManageSubscriptionRow: View {
 }
 
 #Preview("Granted") {
-    Form { ManageSubscriptionRow(entitlement: .init(isGranted: true)) }
+    Form { if #available(iOS 18.4, *) {
+        ManageSubscriptionRow(entitlement: .init(isGranted: true))
+    } else {
+        // Fallback on earlier versions
+    } }
         .environment(ManageSubscriptionPresenter())
 }
 
 #Preview("Not granted (failure-mode)") {
-    Form { ManageSubscriptionRow(entitlement: .init(isGranted: false)) }
+    Form { if #available(iOS 18.4, *) {
+        ManageSubscriptionRow(entitlement: .init(isGranted: false))
+    } else {
+        // Fallback on earlier versions
+    } }
         .environment(ManageSubscriptionPresenter())
 }

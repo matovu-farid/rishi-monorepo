@@ -63,6 +63,7 @@ public protocol PurchaseProtocol: Sendable {
 /// Adopts ``PurchaseProtocol`` (plan 13-05) via the extension at the
 /// bottom of this file so the Wave-3 paywall view-model can depend on
 /// the protocol seam instead of the concrete actor.
+@available(iOS 18.4, *)
 public actor PurchaseService: PurchaseUpdateForwarder {
 
     // MARK: Dependencies
@@ -94,6 +95,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
     ///   (default = `{ try await $0.purchase() }`). PurchaseServiceTests
     ///   injects closures returning `.userCancelled` or `.pending` because
     ///   SKTestSession cannot reliably synthesize those outcomes.
+    @available(iOS 18.4, *)
     public init(
         productFetcher: any ProductFetching,
         verifier: any ReceiptVerifier,
@@ -259,4 +261,5 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 // Adopted via extension so the public protocol seam is wired without
 // editing the actor declaration line. PaywallViewModel + tests can take
 // `any PurchaseProtocol`; production passes the concrete actor.
+@available(iOS 18.4, *)
 extension PurchaseService: PurchaseProtocol {}

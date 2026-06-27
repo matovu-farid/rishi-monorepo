@@ -12,6 +12,7 @@ import RishiLogging
 /// Cache: `UserDefaults` under `"billing.entitlement.level"`. String rawValue
 /// so missing / corrupt reads fall back to `.free` (safe default — never
 /// silently grant Pro to a free user).
+@available(iOS 18.4, *)
 public actor EntitlementService {
 
     /// Continuous stream of entitlement values. The first subscriber always

@@ -42,7 +42,7 @@ struct OnboardingHost: View {
                 
                 
                 
-                _ = await services.entitlementService.refresh()
+//                _ = await services.entitlementService.refresh()
             },
             onUseSample: { [services] in
                 guard let userId = await services.authService.currentUser?.id else { return }

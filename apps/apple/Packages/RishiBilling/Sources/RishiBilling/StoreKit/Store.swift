@@ -30,6 +30,7 @@ public final class Store {
         } catch {
             logger.error("Failed product request from the App Store. \(error)")
         }
+        
     }
 
     public func process(purchaseResult: sending Product.PurchaseResult) async {

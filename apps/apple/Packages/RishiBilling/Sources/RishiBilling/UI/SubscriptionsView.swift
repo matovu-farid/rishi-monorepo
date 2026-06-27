@@ -1,27 +1,31 @@
-
-
-
-
-
-
-
 import SwiftUI
 import StoreKit
 
 
-@Observable
-class GroupId {
+// TODO: Change this before prod
+#if DEBUG
+let groupID = "rishi-pro-group"
+#endif
+public class GroupId {
     //var value:String = "22149819"
-    var value:String = "AB6C54E6"
+    public var value:String = groupID
+    private init(_ value: String? = groupID) {
+        if let value {self.value = value}
+    }
+    @MainActor public static  let shared:GroupId = .init()
     
 }
 
-struct SubscriptionsView: View {
+public struct SubscriptionsView: View {
+    var color: UIColor
+    public init(color:UIColor) {
+        self.color = color
+    }
 
-    @Environment(GroupId.self) private var groupId
-    var body: some View {
+    private var groupId: GroupId = GroupId.shared
+   public var body: some View {
         ZStack{
-            Color("rishiBrown")
+            Color(color)
                 .opacity(0.1)
                 .ignoresSafeArea()
             SubscriptionStoreView(groupID: groupId.value){
@@ -55,7 +59,7 @@ struct SubscriptionsView: View {
            
             
 
-            .tint(Color("rishiBrown"))
+            .tint(Color(color))
             
         }
     }
