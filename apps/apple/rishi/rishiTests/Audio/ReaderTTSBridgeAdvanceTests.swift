@@ -202,6 +202,9 @@ func makeBridge(
     let prewarmer = TTSPrewarmer(source: NoopChunkSource())
     let settingsStore = InMemoryTTSSettingsStore()
     let userId = UserID()
+    let configurator = FakeAudioSessionConfigurator()
+    let coordinator = AudioSessionCoordinator(configurator: configurator)
+    
 
     let recorder = PassageChangeRecorder()
     let bridge = ReaderTTSBridge(
@@ -211,6 +214,7 @@ func makeBridge(
         prewarmer: prewarmer,
         settingsStore: settingsStore,
         userId: userId,
+        coordinator: coordinator,
         onPassageChange: { index in recorder.record(index) },
         onParagraphsExhausted: onExhausted,
         onParagraphsBeforeStart: onBeforeStart

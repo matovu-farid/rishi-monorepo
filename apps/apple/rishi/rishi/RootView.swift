@@ -127,8 +127,13 @@ struct RootView: View {
                     selectedTabRaw: $selectedTabRaw,
                     openBookIdRaw: $openBookIdRaw,
                     onSignedOut: { currentUser = nil },
-                    onCacheUserId: { [deps] id in deps.cachedUserId = id }
+                    onCacheUserId: { [deps] id in deps.cachedUserId = currentUser?.id}
                 )
+                .task {
+                    if let userId = currentUser?.id {
+                         deps.setUserId(userId)
+                    }
+                }
             }
         }
         

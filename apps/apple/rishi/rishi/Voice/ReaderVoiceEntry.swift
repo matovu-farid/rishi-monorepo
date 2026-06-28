@@ -1,27 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import Foundation
 import RishiAPI
 import RishiBilling
 import RishiCore
 import RishiReader
-
-
-
-
 
 @MainActor
 final class ReaderVoiceEntry: ReaderVoicePresenter {
@@ -32,20 +13,18 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
 
     init(
         voicePresenter: VoiceSessionPresenter,
-//        entitlementProvider: @escaping () async -> EntitlementLevel,
         onRequestPaywall: @escaping (String) -> Void
     ) {
         self.voicePresenter = voicePresenter
-//        self.entitlementProvider = entitlementProvider
         self.onRequestPaywall = onRequestPaywall
     }
 
-    func presentVoice(bookId: BookID, context: ReaderVoiceContext, initialQuote: String?) {
-        
-        
-        
-        
-        
+    func presentVoice(
+        bookId: BookID,
+        context: ReaderVoiceContext,
+        initialQuote: String?
+    ) {
+
         let snapshot = BookContextSnapshot(
             bookId: bookId,
             currentPage: context.currentPage,
@@ -58,14 +37,7 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
             activeParagraphText: context.activeParagraphText
         )
 
-        
-        
-        
         Task {
-//            let level = await entitlementProvider()
-//            var entitled = level == .subscribed
-//          
-//            guard entitled else { onRequestPaywall("Voice Chat"); return }
             await voicePresenter.start(
                 bookId: bookId,
                 initialQuote: initialQuote,

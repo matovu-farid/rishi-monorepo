@@ -74,6 +74,7 @@ final class VoiceSessionPresenter {
                 EphemeralKeyFetcher(workerClient: workerClient)
             }
     }
+    func getSession()->RealtimeVoiceSession? { self.session}
 
     func start(
         bookId: BookID?,
@@ -97,6 +98,12 @@ final class VoiceSessionPresenter {
         }
 
         state.reset()
+        await coordinator.registerPreemption(for: .voice) { [weak self] in
+            await self?.end()
+        }
+        // Acquire audio session BEFORE fetching the key. If the key fetch
+        // fails we already own the session and must release it cleanly.
+        await coordinator.requestActiveMode(.voice)
 
         let conversation: Conversation
         do {
@@ -192,6 +199,7 @@ final class VoiceSessionPresenter {
         clearFailure()
         await start(bookId: bookId, initialQuote: quote, bookContext: context)
     }
+    
 
     func clearFailure() {
         failure = nil

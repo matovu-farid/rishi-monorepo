@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 import XCTest
 
 final class LibraryNavigationUITests: XCTestCase {
@@ -21,7 +12,6 @@ final class LibraryNavigationUITests: XCTestCase {
         app.launchEnvironment["RISHI_UITEST"] = "1"
         app.launch()
 
-        
         let bookCell = app.descendants(matching: .any)
             .matching(identifier: "library-book-cell")
             .firstMatch
@@ -30,8 +20,6 @@ final class LibraryNavigationUITests: XCTestCase {
             "Library never showed a book cell — auth bypass or sample-book seed failed."
         )
 
-        
-        
         let oldLibraryTab = app.descendants(matching: .any)
             .matching(identifier: "books.vertical")
             .firstMatch
@@ -40,7 +28,6 @@ final class LibraryNavigationUITests: XCTestCase {
             "Bottom tab bar still present — the iPhone TabView was not removed."
         )
 
-        
         let chats = app.descendants(matching: .any)
             .matching(identifier: "library.toolbar.chats")
             .firstMatch
@@ -50,18 +37,16 @@ final class LibraryNavigationUITests: XCTestCase {
         )
         robustTap(chats)
 
-        
         XCTAssertTrue(
             app.navigationBars["Conversations"].waitForExistence(timeout: 10),
             "Conversations list did not push onto the Library NavigationStack."
         )
     }
 
-    
-    
     @MainActor
     private func robustTap(_ element: XCUIElement) {
         usleep(300_000)
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .tap()
     }
 }

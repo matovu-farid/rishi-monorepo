@@ -56,6 +56,7 @@ struct SignedInView: View {
             model: model,
             onCacheUserId: onCacheUserId
         )
+        
         .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
                 vm: ChatPanelViewModel.make(
@@ -141,6 +142,7 @@ struct SignedInView: View {
             openBookIdRaw: $openBookIdRaw
         )
     }
+       
 
     private var voiceFailureTitle: String {
         services.voicePresenter.failure?.title ?? ""

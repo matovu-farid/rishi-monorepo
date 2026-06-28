@@ -59,18 +59,17 @@ public actor TTSEngine {
 
         let observable = state
         await MainActor.run {
-            observable.status = .loading
+         
+            
             observable.error = nil
         }
         // Single-audio-owner invariant: let the coordinator stop us if another
         // owner (voice) takes the session. stop() is our full teardown and
         // releases .tts itself, so this is safe to call any time.
-        await coordinator.registerPreemption(for: .tts) { [weak self] in
-            await self?.stop()
-        }
+ 
         // No-op on a switch: an already-active .tts coordinator reduces this to
         // .switchPassage, which the policy returns [] for (no configure/activate).
-        await coordinator.requestActiveMode(.tts)
+       
 
         do {
             // Long-lived engine: bring it up ONCE (first passage), then only
@@ -129,14 +128,11 @@ public actor TTSEngine {
 
     public func pause() async {
         engine.pause()
-        let observable = state
-        await MainActor.run { observable.status = .paused }
+        
     }
 
     public func resume() async {
         engine.resume()
-        let observable = state
-        await MainActor.run { observable.status = .playing }
     }
 
     public func stop() async {
@@ -145,8 +141,6 @@ public actor TTSEngine {
         engine.stop()
         engineRunning = false
         await coordinator.releaseActiveMode(.tts)
-        let observable = state
-        await MainActor.run { observable.status = .stopped }
     }
 
     // MARK: - Internals
@@ -155,12 +149,15 @@ public actor TTSEngine {
 
     private func onBufferScheduled(chunk: PCMChunk) async {
         let observable = state
+        if await state.status == .paused {
+            return
+        }
         if !firstBufferScheduled {
             firstBufferScheduled = true
             engine.resume()
             let passageId = chunk.passageId
             await MainActor.run {
-                observable.status = .playing
+                observable.update(status: .playing)
                 observable.currentPassageId = passageId
             }
             Log.event("tts.engine.first_buffer", level: .info, data: [
@@ -181,7 +178,7 @@ public actor TTSEngine {
             // status .stopped so the bridge's advance watcher still fires on the
             // (.stopped + currentPassageId) post-condition.
             let observable = state
-            await MainActor.run { observable.status = .stopped }
+            await MainActor.run { observable.update(status: .stopped) }
         }
     }
 
@@ -210,7 +207,7 @@ public actor TTSEngine {
         let message = String(describing: error)
         let observable = state
         await MainActor.run {
-            observable.status = .error
+            observable.update(status: .error)
             observable.error = message
         }
         Log.event("tts.engine.error", level: .error, data: ["error": message])

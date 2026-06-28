@@ -29,11 +29,11 @@ struct ParagraphAdvanceWatcherTests {
         let watcher = ParagraphAdvanceWatcher(state: state)
         let recorder = AdvanceRecorder()
 
-        state.status = .loading
+        state.update(status: .loading)
         state.currentPassageId = "0"
         watcher.start(targetPassageId: "0") { recorder.record() }
 
-        state.status = .stopped
+        state.update(status: .stopped)
 
         await waitUntil(timeout: 3) { recorder.count == 1 }
         #expect(recorder.count == 1)
@@ -49,16 +49,16 @@ struct ParagraphAdvanceWatcherTests {
         let watcher = ParagraphAdvanceWatcher(state: state)
         let recorder = AdvanceRecorder()
 
-        state.status = .stopped
+        state.update(status: .stopped)
         state.currentPassageId = "0"
         watcher.start(targetPassageId: "1") { recorder.record() }
 
         try? await Task.sleep(nanoseconds: 350_000_000)
         #expect(recorder.count == 0)
 
-        state.status = .loading
+        state.update(status: .loading)
         state.currentPassageId = "1"
-        state.status = .stopped
+        state.update(status: .stopped)
         await waitUntil(timeout: 3) { recorder.count == 1 }
         #expect(recorder.count == 1)
         watcher.cancel()
@@ -70,11 +70,11 @@ struct ParagraphAdvanceWatcherTests {
         let watcher = ParagraphAdvanceWatcher(state: state)
         let recorder = AdvanceRecorder()
 
-        state.status = .loading
+        state.update(status: .loading)
         state.currentPassageId = "0"
         watcher.start(targetPassageId: "0") { recorder.record() }
 
-        state.status = .error
+        state.update(status: .error)
         try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(recorder.count == 0)
         watcher.cancel()
@@ -86,12 +86,12 @@ struct ParagraphAdvanceWatcherTests {
         let watcher = ParagraphAdvanceWatcher(state: state)
         let recorder = AdvanceRecorder()
 
-        state.status = .loading
+        state.update(status: .loading)
         state.currentPassageId = "0"
         watcher.start(targetPassageId: "0") { recorder.record() }
         watcher.cancel()
 
-        state.status = .stopped
+        state.update(status: .stopped)
         try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(recorder.count == 0)
     }
@@ -103,10 +103,10 @@ struct ParagraphAdvanceWatcherTests {
         let recorder = AdvanceRecorder()
 
         watcher.start(targetPassageId: "0") { recorder.record() }
-        state.status = .loading
+        state.update(status: .loading)
         state.currentPassageId = "1"
         watcher.start(targetPassageId: "1") { recorder.record() }
-        state.status = .stopped
+        state.update(status: .stopped)
 
         await waitUntil(timeout: 3) { recorder.count == 1 }
 

@@ -112,7 +112,7 @@ struct NowPlayingControllerTests {
         let state = TTSPlaybackState()
         let rec = RecordingController()
         controller.attach(state: state, controller: rec, metadata: .init(title: "x"))
-        state.status = .playing
+        state.update(status: .playing)
         try? await Task.sleep(nanoseconds: 300_000_000)
         let rates = info.calls.compactMap { call -> Double? in
             if case .rate(let r) = call { return r } else { return nil }

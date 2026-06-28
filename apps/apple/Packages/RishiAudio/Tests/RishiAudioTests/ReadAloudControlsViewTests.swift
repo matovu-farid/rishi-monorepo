@@ -11,7 +11,7 @@ struct ReadAloudControlsViewTests {
     func rendersAllStatuses() {
         for status in TTSStatus.allCases {
             let state = TTSPlaybackState()
-            state.status = status
+            state.update(status: status)
             _ = ReadAloudControlsView(
                 state: state,
                 onPlayPause: {},
@@ -25,7 +25,7 @@ struct ReadAloudControlsViewTests {
     @Test("Error status surfaces state.error string")
     func errorStatusUsesErrorString() {
         let state = TTSPlaybackState()
-        state.status = .error
+        state.update(status: .error)
         state.error = "Network down"
         let view = ReadAloudControlsView(
             state: state,
@@ -43,7 +43,7 @@ struct ReadAloudControlsViewTests {
     @Test("TTSFailureAlert.clear resets error and moves status off .error")
     func ttsErrorAlertClear() {
         let state = TTSPlaybackState()
-        state.status = .error
+        state.update(status: .error)
         state.error = "Network down"
 
         TTSFailureAlert.clear(state)
@@ -56,7 +56,7 @@ struct ReadAloudControlsViewTests {
     @Test("TTSFailureAlert.message falls back when state.error is nil")
     func ttsErrorAlertMessageFallback() {
         let state = TTSPlaybackState()
-        state.status = .error
+        state.update(status: .error)
         state.error = nil
         #expect(TTSFailureAlert.message(for: state) == TTSFailureAlert.defaultMessage)
 

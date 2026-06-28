@@ -180,7 +180,7 @@ private struct PrimaryGlassButtonStyle: ViewModifier {
 
 #Preview("Playing") {
     let state = TTSPlaybackState()
-    state.status = .playing
+    state.update(status: .playing)
     return ReadAloudControlsView(
         state: state,
         onPlayPause: {},
@@ -193,7 +193,8 @@ private struct PrimaryGlassButtonStyle: ViewModifier {
 
 #Preview("Paused") {
     let state = TTSPlaybackState()
-    state.status = .paused
+
+    state.update(status: .paused)
     return ReadAloudControlsView(
         state: state,
         onPlayPause: {},
@@ -206,7 +207,8 @@ private struct PrimaryGlassButtonStyle: ViewModifier {
 
 #Preview("Loading") {
     let state = TTSPlaybackState()
-    state.status = .loading
+//    state.update(status: .loading)
+    state.update(status: .loading)
     return ReadAloudControlsView(
         state: state,
         onPlayPause: {},

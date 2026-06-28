@@ -1,23 +1,11 @@
-
-
 import Foundation
 import Observation
 import RishiAudio
 import RishiCore
 
-
-
-
-
-
-
 @MainActor
 final class ReaderTTSBridge {
 
-    
-    
-    
-    
     private let engine: any TTSPlaying
     private let state: TTSPlaybackState
     private let tracker: TTSPassageTracker
@@ -25,38 +13,18 @@ final class ReaderTTSBridge {
     private let userId: UserID
     private let onPassageChange: (Int?) -> Void
 
-    
-    
-    
     private let advanceWatcher: ParagraphAdvanceWatcher
 
-    
-    
-    
     private let readAhead: ReadAheadCoordinator
 
-    
-    
-    
-    
-    
-    
     private let onParagraphsExhausted: () async -> [String]
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     private let onParagraphsBeforeStart: () async -> [String]
 
     private var paragraphs: [String] = []
     private var currentIndex = 0
     private var consumeTask: Task<Void, Never>?
+    private var coordinator: AudioSessionCoordinator
 
     init(
         engine: any TTSPlaying,
@@ -65,6 +33,7 @@ final class ReaderTTSBridge {
         prewarmer: TTSPrewarmer,
         settingsStore: any TTSSettingsStore,
         userId: UserID,
+        coordinator: AudioSessionCoordinator,
         onPassageChange: @escaping (Int?) -> Void,
         onParagraphsExhausted: @escaping () async -> [String] = { [] },
         onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
@@ -77,42 +46,37 @@ final class ReaderTTSBridge {
         self.onPassageChange = onPassageChange
         self.onParagraphsExhausted = onParagraphsExhausted
         self.onParagraphsBeforeStart = onParagraphsBeforeStart
-        
-        
-        
+
         self.advanceWatcher = ParagraphAdvanceWatcher(state: state)
         self.readAhead = ReadAheadCoordinator(prewarmer: prewarmer)
+        self.coordinator = coordinator
     }
+    
+   
 
-    
-
-    
-    
     func start(paragraphs: [String]) async {
         await stop()
+        state.update(status: .loading)
         guard !paragraphs.isEmpty else { return }
         self.paragraphs = paragraphs
         self.currentIndex = 0
         await tracker.attach(state: state)
         startConsumingPassages()
         startAdvanceWatcher()
+        await requestActiveMode()
         await playCurrent()
+
     }
 
-    
-    
-    
-    
-    
     private func startAdvanceWatcher() {
-        advanceWatcher.start(targetPassageId: String(currentIndex)) { [weak self] in
+        advanceWatcher.start(targetPassageId: String(currentIndex)) {
+            [weak self] in
             await self?.advance()
         }
     }
 
-    
-    
     func stop() async {
+        
         consumeTask?.cancel()
         consumeTask = nil
         advanceWatcher.cancel()
@@ -122,70 +86,54 @@ final class ReaderTTSBridge {
         paragraphs = []
         currentIndex = 0
         onPassageChange(nil)
+        state.update(status: .stopped)
     }
 
-    
-    
-    
-    
-    
     func pause() async {
+        
         await readAhead.cancelAll()
         await engine.pause()
+        state.update(status: .paused)
+        
+        
+    }
+    private func requestActiveMode()async{
+        await coordinator.registerPreemption(for: .tts) { [weak self] in
+            await self?.pause()
+        }
+        await coordinator.requestActiveMode(.tts)
     }
 
-    
     func resume() async {
+        await requestActiveMode()
         await engine.resume()
+        state.update(status: .playing)
     }
 
-    
-    
-    
-    
     func jump(to index: Int) async {
         guard index >= 0, index < paragraphs.count else { return }
-        
-        
-        
-        
-        
+
         advanceWatcher.cancel()
         await readAhead.cancelAll()
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
         currentIndex = index
         startAdvanceWatcher()
         await playCurrent()
     }
+    
+    var currentState:TTSPlaybackState {
+        state
+    }
 
-    
-    
-    
-    
     func next() async {
         if currentIndex + 1 >= paragraphs.count {
-            
-            
-            
+
             await advanceToNextBatch()
         } else {
             await jump(to: currentIndex + 1)
         }
     }
 
-    
-    
-    
-    
-    
     func previous() async {
         if currentIndex == 0 {
             await retreatToPreviousBatch()
@@ -194,20 +142,14 @@ final class ReaderTTSBridge {
         }
     }
 
-    
-    
     func repeatCurrent() async {
         await jump(to: currentIndex)
     }
 
-    
-
     private func startConsumingPassages() {
         consumeTask?.cancel()
-        
-        
-        
-        
+    
+
         consumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let stream = await self.tracker.passageStream()
@@ -221,8 +163,7 @@ final class ReaderTTSBridge {
     private func playCurrent() async {
         guard currentIndex < paragraphs.count else { return }
         let settings = await settingsStore.load(userId: userId)
-        
-        
+
         guard currentIndex < paragraphs.count else { return }
         let paragraph = paragraphs[currentIndex]
         let request = TTSStreamRequest(
@@ -231,13 +172,7 @@ final class ReaderTTSBridge {
             speed: settings.speed,
             passageId: String(currentIndex)
         )
-        
-        
-        
-        
-        
-        
-        
+
         await readAhead.warm(
             after: currentIndex,
             in: paragraphs,
@@ -245,13 +180,13 @@ final class ReaderTTSBridge {
             speed: settings.speed
         )
         await engine.start(request: request)
+        state.update(status: .playing)
     }
 
     private func advance() async {
         currentIndex += 1
         if currentIndex >= paragraphs.count {
-            
-            
+
             await advanceToNextBatch()
         } else {
             startAdvanceWatcher()
@@ -259,13 +194,6 @@ final class ReaderTTSBridge {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
     @discardableResult
     private func advanceToNextBatch() async -> Bool {
         advanceWatcher.cancel()
@@ -282,18 +210,6 @@ final class ReaderTTSBridge {
         return true
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     @discardableResult
     private func retreatToPreviousBatch() async -> Bool {
         let previous = await onParagraphsBeforeStart()
@@ -307,3 +223,9 @@ final class ReaderTTSBridge {
         return true
     }
 }
+
+
+
+
+
+

@@ -73,6 +73,7 @@ struct ReaderTTSBridgeLongLivedEngineTests {
             prewarmer: TTSPrewarmer(source: InfiniteChunkSource()),
             settingsStore: InMemoryTTSSettingsStore(),
             userId: UserID(),
+            coordinator: coordinator,
             onPassageChange: { _ in }
         )
         return Env(bridge: bridge, audio: audio)

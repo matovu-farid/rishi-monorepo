@@ -18,12 +18,17 @@ public enum TTSStatus: String, Sendable, Equatable, CaseIterable {
 @MainActor
 public final class TTSPlaybackState {
 
-    public var status: TTSStatus = .idle
+    public private(set)  var  status : TTSStatus = .idle
     public var currentPassageId: String?
     public var elapsed: TimeInterval = 0
     public var error: String?
 
     public init() {}
+    
+    public func update(status: TTSStatus){
+        self.status = status
+    }
+    
 
     /// Reset to .idle and clear transient fields. Used by TTSEngine.stop().
     public func reset() {

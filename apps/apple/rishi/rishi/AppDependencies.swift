@@ -35,7 +35,7 @@ final class AppDependencies {
 
     let macAccountMenu = MacAccountMenuModel()
 
-    var cachedUserId: UserID? {
+    var cachedUserId: UUID? {
         get { userIdBox.value }
         set { userIdBox.value = newValue }
     }
@@ -44,7 +44,8 @@ final class AppDependencies {
 
     @ObservationIgnored
     private lazy var _backgroundSyncLifecycle = BackgroundSyncLifecycle(
-        dependencies: self
+        dependencies: self,
+        userIdBox: self.userIdBox
     )
 
     var backgroundSyncLifecycle: BackgroundSyncLifecycle {
@@ -54,12 +55,17 @@ final class AppDependencies {
     nonisolated init() {
 
     }
+    func setUserId(_ userId: UUID){
+        self.userIdBox.setUserId(value: userId)
+    }
 
     func bootstrap() async {
         if let inFlight = bootstrapTask {
             await inFlight.value
             return
         }
+       
+        
 
         let task = Task { [weak self] in
             guard let self else { return }
@@ -159,9 +165,20 @@ struct BootstrappedServices: @unchecked Sendable {
 
 @MainActor
 final class UserIdBox {
-    var value: UserID? = nil
+    var value: UUID? = nil
 
-    nonisolated init() {}
+    nonisolated init(
+        _ value: UUID? = nil
+    ) {
+        
+        self.value =  value
+    }
+    func setUserId(
+        value: UUID
+    ) {
+        
+        self.value =  value
+    }
 }
 
 private struct RishiAuthServiceKey: EnvironmentKey {

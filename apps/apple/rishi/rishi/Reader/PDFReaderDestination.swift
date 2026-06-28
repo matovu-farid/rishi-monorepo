@@ -75,6 +75,7 @@ struct PDFReaderDestination: View {
                             ttsState: services.ttsState,
                             ttsSettingsStore: services.ttsSettingsStore,
                             ttsPrewarmer: services.ttsPrewarmer,
+                            coordidator: services.audioCoordinator,
                             userId: userId
                         )
                     }

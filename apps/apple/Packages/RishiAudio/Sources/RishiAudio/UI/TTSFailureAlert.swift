@@ -29,7 +29,7 @@ public enum TTSFailureAlert {
     public static func clear(_ state: TTSPlaybackState) {
         state.error = nil
         if state.status == .error {
-            state.status = .stopped
+            state.update(status: .stopped)
         }
     }
 }

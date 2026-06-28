@@ -1,8 +1,5 @@
-
-
 import Foundation
 import RishiAudio
-
 
 struct AdvanceWatcherDecision {
 
@@ -15,30 +12,27 @@ struct AdvanceWatcherDecision {
     private let targetPassageId: String?
     private var hasStarted = false
 
-
     init() {
         self.targetPassageId = nil
     }
-
 
     init(targetPassageId: String) {
         self.targetPassageId = targetPassageId
     }
 
-
     mutating func observe(_ status: TTSStatus) -> Action {
         observe(status: status, passageId: nil)
     }
-
 
     mutating func observe(status: TTSStatus, passageId: String?) -> Action {
         if status == .error {
             return .bail
         }
 
-        
-        
-        
+        if status == .paused {
+            return .wait
+        }
+
         if status == .loading || status == .playing {
             if targetPassageId == nil || passageId == targetPassageId {
                 hasStarted = true
@@ -46,14 +40,11 @@ struct AdvanceWatcherDecision {
         }
 
         if status == .stopped {
-            
-            
-            
+
             if let target = targetPassageId, passageId == target {
                 return .advance
             }
-            
-            
+
             if hasStarted {
                 return .advance
             }
@@ -62,7 +53,6 @@ struct AdvanceWatcherDecision {
         return .wait
     }
 }
-
 
 @MainActor
 final class ParagraphAdvanceWatcher {
@@ -74,16 +64,14 @@ final class ParagraphAdvanceWatcher {
         self.state = state
     }
 
-
     func start(targetPassageId: String, onAdvance: @escaping () async -> Void) {
         advanceTask?.cancel()
-        
-        
-        
-        
+
         advanceTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            var decision = AdvanceWatcherDecision(targetPassageId: targetPassageId)
+            var decision = AdvanceWatcherDecision(
+                targetPassageId: targetPassageId
+            )
             while !Task.isCancelled {
                 switch decision.observe(
                     status: self.state.status,
@@ -95,7 +83,7 @@ final class ParagraphAdvanceWatcher {
                 case .bail:
                     return
                 case .wait:
-                    try? await Task.sleep(nanoseconds: 100_000_000) 
+                    try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
         }

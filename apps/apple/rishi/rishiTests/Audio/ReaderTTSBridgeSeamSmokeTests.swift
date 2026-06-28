@@ -46,6 +46,7 @@ struct ReaderTTSBridgeSeamSmokeTests {
         let prewarmer = TTSPrewarmer(source: NoopChunkSource())
         let settingsStore = InMemoryTTSSettingsStore()
         let userId = UserID()
+        let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
 
         let recorder = PassageRecorder()
         let bridge = ReaderTTSBridge(
@@ -55,6 +56,7 @@ struct ReaderTTSBridgeSeamSmokeTests {
             prewarmer: prewarmer,
             settingsStore: settingsStore,
             userId: userId,
+            coordinator: coordinator,
             onPassageChange: { index in
                 if let index { recorder.record(index) }
             }

@@ -1,46 +1,14 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import Foundation
-import Testing
 import RishiAudio
 import RishiCore
+import Testing
+
 @testable import rishi
-
-
 
 @Suite("ReadAloudController")
 @MainActor
 struct ReadAloudControllerTests {
 
-    
-
-    
-    
-    
-    
-    
-    
-    
     private func makeController(
         script: FakeTTSEngine.Script = .holds
     ) -> ReadAloudController {
@@ -48,17 +16,18 @@ struct ReadAloudControllerTests {
         let engine = FakeTTSEngine(state: state, script: script)
         let settingsStore = InMemoryTTSSettingsStore()
         let prewarmer = TTSPrewarmer(source: ControllerNoopChunkSource())
+        let configurer = FakeAudioSessionConfigurator()
+        let coordinator = AudioSessionCoordinator(configurator: configurer)
         let userId = UserID()
         return ReadAloudController(
             ttsEngine: engine,
             ttsState: state,
             ttsSettingsStore: settingsStore,
             ttsPrewarmer: prewarmer,
+            coordidator: coordinator,
             userId: userId
         )
     }
-
-    
 
     @Test("paragraphs populated and bridge non-nil after start")
     func paragraphsAndBridgeSetAfterStart() async {
@@ -72,7 +41,7 @@ struct ReadAloudControllerTests {
         #expect(controller.paragraphs == ["alpha", "bravo", "charlie"])
         #expect(controller.bridge != nil)
         #expect(controller.showControls == true)
-        
+
         #expect(controller.currentParagraph == nil)
 
         await controller.stop()
@@ -82,7 +51,10 @@ struct ReadAloudControllerTests {
     func stopClearsState() async {
         let controller = makeController()
 
-        await controller.start(paragraphs: ["one", "two"], onPassageChange: { _ in })
+        await controller.start(
+            paragraphs: ["one", "two"],
+            onPassageChange: { _ in }
+        )
         #expect(controller.paragraphs.count == 2)
 
         await controller.stop()
@@ -105,8 +77,6 @@ struct ReadAloudControllerTests {
         #expect(controller.paragraphs.isEmpty)
     }
 
-    
-
     @Test("in-range passage index resolves to paragraph text")
     func passageChangeInRangeSetsParagraph() async {
         let controller = makeController()
@@ -116,7 +86,6 @@ struct ReadAloudControllerTests {
             onPassageChange: { _ in }
         )
 
-        
         controller.updateCurrentParagraph(for: 1)
 
         #expect(controller.currentParagraph == "bravo")
@@ -128,12 +97,14 @@ struct ReadAloudControllerTests {
     func passageChangeOutOfRangeClearsParagraph() async {
         let controller = makeController()
 
-        await controller.start(paragraphs: ["alpha", "bravo"], onPassageChange: { _ in })
-        
+        await controller.start(
+            paragraphs: ["alpha", "bravo"],
+            onPassageChange: { _ in }
+        )
+
         controller.updateCurrentParagraph(for: 0)
         #expect(controller.currentParagraph == "alpha")
 
-        
         controller.updateCurrentParagraph(for: 99)
         #expect(controller.currentParagraph == nil)
 
@@ -154,7 +125,9 @@ struct ReadAloudControllerTests {
         await controller.stop()
     }
 
-    @Test("passage-change closure sets currentParagraph when wired through start")
+    @Test(
+        "passage-change closure sets currentParagraph when wired through start"
+    )
     func passageChangeClosure_setsParagraph() async {
         let controller = makeController()
 
@@ -165,31 +138,28 @@ struct ReadAloudControllerTests {
             }
         )
 
-        
-        
         controller.updateCurrentParagraph(for: 1)
         #expect(controller.currentParagraph == "bravo")
 
         await controller.stop()
     }
 
-    
-
-    @Test("pickerInitial matches TTSSettings.default when store has no saved settings")
+    @Test(
+        "pickerInitial matches TTSSettings.default when store has no saved settings"
+    )
     func pickerInitialMatchesDefault() async {
         let controller = makeController()
 
         await controller.start(paragraphs: ["x"], onPassageChange: { _ in })
 
-        
         #expect(controller.pickerInitial == TTSSettings.default)
 
         await controller.stop()
     }
 
-    
-
-    @Test("calling start twice tears down the first bridge and installs a new one")
+    @Test(
+        "calling start twice tears down the first bridge and installs a new one"
+    )
     func doubleStartTearDownsFirst() async {
         let controller = makeController()
 
@@ -200,17 +170,13 @@ struct ReadAloudControllerTests {
         let secondBridge = controller.bridge
 
         #expect(secondBridge != nil)
-        
+
         #expect(firstBridge !== secondBridge)
         #expect(controller.paragraphs == ["bravo"])
 
         await controller.stop()
     }
 }
-
-
-
-
 
 private struct ControllerNoopChunkSource: TTSChunkSource {
     func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {

@@ -268,6 +268,7 @@ private func makeRealEngineBridge(configurator: FakeAudioSessionConfigurator) ->
         prewarmer: TTSPrewarmer(source: InfiniteChunkSource()),
         settingsStore: InMemoryTTSSettingsStore(),
         userId: UserID(),
+        coordinator: coordinator,
         onPassageChange: { _ in }
     )
 }

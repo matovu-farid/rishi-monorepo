@@ -105,35 +105,35 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
         switch script(for: passageId) {
         case .normal:
             await MainActor.run {
-                observable.status = .loading
+                observable.update(status: .loading)
                 observable.error = nil
             }
             await MainActor.run {
-                observable.status = .playing
+                observable.update(status: .playing)
                 observable.currentPassageId = passageId
             }
             await MainActor.run {
-                observable.status = .stopped
+                observable.update(status: .stopped)
                 // currentPassageId intentionally left SET through .stopped.
             }
         case .prewarmedFast:
             await MainActor.run {
-                observable.status = .stopped
+                observable.update(status: .stopped)
                 observable.currentPassageId = passageId
                 observable.error = nil
             }
         case .error:
             await MainActor.run {
-                observable.status = .error
+                observable.update(status: .error)
                 observable.error = "FakeTTSEngine scripted error"
             }
         case .holds:
             await MainActor.run {
-                observable.status = .loading
+                observable.update(status: .loading)
                 observable.error = nil
             }
             await MainActor.run {
-                observable.status = .playing
+                observable.update(status: .playing)
                 observable.currentPassageId = passageId
                 // Intentionally never transitions to .stopped: the advance
                 // watcher waits, so only explicit next()/previous() move the head.
@@ -144,18 +144,18 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
     public func pause() async {
         append(.pause)
         let observable = state
-        await MainActor.run { observable.status = .stopped }
+        await MainActor.run { observable.update(status: .stopped) }
     }
 
     public func resume() async {
         append(.resume)
         let observable = state
-        await MainActor.run { observable.status = .playing }
+        await MainActor.run { observable.update(status: .playing) }
     }
 
     public func stop() async {
         append(.stop)
         let observable = state
-        await MainActor.run { observable.status = .stopped }
+        await MainActor.run { observable.update(status: .stopped) }
     }
 }
