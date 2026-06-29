@@ -48,42 +48,42 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     public init() {}
 
     // MARK: - White-box test seams (preserved)
-    //
-    // These forward to the pump / config builder / dispatcher so the existing
-    // `@testable` tests (`RealtimeAPIAdapterTeardownTests`,
-    // `RealtimeAPIAdapterAudioFormatTests`, `RealtimeAPIAdapterToolCallTests`)
-    // keep pointing at the same symbols after the decomposition.
-
-    /// Test seam: the error pump handle now lives on `RealtimeEventPump`.
-    internal var errorPump: Task<Void, Never>? {
-        get { pump.errorPump }
-        set { pump.errorPump = newValue }
-    }
-    /// Test seam: the transcript pump handle now lives on `RealtimeEventPump`.
-    internal var transcriptPump: Task<Void, Never>? {
-        get { pump.transcriptPump }
-        set { pump.transcriptPump = newValue }
-    }
-    /// Test seam: the tool-call pump handle now lives on `RealtimeEventPump`.
-    internal var toolCallPump: Task<Void, Never>? {
-        get { pump.toolCallPump }
-        set { pump.toolCallPump = newValue }
-    }
-
-    /// Test seam: PCM 24kHz format (delegates to the config builder).
-    static func makePCM24kFormat() -> Session.AudioFormat {
-        RealtimeSessionConfigBuilder.makePCM24kFormat()
-    }
-
-    /// Test seam: per-platform input noise reduction (delegates to the builder).
-    static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
-        RealtimeSessionConfigBuilder.inputNoiseReduction
-    }
-
-    /// Test seam: tool-call readiness gate (delegates to the dispatcher).
-    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
-        toolDispatcher.isArgumentsReady(fc: fc)
-    }
+//    //
+//    // These forward to the pump / config builder / dispatcher so the existing
+//    // `@testable` tests (`RealtimeAPIAdapterTeardownTests`,
+//    // `RealtimeAPIAdapterAudioFormatTests`, `RealtimeAPIAdapterToolCallTests`)
+//    // keep pointing at the same symbols after the decomposition.
+//
+//    /// Test seam: the error pump handle now lives on `RealtimeEventPump`.
+//    internal var errorPump: Task<Void, Never>? {
+//        get { pump.errorPump }
+//        set { pump.errorPump = newValue }
+//    }
+//    /// Test seam: the transcript pump handle now lives on `RealtimeEventPump`.
+//    internal var transcriptPump: Task<Void, Never>? {
+//        get { pump.transcriptPump }
+//        set { pump.transcriptPump = newValue }
+//    }
+//    /// Test seam: the tool-call pump handle now lives on `RealtimeEventPump`.
+//    internal var toolCallPump: Task<Void, Never>? {
+//        get { pump.toolCallPump }
+//        set { pump.toolCallPump = newValue }
+//    }
+//
+//    /// Test seam: PCM 24kHz format (delegates to the config builder).
+//    static func makePCM24kFormat() -> Session.AudioFormat {
+//        RealtimeSessionConfigBuilder.makePCM24kFormat()
+//    }
+//
+//    /// Test seam: per-platform input noise reduction (delegates to the builder).
+//    static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
+//        RealtimeSessionConfigBuilder.inputNoiseReduction
+//    }
+//
+//    /// Test seam: tool-call readiness gate (delegates to the dispatcher).
+//    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
+//        toolDispatcher.isArgumentsReady(fc: fc)
+//    }
 
     // MARK: - RealtimeClientAPI
 

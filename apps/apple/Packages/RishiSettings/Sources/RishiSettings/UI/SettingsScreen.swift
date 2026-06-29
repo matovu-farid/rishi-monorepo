@@ -21,7 +21,6 @@ public struct SettingsScreen: View {
     public let onDelete: () async throws -> Void
     public let onDeleted: () -> Void
     public let onDismiss: () -> Void
-    public let onManageSubscription: () -> Void
 
     /// Reader app-wide defaults. Bindings are owned by AppDependencies in
     /// 11-06; this section only renders + edits them.
@@ -83,7 +82,6 @@ public struct SettingsScreen: View {
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
-        onManageSubscription: @escaping () -> Void,
         onDismiss: @escaping () -> Void
     ) {
         self.user = user
@@ -102,7 +100,6 @@ public struct SettingsScreen: View {
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
-        self.onManageSubscription = onManageSubscription
         self.onDismiss = onDismiss
     }
 
@@ -128,7 +125,6 @@ public struct SettingsScreen: View {
                 )
                 // Phase 13: BillingSection no longer takes an `onManage`
                 // closure — `ManageSubscriptionRow` reads
-                // `ManageSubscriptionPresenter` from the SwiftUI
                 // environment and drives the in-app Manage Subscriptions
                 // sheet directly. The `onManageSubscription` parameter
                 // remains in `SettingsScreen`'s init for source compat
@@ -224,7 +220,6 @@ private struct SettingsScreenPreviewHost: View {
             onSignOut: {},
             onDelete: {},
             onDeleted: {},
-            onManageSubscription: {},
             onDismiss: {}
         )
     }

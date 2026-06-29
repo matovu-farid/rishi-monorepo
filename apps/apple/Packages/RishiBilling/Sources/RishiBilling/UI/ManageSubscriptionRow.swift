@@ -18,67 +18,31 @@ import RishiUIKit
 @available(iOS 18.4, *)
 public struct ManageSubscriptionRow: View {
 
-    @Environment(ManageSubscriptionPresenter.self) private var presenter
-    @State private var isPresenting = false
 
-    private let entitlement: ReaderAppEntitlementFlag.Resolver
-
-    public init(entitlement: ReaderAppEntitlementFlag.Resolver = .production) {
-        self.entitlement = entitlement
+    @State private var showManageSubscriptions = false
+    public init(){
+        
     }
 
+
+
     public var body: some View {
-        if entitlement.isGranted {
-            Button {
-                isPresenting = true
-                // KEEP: presenter.present() drives AppStore.showManageSubscriptions
-                // which is @MainActor-bound; the @State write must run on main too.
-                Task { @MainActor in
-                    await presenter.present()
-                    isPresenting = false
+ 
+                Button(action: {
+                    showManageSubscriptions = true
+                }) {
+                    Label("Manage Subscriptions", systemImage: "creditcard")
                 }
-            } label: {
-                HStack {
-                    Image(systemName: "creditcard")
-                        .foregroundStyle(RishiColor.accent)
-                    Text("Manage Subscription")
-                        .font(RishiTypography.body)
-                        .foregroundStyle(RishiColor.textPrimary)
-                    Spacer()
-                    if isPresenting {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .accessibilityIdentifier("billing-manage-subscription-button")
-            .accessibilityHint("Opens the App Store Manage Subscriptions sheet")
-            .accessibilityLabel("Manage Subscription")
-            .disabled(isPresenting)
-        } else {
-            // Entitlement NOT granted (post-Phase-11 dev/free-tier path).
-            // NO Button, NO Link, NO URL formatting — plain caption so the
-            // row cannot be misread as a CTA. Anti-steering safe: no
-            // external billing URLs, no Stripe references.
-            VStack(alignment: .leading, spacing: RishiSpacing.s) {
-                Text("Subscription")
-                    .font(RishiTypography.body)
-                    .foregroundStyle(RishiColor.textPrimary)
-                Text("Subscribe in-app to manage your subscription here.")
-                    .font(RishiTypography.caption)
-                    .foregroundStyle(RishiColor.textSecondary)
-            }
-            .accessibilityIdentifier("billing-manage-subscription-fallback")
-            .accessibilityLabel("Subscribe in-app to manage your subscription here.")
-        }
+            
+        
+        // Triggers the native system sheet to edit, cancel, or switch plans
+        .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
     }
 }
 
 #Preview("Granted") {
     Form { if #available(iOS 18.4, *) {
-        ManageSubscriptionRow(entitlement: .init(isGranted: true))
+        ManageSubscriptionRow()
     } else {
         // Fallback on earlier versions
     } }
@@ -87,7 +51,7 @@ public struct ManageSubscriptionRow: View {
 
 #Preview("Not granted (failure-mode)") {
     Form { if #available(iOS 18.4, *) {
-        ManageSubscriptionRow(entitlement: .init(isGranted: false))
+        ManageSubscriptionRow()
     } else {
         // Fallback on earlier versions
     } }

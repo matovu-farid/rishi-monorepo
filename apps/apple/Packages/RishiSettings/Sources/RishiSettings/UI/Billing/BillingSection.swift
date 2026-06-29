@@ -20,7 +20,7 @@ public struct BillingSection: View {
 
     public var body: some View {
         Section {
-            ManageSubscriptionRow(entitlement: entitlement)
+            ManageSubscriptionRow()
         } header: {
             Text("Subscription")
                 .font(RishiTypography.titleM)

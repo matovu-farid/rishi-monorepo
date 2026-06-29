@@ -89,14 +89,7 @@ struct SettingsContent: View {
                         onDismiss()
                         signOut()
                     },
-                    onManageSubscription: {
-                        
-                        
-                        
-//                        Task { @MainActor in
-//                            await presenter.present()
-//                        }
-                    },
+             
                     onDismiss: { onDismiss() }
                 )
             } else {

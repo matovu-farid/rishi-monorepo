@@ -30,11 +30,7 @@ import RishiSearch
 /// ```
 public actor RealtimeVoiceSession {
 
-    /// Factory closure type for the per-session Book-Context Responder.
-    /// Plan 25-10 spawns the responder at connect-time when `start(bookId:)`
-    /// supplies a non-nil book id AND a factory was passed at init. Returning
-    /// a `BookContextResponder` (not a protocol) keeps the responder's actor
-    /// isolation contractual without forcing tests to mock the search loop.
+
     public typealias BookContextResponderFactory = @Sendable (UUID) -> BookContextResponder
 
     private let micGate: any MicPermissionGate
@@ -204,11 +200,6 @@ public actor RealtimeVoiceSession {
         isEnding = true
         await update(.ending)
         await reconnect?.cancel()
-        // Phase 25 (Plan 25-10) — cancel the Responder BEFORE client.disconnect()
-        // so any in-flight tool-call processing sees Task.isCancelled and
-        // skips its sendToolResult. Disconnect would also finish the stream
-        // and break the consume loop, but cancelling first guarantees an
-        // in-flight search doesn't race a phantom sendToolResult.
         responderTask?.cancel(); responderTask = nil
         await client.disconnect()
         await coordinator.releaseActiveMode(.voice)
