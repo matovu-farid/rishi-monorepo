@@ -661,7 +661,7 @@ public struct PDFReaderScreen: View {
                             initialQuote: nil
                         )
                     } label: {
-                        Image(systemName: "waveform.circle")
+                        Image(systemName: "waveform.circle.fill")
                     }
                     .accessibilityIdentifier("reader.toolbar.voice")
                     .accessibilityLabel(A11yLabel.readerOpenVoice)

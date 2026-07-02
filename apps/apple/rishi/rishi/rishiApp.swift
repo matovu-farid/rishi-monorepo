@@ -4,6 +4,7 @@ import RishiCore
 import RishiLibrary
 import RishiSync
 import SwiftUI
+import TipKit
 
 #if canImport(UIKit)
     import UIKit
@@ -38,6 +39,24 @@ struct rishiApp: App {
                 .task {
                     await deps.bootstrap()
                 }
+                .task {
+                    // Configure and load your tips at app launch.
+                    do {
+                        #if DEBUG
+                        try Tips.resetDatastore()
+                        try Tips.configure([
+                            .displayFrequency(.immediate)
+                        ])
+                        #else
+                        try Tips.configure()
+                        #endif
+                    }
+                    catch {
+                        // Handle TipKit errors
+                        print("Error initializing TipKit \(error.localizedDescription)")
+                    }
+                }
+                
         }
 
         .commands {
