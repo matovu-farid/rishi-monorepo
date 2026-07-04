@@ -456,9 +456,7 @@ app.get("/api/user", requireAuth, async (c) => {
       });
     }
 
-    return c.json({
-      user: retrieveduser,
-    });
+    return c.json(retrieveduser);
   } catch (e) {
     console.log(e);
     c.json({

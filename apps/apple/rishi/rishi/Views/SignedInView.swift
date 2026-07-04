@@ -16,136 +16,125 @@ import SwiftUI
 #endif
 
 struct SignedInView: View {
-
-    let services: BootstrappedServices
-    let user: User
-
-    @Binding var selectedTabRaw: String
-    @Binding var openBookIdRaw: String
-
-    let onSignedOut: () -> Void
-
-    let onCacheUserId: (UserID) -> Void
-
+    @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw:
+    String = ""
+    @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw:
+    String = ""
+  
     @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var appDependencies
 
-    init(
-        services: BootstrappedServices,
-        user: User,
-        selectedTabRaw: Binding<String>,
-        openBookIdRaw: Binding<String>,
-        onSignedOut: @escaping () -> Void,
-        onCacheUserId: @escaping (UserID) -> Void
-    ) {
-        self.services = services
-        self.user = user
-        self._selectedTabRaw = selectedTabRaw
-        self._openBookIdRaw = openBookIdRaw
-        self.onSignedOut = onSignedOut
-        self.onCacheUserId = onCacheUserId
+    @Environment(CurrentUserBox.self) private var currentUserBox
+    var services: BootstrappedServices? {appDependencies?.services}
+    var user: User? {
+        guard case .signedIn(user: let user) = currentUserBox.state else {return nil}
+        return user
     }
+    
+
+
+  
 
     @State private var model = SignedInViewModel()
 
     var body: some View {
-        @Bindable var model = model
-        LibraryTabView(
-            services: services,
-            user: user,
-            model: model,
-            onCacheUserId: onCacheUserId
-        )
-        
-        .sheet(item: $model.selectedConversation) { convo in
-            ConversationChatHost(
-                vm: ChatPanelViewModel.make(
-                    conversation: convo,
-                    services: services
-                )
-            )
-        }
-
-        .fullScreenCover(
-            isPresented: Binding(
-                get: { services.voicePresenter.isPresenting },
-                set: { newValue in
-                    if newValue == false {
-
-                        Task { await services.voicePresenter.end() }
-                    }
-                }
-            ),
-            onDismiss: {
-
-                services.voicePresenter.promotePendingFailure()
-            }
-        ) {
-            VoiceSessionHost(
-                presenter: services.voicePresenter,
+        if let services, let user  {
+            
+            @Bindable var model = model
+            LibraryTabView(
                 services: services,
-                userId: user.id
+                user: user,
+                model: model
             )
-        }
-
-        .alert(
-            voiceFailureTitle,
-            isPresented: Binding(
-                get: { services.voicePresenter.failure != nil },
-                set: { presented in
-                    if presented == false {
+            
+            .sheet(item: $model.selectedConversation) { convo in
+                ConversationChatHost(
+                    vm: ChatPanelViewModel.make(
+                        conversation: convo,
+                        services: services
+                    )
+                )
+            }
+            
+            .fullScreenCover(
+                isPresented: Binding(
+                    get: { services.voicePresenter.isPresenting },
+                    set: { newValue in
+                        if newValue == false {
+                            
+                            Task { await services.voicePresenter.end() }
+                        }
+                    }
+                ),
+                onDismiss: {
+                    
+                    services.voicePresenter.promotePendingFailure()
+                }
+            ) {
+                VoiceSessionHost(
+                    presenter: services.voicePresenter,
+                    services: services,
+                    userId: user.id
+                )
+            }
+            
+            .alert(
+                voiceFailureTitle,
+                isPresented: Binding(
+                    get: { services.voicePresenter.failure != nil },
+                    set: { presented in
+                        if presented == false {
+                            services.voicePresenter.clearFailure()
+                        }
+                    }
+                ),
+                presenting: services.voicePresenter.failure
+            ) { failure in
+                switch failure.primaryAction {
+                case .openSettings:
+                    Button("Open Settings") {
+                        Self.openSettings()
                         services.voicePresenter.clearFailure()
                     }
+                case .retry:
+                    Button("Try again") {
+                        
+                        Task { await services.voicePresenter.retry() }
+                    }
                 }
-            ),
-            presenting: services.voicePresenter.failure
-        ) { failure in
-            switch failure.primaryAction {
-            case .openSettings:
-                Button("Open Settings") {
-                    Self.openSettings()
+                Button("Dismiss", role: .cancel) {
                     services.voicePresenter.clearFailure()
                 }
-            case .retry:
-                Button("Try again") {
-
-                    Task { await services.voicePresenter.retry() }
-                }
+            } message: { failure in
+                Text(failure.message)
             }
-            Button("Dismiss", role: .cancel) {
-                services.voicePresenter.clearFailure()
-            }
-        } message: { failure in
-            Text(failure.message)
+            
+     
+            
+            .macCommandDispatch(readerDefaults: services.readerDefaults)
+            
+            .readerPrefsMenuPublisher(
+                services: services,
+                user: user,
+                account: appDependencies?.macAccountMenu
+            )
+            
+            .sceneRestoration(
+                model: model,
+                tabRaw: $selectedTabRaw,
+                openBookIdRaw: $openBookIdRaw
+            )
         }
-
-        //        .sheet(item: $model.paywallFeature) { feature in
-        ////            PaywallHost(
-        ////                feature: feature,
-        ////                vm: PaywallViewModel.make(services: services),
-        ////                onDismiss: { model.dismissPaywall() }
-        ////            )
-        //        }
-
-        .macCommandDispatch(readerDefaults: services.readerDefaults)
-
-        .readerPrefsMenuPublisher(
-            services: services,
-            user: user,
-            onSignedOut: onSignedOut,
-            account: appDependencies?.macAccountMenu
-        )
-
-        .sceneRestoration(
-            model: model,
-            tabRaw: $selectedTabRaw,
-            openBookIdRaw: $openBookIdRaw
-        )
+        else {
+            VStack{
+                ProgressView()
+            }
+        }
     }
        
 
     private var voiceFailureTitle: String {
-        services.voicePresenter.failure?.title ?? ""
+        services?.voicePresenter.failure?.title ?? ""
     }
 
     private static func openSettings() {
@@ -171,7 +160,6 @@ extension View {
     func readerPrefsMenuPublisher(
         services: BootstrappedServices,
         user: User,
-        onSignedOut: @escaping () -> Void,
         account: MacAccountMenuModel?
     ) -> some View {
         #if targetEnvironment(macCatalyst)

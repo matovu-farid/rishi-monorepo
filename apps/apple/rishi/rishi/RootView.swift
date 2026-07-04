@@ -6,6 +6,7 @@ import RishiOnboarding
 import StoreKit
 import SwiftUI
 import RishiBilling
+import RishiAPI
 
 struct RootView: View {
 
@@ -13,10 +14,7 @@ struct RootView: View {
     @Environment(\.rishiAuthService) private var auth
     @Environment(\.appDependencies) private var deps
 
-    @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw:
-        String = ""
-    @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw:
-        String = ""
+
 
     @State private var currentUser: User? = nil
     @State private var bootstrapped = false
@@ -26,6 +24,7 @@ struct RootView: View {
     @State private var entitlementResolved = false
 
     @State private var showOnboarding = false
+    @Environment(CurrentUserBox.self) private var currentUserBox
     
    
     var body: some View {
@@ -43,22 +42,35 @@ struct RootView: View {
     private func realBody(deps: AppDependencies) -> some View {
 
         realBodyContent(deps: deps)
-//            .environment(deps.manageSubscriptionPresenter)
             .environment(\.services, deps.services)
-            .environment(\.currentUser, currentUser)
+         
             .environment(
                 \.signOut,
                 {
 
                     deps.entitlementReconciler.reset()
-//                    let service = deps.entitlementService
-//                    Task { await service.clearCache() }
+
                     currentUser = nil
+                    
                 }
             )
             .checkCustomerEntitlements()
             .loadProducts()
             .observeErrors()
+            .task {
+                guard case .signedOut = currentUserBox.state else { return }
+                currentUserBox.state = .loading
+                if let userId = try? Keychain.load(.userId), let uuidUserId = UUID(uuidString: userId) {
+                    
+                    deps.setUserId(uuidUserId)
+                    let workerClient = deps.workerClient
+                    if let user = try? await workerClient.send(UserGetEndpoint()){
+                        currentUserBox.signIn(user: user)
+                    }
+                }else {
+                    currentUserBox.state = .signedOut
+                }
+            }
             .onInAppPurchaseStart { product in
                 print("START:", product.id)
             }
@@ -87,62 +99,46 @@ struct RootView: View {
     private func resolvedGate(deps: AppDependencies) -> AppGate {
         let gate = AppGate.resolve(
             authProbeComplete: authProbeComplete,
-            isSignedIn: currentUser != nil,
+            isSignedIn: currentUserBox.isSigned,
             entitlementResolved: entitlementResolved,
             level: subscriptionService.currentSubscription
         )
-        Log.event(
-            "approuter.gate.resolved",
-            level: .info,
-            data: [
-                "case": "\(gate)",
-                "level": "\(deps.entitlementReconciler.level)",
-                "authProbe": "\(authProbeComplete)",
-                "signedIn": "\(currentUser != nil)",
-                "resolved": "\(entitlementResolved)",
-                "id": "\(ObjectIdentifier(deps.entitlementReconciler))",
-            ]
-        )
+       
         return gate
     }
 
     @ViewBuilder
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
-
-            switch resolvedGate(deps: deps) {
-            case .loading:
+            if case .loading = currentUserBox.state {
                 ProgressView()
-
-
-            case .signedOut:
-                signedOutView
-            case .paywall:
-                if let groupID = deps.services?.groupID {
+            } else {
+                
+                switch resolvedGate(deps: deps) {
+                case .loading:
+                    ProgressView()
                     
                     
-                    
-                    SubscriptionsView(color: .rishiBrown, groupId: groupID)
-                }else {
-                    VStack{
-                        Text("GroupID is not provided")
-                        ProgressView()
+                case .signedOut:
+                    signedOutView
+                case .paywall:
+                    if let groupID = deps.services?.groupID {
+                        
+                        
+                        
+                        SubscriptionsView(color: .rishiBrown, groupId: groupID)
+                    }else {
+                        VStack{
+                            ProgressView()
+                        }
                     }
-                }
-            case .app:
-
-                SignedInView(
-                    services: deps.services!,
-                    user: currentUser!,
-                    selectedTabRaw: $selectedTabRaw,
-                    openBookIdRaw: $openBookIdRaw,
-                    onSignedOut: { currentUser = nil },
-                    onCacheUserId: { [deps] id in deps.cachedUserId = currentUser?.id}
-                )
-                .task {
-                    if let userId = currentUser?.id {
-                         deps.setUserId(userId)
-                    }
+                case .app:
+                    
+                    SignedInView(
+                        
+                        
+                    )
+              
                 }
             }
         }

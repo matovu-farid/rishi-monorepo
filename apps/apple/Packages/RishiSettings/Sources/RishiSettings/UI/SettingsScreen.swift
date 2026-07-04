@@ -197,9 +197,10 @@ private struct SettingsScreenPreviewHost: View {
     var body: some View {
         SettingsScreen(
             user: User(
+                id: UUID(),
                 email: "reader@example.com",
-                displayName: "Sample Reader",
-                hasPro: true
+                name: "Sample Reader",
+                
             ),
             readerTheme: $theme,
             readerFontFamily: $font,

@@ -5,6 +5,7 @@ import RishiLibrary
 import RishiSync
 import SwiftUI
 import TipKit
+import SwiftData
 
 #if canImport(UIKit)
     import UIKit
@@ -14,6 +15,8 @@ import TipKit
 struct rishiApp: App {
     @State private var deps = AppDependencies()
     @State private var router = AppRouter()
+  
+    var currentUserBox = CurrentUserBox()
 
     #if canImport(UIKit)
         @UIApplicationDelegateAdaptor(RishiAppDelegate.self) private
@@ -25,16 +28,20 @@ struct rishiApp: App {
         #if canImport(UIKit)
             RishiAppDelegate.shared.dependencies = deps
         #endif
+    
     }
 
     var body: some Scene {
         WindowGroup {
+        
             RootView()
+                .environment(currentUserBox)
                 .environment(\.rishiAuthService, deps.services?.authService)
                 .environment(\.appDependencies, deps)
                 .environment(\.macCommandRouter, deps.macCommandRouter)
                 .environment(SubscriptionService.shared)
                 .environment(router)
+        
 
                 .task {
                     await deps.bootstrap()
@@ -142,12 +149,16 @@ struct rishiApp: App {
                 completionHandler,
                 to: (@Sendable (UIBackgroundFetchResult) -> Void).self
             )
+       
 
             Task { @MainActor in
                 await deps.backgroundSyncLifecycle.handleSilentPush(
                     userInfo,
                     completion: sendableHandler
                 )
+             
+           
+                
             }
         }
     }

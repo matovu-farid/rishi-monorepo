@@ -33,12 +33,12 @@ struct AccountSection: View {
                     .font(RishiTypography.body)
                     .foregroundStyle(RishiColor.textPrimary)
                 Spacer()
-                Text(user.email)
+                Text(user.email ?? "Email unavailable")
                     .font(RishiTypography.caption)
                     .foregroundStyle(RishiColor.textSecondary)
                     .accessibilityIdentifier("settings-account-email")
             }
-            if let displayName = user.displayName, !displayName.isEmpty {
+            if let displayName = user.name, !displayName.isEmpty {
                 HStack {
                     Text("Name")
                         .font(RishiTypography.body)
@@ -77,9 +77,10 @@ struct AccountSection: View {
     Form {
         AccountSection(
             user: User(
+                id: UUID(),
                 email: "reader@example.com",
-                displayName: "Sample Reader",
-                hasPro: true
+                name: "Sample Reader",
+               
             ),
             onSignOut: {},
             onShowDeleteFlow: {}

@@ -44,7 +44,7 @@ authRoutes.post("/apple", async (c) => {
       audience: "org.fidexa.rishi",
     });
     const db = createDb(c.env.DB);
-    const userId = await Effect.runPromise(
+    const user = await Effect.runPromise(
       findOrCreateUser(db, {
         sub: payload.sub!,
         email: (payload.email as string) || "${payload.sub}@apple.com",
@@ -58,20 +58,25 @@ authRoutes.post("/apple", async (c) => {
 
     const accessToken = await Effect.runPromise(
       signAccessToken(c.env, {
-        userId: userId,
+        userId: user.id,
       }),
     );
 
     const refreshToken = await Effect.runPromise(
       signRefreshToken(c.env, {
-        userId: userId,
+        userId: user.id,
       }),
     );
 
     return c.json({
       accessToken,
       refreshToken,
-      userId: userId,
+      userId: user.id,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
     });
   } catch (err) {
     console.error(err);

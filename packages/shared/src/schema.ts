@@ -11,7 +11,7 @@ import {
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  email: text("email").notNull().unique(),
+  email: text("email"),
   emailVerified: integer("email_verified", { mode: "boolean" }).notNull(),
   image: text("image"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
@@ -49,6 +49,19 @@ export const appleUsers = sqliteTable("apple_users", {
     .$onUpdateFn(() => new Date())
     .notNull(),
 });
+
+import { relations } from "drizzle-orm";
+
+export const appleUsersRelations = relations(appleUsers, ({ one }) => ({
+  user: one(user, {
+    fields: [appleUsers.userId],
+    references: [user.id],
+  }),
+}));
+
+export const userRelations = relations(user, ({ many }) => ({
+  appleAccounts: many(appleUsers),
+}));
 
 // ─── Books table ───────────────────────────────────────────────────────────────
 // Matches mobile SQLite schema columns (snake_case) plus sync-specific columns.

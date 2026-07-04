@@ -11,7 +11,6 @@ struct LibraryTabView: View {
     let services: BootstrappedServices
     let user: User
     let model: SignedInViewModel
-    let onCacheUserId: (UserID) -> Void
 
     @Environment(AppRouter.self) private var router
 
@@ -21,12 +20,10 @@ struct LibraryTabView: View {
         services: BootstrappedServices,
         user: User,
         model: SignedInViewModel,
-        onCacheUserId: @escaping (UserID) -> Void
     ) {
         self.services = services
         self.user = user
         self.model = model
-        self.onCacheUserId = onCacheUserId
         _libraryVM = State(
             initialValue: LibraryViewModel.make(services: services, user: user)
         )
@@ -73,7 +70,6 @@ struct LibraryTabView: View {
                 )
             }
             .task(id: user.id) {
-                onCacheUserId(user.id)
                 async let sample = services.sampleBookInstaller.installIfNeeded(
                     ownerId: user.id
                 )

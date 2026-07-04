@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import RishiCore
 
 public struct JWTEndPoint: WorkerEndpointWithBody {
     public let body: BodyType
@@ -18,6 +19,8 @@ public struct JWTEndPoint: WorkerEndpointWithBody {
         
        public var accessToken: String
        public var refreshToken: String
+       public var userId: String
+       public var user: User
     }
     
     public struct BodyType:Encodable,Sendable {

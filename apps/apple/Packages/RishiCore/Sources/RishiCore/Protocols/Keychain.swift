@@ -13,6 +13,7 @@ public enum Keychain {
     public enum Key: String {
         case accessToken
         case refreshToken
+        case userId
     }
     
     public static func save(_ value: String, for key: Key) throws {

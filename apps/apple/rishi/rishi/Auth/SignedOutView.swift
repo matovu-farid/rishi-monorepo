@@ -9,51 +9,64 @@ struct SignedOutView: View {
     @Environment(\.rishiAuthService) private var authService: (any AuthService)?
     
     @Environment(\.appDependencies) private var deps
+    
     var workerClient: WorkerClient? {deps?.workerClient}
     var onSignedIn: (User) -> Void = { _ in }
+    @State var currentUser:User? = nil
+    @State var isSignedIn:Bool = false
+    @Environment(CurrentUserBox.self) private var currentUserBox
+    
+
 
     @State private var viewModel = SignedOutViewModel(authService: nil)
 
     var body: some View {
-        ZStack{
-            Color.rishiBrown
-                .opacity(0.1)
-                .ignoresSafeArea()
-            
-            RishiScreenScaffold(actionPlacement: .belowContent) {
-                VStack(spacing: 24){
-                    Image(.rishi)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 100, height: 100)
-                        .clipShape(.rect(cornerRadius: 20))
-                    VStack(spacing: 8) {
-                        Text("Rishi Reader")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                        
-                        Text("Read with focus, listen on the go, and seamlessly switch between text and audio.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
+        NavigationStack{
+            ZStack{
+                Color.rishiBrown
+                    .opacity(0.1)
+                    .ignoresSafeArea()
+                
+                RishiScreenScaffold(actionPlacement: .belowContent) {
+                    VStack(spacing: 24){
+                        Image(.rishi)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 100, height: 100)
+                            .clipShape(.rect(cornerRadius: 20))
+                        VStack(spacing: 8) {
+                            Text("Rishi Reader")
+                                .font(.largeTitle)
+                                .fontWeight(.bold)
+                            
+                            Text("Read with focus, listen on the go, and seamlessly switch between text and audio.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        }
                     }
+                    .padding(.horizontal, RishiSpacing.l)
+                } actions: {
+                    VStack(spacing: RishiSpacing.l) {
+                        buttons
+                        errorRow
+                    }
+                    .padding(.horizontal, RishiSpacing.l)
+                    .padding(.bottom, RishiSpacing.l)
                 }
-                .padding(.horizontal, RishiSpacing.l)
-            } actions: {
-                VStack(spacing: RishiSpacing.l) {
-                    buttons
-                    errorRow
+                .environment(\.currentUser, currentUser)
+                
+                .task {
+                    
+                    viewModel.setAuthService(authService)
+                    
+                    viewModel.onSignedIn = onSignedIn
                 }
-                .padding(.horizontal, RishiSpacing.l)
-                .padding(.bottom, RishiSpacing.l)
             }
-            
-            .task {
-                
-                viewModel.setAuthService(authService)
-                
-                viewModel.onSignedIn = onSignedIn
+            .navigationDestination(isPresented: $isSignedIn) {
+                SignedInView()
+              
             }
         }
     }
@@ -132,6 +145,18 @@ struct SignedOutView: View {
                         auth.refreshToken,
                         for: .refreshToken
                     )
+                    try? Keychain.save(
+                        auth.userId,
+                        for: .userId
+                    )
+                    currentUser = auth.user
+                    
+                    if let userId = UUID(uuidString: auth.userId){
+                        deps?.setUserId(userId)
+                        isSignedIn = true
+                        
+                    }
+                    currentUserBox.signIn(user: auth.user)
                 }
             }
             

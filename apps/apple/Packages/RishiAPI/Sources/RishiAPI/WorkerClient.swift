@@ -12,6 +12,9 @@ public actor WorkerClient {
     private let tokenProvider: any TokenProvider
     private let devBypassEnabled: Bool
     private let devBypassSecret: String?
+    private var refreshTask: Task<Void, Error>?
+    private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
 
     /// Retry attempt cap (total, including the initial try). Phase 2 fixes this
     /// at 3 per requirement API-01; revisit if 5xx tail-latency becomes a problem.
@@ -34,37 +37,194 @@ public actor WorkerClient {
     // MARK: - Non-streaming send
 
     /// Send a typed endpoint, retrying transient failures with exponential backoff.
-    public func send<E: WorkerEndpoint>(_ endpoint: E) async throws -> E.Response {
+    public func send<E: WorkerEndpoint>(
+        _ endpoint: E
+    ) async throws -> E.Response {
+        
         var lastError: Error?
+        
         for attempt in 1...maxAttempts {
+            
             if attempt > 1 {
-                let delaySeconds = pow(2.0, Double(attempt - 1)) * 0.5
-                try await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+                let delaySeconds =
+                pow(2.0, Double(attempt - 1)) * 0.5
+                
+               
+                try await Task.sleep(
+                    for: .seconds(delaySeconds)
+                )
             }
-
+            
             do {
-                return try await performAttempt(endpoint, attempt: attempt)
+                
+                return try await performAuthenticatedRequest(
+                    endpoint,
+                    attempt: attempt
+                )
+                
             } catch let error as RishiError {
+                
                 switch error {
-                case .unauthenticated, .network, .decoding, .notFound, .subscription, .cancelled, .persistence:
-                    // 4xx + decode + business errors: do not retry.
-                    Log.error("worker.error", error: error)
-                    throw error
+                    
                 case .networkFailure(let urlError):
-                    if isRetryable(urlError) && attempt < maxAttempts {
+                    
+                    if isRetryable(urlError),
+                       attempt < maxAttempts {
+                        
                         lastError = error
                         continue
                     }
-                    Log.error("worker.error", error: error)
+                    
+                    throw error
+                    
+                default:
                     throw error
                 }
+                
             } catch {
-                Log.error("worker.error", error: error)
+                
                 throw error
             }
         }
-        // Unreachable, but the compiler can't prove it; throw the last error.
-        throw lastError ?? RishiError.networkFailure(URLError(.unknown))
+        
+        throw lastError!
+    }
+    
+    private func performAuthenticatedRequest<E: WorkerEndpoint>(
+        _ endpoint: E,
+        attempt: Int
+    ) async throws -> E.Response {
+        
+        do {
+            return try await performAttempt(endpoint, attempt: attempt)
+        } catch RishiError.unauthenticated {
+            
+            try await refreshAccessToken()
+            
+            return try await performAttempt(
+                endpoint,
+                attempt: attempt
+            )
+        }
+    }
+    public nonisolated func stream<E: WorkerStreamingEndpoint>(
+        _ endpoint: E
+    ) async -> AsyncThrowingStream<Data, Error> {
+        
+        await makeStream(endpoint)
+    }
+    private func makeStream<E: WorkerStreamingEndpoint>(
+        _ endpoint: E
+    ) -> AsyncThrowingStream<Data, Error> {
+        
+        AsyncThrowingStream { continuation in
+            
+            let task = Task {
+                
+                do {
+                    
+                    let request =
+                    try await buildStreamingRequest(
+                        for: endpoint
+                    )
+                    
+                    let (bytes, response) =
+                    try await session.bytes(
+                        for: request
+                    )
+                    
+                    guard
+                        let http =
+                            response as? HTTPURLResponse
+                    else {
+                        
+                        throw RishiError.network(
+                            code: "",
+                            message: ""
+                        )
+                    }
+                    
+                    if http.statusCode == 401 {
+                        
+                        try await refreshAccessToken()
+                        
+                        let retry =
+                        try await buildStreamingRequest(
+                            for: endpoint
+                        )
+                        
+                        let (retryBytes, _) =
+                        try await session.bytes(
+                            for: retry
+                        )
+                        
+                        var buffer = Data()
+                        
+                        for try await byte in retryBytes {
+                            
+                            buffer.append(byte)
+                            
+                            if buffer.count >= 4096 {
+                                
+                                continuation.yield(buffer)
+                                
+                                buffer.removeAll(
+                                    keepingCapacity: true
+                                )
+                            }
+                        }
+                        
+                        if !buffer.isEmpty {
+                            continuation.yield(buffer)
+                        }
+                        
+                        continuation.finish()
+                        
+                        return
+                    }
+                    
+                    if !(200..<300).contains(http.statusCode) {
+                        
+                        throw RishiError.network(
+                            code: "http_\(http.statusCode)",
+                            message: ""
+                        )
+                    }
+                    
+                    var buffer = Data()
+                    
+                    for try await byte in bytes {
+                        
+                        buffer.append(byte)
+                        
+                        if buffer.count >= 4096 {
+                            
+                            continuation.yield(buffer)
+                            
+                            buffer.removeAll(
+                                keepingCapacity: true
+                            )
+                        }
+                    }
+                    
+                    if !buffer.isEmpty {
+                        continuation.yield(buffer)
+                    }
+                    
+                    continuation.finish()
+                    
+                } catch {
+                    
+                    continuation.finish(
+                        throwing: error
+                    )
+                }
+            }
+            
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
     }
 
     private func performAttempt<E: WorkerEndpoint>(_ endpoint: E, attempt: Int) async throws -> E.Response {
@@ -96,14 +256,14 @@ public actor WorkerClient {
         switch status {
         case 200..<300:
             do {
-                return try JSONDecoder().decode(E.Response.self, from: data)
+                return try decoder.decode(E.Response.self, from: data)
             } catch {
                 throw RishiError.decoding("Failed to decode \(E.Response.self) at \(endpoint.path): \(error)")
             }
         case 401:
             throw RishiError.unauthenticated
         case 400..<500:
-            let envelope = (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))
+            let envelope = (try? decoder.decode(ErrorEnvelope.self, from: data))
                 ?? ErrorEnvelope(error: .init(code: "http_4xx", message: "HTTP \(status)"))
             throw RishiError.network(code: envelope.code, message: envelope.message)
         case 500..<600:
@@ -125,52 +285,97 @@ public actor WorkerClient {
             return false
         }
     }
-
-    // MARK: - Streaming
-
-    /// Stream raw `Data` chunks from a streaming endpoint (e.g. `/api/audio/speech`).
-    /// The returned `AsyncThrowingStream` terminates with an error on transport failure
-    /// or non-2xx status, and finishes cleanly when the worker closes the body.
-    public nonisolated func stream<E: WorkerStreamingEndpoint>(
-        _ endpoint: E
-    ) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
-            // KEEP: nonisolated wrapper; Task body runs off main and bridges
-            // URLSession.bytes into the AsyncThrowingStream continuation.
-            let task = Task {
-                do {
-                    let request = try await self.buildStreamingRequest(for: endpoint)
-                    let (bytes, response) = try await self.session.bytes(for: request)
-                    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                        if http.statusCode == 401 {
-                            continuation.finish(throwing: RishiError.unauthenticated)
-                        } else {
-                            continuation.finish(throwing: RishiError.network(
-                                code: "http_\(http.statusCode)",
-                                message: "HTTP \(http.statusCode)"
-                            ))
-                        }
-                        return
-                    }
-                    var buffer = Data()
-                    let flushSize = 4096
-                    for try await byte in bytes {
-                        buffer.append(byte)
-                        if buffer.count >= flushSize {
-                            continuation.yield(buffer)
-                            buffer.removeAll(keepingCapacity: true)
-                        }
-                    }
-                    if !buffer.isEmpty { continuation.yield(buffer) }
-                    continuation.finish()
-                } catch let urlError as URLError {
-                    continuation.finish(throwing: RishiError.networkFailure(urlError))
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
+    private func refreshAccessToken() async throws {
+        
+        if let refreshTask {
+            return try await refreshTask.value
         }
+        
+        let task = Task {
+            try await actuallyRefresh()
+        }
+        
+        refreshTask = task
+        
+        defer {
+            refreshTask = nil
+        }
+        
+        try await task.value
+    }
+ 
+    
+    private func actuallyRefresh() async throws {
+        
+        guard let refreshToken =
+                try Keychain.load(.refreshToken)
+        else {
+            throw RishiError.unauthenticated
+        }
+        
+        var request = URLRequest(
+            url: makeURL(path: "/auth/refresh")
+        )
+        
+        request.httpMethod = "POST"
+        
+        request.httpShouldHandleCookies = false
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        
+        struct Body: Encodable {
+            let refreshToken: String
+        }
+        
+        request.httpBody =
+        try encoder.encode(
+            Body(refreshToken: refreshToken)
+        )
+        
+        let (data, response) =
+        try await session.data(for: request)
+        
+        guard
+            let http = response as? HTTPURLResponse
+        else {
+            throw RishiError.network(
+                code: "invalid_response",
+                message: ""
+            )
+        }
+        
+        guard http.statusCode == 200 else {
+            
+            Keychain.delete(.accessToken)
+            Keychain.delete(.refreshToken)
+            
+            throw RishiError.unauthenticated
+        }
+        
+        struct Tokens: Decodable {
+            
+            let accessToken: String
+            let refreshToken: String
+        }
+        
+        let tokens =
+        try JSONDecoder().decode(
+            Tokens.self,
+            from: data
+        )
+        
+        try Keychain.save(
+            tokens.accessToken,
+            for: .accessToken
+        )
+        
+        try Keychain.save(
+            tokens.refreshToken,
+            for: .refreshToken
+        )
     }
 
     // MARK: - Request building
@@ -195,6 +400,7 @@ public actor WorkerClient {
         components.percentEncodedQuery = query
         return components.url ?? url
     }
+   
 
     func buildRequest<E: WorkerEndpoint>(for endpoint: E) async throws -> URLRequest {
         let url = makeURL(path: endpoint.path)
@@ -206,10 +412,8 @@ public actor WorkerClient {
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-//        if let token = await tokenProvider.token() {
-//            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-//        }
-        if let token = try Keychain.load(.accessToken) {
+
+        if let token = try accessToken() {
             request.setValue(
                 "Bearer \(token)",
                 forHTTPHeaderField: "Authorization"
@@ -228,7 +432,7 @@ public actor WorkerClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if let bodied = endpoint as? (any WorkerEndpointWithBody) {
-            request.httpBody = try JSONEncoder().encode(AnyEncodable(bodied.body))
+            request.httpBody = try encoder.encode(AnyEncodable(bodied.body))
         }
         return request
     }
@@ -242,8 +446,12 @@ public actor WorkerClient {
         // Native bearer-token client: never attach/store cookies (see buildRequest).
         request.httpShouldHandleCookies = false
 
-        if let token = await tokenProvider.token() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        if let token = try accessToken() {
+            request.setValue(
+                "Bearer \(token)",
+                forHTTPHeaderField: "Authorization"
+            )
         }
         #if DEBUG
         if devBypassEnabled {
@@ -252,10 +460,13 @@ public actor WorkerClient {
         #endif
         if let bodied = endpoint as? (any WorkerStreamingEndpointWithBody) {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(AnyEncodable(bodied.body))
+            request.httpBody = try encoder.encode(AnyEncodable(bodied.body))
         }
         return request
     }
+}
+private func accessToken() throws -> String? {
+    try Keychain.load(.accessToken)
 }
 
 // MARK: - AnyEncodable shim

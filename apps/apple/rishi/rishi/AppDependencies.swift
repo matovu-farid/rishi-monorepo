@@ -40,7 +40,7 @@ final class AppDependencies {
         set { userIdBox.value = newValue }
     }
 
-    private let userIdBox = UserIdBox()
+    public let userIdBox = UserIdBox()
 
     @ObservationIgnored
     private lazy var _backgroundSyncLifecycle = BackgroundSyncLifecycle(

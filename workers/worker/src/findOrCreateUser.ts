@@ -23,7 +23,7 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
     );
 
     if (existing && existing.user?.id) {
-      return existing.user.id!;
+      return existing.user;
     }
     const userId = randomUUID();
     const userData = {
@@ -49,8 +49,6 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
     };
     yield* Effect.tryPromise({
       try: async () => {
-   
-   
         try {
           await db.insert(user).values(userData);
 
@@ -69,5 +67,5 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
       },
     });
 
-    return userId;
+    return userData;
   });

@@ -125,7 +125,7 @@ public actor RishiChatService: ChatService {
         let accumulator = AssistantAccumulator()
         var finalized = false
 
-        let byteStream = workerClient.stream(endpoint)
+        let byteStream = await workerClient.stream(endpoint)
         let yieldChannel = AsyncStream<ChatEvent>.makeStream(bufferingPolicy: .unbounded)
 
         // KEEP: child consumer Task inside the actor; reads WorkerClient bytes

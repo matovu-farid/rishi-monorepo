@@ -119,10 +119,8 @@ public actor RishiAuthService: AuthService {
         return User(
             id: derivedId,
             email: email,
-            displayName: nil,
-            avatarURL: nil,
-            hasPro: false,
-            createdAt: session.issuedAt
+            name: nil
+    
         )
     }
 }
