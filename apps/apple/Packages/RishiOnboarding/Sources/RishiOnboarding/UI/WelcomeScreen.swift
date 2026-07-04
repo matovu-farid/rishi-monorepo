@@ -4,20 +4,23 @@ import RishiUIKit
 /// First-run welcome screen. ONB-01.
 struct WelcomeScreen: View {
     public let onGetStarted: () -> Void
+    private var logo: String
 
-    public init(onGetStarted: @escaping () -> Void) {
+    public init(onGetStarted: @escaping () -> Void, logo: String) {
         self.onGetStarted = onGetStarted
+        self.logo = logo
     }
 
     public var body: some View {
         RishiScreenScaffold(actionPlacement: .pinnedToBottom) {
             VStack(spacing: RishiSpacing.l) {
-                Image(systemName: "book.fill")
+                Image( logo)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 96, height: 96)
                     .foregroundStyle(RishiColor.accent)
                     .accessibilityHidden(true)
+                    .clipShape(RoundedRectangle(cornerSize: CGSize(width: 16, height: 16)))
 
                 Text("Welcome to Rishi")
                     .font(RishiTypography.titleL)
@@ -56,5 +59,5 @@ struct WelcomeScreen: View {
 }
 
 #Preview {
-    WelcomeScreen(onGetStarted: {})
+    WelcomeScreen(onGetStarted: {}, logo: "rishi")
 }

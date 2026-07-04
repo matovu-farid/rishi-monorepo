@@ -58,6 +58,8 @@ enum ServiceGraphFactory {
             siwaCoordinator: siwaCoordinator,
             keychain: keychain
         )
+        let groupID = try? await workerClient.send(GroupIDEndpoint())
+        
 
         let documentsURL = FileManager.default.urls(
             for: .documentDirectory,
@@ -385,11 +387,12 @@ enum ServiceGraphFactory {
             footerDetectionStore: footerDetectionStore,
             onboardingState: onboardingState,
             onboardingCoordinator: onboardingCoordinator,
-            readerDefaults: readerDefaults
+            readerDefaults: readerDefaults,
+            groupID: groupID
         )
     }
 
-    //
+    
 
     nonisolated static func openDatabaseWriter(
         at dbURL: URL

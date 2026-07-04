@@ -161,6 +161,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let onboardingState: any OnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+    let groupID: Optional<GroupId>
 }
 
 @MainActor

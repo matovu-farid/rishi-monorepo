@@ -9,7 +9,7 @@
       }
     ]
   },
-  "identifier" : "897F0487",
+  "identifier" : "BF73D859",
   "nonRenewingSubscriptions" : [
 
   ],
@@ -17,11 +17,14 @@
 
   ],
   "settings" : {
+    "_applicationInternalID" : "6763041630",
     "_askToBuyEnabled" : false,
     "_billingGracePeriodEnabled" : false,
     "_billingIssuesEnabled" : false,
+    "_developerTeamID" : "9VL7VRY6QZ",
     "_disableDialogs" : false,
     "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 804778767.63425303,
     "_locale" : "en_US",
     "_renewalBillingIssuesEnabled" : false,
     "_storefront" : "USA",
@@ -32,11 +35,15 @@
   },
   "subscriptionGroups" : [
     {
-      "id" : "AB6C54E6",
+      "id" : "22149819",
       "localizations" : [
-
+        {
+          "description" : "",
+          "displayName" : "Rishi Pro",
+          "locale" : "en_US"
+        }
       ],
-      "name" : "Rishi Premium",
+      "name" : "Rishi Pro",
       "subscriptions" : [
         {
           "adHocOffers" : [
@@ -45,33 +52,33 @@
           "billingPlans" : [
             {
               "billingPlanType" : "BILLED_UPFRONT",
-              "commitmentDisplayPrice" : "0.99",
-              "displayPrice" : "0.99",
-              "internalID" : "2983A644",
+              "commitmentDisplayPrice" : "79.99",
+              "displayPrice" : "79.99",
+              "internalID" : "6779146686_BILLED_UPFRONT",
               "isEnabled" : true
             }
           ],
           "codeOffers" : [
 
           ],
-          "displayPrice" : "6.99",
+          "displayPrice" : "79.99",
           "familyShareable" : false,
           "groupNumber" : 1,
-          "internalID" : "346983A6",
+          "internalID" : "6779146686",
           "introductoryOffers" : [
 
           ],
           "localizations" : [
             {
-              "description" : "",
-              "displayName" : "",
+              "description" : "AI chat, voice, premium TTS, library sync.",
+              "displayName" : "Rishi Pro Annual",
               "locale" : "en_US"
             }
           ],
-          "productID" : "org.fidexa.rishi.pro.monthly",
-          "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "monthly",
-          "subscriptionGroupID" : "AB6C54E6",
+          "productID" : "org.fidexa.rishi.pro.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Rishi Pro Annual",
+          "subscriptionGroupID" : "22149819",
           "type" : "RecurringSubscription",
           "winbackOffers" : [
 
@@ -84,33 +91,33 @@
           "billingPlans" : [
             {
               "billingPlanType" : "BILLED_UPFRONT",
-              "commitmentDisplayPrice" : "0.99",
-              "displayPrice" : "0.99",
-              "internalID" : "FF90D301",
+              "commitmentDisplayPrice" : "6.99",
+              "displayPrice" : "6.99",
+              "internalID" : "6779146832_BILLED_UPFRONT",
               "isEnabled" : true
             }
           ],
           "codeOffers" : [
 
           ],
-          "displayPrice" : "74.99",
+          "displayPrice" : "6.99",
           "familyShareable" : false,
           "groupNumber" : 1,
-          "internalID" : "791CCB74",
+          "internalID" : "6779146832",
           "introductoryOffers" : [
 
           ],
           "localizations" : [
             {
-              "description" : "",
-              "displayName" : "",
+              "description" : "AI chat, voice, premium TTS, library sync.",
+              "displayName" : "Rishi Pro Monthly",
               "locale" : "en_US"
             }
           ],
-          "productID" : "org.fidexa.rishi.pro.yearly",
-          "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "yearly",
-          "subscriptionGroupID" : "AB6C54E6",
+          "productID" : "org.fidexa.rishi.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Rishi Pro Monthly",
+          "subscriptionGroupID" : "22149819",
           "type" : "RecurringSubscription",
           "winbackOffers" : [
 

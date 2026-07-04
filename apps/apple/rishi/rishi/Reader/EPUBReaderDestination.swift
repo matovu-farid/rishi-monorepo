@@ -48,7 +48,6 @@ struct EPUBReaderDestination: View {
         self.onRequestPaywall = onRequestPaywall
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
-//           entitlementProvider: { await services.entitlementService.snapshot() },
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -67,10 +66,7 @@ struct EPUBReaderDestination: View {
             onReadAloud: {
                 
                 Task {
-                  //  let level = await services.entitlementService.snapshot()
-                   // var entitled = level == .subscribed
-             
-                   // guard entitled else { onRequestPaywall("Read Aloud"); return }
+  
                     if readAloud == nil {
                         readAloud = ReadAloudController(
                             ttsEngine: services.ttsEngine,

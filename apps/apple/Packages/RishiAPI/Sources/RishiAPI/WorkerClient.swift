@@ -210,11 +210,11 @@ public actor WorkerClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        #if DEBUG
-        if devBypassEnabled {
-            request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
-        }
-        #endif
+//        #if DEBUG
+//        if devBypassEnabled {
+//            request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
+//        }
+//        #endif
 
         // Any non-GET request declares JSON, even bodyless ones (e.g. sign-out),
         // otherwise Better Auth rejects the bodyless POST with 415.

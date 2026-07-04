@@ -1,18 +1,6 @@
-
-
-
-
-
-
-
-
-
-
-
-
-import SwiftUI
 import RishiCore
 import RishiReader
+import SwiftUI
 
 struct ReaderDestinationView: View {
     let route: ReaderRoute
@@ -24,33 +12,50 @@ struct ReaderDestinationView: View {
     @Environment(\.currentUser) private var currentUser
 
     var body: some View {
-        
-        
-        
-        
+
         let services = servicesEnv!
         let userId = currentUser!.id
         switch route {
         case .pdf(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: hint, bookStore: services.bookStore) { book in
+            NavigationLazyBook(
+                bookId: bookId,
+                hint: hint,
+                bookStore: services.bookStore
+            ) { book in
                 PDFReaderDestination(
-                    vm: PDFReaderViewModel.make(book: book, userId: userId, services: services),
+                    vm: PDFReaderViewModel.make(
+                        book: book,
+                        userId: userId,
+                        services: services
+                    ),
                     services: services,
                     userId: userId,
                     onRequestPaywall: onRequestPaywall
                 )
             }
         case .epub(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: hint, bookStore: services.bookStore) { book in
+            NavigationLazyBook(
+                bookId: bookId,
+                hint: hint,
+                bookStore: services.bookStore
+            ) { book in
                 EPUBReaderDestination(
-                    vm: EPUBReaderViewModel.make(book: book, userId: userId, services: services),
+                    vm: EPUBReaderViewModel.make(
+                        book: book,
+                        userId: userId,
+                        services: services
+                    ),
                     services: services,
                     userId: userId,
                     onRequestPaywall: onRequestPaywall
                 )
             }
         case .unsupportedFormat(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: hint, bookStore: services.bookStore) { book in
+            NavigationLazyBook(
+                bookId: bookId,
+                hint: hint,
+                bookStore: services.bookStore
+            ) { book in
                 EpubPlaceholderView(book: book) {
                     if !router.path.isEmpty { router.path.removeLast() }
                 }

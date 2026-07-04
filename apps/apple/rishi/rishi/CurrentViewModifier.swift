@@ -5,6 +5,7 @@ import OSLog
 import StoreKit
 import SwiftUI
 import RishiBilling
+import RishiAPI
 
 
 // MARK: - Customer Entitlements
@@ -15,8 +16,10 @@ import RishiBilling
 @available(iOS 18.4, *)
 private struct CustomerEntitlementsViewModifier: ViewModifier {
     private let logger = Logger(subsystem: "Rishi", category: "CustomerEntitlementsViewModifier")
-    let groupID = GroupId.shared
+   
+    @Environment(\.services) private var services
     @Environment(SubscriptionService.self) private var subscriptionService
+    
 
     private var customerEntitlements = CustomerEntitlements.shared
 
@@ -31,16 +34,17 @@ private struct CustomerEntitlementsViewModifier: ViewModifier {
             // Observe updates to the user's status for SKDemo+.
             .onChange(of: customerEntitlements.subscriptionStatuses) { _, subscriptionStatuses in
                 do {
-
-                    if let currentStatus = try transformStatus(subscriptionStatuses[groupID.value]){
+                    if  let groupID = services?.groupID{
                         
-                        subscriptionService.saveSubscription(subscription: currentStatus)
-                        
+                        if let currentStatus = try transformStatus(subscriptionStatuses[groupID.value]){
+                            
+                            subscriptionService.saveSubscription(subscription: currentStatus)
+                            
+                        }
                     }
-                    
                 } catch {
                     logger.error("""
-                    Fail to transform statuses for subscription group ID \(groupID.value): \(error)
+                    Fail to transform statuses for subscription group ID \(error)
                     """)
                     return
                 }

@@ -9,7 +9,7 @@ struct OnboardingUITests {
 
     @Test("WelcomeScreen constructs")
     func welcomeConstructs() {
-        _ = WelcomeScreen(onGetStarted: {}).body
+        _ = WelcomeScreen(onGetStarted: {}, logo: "rishi").body
     }
 
     @Test("MicPermissionPrimer constructs")

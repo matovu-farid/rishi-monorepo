@@ -26,7 +26,8 @@ struct RootView: View {
     @State private var entitlementResolved = false
 
     @State private var showOnboarding = false
-
+    
+   
     var body: some View {
 
         if let deps, deps.services != nil {
@@ -117,8 +118,17 @@ struct RootView: View {
             case .signedOut:
                 signedOutView
             case .paywall:
-
-                SubscriptionsView(color: .rishiBrown)
+                if let groupID = deps.services?.groupID {
+                    
+                    
+                    
+                    SubscriptionsView(color: .rishiBrown, groupId: groupID)
+                }else {
+                    VStack{
+                        Text("GroupID is not provided")
+                        ProgressView()
+                    }
+                }
             case .app:
 
                 SignedInView(

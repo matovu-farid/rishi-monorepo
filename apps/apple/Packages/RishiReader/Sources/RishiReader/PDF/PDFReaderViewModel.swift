@@ -28,6 +28,12 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     public private(set) var totalPages: Int = 0
     public private(set) var pageIndex: Int = 0
     public private(set) var outline: [PDFOutlineNode] = []
+    public var activeSheet: ReaderSheet?
+    
+    public var bookmarkToggle: PDFBookmarkToggleModel?
+    
+    
+
 
     /// Phase 21 Plan 21-03 — observable cold-open loading state.
     /// `PDFReaderScreen` overlays a native SwiftUI `ProgressView` while

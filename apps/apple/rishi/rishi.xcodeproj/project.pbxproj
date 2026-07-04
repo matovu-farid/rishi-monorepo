@@ -25,6 +25,7 @@
 		09B561C42FF125A000972BA3 /* RishiSettings in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C32FF125A000972BA3 /* RishiSettings */; };
 		09B561C62FF125A000972BA3 /* RishiOnboarding in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C52FF125A000972BA3 /* RishiOnboarding */; };
 		09B561C82FF125A000972BA3 /* RishiSearch in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C72FF125A000972BA3 /* RishiSearch */; };
+		09ECC56D2FF7F30900272ABC /* Rishi Reader.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */; };
 		1CFCB7146A2AB08228F56E59 /* RishiBilling in Frameworks */ = {isa = PBXBuildFile; productRef = F8BE24D4A39386B6BF18E867 /* RishiBilling */; };
 		252859A25AFDB0AC38588F5F /* RishiUIKit in Frameworks */ = {isa = PBXBuildFile; productRef = 02462412E0BB4964915C0E2F /* RishiUIKit */; };
 		3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */ = {isa = PBXBuildFile; productRef = D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */; };
@@ -66,6 +67,7 @@
 		092254942FD83183008C5ADE /* rishi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rishi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		092254A32FD83186008C5ADE /* rishiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		092254AD2FD83186008C5ADE /* rishiUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Rishi Reader.storekit"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -208,6 +210,7 @@
 		0922548B2FD83183008C5ADE = {
 			isa = PBXGroup;
 			children = (
+				09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */,
 				092254962FD83183008C5ADE /* rishi */,
 				092254A62FD83186008C5ADE /* rishiTests */,
 				092254B02FD83186008C5ADE /* rishiUITests */,
@@ -390,6 +393,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				09ECC56D2FF7F30900272ABC /* Rishi Reader.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -87,7 +87,7 @@
          </EnvironmentVariable>
       </EnvironmentVariables>
       <StoreKitConfigurationFileReference
-         identifier = "../../../Packages/RishiBilling/Tests/RishiBillingTests/Resources/Rishi.storekit">
+         identifier = "../../Rishi Reader.storekit">
       </StoreKitConfigurationFileReference>
    </LaunchAction>
    <ProfileAction

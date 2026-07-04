@@ -10,7 +10,6 @@ import Foundation
 
 import OSLog
 import StoreKit
-import RishiBilling
 
 private let logger = Logger(subsystem: "Rishi", category: "CustomerEntitlements")
 import Foundation
@@ -68,8 +67,10 @@ public final class CustomerEntitlements {
             Processing current entitlement \(transaction.id) for \
             \(transaction.productID)
             """)
+            SubscriptionService.shared.saveSubscription(subscription: .subscribed)
             Task.detached(priority: .background) {
                 await self.process(transaction: transaction)
+                
             }
         }
         logger.debug("Finished checking for current entitlements")

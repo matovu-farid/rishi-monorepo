@@ -47,7 +47,7 @@ public struct OnboardingFlowView: View {
                     // KEEP: coordinator is an @Observable @MainActor; advance
                     // mutates currentStage which SwiftUI observes.
                     Task { await coordinator.advance() }
-                })
+                }, logo: "rishi")
 
             case .signIn:
                 // The actual sign-in surface is owned by the app layer
