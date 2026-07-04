@@ -206,8 +206,14 @@ public actor WorkerClient {
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        if let token = await tokenProvider.token() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+//        if let token = await tokenProvider.token() {
+//            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+//        }
+        if let token = try Keychain.load(.accessToken) {
+            request.setValue(
+                "Bearer \(token)",
+                forHTTPHeaderField: "Authorization"
+            )
         }
 
 //        #if DEBUG
