@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { eq, and, count, sum } from "drizzle-orm";
 import type { Env } from "../index";
-import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
 import { signR2Url } from "../r2-presign";
+import { requireAuth } from "../middleware";
 
 // Defaults applied when the corresponding wrangler var is unset.
 const DEFAULT_BOOK_MAX_PER_USER = 500;

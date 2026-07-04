@@ -13,8 +13,8 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "rishi-sync",
-			"database_id": "ccef7988-1e94-40c8-a852-e4149bedf72d",
+			"database_name": "rishi",
+			"database_id": "970159b7-ca91-49c1-bae8-feb43b24a7e6",
 			"migrations_dir": "drizzle/migrations"
 		}
 	],

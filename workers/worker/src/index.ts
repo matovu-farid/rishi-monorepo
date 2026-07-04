@@ -44,6 +44,11 @@ import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { AppleBucket, createTestNotification } from "./apple-connect/functions";
 import { value } from "effect/Redacted";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+import { requireAuth } from "./middleware";
+import { signAccessToken, signRefreshToken, verifyRefreshToken } from "./jwt";
+import { findOrCreateUser } from "./findOrCreateUser";
+export { requireAuth } from "./middleware";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
 const ALLOWED_REALTIME_LANGUAGES = [
@@ -210,6 +215,87 @@ app.use(
   }),
 );
 
+app.post("/auth/apple", async (c) => {
+  const appleJWKS = createRemoteJWKSet(
+    new URL("https://appleid.apple.com/auth/keys"),
+  );
+  const { identityToken } = await c.req.json<{
+    identityToken: string;
+  }>();
+
+  if (!identityToken) {
+    return c.json(
+      {
+        error: "Missing identity token",
+      },
+      400,
+    );
+  }
+
+  try {
+    const { payload } = await jwtVerify(identityToken, appleJWKS, {
+      issuer: "https://appleid.apple.com",
+
+      // Your iOS Bundle Identifier
+      audience: "org.fidexa.rishi",
+    });
+    const db = createDb(c.env.DB);
+    const user = await Effect.runPromise(
+      findOrCreateUser(db, {
+        sub: payload.sub!,
+        email: (payload.email as string) || "${payload.sub}@apple.com",
+        email_verified:
+          payload.email_verified === true || payload.email_verified === "true",
+        is_private_email:
+          payload.is_private_email === true ||
+          payload.is_private_email === "true",
+      }),
+    );
+
+    const accessToken = await Effect.runPromise(
+      signAccessToken(c.env, {
+        userId: user.id,
+      }),
+    );
+
+    const refreshToken = await Effect.runPromise(
+      signRefreshToken(c.env, {
+        userId: user.id,
+      }),
+    );
+
+    return c.json({
+      accessToken,
+      refreshToken,
+    });
+  } catch (err) {
+    console.error(err);
+
+    return c.json(
+      {
+        error: "Invalid Apple identity token",
+      },
+      401,
+    );
+  }
+});
+app.post("/auth/refresh", async (c) => {
+  const { refreshToken } = await c.req.json();
+
+  const payload = await Effect.runPromise(
+    verifyRefreshToken(c.env, refreshToken),
+  );
+
+  const accessToken = await Effect.runPromise(
+    signAccessToken(c.env, {
+      userId: payload.userId,
+    }),
+  );
+
+  return c.json({
+    accessToken,
+  });
+});
 // Better Auth handles all /api/auth/* internally
 app.on(["GET", "POST"], "/api/auth/*", async (c) => {
   const auth = await createAuth(c.env);
@@ -224,24 +310,24 @@ app.get("/", (c) => {
 // Validates the caller's Better Auth session token (cookie or Authorization
 // header) and exposes the user id via c.get("userId"). Preserves the dev
 // bypass header for local development.
-export async function requireAuth(c: any, next: () => Promise<void>) {
-  // const devSecret = c.env.DEV_BYPASS_SECRET;
-  // if (devSecret) {
-  //   const devHeader = c.req.header("X-Dev-Bypass");
-  //   if (devHeader && timingSafeEqual(devHeader, devSecret)) {
-  //     c.set("userId", "dev-user");
-  //     return next();
-  //   }
-  // }
+// export async function requireAuth(c: any, next: () => Promise<void>) {
+//   // const devSecret = c.env.DEV_BYPASS_SECRET;
+//   // if (devSecret) {
+//   //   const devHeader = c.req.header("X-Dev-Bypass");
+//   //   if (devHeader && timingSafeEqual(devHeader, devSecret)) {
+//   //     c.set("userId", "dev-user");
+//   //     return next();
+//   //   }
+//   // }
 
-  const auth = await createAuth(c.env);
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  c.set("userId", session.user.id);
-  await next();
-}
+//   const auth = await createAuth(c.env);
+//   const session = await auth.api.getSession({ headers: c.req.raw.headers });
+//   if (!session) {
+//     return c.json({ error: "Unauthorized" }, 401);
+//   }
+//   c.set("userId", session.user.id);
+//   await next();
+// }
 
 // ─── Sync routes ─────────────────────────────────────────────────────────────
 // Quick task 260612-g89 — closes the Phase-7 inbound book + highlight bridge

@@ -5,64 +5,15 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1775431766208,
-      "tag": "0000_gifted_matthew_murdock",
+      "when": 1783162287767,
+      "tag": "0000_thick_madrox",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "6",
-      "when": 1778360694317,
-      "tag": "0001_hot_the_call",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1778363163109,
-      "tag": "0002_fantastic_carnage",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1780453441753,
-      "tag": "0003_catch_up_bookmarks_books",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1780453684697,
-      "tag": "0004_stripe_billing",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1781178324424,
-      "tag": "0007_apple_iap",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "6",
-      "when": 1781208146746,
-      "tag": "0008_devices",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "6",
-      "when": 1781229108895,
-      "tag": "0009_chat_sync",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "6",
-      "when": 1781795584178,
-      "tag": "0010_breezy_night_nurse",
+      "when": 1783164138616,
+      "tag": "0001_common_invaders",
       "breakpoints": true
     }
   ]
