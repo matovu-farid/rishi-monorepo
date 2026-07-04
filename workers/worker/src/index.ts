@@ -267,6 +267,7 @@ app.post("/auth/apple", async (c) => {
     return c.json({
       accessToken,
       refreshToken,
+      userId: user.id,
     });
   } catch (err) {
     console.error(err);
@@ -405,20 +406,6 @@ registerAppleWebhookRoute(app);
 // {premium:boolean, premiumUntil: ISO8601 string | null} with a 30s
 // private Cache-Control header to dampen the iOS reconciler hot path.
 registerBillingMeRoute(app, requireAuth);
-
-app.get("/api/apple-test", async (c) => {
-  try {
-    const AppleBucketLive = Layer.succeed(AppleBucket, c.env.APPLE);
-    const effect = createTestNotification().pipe(
-      Effect.provide(AppleBucketLive),
-    );
-
-    const result = await Effect.runPromise(effect);
-    return c.json(result);
-  } catch (error) {
-    console.log(error);
-  }
-});
 
 // Customer Portal — mints a Stripe-hosted URL where the user manages
 // payment methods, views invoices, and cancels their subscription.
