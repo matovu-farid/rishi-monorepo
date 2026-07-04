@@ -1,4 +1,5 @@
 import AuthenticationServices
+import RishiAPI
 import RishiCore
 import RishiUIKit
 import SwiftUI
@@ -6,7 +7,9 @@ import SwiftUI
 struct SignedOutView: View {
 
     @Environment(\.rishiAuthService) private var authService: (any AuthService)?
-
+    
+    @Environment(\.appDependencies) private var deps
+    var workerClient: WorkerClient? {deps?.workerClient}
     var onSignedIn: (User) -> Void = { _ in }
 
     @State private var viewModel = SignedOutViewModel(authService: nil)
@@ -87,29 +90,71 @@ struct SignedOutView: View {
             appleButton
         }
     }
+    func configure(_ request: ASAuthorizationAppleIDRequest) {
+        request.requestedScopes = [
+            .fullName,
+            .email
+        ]
+    }
+    func handle(_ result: Result<ASAuthorization, Error>) async {
+        switch result {
+        case .success(let authorization):
+            
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                return
+            }
+            
+            let userID = credential.user
+            let email = credential.email
+            let fullName = credential.fullName
+            
+            print("User ID:", userID)
+            print("Email:", email ?? "nil")
+            print("Name:", fullName?.givenName ?? "nil")
+            guard let token = credential.identityToken,
+                  let jwt = String(data: token, encoding: .utf8) else {
+                return
+            }
+           
+     
+            let endpoint = JWTEndPoint(body: .init(identityToken: jwt))
+            if let workerClient  {
+                let auth = try? await workerClient.send(endpoint)
+                if let auth {
+                    
+                    print(result)
+                    try? Keychain.save(
+                        auth.accessToken,
+                        for: .accessToken
+                    )
+                    
+                    try? Keychain.save(
+                        auth.refreshToken,
+                        for: .refreshToken
+                    )
+                }
+            }
+            
+            
+            
+        case .failure(let error):
+            print(error)
+        }
+    }
 
     private var appleButton: some View {
-        Button {
-
-            Task { await viewModel.signInWithApple() }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "apple.logo")
-                    .font(.system(size: 18, weight: .medium))
-                Text("Sign in with Apple")
-                    .font(.system(size: 17, weight: .semibold))
+        SignInWithAppleButton(
+            .signIn,
+            onRequest: configure,
+            onCompletion: { result in
+                Task{
+                    await handle(result)
+                }
             }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-
-        .disabled(viewModel.isSignInButtonDisabled)
-        .accessibilityLabel("Sign in with Apple")
-        .accessibilityIdentifier("signed-out-apple")
+        )
+        .signInWithAppleButtonStyle(.black)
+        .frame(height: 50)
+        .cornerRadius(10)
     }
 
     @ViewBuilder
