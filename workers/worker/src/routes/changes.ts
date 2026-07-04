@@ -1,9 +1,9 @@
-import { Hono } from "hono"
-import { and, asc, eq, gt } from "drizzle-orm"
-import type { CloudflareBindings } from "../index"
-import { requireAuth } from "../index"
-import { createDb } from "../db/drizzle"
-import { books, highlights, bookmarks } from "@rishi/shared/schema"
+import { Hono } from "hono";
+import { and, asc, eq, gt } from "drizzle-orm";
+import type { Env } from "../index";
+import { requireAuth } from "../index";
+import { createDb } from "../db/drizzle";
+import { books, highlights, bookmarks } from "@rishi/shared/schema";
 
 /**
  * GET /api/sync/changes?since=<ISO8601>
@@ -37,52 +37,43 @@ import { books, highlights, bookmarks } from "@rishi/shared/schema"
  * constant: 978_307_200_000 ms (the 1970->2001 gap).
  */
 
-const REFERENCE_DATE_OFFSET_MS = 978_307_200_000
-const PULL_LIMIT = 5000
+const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
+const PULL_LIMIT = 5000;
 
 function toSecondsSinceRefDate(msEpoch: number): number {
-  return (msEpoch - REFERENCE_DATE_OFFSET_MS) / 1000
+  return (msEpoch - REFERENCE_DATE_OFFSET_MS) / 1000;
 }
 
 export const changesRoutes = new Hono<{
-  Bindings: CloudflareBindings
-  Variables: { userId: string }
-}>()
+  Bindings: Env;
+  Variables: { userId: string };
+}>();
 
 changesRoutes.get("/", requireAuth, async (c) => {
-  const rawSince = c.req.query("since")
-  let sinceMs: number | null = null
+  const rawSince = c.req.query("since");
+  let sinceMs: number | null = null;
   if (rawSince !== undefined) {
-    const parsed = Date.parse(rawSince)
+    const parsed = Date.parse(rawSince);
     if (Number.isNaN(parsed)) {
-      return c.json(
-        { error: "since must be a valid ISO8601 timestamp" },
-        400,
-      )
+      return c.json({ error: "since must be a valid ISO8601 timestamp" }, 400);
     }
-    sinceMs = parsed
+    sinceMs = parsed;
   }
-  const userId = c.get("userId")
-  const db = createDb(c.env.DB)
+  const userId = c.get("userId");
+  const db = createDb(c.env.DB);
 
   const bookWhere =
     sinceMs === null
       ? eq(books.userId, userId)
-      : and(eq(books.userId, userId), gt(books.updatedAt, sinceMs))
+      : and(eq(books.userId, userId), gt(books.updatedAt, sinceMs));
   const highlightWhere =
     sinceMs === null
       ? eq(highlights.userId, userId)
-      : and(
-          eq(highlights.userId, userId),
-          gt(highlights.updatedAt, sinceMs),
-        )
+      : and(eq(highlights.userId, userId), gt(highlights.updatedAt, sinceMs));
   const bookmarkWhere =
     sinceMs === null
       ? eq(bookmarks.userId, userId)
-      : and(
-          eq(bookmarks.userId, userId),
-          gt(bookmarks.updatedAt, sinceMs),
-        )
+      : and(eq(bookmarks.userId, userId), gt(bookmarks.updatedAt, sinceMs));
 
   const bookRows = await db
     .select()
@@ -90,33 +81,33 @@ changesRoutes.get("/", requireAuth, async (c) => {
     .where(bookWhere)
     .orderBy(asc(books.updatedAt))
     .limit(PULL_LIMIT)
-    .all()
+    .all();
   const highlightRows = await db
     .select()
     .from(highlights)
     .where(highlightWhere)
     .orderBy(asc(highlights.updatedAt))
     .limit(PULL_LIMIT)
-    .all()
+    .all();
   const bookmarkRows = await db
     .select()
     .from(bookmarks)
     .where(bookmarkWhere)
     .orderBy(asc(bookmarks.updatedAt))
     .limit(PULL_LIMIT)
-    .all()
+    .all();
 
   // ── Map rows to SyncChange envelopes ────────────────────────────────
   interface Change {
-    kind: "book" | "highlight" | "bookmark"
-    id: string
-    payload: Record<string, unknown>
-    updated_at: number
-    deleted: boolean
-    __sortKey: number // private — stripped before response
+    kind: "book" | "highlight" | "bookmark";
+    id: string;
+    payload: Record<string, unknown>;
+    updated_at: number;
+    deleted: boolean;
+    __sortKey: number; // private — stripped before response
   }
 
-  const changes: Change[] = []
+  const changes: Change[] = [];
 
   for (const row of bookRows as unknown as Array<Record<string, unknown>>) {
     // STRIP file_path + cover_path — local-only paths, same rule as the
@@ -128,9 +119,9 @@ changesRoutes.get("/", requireAuth, async (c) => {
       updatedAt,
       isDeleted,
       ...rest
-    } = row
-    void _fp
-    void _cp
+    } = row;
+    void _fp;
+    void _cp;
     changes.push({
       kind: "book",
       id: id as string,
@@ -138,17 +129,17 @@ changesRoutes.get("/", requireAuth, async (c) => {
       updated_at: toSecondsSinceRefDate(updatedAt as number),
       deleted: !!isDeleted,
       __sortKey: updatedAt as number,
-    })
+    });
   }
 
   for (const row of highlightRows as unknown as Array<
     Record<string, unknown>
   >) {
-    const updatedAt = row.updatedAt as number
-    const isDeleted = !!row.isDeleted
+    const updatedAt = row.updatedAt as number;
+    const isDeleted = !!row.isDeleted;
     // Highlights: payload includes EVERY column (per the contract — no
     // local-only paths exist on this table).
-    const { ...payload } = row
+    const { ...payload } = row;
     changes.push({
       kind: "highlight",
       id: row.id as string,
@@ -156,23 +147,21 @@ changesRoutes.get("/", requireAuth, async (c) => {
       updated_at: toSecondsSinceRefDate(updatedAt),
       deleted: isDeleted,
       __sortKey: updatedAt,
-    })
+    });
   }
 
-  for (const row of bookmarkRows as unknown as Array<
-    Record<string, unknown>
-  >) {
-    const updatedAt = row.updatedAt as number
-    const isDeleted = !!row.isDeleted
+  for (const row of bookmarkRows as unknown as Array<Record<string, unknown>>) {
+    const updatedAt = row.updatedAt as number;
+    const isDeleted = !!row.isDeleted;
     // NAME MISMATCH: column `location` -> wire `locator` (inverse of the
     // sync.ts push arm). created_at is an ISO8601 STRING because the iOS
     // SyncPayloadCodec decodes PAYLOAD dates with .iso8601 (NOT the envelope's
     // .deferredToDate seconds-since-2001). row.createdAt is integer ms epoch.
-    const createdAtMs = row.createdAt as number | null | undefined
+    const createdAtMs = row.createdAt as number | null | undefined;
     const createdAtIso =
       typeof createdAtMs === "number"
         ? new Date(createdAtMs).toISOString() // WIRE-ISO8601-PAYLOAD: payload-internal date, decoded by SyncPayloadCodec .iso8601, NOT the envelope .deferredToDate field
-        : null
+        : null;
     changes.push({
       kind: "bookmark",
       id: row.id as string,
@@ -187,18 +176,18 @@ changesRoutes.get("/", requireAuth, async (c) => {
       updated_at: toSecondsSinceRefDate(updatedAt),
       deleted: isDeleted,
       __sortKey: updatedAt,
-    })
+    });
   }
 
   // Sort ASC by updatedAt across BOTH kinds so the iOS ChangeApplier sees
   // a stable, monotonically-increasing iteration order. Within-kind order
   // already comes from the .orderBy(asc(...)) clauses above; this final
   // sort interleaves books + highlights correctly.
-  changes.sort((a, b) => a.__sortKey - b.__sortKey)
+  changes.sort((a, b) => a.__sortKey - b.__sortKey);
   const sanitized = changes.map(({ __sortKey: _s, ...rest }) => {
-    void _s
-    return rest
-  })
+    void _s;
+    return rest;
+  });
 
-  return c.json({ changes: sanitized })
-})
+  return c.json({ changes: sanitized });
+});

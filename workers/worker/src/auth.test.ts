@@ -33,7 +33,7 @@ vi.mock("better-auth/adapters/drizzle", async () => {
 });
 
 import { createAuth, deriveHasPro, type HasProDeps } from "./auth";
-import type { CloudflareBindings } from "./index";
+import type { Env } from "./index";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 // Apple's iOS identity tokens are ES256 JWTs signed by Apple's authorization
@@ -93,20 +93,23 @@ async function mintAppleIdToken(opts: IdTokenOpts): Promise<string> {
 
 function stubAppleJWKS(fixture: AppleFixture): ReturnType<typeof vi.fn> {
   const realFetch = globalThis.fetch;
-  const spy = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
-    const url = typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
-    if (url.includes("appleid.apple.com/auth/keys")) {
-      return new Response(JSON.stringify({ keys: [fixture.jwk] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return realFetch(input as RequestInit & Request, init);
-  });
+  const spy = vi.fn(
+    async (input: Request | string | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.includes("appleid.apple.com/auth/keys")) {
+        return new Response(JSON.stringify({ keys: [fixture.jwk] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return realFetch(input as RequestInit & Request, init);
+    },
+  );
   vi.stubGlobal("fetch", spy);
   return spy;
 }
@@ -117,8 +120,8 @@ const BUNDLE_ID = "org.fidexa.rishi";
 
 async function makeEnv(
   _fixture: AppleFixture,
-  overrides: Partial<CloudflareBindings> = {},
-): Promise<CloudflareBindings> {
+  overrides: Partial<Env> = {},
+): Promise<Env> {
   // Generate a separate ECDSA P-256 key purely for the static client-secret
   // mint (the iOS ID-token branch does NOT consume this key, but Better Auth's
   // typed Apple options require a clientSecret value at config time).
@@ -148,7 +151,7 @@ async function makeEnv(
     APPLE_SIWA_PRIVATE_KEY: pem,
     APPLE_TEAM_ID: "TESTTEAMID",
     ...overrides,
-  } as CloudflareBindings;
+  } as Env;
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -245,9 +248,11 @@ describe("createAuth: Better Auth Apple social provider", () => {
     });
     const res = await auth.handler(req);
     expect(res.status).toBe(401);
-    const body = await res.json() as { code?: string; message?: string };
+    const body = (await res.json()) as { code?: string; message?: string };
     // Better Auth surfaces invalid id tokens with code INVALID_TOKEN.
-    expect(body.code ?? body.message ?? "").toMatch(/INVALID_TOKEN|invalid id token/i);
+    expect(body.code ?? body.message ?? "").toMatch(
+      /INVALID_TOKEN|invalid id token/i,
+    );
   });
 
   it("get-session returns literal JSON null when no session present", async () => {
@@ -344,7 +349,10 @@ describe("deriveHasPro (has_pro session projection)", () => {
 
   it("active apple_subscriptions row → has_pro=true, Stripe not queried", async () => {
     const deps = makeHasProDeps({
-      appleRow: { currentPeriodEnd: new Date(HASPRO_APPLE_MS), status: "active" },
+      appleRow: {
+        currentPeriodEnd: new Date(HASPRO_APPLE_MS),
+        status: "active",
+      },
     });
     const has_pro = await deriveHasPro({ userId: "u1", deps });
     expect(has_pro).toBe(true);
@@ -354,7 +362,10 @@ describe("deriveHasPro (has_pro session projection)", () => {
 
   it("apple_subscriptions in_grace row → has_pro=true", async () => {
     const deps = makeHasProDeps({
-      appleRow: { currentPeriodEnd: new Date(HASPRO_APPLE_MS), status: "in_grace" },
+      appleRow: {
+        currentPeriodEnd: new Date(HASPRO_APPLE_MS),
+        status: "in_grace",
+      },
     });
     const has_pro = await deriveHasPro({ userId: "u1", deps });
     expect(has_pro).toBe(true);

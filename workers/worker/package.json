@@ -4,8 +4,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
-    "test": "vitest run",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "generate-types": "wrangler types",
+    "type-check": "generate-types && tsc"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.64",
@@ -18,10 +18,13 @@
     "@sentry/cloudflare": "^10.32.1",
     "@upstash/redis": "^1.36.0",
     "ai": "^6.0.185",
+    "asn1js": "^3.0.10",
     "aws4fetch": "^1.0.20",
     "axios": "^1.13.2",
+    "base64url": "^3.0.1",
     "better-auth": "^1.6.10",
     "drizzle-orm": "^0.45.2",
+    "effect": "^3.21.4",
     "hono": "^4.10.6",
     "jose": "^6.2.3",
     "react": "^19.2.6",
@@ -33,14 +36,14 @@
   },
   "devDependencies": {
     "@better-auth/cli": "^1.4.21",
-    "@cloudflare/workers-types": "^4.20260405.1",
+    "@types/jsrsasign": "^10.5.12",
     "@types/node": "^25.5.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^0.31.0",
     "tsx": "^4.22.4",
     "vitest": "^4.1.6",
-    "wrangler": "^4.4.0"
+    "wrangler": "^4.107.0"
   },
   "pnpm": {
     "overrides": {

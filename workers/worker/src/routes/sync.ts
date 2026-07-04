@@ -1,10 +1,16 @@
 import { Hono } from "hono";
 import { eq, gt, and, max, asc, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import type { CloudflareBindings } from "../index";
+import type { Env } from "../index";
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
-import { books, highlights, conversations, messages, bookmarks } from "@rishi/shared/schema";
+import {
+  books,
+  highlights,
+  conversations,
+  messages,
+  bookmarks,
+} from "@rishi/shared/schema";
 import type { PullResponse } from "@rishi/shared/sync-types";
 
 // ─── Date wire convention ──────────────────────────────────────────────────────
@@ -23,7 +29,14 @@ const fromSecondsSinceRef = (s: number) => s * 1000 + REFERENCE_DATE_OFFSET_MS;
 // the legacy grouped-object body {changes: {books, highlights, ...}} that the
 // /pull handler still echoes — those two contracts diverged after Phase 7.
 const SyncChangeSchema = z.object({
-  kind: z.enum(["book", "position", "highlight", "conversation", "message", "bookmark"]),
+  kind: z.enum([
+    "book",
+    "position",
+    "highlight",
+    "conversation",
+    "message",
+    "bookmark",
+  ]),
   id: z.string(),
   payload: z.record(z.string(), z.unknown()),
   updated_at: z.number(),
@@ -35,7 +48,7 @@ const PushBodySchema = z.object({
 });
 
 export const syncRoutes = new Hono<{
-  Bindings: CloudflareBindings;
+  Bindings: Env;
   Variables: { userId: string };
 }>();
 
@@ -62,10 +75,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
   const rawBody = await c.req.json().catch(() => null);
   const parsed = PushBodySchema.safeParse(rawBody);
   if (!parsed.success) {
-    return c.json(
-      { error: "bad_request", detail: parsed.error.message },
-      400,
-    );
+    return c.json({ error: "bad_request", detail: parsed.error.message }, 400);
   }
   const body = parsed.data;
   const userId = c.get("userId");
@@ -92,8 +102,10 @@ syncRoutes.post("/push", requireAuth, async (c) => {
         if (typeof p.title === "string") fields.title = p.title;
         if (typeof p.author === "string") fields.author = p.author;
         if (typeof p.format_type === "string") fields.format = p.format_type;
-        if (typeof p.current_cfi === "string") fields.currentCfi = p.current_cfi;
-        if (typeof p.current_page === "number") fields.currentPage = p.current_page;
+        if (typeof p.current_cfi === "string")
+          fields.currentCfi = p.current_cfi;
+        if (typeof p.current_page === "number")
+          fields.currentPage = p.current_page;
         if (typeof p.last_progress_percent === "number")
           fields.lastProgressPercent = p.last_progress_percent;
 
@@ -262,10 +274,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
                 updatedAt: pushedUpdatedAtMs,
               } as Partial<typeof bookmarks.$inferInsert>)
               .where(
-                and(
-                  eq(bookmarks.id, bookmarkId),
-                  eq(bookmarks.userId, userId),
-                ),
+                and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId)),
               );
           }
           continue;
@@ -299,10 +308,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
               updatedAt: pushedUpdatedAtMs,
             } as Partial<typeof bookmarks.$inferInsert>)
             .where(
-              and(
-                eq(bookmarks.id, bookmarkId),
-                eq(bookmarks.userId, userId),
-              ),
+              and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId)),
             );
         }
         continue;
@@ -319,10 +325,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
           .select()
           .from(conversations)
           .where(
-            and(
-              eq(conversations.id, convId),
-              eq(conversations.userId, userId),
-            ),
+            and(eq(conversations.id, convId), eq(conversations.userId, userId)),
           )
           .get();
 
@@ -381,10 +384,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
           .select()
           .from(conversations)
           .where(
-            and(
-              eq(conversations.id, convId),
-              eq(conversations.userId, userId),
-            ),
+            and(eq(conversations.id, convId), eq(conversations.userId, userId)),
           )
           .get();
         if (!parentConv) continue;
@@ -420,7 +420,10 @@ syncRoutes.post("/push", requireAuth, async (c) => {
 syncRoutes.get("/pull", requireAuth, async (c) => {
   const sinceVersion = Number(c.req.query("since_version") ?? "0");
   if (!Number.isFinite(sinceVersion) || sinceVersion < 0) {
-    return c.json({ error: "since_version must be a non-negative number" }, 400);
+    return c.json(
+      { error: "since_version must be a non-negative number" },
+      400,
+    );
   }
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
@@ -436,12 +439,7 @@ syncRoutes.get("/pull", requireAuth, async (c) => {
     const changedBooks = await tx
       .select()
       .from(books)
-      .where(
-        and(
-          eq(books.userId, userId),
-          gt(books.syncVersion, sinceVersion)
-        )
-      )
+      .where(and(eq(books.userId, userId), gt(books.syncVersion, sinceVersion)))
       .limit(PULL_LIMIT)
       .all();
 
@@ -451,8 +449,8 @@ syncRoutes.get("/pull", requireAuth, async (c) => {
       .where(
         and(
           eq(highlights.userId, userId),
-          gt(highlights.syncVersion, sinceVersion)
-        )
+          gt(highlights.syncVersion, sinceVersion),
+        ),
       )
       .limit(PULL_LIMIT)
       .all();
@@ -464,8 +462,8 @@ syncRoutes.get("/pull", requireAuth, async (c) => {
       .where(
         and(
           eq(conversations.userId, userId),
-          gt(conversations.syncVersion, sinceVersion)
-        )
+          gt(conversations.syncVersion, sinceVersion),
+        ),
       )
       .limit(PULL_LIMIT)
       .all();
@@ -480,17 +478,38 @@ syncRoutes.get("/pull", requireAuth, async (c) => {
       .where(
         and(
           gt(messages.syncVersion, sinceVersion),
-          eq(conversations.userId, userId)
-        )
+          eq(conversations.userId, userId),
+        ),
       )
       .orderBy(asc(messages.createdAt))
       .limit(PULL_LIMIT)
       .all();
 
     // Get current max syncVersion across all tables for this user
-    const maxBookVer = (await tx.select({ v: max(books.syncVersion) }).from(books).where(eq(books.userId, userId)).get())?.v ?? 0;
-    const maxHighVer = (await tx.select({ v: max(highlights.syncVersion) }).from(highlights).where(eq(highlights.userId, userId)).get())?.v ?? 0;
-    const maxConvVer = (await tx.select({ v: max(conversations.syncVersion) }).from(conversations).where(eq(conversations.userId, userId)).get())?.v ?? 0;
+    const maxBookVer =
+      (
+        await tx
+          .select({ v: max(books.syncVersion) })
+          .from(books)
+          .where(eq(books.userId, userId))
+          .get()
+      )?.v ?? 0;
+    const maxHighVer =
+      (
+        await tx
+          .select({ v: max(highlights.syncVersion) })
+          .from(highlights)
+          .where(eq(highlights.userId, userId))
+          .get()
+      )?.v ?? 0;
+    const maxConvVer =
+      (
+        await tx
+          .select({ v: max(conversations.syncVersion) })
+          .from(conversations)
+          .where(eq(conversations.userId, userId))
+          .get()
+      )?.v ?? 0;
     // Query max message syncVersion from DB via JOIN (not from truncated result set)
     const maxMsgVerResult = await tx
       .select({ v: max(messages.syncVersion) })
@@ -500,9 +519,20 @@ syncRoutes.get("/pull", requireAuth, async (c) => {
       .get();
     const maxMsgVer = maxMsgVerResult?.v ?? 0;
 
-    const currentSyncVersion = Math.max(maxBookVer, maxHighVer, maxConvVer, maxMsgVer);
+    const currentSyncVersion = Math.max(
+      maxBookVer,
+      maxHighVer,
+      maxConvVer,
+      maxMsgVer,
+    );
 
-    return { changedBooks, changedHighlights, changedConversations, changedMessages, currentSyncVersion };
+    return {
+      changedBooks,
+      changedHighlights,
+      changedConversations,
+      changedMessages,
+      currentSyncVersion,
+    };
   });
 
   // Strip local-only paths from response -- client must never overwrite its local paths
@@ -521,9 +551,15 @@ syncRoutes.get("/pull", requireAuth, async (c) => {
   const response: PullResponse = {
     changes: {
       books: sanitizedBooks as unknown as Array<Record<string, unknown>>,
-      highlights: result.changedHighlights as unknown as Array<Record<string, unknown>>,
-      conversations: result.changedConversations as unknown as Array<Record<string, unknown>>,
-      messages: result.changedMessages as unknown as Array<Record<string, unknown>>,
+      highlights: result.changedHighlights as unknown as Array<
+        Record<string, unknown>
+      >,
+      conversations: result.changedConversations as unknown as Array<
+        Record<string, unknown>
+      >,
+      messages: result.changedMessages as unknown as Array<
+        Record<string, unknown>
+      >,
     },
     syncVersion: result.currentSyncVersion,
     hasMore,

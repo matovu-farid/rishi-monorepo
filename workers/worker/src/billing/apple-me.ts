@@ -5,7 +5,7 @@ import { createDb } from "../db/drizzle";
 // Type-only import to avoid a runtime ESM cycle with ../index — same shape as
 // the 14-04 verify-receipt and 14-05 webhook factories. `requireAuth` is
 // passed in by the caller (src/index.ts) rather than imported here.
-import type { CloudflareBindings } from "../index";
+import type { Env } from "../index";
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ export async function handleBillingMe(
  */
 export function registerBillingMeRoute(
   app: Hono<{
-    Bindings: CloudflareBindings;
+    Bindings: Env;
     Variables: { userId: string };
   }>,
   requireAuth: MiddlewareHandler,

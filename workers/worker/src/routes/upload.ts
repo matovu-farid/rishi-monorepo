@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { eq, and, count, sum } from "drizzle-orm";
-import type { CloudflareBindings } from "../index";
+import type { Env } from "../index";
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
@@ -26,17 +26,16 @@ const UPLOAD_URL_EXPIRES_SEC = 300;
 // on flaky mobile networks.
 const DOWNLOAD_URL_EXPIRES_SEC = 600;
 
-function getLimits(env: CloudflareBindings) {
+function getLimits(env: Env) {
   return {
-    perUserCount:
-      Number(env.BOOK_MAX_PER_USER) || DEFAULT_BOOK_MAX_PER_USER,
+    perUserCount: Number(env.BOOK_MAX_PER_USER) || DEFAULT_BOOK_MAX_PER_USER,
     perUserBytes:
       Number(env.BOOK_MAX_USER_BYTES) || DEFAULT_BOOK_MAX_USER_BYTES,
   };
 }
 
 export const uploadRoutes = new Hono<{
-  Bindings: CloudflareBindings;
+  Bindings: Env;
   Variables: { userId: string };
 }>();
 
@@ -192,9 +191,7 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
 // `..`/`%`/null-byte tricks (isR2KeySafe). This prevents the client from
 // downloading another user's book file.
 uploadRoutes.post("/download-url", requireAuth, async (c) => {
-  const body = await c.req
-    .json<{ key?: unknown }>()
-    .catch(() => null);
+  const body = await c.req.json<{ key?: unknown }>().catch(() => null);
   if (!body || typeof body.key !== "string") {
     return c.json({ error: "Forbidden: invalid key" }, 403);
   }

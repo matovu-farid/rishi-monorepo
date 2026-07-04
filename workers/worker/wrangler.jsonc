@@ -1,54 +1,67 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "rishi-worker",
-  "main": "src/index.ts",
-  "compatibility_date": "2025-11-17",
-  "compatibility_flags": [
-    "nodejs_als",
-    "nodejs_compat"
-  ],
-  "version_metadata": {
-    "binding": "CF_VERSION_METADATA"
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "rishi-sync",
-      "database_id": "ccef7988-1e94-40c8-a852-e4149bedf72d",
-      "migrations_dir": "drizzle/migrations"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "BOOK_STORAGE",
-      "bucket_name": "rishi-books"
-    },
-    {
-      "binding": "TTS_CACHE",
-      "bucket_name": "rishi-tts-cache"
-    }
-  ],
-  "kv_namespaces": [
-    {
-      "binding": "RISHI_DESKTOP_STATE",
-      "id": "12eb084c99f44bebafcf1143bc457f58",
-      "preview_id": "49a43a76aac747ad8472856f33e1eeda"
-    }
-  ],
-  "vars": {
-    "PUBLIC_API_URL": "https://api.fidexa.org",
-    "PUBLIC_WEB_URL": "https://rishi.fidexa.org",
-    // ─── /api/sync/upload-url storage caps ───────────────────────────────
-    // wrangler passes numeric vars as strings; defaults in upload.ts kick in
-    // if these are unset. Override per-environment as needed.
-    "BOOK_MAX_FILE_BYTES": "838860800",   // 800 MB per uploaded file
-    "BOOK_MAX_PER_USER": "500",            // count of non-deleted books / user
-    "BOOK_MAX_USER_BYTES": "10737418240"   // 10 GB total per user (sum of fileSize)
-    // ENABLE_TEST_AUTH + TEST_AUTH_SECRET are intentionally NOT defined here.
-    // Set them ONLY in dev/staging via `wrangler secret put` to keep prod
-    // hard-gated by absence.
-  },
-  "routes": [
-    { "pattern": "api.fidexa.org", "custom_domain": true }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "rishi-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-11-17",
+	"compatibility_flags": [
+		"nodejs_als",
+		"nodejs_compat"
+	],
+	"version_metadata": {
+		"binding": "CF_VERSION_METADATA"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "rishi-sync",
+			"database_id": "ccef7988-1e94-40c8-a852-e4149bedf72d",
+			"migrations_dir": "drizzle/migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "APPLE",
+			"bucket_name": "apple",
+			"remote": true
+
+		},
+		{
+			"binding": "BOOK_STORAGE",
+			"bucket_name": "rishi-books"
+		},
+		{
+			"binding": "TTS_CACHE",
+			"bucket_name": "rishi-tts-cache"
+		},
+		{
+			"bucket_name": "apple-dev",
+			"binding": "apple_dev"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "RISHI_DESKTOP_STATE",
+			"id": "12eb084c99f44bebafcf1143bc457f58",
+			"preview_id": "49a43a76aac747ad8472856f33e1eeda"
+		}
+	],
+	"vars": {
+		"PUBLIC_API_URL": "https://api.fidexa.org",
+		"PUBLIC_WEB_URL": "https://rishi.fidexa.org",
+		// ─── /api/sync/upload-url storage caps ───────────────────────────────
+		// wrangler passes numeric vars as strings; defaults in upload.ts kick in
+		// if these are unset. Override per-environment as needed.
+		"BOOK_MAX_FILE_BYTES": "838860800", // 800 MB per uploaded file
+		"BOOK_MAX_PER_USER": "500", // count of non-deleted books / user
+		"BOOK_MAX_USER_BYTES": "10737418240" // 10 GB total per user (sum of fileSize)
+		// ENABLE_TEST_AUTH + TEST_AUTH_SECRET are intentionally NOT defined here.
+		// Set them ONLY in dev/staging via `wrangler secret put` to keep prod
+		// hard-gated by absence.
+	},
+	"routes": [
+		{
+			"pattern": "api.fidexa.org",
+			"custom_domain": true
+		}
+	]
 }

@@ -1,5 +1,5 @@
-import { Hono } from "hono"
-import { eq } from "drizzle-orm"
+import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import {
   books,
   highlights,
@@ -9,10 +9,10 @@ import {
   user,
   session,
   account,
-} from "@rishi/shared/schema"
-import { createDb } from "../db/drizzle"
-import { createAuth } from "../auth"
-import type { CloudflareBindings } from "../index"
+} from "@rishi/shared/schema";
+import { createDb } from "../db/drizzle";
+import { createAuth } from "../auth";
+import type { Env } from "../index";
 
 /**
  * Test-only auth routes mounted at /test/*.
@@ -31,9 +31,9 @@ import type { CloudflareBindings } from "../index"
  */
 
 export const testAuthRoutes = new Hono<{
-  Bindings: CloudflareBindings
-  Variables: { userId: string }
-}>()
+  Bindings: Env;
+  Variables: { userId: string };
+}>();
 
 /**
  * Constant-time string comparison.
@@ -44,15 +44,15 @@ export const testAuthRoutes = new Hono<{
  * mismatch by sending a 1-char header.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  const encoder = new TextEncoder()
-  const bufA = encoder.encode(a)
-  const bufB = encoder.encode(b)
-  let diff = bufA.length ^ bufB.length
-  const len = Math.max(bufA.length, bufB.length)
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  let diff = bufA.length ^ bufB.length;
+  const len = Math.max(bufA.length, bufB.length);
   for (let i = 0; i < len; i++) {
-    diff |= (bufA[i] ?? 0) ^ (bufB[i] ?? 0)
+    diff |= (bufA[i] ?? 0) ^ (bufB[i] ?? 0);
   }
-  return diff === 0
+  return diff === 0;
 }
 
 /**
@@ -62,22 +62,22 @@ function timingSafeEqual(a: string, b: string): boolean {
  * unknown path.
  */
 function gateOrNotFound(c: {
-  env: CloudflareBindings
-  req: { header: (name: string) => string | undefined }
+  env: Env;
+  req: { header: (name: string) => string | undefined };
 }): Response | null {
-  const enabled = c.env.ENABLE_TEST_AUTH
+  const enabled = c.env.ENABLE_TEST_AUTH;
   if (!enabled || enabled !== "true") {
-    return new Response("Not Found", { status: 404 })
+    return new Response("Not Found", { status: 404 });
   }
-  const expected = c.env.TEST_AUTH_SECRET
+  const expected = c.env.TEST_AUTH_SECRET;
   if (!expected) {
-    return new Response("Not Found", { status: 404 })
+    return new Response("Not Found", { status: 404 });
   }
-  const provided = c.req.header("X-Test-Auth-Secret")
+  const provided = c.req.header("X-Test-Auth-Secret");
   if (!provided || !timingSafeEqual(provided, expected)) {
-    return new Response("Not Found", { status: 404 })
+    return new Response("Not Found", { status: 404 });
   }
-  return null
+  return null;
 }
 
 // ─── POST /sign-in ────────────────────────────────────────────────────────────
@@ -85,16 +85,19 @@ function gateOrNotFound(c: {
 // or — if the user already exists — just signs them in. Returns the bearer
 // session token along with userId + email.
 testAuthRoutes.post("/sign-in", async (c) => {
-  const gate = gateOrNotFound(c)
-  if (gate) return gate
+  const gate = gateOrNotFound(c);
+  if (gate) return gate;
 
-  let body: unknown
+  let body: unknown;
   try {
-    body = await c.req.json()
+    body = await c.req.json();
   } catch {
-    return c.json({ error: "Invalid JSON" }, 400)
+    return c.json({ error: "Invalid JSON" }, 400);
   }
-  const { email, password } = (body ?? {}) as { email?: string; password?: string }
+  const { email, password } = (body ?? {}) as {
+    email?: string;
+    password?: string;
+  };
   if (
     !email ||
     typeof email !== "string" ||
@@ -103,11 +106,11 @@ testAuthRoutes.post("/sign-in", async (c) => {
     typeof password !== "string" ||
     password.length < 1
   ) {
-    return c.json({ error: "email and password required" }, 400)
+    return c.json({ error: "email and password required" }, 400);
   }
 
-  const auth = await createAuth(c.env)
-  const headers = c.req.raw.headers
+  const auth = await createAuth(c.env);
+  const headers = c.req.raw.headers;
 
   // Try to sign up first. If the user already exists, Better-Auth throws
   // (or returns a recognisable error) — we swallow it and fall through to
@@ -121,33 +124,33 @@ testAuthRoutes.post("/sign-in", async (c) => {
       },
       headers,
       asResponse: false,
-    })
+    });
   } catch (err) {
     // Likely "user exists" — proceed to sign in. We don't differentiate here
     // because all other errors will surface again in the signInEmail call.
-    void err
+    void err;
   }
 
-  let signed
+  let signed;
   try {
     signed = await auth.api.signInEmail({
       body: { email, password },
       headers,
       asResponse: false,
-    })
+    });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "sign-in failed"
-    return c.json({ error: message }, 401)
+    const message = err instanceof Error ? err.message : "sign-in failed";
+    return c.json({ error: message }, 401);
   }
 
   // Better-Auth's signInEmail returns { user, token } in v1.6+.
-  const token = (signed as { token?: string })?.token
-  const userId = (signed as { user?: { id?: string } })?.user?.id
+  const token = (signed as { token?: string })?.token;
+  const userId = (signed as { user?: { id?: string } })?.user?.id;
   if (!token || !userId) {
-    return c.json({ error: "sign-in did not return a token" }, 500)
+    return c.json({ error: "sign-in did not return a token" }, 500);
   }
-  return c.json({ token, userId, email })
-})
+  return c.json({ token, userId, email });
+});
 
 // ─── DELETE /users/:email ─────────────────────────────────────────────────────
 // Cascades a user's data:
@@ -158,44 +161,48 @@ testAuthRoutes.post("/sign-in", async (c) => {
 // the user doesn't exist (also returns 404 on gating failures — same code so
 // probers can't distinguish).
 testAuthRoutes.delete("/users/:email", async (c) => {
-  const gate = gateOrNotFound(c)
-  if (gate) return gate
+  const gate = gateOrNotFound(c);
+  if (gate) return gate;
 
   // Better-Auth lowercases emails on storage, so we normalize on lookup
   // — otherwise a mixed-case test email (e.g. nanoid-generated) creates
   // the user as `foo@x` but the delete looks up `FoO@x` and 404s.
-  const email = decodeURIComponent(c.req.param("email")).toLowerCase()
-  const db = createDb(c.env.DB)
+  const email = decodeURIComponent(c.req.param("email")).toLowerCase();
+  const db = createDb(c.env.DB);
 
   // Look up the user by email (case-insensitive normalized above).
-  const userRow = await db.select().from(user).where(eq(user.email, email)).get()
+  const userRow = await db
+    .select()
+    .from(user)
+    .where(eq(user.email, email))
+    .get();
   if (!userRow) {
-    return c.json({ error: "user not found" }, 404)
+    return c.json({ error: "user not found" }, 404);
   }
-  const userId = userRow.id
+  const userId = userRow.id;
 
   // ── R2 teardown ──────────────────────────────────────────────────────────
   const userBooks = await db
     .select()
     .from(books)
     .where(eq(books.userId, userId))
-    .all()
+    .all();
 
-  let r2ObjectsRemoved = 0
+  let r2ObjectsRemoved = 0;
   for (const b of userBooks) {
     for (const key of [b.fileR2Key, b.coverR2Key]) {
-      if (!key) continue
+      if (!key) continue;
       try {
-        await c.env.BOOK_STORAGE.delete(key)
-        r2ObjectsRemoved++
+        await c.env.BOOK_STORAGE.delete(key);
+        r2ObjectsRemoved++;
       } catch (err) {
         // Don't strand teardown on a transient R2 failure — the row will still
         // be removed so a retry can target only the remaining objects.
-        console.error("R2 delete failed:", key, err)
+        console.error("R2 delete failed:", key, err);
       }
     }
   }
-  const booksRemoved = userBooks.length
+  const booksRemoved = userBooks.length;
 
   // ── Messages: scoped via conversationId since the messages row lacks
   // userId. Collect this user's conversation ids first, then delete by each.
@@ -203,33 +210,48 @@ testAuthRoutes.delete("/users/:email", async (c) => {
   // a fresh local D1 that's missing a migration) shouldn't strand teardown.
   const safeRun = async (label: string, fn: () => Promise<unknown>) => {
     try {
-      await fn()
+      await fn();
     } catch (err) {
-      console.error(`teardown ${label} failed:`, err)
+      console.error(`teardown ${label} failed:`, err);
     }
-  }
+  };
 
   await safeRun("messages-by-conv", async () => {
     const userConvs = await db
       .select()
       .from(conversations)
       .where(eq(conversations.userId, userId))
-      .all()
+      .all();
     for (const conv of userConvs) {
-      await db.delete(messages).where(eq(messages.conversationId, conv.id)).run()
+      await db
+        .delete(messages)
+        .where(eq(messages.conversationId, conv.id))
+        .run();
     }
-  })
+  });
 
   // ── D1 user-scoped tables ────────────────────────────────────────────────
-  await safeRun("books", () => db.delete(books).where(eq(books.userId, userId)).run())
-  await safeRun("highlights", () => db.delete(highlights).where(eq(highlights.userId, userId)).run())
-  await safeRun("conversations", () => db.delete(conversations).where(eq(conversations.userId, userId)).run())
-  await safeRun("bookmarks", () => db.delete(bookmarks).where(eq(bookmarks.userId, userId)).run())
+  await safeRun("books", () =>
+    db.delete(books).where(eq(books.userId, userId)).run(),
+  );
+  await safeRun("highlights", () =>
+    db.delete(highlights).where(eq(highlights.userId, userId)).run(),
+  );
+  await safeRun("conversations", () =>
+    db.delete(conversations).where(eq(conversations.userId, userId)).run(),
+  );
+  await safeRun("bookmarks", () =>
+    db.delete(bookmarks).where(eq(bookmarks.userId, userId)).run(),
+  );
 
   // ── Better-Auth rows (verification + passkey cascade via FK ON DELETE) ──
-  await safeRun("session", () => db.delete(session).where(eq(session.userId, userId)).run())
-  await safeRun("account", () => db.delete(account).where(eq(account.userId, userId)).run())
-  await safeRun("user", () => db.delete(user).where(eq(user.id, userId)).run())
+  await safeRun("session", () =>
+    db.delete(session).where(eq(session.userId, userId)).run(),
+  );
+  await safeRun("account", () =>
+    db.delete(account).where(eq(account.userId, userId)).run(),
+  );
+  await safeRun("user", () => db.delete(user).where(eq(user.id, userId)).run());
 
-  return c.json({ deleted: true, userId, booksRemoved, r2ObjectsRemoved })
-})
+  return c.json({ deleted: true, userId, booksRemoved, r2ObjectsRemoved });
+});

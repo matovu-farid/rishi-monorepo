@@ -10,8 +10,8 @@ import {
   APICallError,
 } from "ai";
 import { z } from "zod";
+
 import * as Sentry from "@sentry/cloudflare";
-import { Redis } from "@upstash/redis/cloudflare";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
@@ -41,38 +41,43 @@ import {
   renderRealtimeInstructions,
 } from "@rishi/shared/voice-chat/build-realtime-agent";
 import { eq } from "drizzle-orm";
+import { Effect, Layer } from "effect";
+import { AppleBucket, createTestNotification } from "./apple-connect/functions";
+import { value } from "effect/Redacted";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
 const ALLOWED_REALTIME_LANGUAGES = [
-  'en',
-  'es',
-  'fr',
-  'de',
-  'it',
-  'pt',
-  'ja',
-  'ko',
-  'zh',
-  'ar',
-  'hi',
-  'ru'
-] as const
+  "en",
+  "es",
+  "fr",
+  "de",
+  "it",
+  "pt",
+  "ja",
+  "ko",
+  "zh",
+  "ar",
+  "hi",
+  "ru",
+] as const;
 
 function coerceLanguage(raw: string | undefined): string {
-  if (!raw) return 'en'
-  return (ALLOWED_REALTIME_LANGUAGES as readonly string[]).includes(raw) ? raw : 'en'
+  if (!raw) return "en";
+  return (ALLOWED_REALTIME_LANGUAGES as readonly string[]).includes(raw)
+    ? raw
+    : "en";
 }
 
 // Lazily memoize the AI SDK provider so we don't re-allocate it (and any
 // internal state it caches) on every request. The Cloudflare Workers env
 // binding is only available at request time, so we key the cache on apiKey.
-let _openai: ReturnType<typeof createOpenAI> | null = null
-let _openaiApiKey: string | null = null
+let _openai: ReturnType<typeof createOpenAI> | null = null;
+let _openaiApiKey: string | null = null;
 function getOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
-  if (_openai && _openaiApiKey === apiKey) return _openai
-  _openai = createOpenAI({ apiKey })
-  _openaiApiKey = apiKey
-  return _openai
+  if (_openai && _openaiApiKey === apiKey) return _openai;
+  _openai = createOpenAI({ apiKey });
+  _openaiApiKey = apiKey;
+  return _openai;
 }
 
 /**
@@ -94,16 +99,16 @@ function getOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
  *   pinned by buildRealtimeClientSecretsBody tests.)
  */
 export interface BuildClientSecretsInput {
-  language: string
-  bookId?: string
-  currentPage?: number
-  pageText?: string
+  language: string;
+  bookId?: string;
+  currentPage?: number;
+  pageText?: string;
   outline?: {
-    title: string
-    author?: string
-    chapters: string[]
-  }
-  activeParagraphText?: string
+    title: string;
+    author?: string;
+    chapters: string[];
+  };
+  activeParagraphText?: string;
 }
 
 export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
@@ -117,13 +122,13 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
         author: input.outline.author ?? null,
         chapters: input.outline.chapters,
       }
-    : undefined
+    : undefined;
   const instructions = renderRealtimeInstructions({
     pageText: input.pageText ?? "",
     language: input.language,
     outline,
     activeParagraphText: input.activeParagraphText,
-  })
+  });
   return {
     expires_after: {
       anchor: "created_at",
@@ -143,11 +148,14 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
       ],
       audio: {
         input: {
-          transcription: { model: "gpt-4o-mini-transcribe", language: input.language },
+          transcription: {
+            model: "gpt-4o-mini-transcribe",
+            language: input.language,
+          },
         },
       },
     },
-  } as const
+  } as const;
 }
 
 /**
@@ -163,75 +171,25 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
  * test in audio-speech-cache.test.ts and TTSCacheKeyTests.swift asserts this
  * symmetry against the pinned canonical string "tts-1|alloy|1.00|hello world".
  */
-async function ttsCacheKey(text: string, voice: string, speed: number): Promise<string> {
+async function ttsCacheKey(
+  text: string,
+  voice: string,
+  speed: number,
+): Promise<string> {
   const canonical = `tts-1|${voice}|${speed.toFixed(2)}|${text}`;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-/** Constant-time string comparison to prevent timing attacks. */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const encoder = new TextEncoder();
-  const bufA = encoder.encode(a);
-  const bufB = encoder.encode(b);
-  return crypto.subtle.timingSafeEqual(bufA, bufB);
-}
-
-export interface CloudflareBindings {
-  BETTER_AUTH_SECRET: string;
-  DEEPGRAM_KEY: string;
-  OPENAI_API_KEY: string;
-  GOOGLE_CLIENT_ID: string;
-  GOOGLE_CLIENT_SECRET: string;
-  RESEND_API_KEY: string;
-  PUBLIC_API_URL: string;
-  PUBLIC_WEB_URL: string;
-  RISHI_DESKTOP_STATE: KVNamespace;
-  UPSTASH_REDIS_REST_URL: string;
-  UPSTASH_REDIS_REST_TOKEN: string;
-  DEV_BYPASS_SECRET?: string;
-  SENTRY_DSN?: string;
-  DB: D1Database;
-  BOOK_STORAGE: R2Bucket;
-  TTS_CACHE: R2Bucket;
-  R2_ACCESS_KEY_ID: string;
-  R2_SECRET_ACCESS_KEY: string;
-  CLOUDFLARE_ACCOUNT_ID: string;
-  // Storage caps for /api/sync/upload-url. wrangler passes numeric vars as
-  // strings — parse with Number(...) || DEFAULT in the consuming code.
-  BOOK_MAX_FILE_BYTES?: string;
-  BOOK_MAX_PER_USER?: string;
-  BOOK_MAX_USER_BYTES?: string;
-  // Test-only auth routes. All three gates (env=true, header matches secret,
-  // var present) must pass or /test/* returns 404 — strangers see "no such
-  // endpoint".
-  ENABLE_TEST_AUTH?: string;
-  TEST_AUTH_SECRET?: string;
-  // Stripe billing. Both are wrangler secrets — STRIPE_SECRET_KEY is the
-  // sk_test_/sk_live_ key, STRIPE_WEBHOOK_SECRET is the whsec_ value for
-  // the endpoint registered at /api/auth/stripe/webhook.
-  STRIPE_SECRET_KEY?: string;
-  STRIPE_WEBHOOK_SECRET?: string;
-  // Apple Sign-In (native iOS). All four required to register the Better
-  // Auth Apple social provider; set via `wrangler secret put`. APPLE_TEAM_ID
-  // is shared with Phase 14 (IAP S2S) — do not duplicate. CLIENT_ID is the
-  // iOS bundle identifier (e.g. "org.fidexa.rishi"), KEY_ID is the 10-char
-  // Apple Key ID, PRIVATE_KEY is the .p8 file contents (PKCS8 PEM).
-  APPLE_SIWA_CLIENT_ID?: string;
-  APPLE_SIWA_KEY_ID?: string;
-  APPLE_SIWA_PRIVATE_KEY?: string;
-  APPLE_TEAM_ID?: string;
-  // APNs auth for entitlement-invalidation silent pushes (REFUND/REVOKE).
-  // APPLE_APNS_KEY_P8 is the .p8 file contents (PKCS8 PEM), APPLE_APNS_KEY_ID
-  // is the 10-char APNs Key ID. APPLE_TEAM_ID (above) is reused as the JWT
-  // issuer. All three must be set or the webhook skips the push. Set the
-  // first two via `wrangler secret put`.
-  APPLE_APNS_KEY_P8?: string;
-  APPLE_APNS_KEY_ID?: string;
-}
-
-export const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
+export const app = new Hono<{
+  Bindings: Env;
+  Variables: { userId: string };
+}>();
 
 // CORS must be registered before any auth middleware
 app.use(
@@ -249,7 +207,7 @@ app.use(
     allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
     allowMethods: ["GET", "POST", "OPTIONS", "DELETE"],
     credentials: true,
-  })
+  }),
 );
 
 // Better Auth handles all /api/auth/* internally
@@ -267,14 +225,14 @@ app.get("/", (c) => {
 // header) and exposes the user id via c.get("userId"). Preserves the dev
 // bypass header for local development.
 export async function requireAuth(c: any, next: () => Promise<void>) {
-  const devSecret = c.env.DEV_BYPASS_SECRET;
-  if (devSecret) {
-    const devHeader = c.req.header("X-Dev-Bypass");
-    if (devHeader && timingSafeEqual(devHeader, devSecret)) {
-      c.set("userId", "dev-user");
-      return next();
-    }
-  }
+  // const devSecret = c.env.DEV_BYPASS_SECRET;
+  // if (devSecret) {
+  //   const devHeader = c.req.header("X-Dev-Bypass");
+  //   if (devHeader && timingSafeEqual(devHeader, devSecret)) {
+  //     c.set("userId", "dev-user");
+  //     return next();
+  //   }
+  // }
 
   const auth = await createAuth(c.env);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
@@ -331,6 +289,11 @@ app.get(
   (c) => c.json({ ok: true }),
 );
 
+app.get("/api/groupID", requireAuth, async (c) => {
+  return c.json({
+    value: "22149819",
+  });
+});
 // ─── Apple IAP routes (Phase 14) ──────────────────────────────────────────────
 // POST /api/billing/verify-receipt — mounted behind requireAuth by the
 // route factory; iOS calls this after Product.purchase() to re-verify the
@@ -357,12 +320,18 @@ registerAppleWebhookRoute(app);
 // private Cache-Control header to dampen the iOS reconciler hot path.
 registerBillingMeRoute(app, requireAuth);
 
-// ─── Protected routes ─────────────────────────────────────────────────────────
-app.get("/api/redis-test", requireAuth, async (c) => {
-  const redis = Redis.fromEnv(c.env);
-  await redis.set("foo", "bar");
-  const value = await redis.get("foo");
-  return c.json({ value });
+app.get("/api/apple-test", async (c) => {
+  try {
+    const AppleBucketLive = Layer.succeed(AppleBucket, c.env.APPLE);
+    const effect = createTestNotification().pipe(
+      Effect.provide(AppleBucketLive),
+    );
+
+    const result = await Effect.runPromise(effect);
+    return c.json(result);
+  } catch (error) {
+    console.log(error);
+  }
 });
 
 // Customer Portal — mints a Stripe-hosted URL where the user manages
@@ -372,7 +341,10 @@ app.get("/api/redis-test", requireAuth, async (c) => {
 // plugin, or signup hasn't finished).
 app.post("/api/billing/portal", requireAuth, async (c) => {
   if (!c.env.STRIPE_SECRET_KEY) {
-    return c.json({ error: "Billing is not configured for this environment" }, 503);
+    return c.json(
+      { error: "Billing is not configured for this environment" },
+      503,
+    );
   }
   const body = await c.req
     .json<{ returnUrl?: string }>()
@@ -388,7 +360,11 @@ app.post("/api/billing/portal", requireAuth, async (c) => {
     return c.json({ error: "No Stripe customer for this user yet" }, 409);
   }
   const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
-  const url = await createPortalSession(stripe, row.stripeCustomerId, returnUrl);
+  const url = await createPortalSession(
+    stripe,
+    row.stripeCustomerId,
+    returnUrl,
+  );
   return c.json({ url });
 });
 
@@ -397,7 +373,10 @@ app.post("/api/billing/portal", requireAuth, async (c) => {
 // have to handle the 409 "No Stripe customer for this user yet" branch.
 app.post("/api/billing/start", requireAuth, async (c) => {
   if (!c.env.STRIPE_SECRET_KEY) {
-    return c.json({ error: "Billing is not configured for this environment" }, 503);
+    return c.json(
+      { error: "Billing is not configured for this environment" },
+      503,
+    );
   }
   const body = await c.req
     .json<{ returnUrl?: string }>()
@@ -463,206 +442,255 @@ app.get("/health", (c) => {
   });
 });
 
-app.post("/api/audio/speech", requireAuth, requireActiveSubscription, async (c) => {
-  try {
-    // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
-    // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
-    // The previous {input, voice} shape was an OpenAI passthrough that the iOS
-    // client never matched, so every TTSStreamer.swift call short-circuited
-    // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
-    // call so the user-facing voice playback rate actually changes.
-    const { text, voice, speed } = await c.req.json<{
-      text?: string;
-      voice?: string;
-      speed?: number;
-    }>();
+app.post(
+  "/api/audio/speech",
+  requireAuth,
+  requireActiveSubscription,
+  async (c) => {
+    try {
+      // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
+      // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
+      // The previous {input, voice} shape was an OpenAI passthrough that the iOS
+      // client never matched, so every TTSStreamer.swift call short-circuited
+      // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
+      // call so the user-facing voice playback rate actually changes.
+      const { text, voice, speed } = await c.req.json<{
+        text?: string;
+        voice?: string;
+        speed?: number;
+      }>();
 
-    if (!text || typeof text !== "string" || text.trim().length === 0) {
-      return c.json({ error: "Missing or empty text" }, 400);
-    }
+      if (!text || typeof text !== "string" || text.trim().length === 0) {
+        return c.json({ error: "Missing or empty text" }, 400);
+      }
 
-    if (text.length > 4096) {
-      return c.json({ error: "text must be 4096 characters or fewer" }, 400);
-    }
+      if (text.length > 4096) {
+        return c.json({ error: "text must be 4096 characters or fewer" }, 400);
+      }
 
-    const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
-    const validVoice = allowedVoices.includes(voice as string) ? (voice as string) : "alloy";
+      const allowedVoices = [
+        "alloy",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "shimmer",
+      ];
+      const validVoice = allowedVoices.includes(voice as string)
+        ? (voice as string)
+        : "alloy";
 
-    // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
-    // for missing / non-finite / out-of-range values so the AI SDK never sees
-    // a hostile float.
-    const validSpeed =
-      typeof speed === "number" && Number.isFinite(speed) && speed >= 0.25 && speed <= 4.0
-        ? speed
-        : 1.0;
+      // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
+      // for missing / non-finite / out-of-range values so the AI SDK never sees
+      // a hostile float.
+      const validSpeed =
+        typeof speed === "number" &&
+        Number.isFinite(speed) &&
+        speed >= 0.25 &&
+        speed <= 4.0
+          ? speed
+          : 1.0;
 
-    // Phase 22-01: R2-backed content-addressed cache gate.
-    // Hits skip both the OpenAI call AND metering; misses preserve all existing
-    // behavior verbatim and fire-and-forget a writeback via waitUntil.
-    const key = await ttsCacheKey(text, validVoice, validSpeed);
+      // Phase 22-01: R2-backed content-addressed cache gate.
+      // Hits skip both the OpenAI call AND metering; misses preserve all existing
+      // behavior verbatim and fire-and-forget a writeback via waitUntil.
+      const key = await ttsCacheKey(text, validVoice, validSpeed);
 
-    const cached = await c.env.TTS_CACHE.get(key);
-    if (cached !== null) {
-      const bytes = await cached.bytes();
-      return new Response(bytes, {
+      const cached = await c.env.TTS_CACHE.get(key);
+      if (cached !== null) {
+        const bytes = await cached.bytes();
+        return new Response(bytes, {
+          headers: {
+            "Content-Type": "audio/mpeg",
+            "Content-Length": bytes.byteLength.toString(),
+            "X-TTS-Cache": "hit",
+          },
+        });
+      }
+
+      const openai = getOpenAI(c.env.OPENAI_API_KEY);
+
+      const speech = await generateSpeech({
+        model: openai.speech("tts-1"),
+        text: text,
+        voice: validVoice,
+        speed: validSpeed,
+      });
+
+      c.executionCtx.waitUntil(
+        meterFromContext(c.env, c.get("userId"), {
+          type: "tts",
+          model: "tts-1",
+          characters: text.length,
+        }),
+      );
+
+      const audioBytes = speech.audio.uint8Array;
+
+      // Fire-and-forget writeback; put errors must not surface to the response.
+      c.executionCtx.waitUntil(
+        c.env.TTS_CACHE.put(key, audioBytes, {
+          httpMetadata: { contentType: "audio/mpeg" },
+        }).catch((e) => console.error("tts.cache.put.failed", e)),
+      );
+
+      return new Response(audioBytes, {
         headers: {
           "Content-Type": "audio/mpeg",
-          "Content-Length": bytes.byteLength.toString(),
-          "X-TTS-Cache": "hit",
+          "Content-Length": audioBytes.byteLength.toString(),
+          "X-TTS-Cache": "miss",
         },
       });
-    }
-
-    const openai = getOpenAI(c.env.OPENAI_API_KEY);
-
-    const speech = await generateSpeech({
-      model: openai.speech("tts-1"),
-      text: text,
-      voice: validVoice,
-      speed: validSpeed,
-    });
-
-    c.executionCtx.waitUntil(
-      meterFromContext(c.env, c.get("userId"), {
-        type: "tts",
-        model: "tts-1",
-        characters: text.length,
-      }),
-    );
-
-    const audioBytes = speech.audio.uint8Array;
-
-    // Fire-and-forget writeback; put errors must not surface to the response.
-    c.executionCtx.waitUntil(
-      c.env.TTS_CACHE.put(key, audioBytes, {
-        httpMetadata: { contentType: "audio/mpeg" },
-      }).catch((e) => console.error("tts.cache.put.failed", e)),
-    );
-
-    return new Response(audioBytes, {
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Length": audioBytes.byteLength.toString(),
-        "X-TTS-Cache": "miss",
-      },
-    });
-  } catch (error) {
-    if (APICallError.isInstance(error)) {
-      console.error("OpenAI API error:", error.statusCode, error.message);
-      return c.json(
-        { error: "TTS generation failed" },
-        error.statusCode === 429 ? 429 : 502
+    } catch (error) {
+      if (APICallError.isInstance(error)) {
+        console.error("OpenAI API error:", error.statusCode, error.message);
+        return c.json(
+          { error: "TTS generation failed" },
+          error.statusCode === 429 ? 429 : 502,
+        );
+      }
+      console.error(
+        "TTS error:",
+        error instanceof Error ? error.message : "unknown",
       );
+      return c.json({ error: "TTS generation failed" }, 500);
     }
-    console.error("TTS error:", error instanceof Error ? error.message : "unknown");
-    return c.json({ error: "TTS generation failed" }, 500);
-  }
-});
+  },
+);
 
 // Phase 25-06: POST migration (was GET ?language=). Body shape matches the iOS
 // RishiAPI.RealtimeClientSecretsEndpoint.Body produced in Plan 25-08 — all
 // fields optional so callers without a book (e.g. quick voice without a
 // reader open) still work. Unparseable / empty bodies degrade to
 // `{ language: "en" }`.
-app.post("/api/realtime/client_secrets", requireAuth, requireActiveSubscription, async (c) => {
-  try {
-    const rawBody = await c.req
-      .json<Partial<BuildClientSecretsInput>>()
-      .catch((): Partial<BuildClientSecretsInput> => ({}));
-    const language = coerceLanguage(rawBody.language);
-    const response = await axios.post(
-      "https://api.openai.com/v1/realtime/client_secrets",
-      buildRealtimeClientSecretsBody({
-        language,
-        bookId: rawBody.bookId,
-        currentPage: rawBody.currentPage,
-        pageText: rawBody.pageText,
-        outline: rawBody.outline,
-        activeParagraphText: rawBody.activeParagraphText,
-      }),
-      {
-        headers: {
-          Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
+app.post(
+  "/api/realtime/client_secrets",
+  requireAuth,
+  requireActiveSubscription,
+  async (c) => {
+    try {
+      const rawBody = await c.req
+        .json<Partial<BuildClientSecretsInput>>()
+        .catch((): Partial<BuildClientSecretsInput> => ({}));
+      const language = coerceLanguage(rawBody.language);
+      const response = await axios.post(
+        "https://api.openai.com/v1/realtime/client_secrets",
+        buildRealtimeClientSecretsBody({
+          language,
+          bookId: rawBody.bookId,
+          currentPage: rawBody.currentPage,
+          pageText: rawBody.pageText,
+          outline: rawBody.outline,
+          activeParagraphText: rawBody.activeParagraphText,
+        }),
+        {
+          headers: {
+            Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30_000,
         },
-        timeout: 30_000,
+      );
+      // OpenAI's POST /v1/realtime/client_secrets returns a richer payload than
+      // we used to consume: `value` is the JWT ephemeral key, `expires_at` is
+      // the JWT TTL, and `id` is the realtime session id. iOS
+      // RishiAPI/Endpoints/RealtimeAPI.swift:31-39 decodes the response as
+      // `{client_secret: String, session_id: String}` — both flat strings.
+      //
+      // Project the OpenAI shape into the iOS contract. If OpenAI ever omits
+      // `id` (defensive — it's present in production today), synthesise a
+      // `local_<uuid>` so the iOS decoder still gets a non-empty string and
+      // logs can distinguish synthesised ids from real OpenAI session ids.
+      // Phase 17-05 (Gap 8 of the 2026-06-12 wire-contract audit).
+      const responseSchema = z.object({
+        value: z.string(),
+        expires_at: z.number(),
+        id: z.string().optional(),
+      });
+      const parsedResponse = responseSchema.parse(response.data);
+      return c.json({
+        client_secret: parsedResponse.value,
+        session_id: parsedResponse.id ?? `local_${crypto.randomUUID()}`,
+      });
+    } catch (error) {
+      const axiosErr = error as {
+        response?: { status?: number; data?: unknown };
+        message?: string;
+      };
+      const upstreamStatus = axiosErr.response?.status ?? null;
+      const upstreamBody = axiosErr.response?.data ?? null;
+      const message = error instanceof Error ? error.message : "unknown";
+      console.error("Failed to get client secrets:", {
+        message,
+        upstreamStatus,
+        upstreamBody,
+      });
+      return c.json(
+        {
+          error: "Failed to get client secrets",
+          detail: { message, upstreamStatus, upstreamBody },
+        },
+        500,
+      );
+    }
+  },
+);
+
+app.post(
+  "/api/text/completions",
+  requireAuth,
+  requireActiveSubscription,
+  async (c) => {
+    try {
+      const body = await c.req.json();
+      const input = body?.input;
+      if (!input || typeof input !== "string" || input.length > 50000) {
+        return c.json(
+          { error: "input must be a string under 50000 characters" },
+          400,
+        );
       }
-    );
-    // OpenAI's POST /v1/realtime/client_secrets returns a richer payload than
-    // we used to consume: `value` is the JWT ephemeral key, `expires_at` is
-    // the JWT TTL, and `id` is the realtime session id. iOS
-    // RishiAPI/Endpoints/RealtimeAPI.swift:31-39 decodes the response as
-    // `{client_secret: String, session_id: String}` — both flat strings.
-    //
-    // Project the OpenAI shape into the iOS contract. If OpenAI ever omits
-    // `id` (defensive — it's present in production today), synthesise a
-    // `local_<uuid>` so the iOS decoder still gets a non-empty string and
-    // logs can distinguish synthesised ids from real OpenAI session ids.
-    // Phase 17-05 (Gap 8 of the 2026-06-12 wire-contract audit).
-    const responseSchema = z.object({
-      value: z.string(),
-      expires_at: z.number(),
-      id: z.string().optional(),
-    });
-    const parsedResponse = responseSchema.parse(response.data);
-    return c.json({
-      client_secret: parsedResponse.value,
-      session_id: parsedResponse.id ?? `local_${crypto.randomUUID()}`,
-    });
-  } catch (error) {
-    const axiosErr = error as { response?: { status?: number; data?: unknown }; message?: string }
-    const upstreamStatus = axiosErr.response?.status ?? null
-    const upstreamBody = axiosErr.response?.data ?? null
-    const message = error instanceof Error ? error.message : "unknown"
-    console.error("Failed to get client secrets:", { message, upstreamStatus, upstreamBody })
-    return c.json(
-      { error: "Failed to get client secrets", detail: { message, upstreamStatus, upstreamBody } },
-      500
-    );
-  }
-});
+      const openai = getOpenAI(c.env.OPENAI_API_KEY);
+      const { text, usage } = await generateText({
+        model: openai.responses("gpt-5-nano"),
+        prompt: input,
+        // The AI SDK's OpenAI Responses provider defaults `store: true`, which
+        // tells OpenAI to retain the request/response for later retrieval. We
+        // proxy user book content here — opt out explicitly.
+        providerOptions: { openai: { store: false } },
+      });
 
-app.post("/api/text/completions", requireAuth, requireActiveSubscription, async (c) => {
-  try {
-    const body = await c.req.json();
-    const input = body?.input;
-    if (!input || typeof input !== "string" || input.length > 50000) {
-      return c.json({ error: "input must be a string under 50000 characters" }, 400);
+      c.executionCtx.waitUntil(
+        meterFromContext(c.env, c.get("userId"), {
+          type: "chat",
+          model: "gpt-5-nano",
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+        }),
+      );
+
+      return c.json(text);
+    } catch (error) {
+      if (APICallError.isInstance(error)) {
+        return c.json(
+          { error: error.message },
+          (error.statusCode as 400) || 500,
+        );
+      }
+      return c.json({ error: "Internal server error" }, 500);
     }
-    const openai = getOpenAI(c.env.OPENAI_API_KEY);
-    const { text, usage } = await generateText({
-      model: openai.responses("gpt-5-nano"),
-      prompt: input,
-      // The AI SDK's OpenAI Responses provider defaults `store: true`, which
-      // tells OpenAI to retain the request/response for later retrieval. We
-      // proxy user book content here — opt out explicitly.
-      providerOptions: { openai: { store: false } },
-    });
-
-    c.executionCtx.waitUntil(
-      meterFromContext(c.env, c.get("userId"), {
-        type: "chat",
-        model: "gpt-5-nano",
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-      }),
-    );
-
-    return c.json(text);
-  } catch (error) {
-    if (APICallError.isInstance(error)) {
-      return c.json({ error: error.message }, (error.statusCode as 400) || 500);
-    }
-    return c.json({ error: "Internal server error" }, 500);
-  }
-});
+  },
+);
 
 // ─── POST /api/embed — Server-side embedding fallback ────────────────────────
 app.post("/api/embed", requireAuth, requireActiveSubscription, async (c) => {
   const body = await c.req.json<{ texts: string[] }>();
 
   if (!body.texts || body.texts.length === 0) {
-    return c.json({ error: "texts array is required and must not be empty" }, 400);
+    return c.json(
+      { error: "texts array is required and must not be empty" },
+      400,
+    );
   }
 
   if (!Array.isArray(body.texts)) {
@@ -675,7 +703,10 @@ app.post("/api/embed", requireAuth, requireActiveSubscription, async (c) => {
 
   for (const text of body.texts) {
     if (typeof text !== "string" || text.length > 50000) {
-      return c.json({ error: "Each text must be a string under 50000 characters" }, 400);
+      return c.json(
+        { error: "Each text must be a string under 50000 characters" },
+        400,
+      );
     }
   }
 
@@ -727,10 +758,7 @@ app.post("/api/audio/transcribe", requireAuth, async (c) => {
     typeof body.audio !== "string" ||
     typeof body.mime_type !== "string"
   ) {
-    return c.json(
-      { error: "Missing or invalid {audio, mime_type}" },
-      400,
-    );
+    return c.json({ error: "Missing or invalid {audio, mime_type}" }, 400);
   }
 
   // 2. Base64-decode `audio`. atob throws on illegal base64 — catch and 400.
@@ -761,12 +789,12 @@ app.post("/api/audio/transcribe", requireAuth, async (c) => {
       {
         method: "POST",
         headers: {
-          "Authorization": `Token ${c.env.DEEPGRAM_KEY}`,
+          Authorization: `Token ${c.env.DEEPGRAM_KEY}`,
           "Content-Type": validatedMimeType,
         },
         body: audioBytes,
         signal: dgAbort.signal,
-      }
+      },
     );
   } catch (e) {
     clearTimeout(dgTimeout);
@@ -780,7 +808,7 @@ app.post("/api/audio/transcribe", requireAuth, async (c) => {
     return c.json({ error: "Transcription failed" }, 502);
   }
 
-  const result = await dgResponse.json() as any;
+  const result = (await dgResponse.json()) as any;
   clearTimeout(dgTimeout);
   const transcript =
     result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";

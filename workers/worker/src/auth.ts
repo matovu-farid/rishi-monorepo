@@ -1,24 +1,24 @@
-import { betterAuth } from "better-auth"
-import { magicLink, bearer, customSession } from "better-auth/plugins"
-import { passkey } from "@better-auth/passkey"
-import { stripe } from "@better-auth/stripe"
-import { drizzleAdapter } from "better-auth/adapters/drizzle"
-import { Resend } from "resend"
-import { createDb } from "./db/drizzle"
-import { magicLinkEmail } from "./email-templates/magic-link"
-import { createStripeClient } from "./billing/stripe"
-import { ensureCreditAndSubscription } from "./billing/backfill"
-import { sendPaymentFailedEmail } from "./billing/payment-failed-email"
+import { betterAuth } from "better-auth";
+import { magicLink, bearer, customSession } from "better-auth/plugins";
+import { passkey } from "@better-auth/passkey";
+import { stripe } from "@better-auth/stripe";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { Resend } from "resend";
+import { createDb } from "./db/drizzle";
+import { magicLinkEmail } from "./email-templates/magic-link";
+import { createStripeClient } from "./billing/stripe";
+import { ensureCreditAndSubscription } from "./billing/backfill";
+import { sendPaymentFailedEmail } from "./billing/payment-failed-email";
 import {
   user as userTable,
   appleSubscriptions,
   subscription,
-} from "@rishi/shared/schema"
-import { and, desc, eq, inArray } from "drizzle-orm"
-import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config"
-import type Stripe from "stripe"
-import type { CloudflareBindings } from "./index"
-import { mintAppleClientSecret } from "./auth-apple-secret"
+} from "@rishi/shared/schema";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
+import type Stripe from "stripe";
+import type { Env } from "./index";
+import { mintAppleClientSecret } from "./auth-apple-secret";
 
 // ─── has_pro session projection (Phase 17-01) ───────────────────────────────
 // iOS RishiBilling/Service/EntitlementService.swift:75 calls GET /api/auth/get-session
@@ -38,25 +38,25 @@ import { mintAppleClientSecret } from "./auth-apple-secret"
 export interface HasProDeps {
   db: {
     findAppleActive(userId: string): Promise<{
-      currentPeriodEnd: Date
-      status: string
-    } | null>
+      currentPeriodEnd: Date;
+      status: string;
+    } | null>;
     findStripeActive(userId: string): Promise<{
-      periodEnd: number
-      status: string
-    } | null>
-  }
+      periodEnd: number;
+      status: string;
+    } | null>;
+  };
 }
 
 export async function deriveHasPro(input: {
-  userId: string
-  deps: HasProDeps
+  userId: string;
+  deps: HasProDeps;
 }): Promise<boolean> {
-  const apple = await input.deps.db.findAppleActive(input.userId)
-  if (apple) return true
-  const stripe = await input.deps.db.findStripeActive(input.userId)
-  if (stripe) return true
-  return false
+  const apple = await input.deps.db.findAppleActive(input.userId);
+  if (apple) return true;
+  const stripe = await input.deps.db.findStripeActive(input.userId);
+  if (stripe) return true;
+  return false;
 }
 
 // Production resolver wiring deriveHasPro against the D1-backed Drizzle client.
@@ -79,8 +79,8 @@ function makeHasProDeps(db: ReturnType<typeof createDb>): HasProDeps {
             ),
           )
           .orderBy(desc(appleSubscriptions.currentPeriodEnd))
-          .get()
-        return row ?? null
+          .get();
+        return row ?? null;
       },
       findStripeActive: async (uid) => {
         const row = await db
@@ -96,23 +96,23 @@ function makeHasProDeps(db: ReturnType<typeof createDb>): HasProDeps {
             ),
           )
           .orderBy(desc(subscription.periodEnd))
-          .get()
-        if (!row || row.periodEnd == null) return null
+          .get();
+        if (!row || row.periodEnd == null) return null;
         return {
           periodEnd: Math.floor(row.periodEnd.getTime() / 1000),
           status: row.status ?? "active",
-        }
+        };
       },
     },
-  }
+  };
 }
 
-export async function createAuth(env: CloudflareBindings) {
-  const db = createDb(env.DB)
-  const stripeEnabled = Boolean(env.STRIPE_SECRET_KEY)
+export async function createAuth(env: Env) {
+  const db = createDb(env.DB);
+  const stripeEnabled = Boolean(env.STRIPE_SECRET_KEY);
   const stripeClient = stripeEnabled
     ? createStripeClient(env.STRIPE_SECRET_KEY!)
-    : null
+    : null;
 
   // Apple Sign-In is wired when all four required secrets are present:
   //   APPLE_SIWA_CLIENT_ID (iOS bundle ID, e.g. "org.fidexa.rishi"),
@@ -125,10 +125,10 @@ export async function createAuth(env: CloudflareBindings) {
   // branch and to satisfy the provider's typed config.
   const appleConfigured = Boolean(
     env.APPLE_SIWA_CLIENT_ID &&
-      env.APPLE_SIWA_KEY_ID &&
-      env.APPLE_SIWA_PRIVATE_KEY &&
-      env.APPLE_TEAM_ID,
-  )
+    env.APPLE_SIWA_KEY_ID &&
+    env.APPLE_SIWA_PRIVATE_KEY &&
+    env.APPLE_TEAM_ID,
+  );
   const appleClientSecret = appleConfigured
     ? await mintAppleClientSecret({
         APPLE_SIWA_PRIVATE_KEY: env.APPLE_SIWA_PRIVATE_KEY!,
@@ -136,7 +136,7 @@ export async function createAuth(env: CloudflareBindings) {
         APPLE_TEAM_ID: env.APPLE_TEAM_ID!,
         APPLE_SIWA_CLIENT_ID: env.APPLE_SIWA_CLIENT_ID!,
       })
-    : null
+    : null;
 
   return betterAuth({
     database: drizzleAdapter(db, { provider: "sqlite" }),
@@ -185,23 +185,26 @@ export async function createAuth(env: CloudflareBindings) {
         const has_pro = await deriveHasPro({
           userId: user.id,
           deps: makeHasProDeps(db),
-        })
-        return { user, session, has_pro }
+        });
+        return { user, session, has_pro };
       }),
       magicLink({
         sendMagicLink: async ({ email, url }) => {
-          const resend = new Resend(env.RESEND_API_KEY)
+          const resend = new Resend(env.RESEND_API_KEY);
           await resend.emails.send({
             from: "Rishi <auth@fidexa.org>",
             to: email,
             subject: "Sign in to Rishi",
             html: await magicLinkEmail({ url }),
-          })
+          });
         },
         expiresIn: 60 * 10,
       }),
       passkey({
-        rpID: env.PUBLIC_WEB_URL.replace(/^https?:\/\//, "").replace(/:\d+$/, ""),
+        rpID: env.PUBLIC_WEB_URL.replace(/^https?:\/\//, "").replace(
+          /:\d+$/,
+          "",
+        ),
         rpName: "Rishi",
         origin: env.PUBLIC_WEB_URL,
       }),
@@ -211,44 +214,45 @@ export async function createAuth(env: CloudflareBindings) {
         ? (() => {
             const ids = getStripeIdsForKey(env.STRIPE_SECRET_KEY);
             return [
-            stripe({
-              stripeClient,
-              stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
-              createCustomerOnSignUp: true,
-              onCustomerCreate: async ({ stripeCustomer }, request) => {
-                const ip = request?.headers?.get("cf-connecting-ip") ?? null;
-                await ensureCreditAndSubscription(
-                  stripeClient,
-                  stripeCustomer.id,
-                  ids.priceId,
-                  ip,
-                )
-              },
-              onEvent: async (event) => {
-                if (event.type !== "invoice.payment_failed") return;
-                const customerId = (event.data.object as Stripe.Invoice).customer;
-                if (typeof customerId !== "string") return;
-                const row = await db
-                  .select({ email: userTable.email, name: userTable.name })
-                  .from(userTable)
-                  .where(eq(userTable.stripeCustomerId, customerId))
-                  .get();
-                if (!row?.email) return;
-                await sendPaymentFailedEmail(
-                  event,
-                  { email: row.email, name: row.name ?? null },
-                  {
-                    resendApiKey: env.RESEND_API_KEY,
-                    fromAddress: "Rishi <auth@fidexa.org>",
-                  },
-                );
-              },
-              subscription: {
-                enabled: true,
-                plans: [{ name: "usage", priceId: ids.priceId }],
-              },
-            }),
-          ];
+              stripe({
+                stripeClient,
+                stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
+                createCustomerOnSignUp: true,
+                onCustomerCreate: async ({ stripeCustomer }, request) => {
+                  const ip = request?.headers?.get("cf-connecting-ip") ?? null;
+                  await ensureCreditAndSubscription(
+                    stripeClient,
+                    stripeCustomer.id,
+                    ids.priceId,
+                    ip,
+                  );
+                },
+                onEvent: async (event) => {
+                  if (event.type !== "invoice.payment_failed") return;
+                  const customerId = (event.data.object as Stripe.Invoice)
+                    .customer;
+                  if (typeof customerId !== "string") return;
+                  const row = await db
+                    .select({ email: userTable.email, name: userTable.name })
+                    .from(userTable)
+                    .where(eq(userTable.stripeCustomerId, customerId))
+                    .get();
+                  if (!row?.email) return;
+                  await sendPaymentFailedEmail(
+                    event,
+                    { email: row.email, name: row.name ?? null },
+                    {
+                      resendApiKey: env.RESEND_API_KEY,
+                      fromAddress: "Rishi <auth@fidexa.org>",
+                    },
+                  );
+                },
+                subscription: {
+                  enabled: true,
+                  plans: [{ name: "usage", priceId: ids.priceId }],
+                },
+              }),
+            ];
           })()
         : []),
     ],
@@ -261,7 +265,7 @@ export async function createAuth(env: CloudflareBindings) {
       window: 60,
       max: 5,
     },
-  })
+  });
 }
 
-export type Auth = ReturnType<typeof createAuth>
+export type Auth = ReturnType<typeof createAuth>;

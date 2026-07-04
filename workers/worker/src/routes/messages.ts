@@ -1,10 +1,10 @@
-import { Hono } from "hono"
-import { z } from "zod"
-import { conversations, messages } from "@rishi/shared/schema"
-import { createDb } from "../db/drizzle"
-import type { CloudflareBindings } from "../index"
-import { requireAuth } from "../index"
-import { and, desc, eq, gt, inArray } from "drizzle-orm"
+import { Hono } from "hono";
+import { z } from "zod";
+import { conversations, messages } from "@rishi/shared/schema";
+import { createDb } from "../db/drizzle";
+import type { Env } from "../index";
+import { requireAuth } from "../index";
+import { and, desc, eq, gt, inArray } from "drizzle-orm";
 
 /**
  * Chat sync — Phase 16-03 Task 2.
@@ -34,30 +34,27 @@ const RowSchema = z.object({
   content: z.string().min(1).max(50_000),
   created_at: z.number().int().nonnegative(),
   updated_at: z.number().int().nonnegative(),
-})
+});
 
 const PostBody = z.object({
   messages: z.array(RowSchema).min(1).max(500),
-})
+});
 
 export const messagesRoutes = new Hono<{
-  Bindings: CloudflareBindings
-  Variables: { userId: string }
-}>()
+  Bindings: Env;
+  Variables: { userId: string };
+}>();
 
 messagesRoutes.post("/", requireAuth, async (c) => {
-  const raw = await c.req.json().catch(() => null)
-  const parsed = PostBody.safeParse(raw)
+  const raw = await c.req.json().catch(() => null);
+  const parsed = PostBody.safeParse(raw);
   if (!parsed.success) {
-    return c.json(
-      { error: "bad_request", detail: parsed.error.message },
-      400,
-    )
+    return c.json({ error: "bad_request", detail: parsed.error.message }, 400);
   }
 
-  const userId = c.get("userId")
-  const db = createDb(c.env.DB)
-  let applied = 0
+  const userId = c.get("userId");
+  const db = createDb(c.env.DB);
+  let applied = 0;
   for (const row of parsed.data.messages) {
     // Parent-ownership pre-check: SILENTLY drop if the parent
     // conversation belongs to a different user. No 403 to avoid
@@ -66,8 +63,8 @@ messagesRoutes.post("/", requireAuth, async (c) => {
       .select({ userId: conversations.userId })
       .from(conversations)
       .where(eq(conversations.id, row.conversation_id))
-      .get()
-    if (!parent || parent.userId !== userId) continue
+      .get();
+    if (!parent || parent.userId !== userId) continue;
 
     await db
       .insert(messages)
@@ -88,18 +85,18 @@ messagesRoutes.post("/", requireAuth, async (c) => {
           content: row.content,
           updatedAt: row.updated_at,
         },
-      })
-    applied += 1
+      });
+    applied += 1;
   }
 
-  return c.json({ applied_count: applied })
-})
+  return c.json({ applied_count: applied });
+});
 
 messagesRoutes.get("/", requireAuth, async (c) => {
-  const userId = c.get("userId")
-  const sinceRaw = c.req.query("since")
-  const since = sinceRaw ? Number(sinceRaw) : null
-  const db = createDb(c.env.DB)
+  const userId = c.get("userId");
+  const sinceRaw = c.req.query("since");
+  const since = sinceRaw ? Number(sinceRaw) : null;
+  const db = createDb(c.env.DB);
 
   // Two-step: get caller's conversation ids, then scoped message fetch.
   // Avoids Drizzle's join surface so the test in-memory mock stays simple.
@@ -107,9 +104,9 @@ messagesRoutes.get("/", requireAuth, async (c) => {
     .select({ id: conversations.id })
     .from(conversations)
     .where(eq(conversations.userId, userId))
-    .all()
-  const convIds = convs.map((row: { id: string }) => row.id)
-  if (convIds.length === 0) return c.json({ rows: [] })
+    .all();
+  const convIds = convs.map((row: { id: string }) => row.id);
+  if (convIds.length === 0) return c.json({ rows: [] });
 
   const where =
     since !== null && Number.isFinite(since)
@@ -117,16 +114,16 @@ messagesRoutes.get("/", requireAuth, async (c) => {
           inArray(messages.conversationId, convIds),
           gt(messages.updatedAt, since),
         )
-      : inArray(messages.conversationId, convIds)
+      : inArray(messages.conversationId, convIds);
   const rows = await db
     .select()
     .from(messages)
     .where(where)
     .orderBy(desc(messages.updatedAt))
-    .all()
+    .all();
 
   return c.json({
-    rows: rows.map((r: typeof rows[number]) => ({
+    rows: rows.map((r: (typeof rows)[number]) => ({
       id: r.id,
       conversation_id: r.conversationId,
       role: r.role,
@@ -134,5 +131,5 @@ messagesRoutes.get("/", requireAuth, async (c) => {
       created_at: r.createdAt,
       updated_at: r.updatedAt,
     })),
-  })
-})
+  });
+});

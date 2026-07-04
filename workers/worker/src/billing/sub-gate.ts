@@ -2,7 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
 import { subscription } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
-import type { CloudflareBindings } from "../index";
+import type { Env } from "../index";
 
 const ALLOWED_STATUSES = new Set(["active", "trialing"]);
 
@@ -35,7 +35,7 @@ export function isAllowedForBilledFeature(opts: {
  * `402 Payment Required` on block.
  */
 export const requireActiveSubscription: MiddlewareHandler<{
-  Bindings: CloudflareBindings;
+  Bindings: Env;
   Variables: { userId: string };
 }> = async (c, next) => {
   const userId = c.get("userId");
@@ -69,6 +69,6 @@ export const requireActiveSubscription: MiddlewareHandler<{
 // Re-exported for tests that want to construct middleware-equivalent
 // gates against a fake context without spinning up D1.
 export type GateContext = Context<{
-  Bindings: CloudflareBindings;
+  Bindings: Env;
   Variables: { userId: string };
 }>;

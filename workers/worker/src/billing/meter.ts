@@ -12,7 +12,7 @@ import {
 import { DEFAULT_RATES } from "@rishi/shared/billing/default-rates";
 import { createDb } from "../db/drizzle";
 import { createStripeClient } from "./stripe";
-import type { CloudflareBindings } from "../index";
+import type { Env } from "../index";
 
 /**
  * Report a usage event to the Stripe meter. Fire-and-forget; callers
@@ -50,7 +50,7 @@ export async function reportMeterEvent(
  * computed cost rounds to zero.
  */
 export async function meterFromContext(
-  env: CloudflareBindings,
+  env: Env,
   userId: string,
   usage: OpenAiUsage,
 ): Promise<void> {
@@ -63,6 +63,8 @@ export async function meterFromContext(
     .where(eq(user.id, userId))
     .get();
   if (!row?.stripeCustomerId) return;
-  const microDollars = usdToMicroDollars(computeOpenAiCostUsd(usage, DEFAULT_RATES));
+  const microDollars = usdToMicroDollars(
+    computeOpenAiCostUsd(usage, DEFAULT_RATES),
+  );
   await reportMeterEvent(stripe, row.stripeCustomerId, microDollars);
 }

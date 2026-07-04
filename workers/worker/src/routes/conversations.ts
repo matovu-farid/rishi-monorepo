@@ -1,10 +1,10 @@
-import { Hono } from "hono"
-import { z } from "zod"
-import { conversations } from "@rishi/shared/schema"
-import { createDb } from "../db/drizzle"
-import type { CloudflareBindings } from "../index"
-import { requireAuth } from "../index"
-import { and, desc, eq, gt } from "drizzle-orm"
+import { Hono } from "hono";
+import { z } from "zod";
+import { conversations } from "@rishi/shared/schema";
+import { createDb } from "../db/drizzle";
+import type { Env } from "../index";
+import { requireAuth } from "../index";
+import { and, desc, eq, gt } from "drizzle-orm";
 
 /**
  * Chat sync — Phase 16-03 Task 1.
@@ -33,36 +33,33 @@ const RowSchema = z.object({
   archived: z.boolean(),
   created_at: z.number().int().nonnegative(),
   updated_at: z.number().int().nonnegative(),
-})
+});
 
 const PostBody = z.object({
   conversations: z.array(RowSchema).min(1).max(500),
-})
+});
 
 export const conversationsRoutes = new Hono<{
-  Bindings: CloudflareBindings
-  Variables: { userId: string }
-}>()
+  Bindings: Env;
+  Variables: { userId: string };
+}>();
 
 conversationsRoutes.post("/", requireAuth, async (c) => {
-  const raw = await c.req.json().catch(() => null)
-  const parsed = PostBody.safeParse(raw)
+  const raw = await c.req.json().catch(() => null);
+  const parsed = PostBody.safeParse(raw);
   if (!parsed.success) {
-    return c.json(
-      { error: "bad_request", detail: parsed.error.message },
-      400,
-    )
+    return c.json({ error: "bad_request", detail: parsed.error.message }, 400);
   }
 
-  const userId = c.get("userId")
-  const db = createDb(c.env.DB)
-  let applied = 0
+  const userId = c.get("userId");
+  const db = createDb(c.env.DB);
+  let applied = 0;
   for (const row of parsed.data.conversations) {
     await db
       .insert(conversations)
       .values({
         id: row.id,
-        userId,                  // <-- server-side override; client cannot impersonate
+        userId, // <-- server-side override; client cannot impersonate
         bookId: row.book_id,
         title: row.title,
         createdAt: row.created_at,
@@ -78,32 +75,35 @@ conversationsRoutes.post("/", requireAuth, async (c) => {
           updatedAt: row.updated_at,
           // bookId intentionally NOT updated — book attachment is immutable in v1.
         },
-      })
-    applied += 1
+      });
+    applied += 1;
   }
 
-  return c.json({ applied_count: applied })
-})
+  return c.json({ applied_count: applied });
+});
 
 conversationsRoutes.get("/", requireAuth, async (c) => {
-  const userId = c.get("userId")
-  const sinceRaw = c.req.query("since")
-  const since = sinceRaw ? Number(sinceRaw) : null
-  const db = createDb(c.env.DB)
+  const userId = c.get("userId");
+  const sinceRaw = c.req.query("since");
+  const since = sinceRaw ? Number(sinceRaw) : null;
+  const db = createDb(c.env.DB);
   const where =
     since !== null && Number.isFinite(since)
-      ? and(eq(conversations.userId, userId), gt(conversations.updatedAt, since))
-      : eq(conversations.userId, userId)
+      ? and(
+          eq(conversations.userId, userId),
+          gt(conversations.updatedAt, since),
+        )
+      : eq(conversations.userId, userId);
   const rows = await db
     .select()
     .from(conversations)
     .where(where)
     .orderBy(desc(conversations.updatedAt))
-    .all()
+    .all();
   // Map Drizzle camelCase -> wire snake_case. `archived` is not in the
   // current schema; surface as `false` for v1 (Phase 16 deferred).
   return c.json({
-    rows: rows.map((r: typeof rows[number]) => ({
+    rows: rows.map((r: (typeof rows)[number]) => ({
       id: r.id,
       user_id: r.userId,
       book_id: r.bookId,
@@ -112,5 +112,5 @@ conversationsRoutes.get("/", requireAuth, async (c) => {
       created_at: r.createdAt,
       updated_at: r.updatedAt,
     })),
-  })
-})
+  });
+});

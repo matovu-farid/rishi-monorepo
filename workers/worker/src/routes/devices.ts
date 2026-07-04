@@ -1,14 +1,14 @@
-import { Hono } from "hono"
-import { z } from "zod"
-import { devices } from "@rishi/shared/schema"
-import { createDb } from "../db/drizzle"
-import type { CloudflareBindings } from "../index"
-import { requireAuth } from "../index"
+import { Hono } from "hono";
+import { z } from "zod";
+import { devices } from "@rishi/shared/schema";
+import { createDb } from "../db/drizzle";
+import type { Env } from "../index";
+import { requireAuth } from "../index";
 
 // 1970->2001 epoch gap. Matches workers/worker/src/routes/changes.ts.
 // Required so iOS WorkerClient.swift:96 bare JSONDecoder (.deferredToDate)
 // decodes Date.
-const REFERENCE_DATE_OFFSET_MS = 978_307_200_000
+const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
 
 /**
  * POST /api/devices/register — Quick-VPX Task 2 (GAP 2).
@@ -35,27 +35,24 @@ const BodySchema = z.object({
   app_version: z.string().min(1).max(40),
   bundle_id: z.string().min(1).max(120),
   topic: z.string().min(1).max(120),
-})
+});
 
 export const devicesRoutes = new Hono<{
-  Bindings: CloudflareBindings
-  Variables: { userId: string }
-}>()
+  Bindings: Env;
+  Variables: { userId: string };
+}>();
 
 devicesRoutes.post("/register", requireAuth, async (c) => {
-  const raw = await c.req.json().catch(() => null)
-  const parsed = BodySchema.safeParse(raw)
+  const raw = await c.req.json().catch(() => null);
+  const parsed = BodySchema.safeParse(raw);
   if (!parsed.success) {
-    return c.json(
-      { error: "bad_request", detail: parsed.error.message },
-      400,
-    )
+    return c.json({ error: "bad_request", detail: parsed.error.message }, 400);
   }
 
-  const userId = c.get("userId")
-  const now = new Date()
-  const db = createDb(c.env.DB)
-  const id = crypto.randomUUID()
+  const userId = c.get("userId");
+  const now = new Date();
+  const db = createDb(c.env.DB);
+  const id = crypto.randomUUID();
 
   const row = {
     id,
@@ -68,7 +65,7 @@ devicesRoutes.post("/register", requireAuth, async (c) => {
     env: "production" as const,
     createdAt: now,
     updatedAt: now,
-  }
+  };
 
   const inserted = await db
     .insert(devices)
@@ -84,12 +81,12 @@ devicesRoutes.post("/register", requireAuth, async (c) => {
       },
     })
     .returning({ id: devices.id, createdAt: devices.createdAt })
-    .get()
+    .get();
 
   return c.json({
     device_id: inserted?.id ?? id,
     registered_at:
       ((inserted?.createdAt ?? now).getTime() - REFERENCE_DATE_OFFSET_MS) /
       1000,
-  })
-})
+  });
+});
