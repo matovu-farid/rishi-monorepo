@@ -3,7 +3,7 @@ import { SignJWT, jwtVerify, JWTPayload } from "jose";
 
 const encoder = new TextEncoder();
 
-const ACCESS_EXPIRY = "15m";
+const ACCESS_EXPIRY = "30m";
 const REFRESH_EXPIRY = "30d";
 
 const issuer = "rishi-api";
@@ -43,17 +43,23 @@ export const signRefreshToken = (env: Env, payload: SessionPayload) =>
       .sign(refreshSecret(env)),
   );
 export const verifyAccessToken = (env: Env, token: string) =>
-  Effect.tryPromise(async () => {
-    const { payload } = await jwtVerify<SessionPayload>(
-      token,
-      accessSecret(env),
-      {
-        issuer,
-        audience,
-      },
-    );
+  Effect.tryPromise({
+    try: async () => {
+      const { payload } = await jwtVerify<SessionPayload>(
+        token,
+        accessSecret(env),
+        {
+          issuer,
+          audience,
+        },
+      );
 
-    return payload;
+      return payload;
+    },
+    catch: (error) => {
+      console.log(error);
+      throw error;
+    },
   });
 export const verifyRefreshToken = (env: Env, token: string) =>
   Effect.tryPromise(async () => {

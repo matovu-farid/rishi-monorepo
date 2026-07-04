@@ -22,7 +22,6 @@ import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
 import { changesRoutes } from "./routes/changes";
 import { testAuthRoutes } from "./routes/test-auth";
-import { createAuth } from "./auth";
 import { ensureCreditAndSubscription } from "./billing/backfill";
 import { meterFromContext } from "./billing/meter";
 import { createPortalSession } from "./billing/portal";
@@ -34,8 +33,9 @@ import { registerBillingMeRoute } from "./billing/apple-me";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
-import { user as userTable } from "@rishi/shared/schema";
+import { user, user as userTable } from "@rishi/shared/schema";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
+import authRoutes from "./routes/auth";
 import {
   BOOK_CONTEXT_TOOL_SPEC,
   renderRealtimeInstructions,
@@ -48,6 +48,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { requireAuth } from "./middleware";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "./jwt";
 import { findOrCreateUser } from "./findOrCreateUser";
+import { error } from "node:console";
 export { requireAuth } from "./middleware";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -215,93 +216,28 @@ app.use(
   }),
 );
 
-app.post("/auth/apple", async (c) => {
-  const appleJWKS = createRemoteJWKSet(
-    new URL("https://appleid.apple.com/auth/keys"),
-  );
-  const { identityToken } = await c.req.json<{
-    identityToken: string;
-  }>();
+// app.post("/auth/refresh", async (c) => {
+//   const { refreshToken } = await c.req.json();
 
-  if (!identityToken) {
-    return c.json(
-      {
-        error: "Missing identity token",
-      },
-      400,
-    );
-  }
+//   const payload = await Effect.runPromise(
+//     verifyRefreshToken(c.env, refreshToken),
+//   );
 
-  try {
-    const { payload } = await jwtVerify(identityToken, appleJWKS, {
-      issuer: "https://appleid.apple.com",
+//   const accessToken = await Effect.runPromise(
+//     signAccessToken(c.env, {
+//       userId: payload.userId,
+//     }),
+//   );
 
-      // Your iOS Bundle Identifier
-      audience: "org.fidexa.rishi",
-    });
-    const db = createDb(c.env.DB);
-    const user = await Effect.runPromise(
-      findOrCreateUser(db, {
-        sub: payload.sub!,
-        email: (payload.email as string) || "${payload.sub}@apple.com",
-        email_verified:
-          payload.email_verified === true || payload.email_verified === "true",
-        is_private_email:
-          payload.is_private_email === true ||
-          payload.is_private_email === "true",
-      }),
-    );
-
-    const accessToken = await Effect.runPromise(
-      signAccessToken(c.env, {
-        userId: user.id,
-      }),
-    );
-
-    const refreshToken = await Effect.runPromise(
-      signRefreshToken(c.env, {
-        userId: user.id,
-      }),
-    );
-
-    return c.json({
-      accessToken,
-      refreshToken,
-      userId: user.id,
-    });
-  } catch (err) {
-    console.error(err);
-
-    return c.json(
-      {
-        error: "Invalid Apple identity token",
-      },
-      401,
-    );
-  }
-});
-app.post("/auth/refresh", async (c) => {
-  const { refreshToken } = await c.req.json();
-
-  const payload = await Effect.runPromise(
-    verifyRefreshToken(c.env, refreshToken),
-  );
-
-  const accessToken = await Effect.runPromise(
-    signAccessToken(c.env, {
-      userId: payload.userId,
-    }),
-  );
-
-  return c.json({
-    accessToken,
-  });
-});
+//   return c.json({
+//     accessToken,
+//   });
+// });
 // Better Auth handles all /api/auth/* internally
-app.on(["GET", "POST"], "/api/auth/*", async (c) => {
-  const auth = await createAuth(c.env);
-  return auth.handler(c.req.raw);
-});
+// app.on(["GET", "POST"], "/api/auth/*", async (c) => {
+//   const auth = await createAuth(c.env);
+//   return auth.handler(c.req.raw);
+// });
 
 app.get("/", (c) => {
   return c.text("Hello Hono!");
@@ -347,6 +283,7 @@ app.route("/api/sync", uploadRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);
+app.route("/auth", authRoutes);
 app.route("/api/sync/messages", messagesRoutes);
 app.route("/desktop", desktopRoutes);
 app.route("/mobile", mobileRoutes);
@@ -505,7 +442,30 @@ app.post("/api/billing/realtime-usage", requireAuth, async (c) => {
   );
   return c.json({ accepted: true });
 });
+app.get("/api/user", requireAuth, async (c) => {
+  try {
+    const userId = c.get("userId");
+    const db = createDb(c.env.DB);
 
+    const retrieveduser = await db.query.user.findFirst({
+      where: eq(user.id, userId),
+    });
+    if (!retrieveduser) {
+      return c.json({
+        error: "No user retrieved",
+      });
+    }
+
+    return c.json({
+      user: retrieveduser,
+    });
+  } catch (e) {
+    console.log(e);
+    c.json({
+      error: "Failed to get a user",
+    });
+  }
+});
 // // Health check endpoint
 app.get("/health", (c) => {
   return c.json({

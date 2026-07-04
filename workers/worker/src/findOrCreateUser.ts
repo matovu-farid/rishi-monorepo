@@ -17,46 +17,57 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
       db.query.appleUsers.findFirst({
         where: eq(appleUsers.appleUserId, identity.sub),
         with: {
-          user,
+          user: true,
         },
       }),
     );
 
-    if (existing) {
-      return existing.user;
+    if (existing && existing.user?.id) {
+      return existing.user.id!;
     }
+    const userId = randomUUID();
+    const userData = {
+      id: userId,
+      email: identity.email || "",
 
-    const  userSaved = yield* Effect.tryPromise(() =>
-      db.transaction(async (tx) => {
-        const userSaved = await tx.insert(user).values({
-          id: randomUUID(),
-          email: identity.email || "",
+      emailVerified: identity.email_verified ?? false,
+      name: identity.sub,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const appleUser = {
+      id: randomUUID(),
 
-          emailVerified: identity.email_verified ?? false,
-          name: identity.sub,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          
-        
-        }).returning()
-        const appleUser = {
-          id: randomUUID(),
+      appleUserId: identity.sub,
 
-          appleUserId: identity.sub,
+      email: identity.email ?? null,
 
-          email: identity.email ?? null,
+      emailVerified: identity.email_verified ?? false,
 
-          emailVerified: identity.email_verified ?? false,
-
-          privateEmail: identity.is_private_email ?? false,
-          userId: userSaved[0].id
-          
-        };
-        await tx.insert(appleUsers).values(appleUser);
-           return userSaved[0]
-      }),
+      privateEmail: identity.is_private_email ?? false,
+      userId: userId,
+    };
+    yield* Effect.tryPromise({
+      try: async () => {
    
-    );
+   
+        try {
+          await db.insert(user).values(userData);
 
-    return userSaved;
+          await db.insert(appleUsers).values(appleUser);
+
+          return userId;
+        } catch (err) {
+          await db.delete(user).where(eq(user.id, userId));
+
+          throw err;
+        }
+      },
+      catch(error) {
+        console.log(error);
+        throw error;
+      },
+    });
+
+    return userId;
   });
