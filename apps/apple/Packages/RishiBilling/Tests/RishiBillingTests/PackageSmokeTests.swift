@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiBilling
 import RishiCore
-import RishiAPI
+import RishiCore
 
 @Suite("RishiBilling package smoke")
 struct PackageSmokeTests {

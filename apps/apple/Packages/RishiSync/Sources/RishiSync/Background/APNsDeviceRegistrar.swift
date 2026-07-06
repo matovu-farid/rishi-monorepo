@@ -1,5 +1,5 @@
 import Foundation
-import RishiAPI
+import RishiCore
 import RishiLogging
 
 /// Calls `/api/devices/register` exactly once after sign-in so the worker can

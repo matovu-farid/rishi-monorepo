@@ -36,6 +36,9 @@ final class CurrentUserBox {
        
     }
     func signout(){
+        Keychain.delete(.accessToken)
+        Keychain.delete(.refreshToken)
+        Keychain.delete(.userId)
         self.state = .signedOut
     }
     

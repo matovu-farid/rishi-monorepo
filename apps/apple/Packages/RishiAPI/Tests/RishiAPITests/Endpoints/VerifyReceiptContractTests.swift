@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RishiAPI
+@testable import RishiCore
 
 /// Contract gate for `POST /api/billing/verify-receipt`. Both sides — iOS
 /// `VerifyReceiptEndpoint` and the worker's `VerifyReceiptResponse` — round-trip

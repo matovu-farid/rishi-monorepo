@@ -3,7 +3,7 @@ import Testing
 import Foundation
 import UIKit
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 import RishiLibrary
 

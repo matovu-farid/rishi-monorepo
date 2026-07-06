@@ -109,7 +109,7 @@ public actor TTSEngine {
             // them to the active decoder actor. No main hop.
             feedTask = Task { [weak self, streamer, request] in
                 do {
-                    for try await mp3 in streamer.stream(request) {
+                    for try await mp3 in await streamer.stream(request) {
                         if Task.isCancelled { return }
                         guard let dec = await self?.currentDecoder() else { return }
                         try await dec.append(mp3, passageId: request.passageId)

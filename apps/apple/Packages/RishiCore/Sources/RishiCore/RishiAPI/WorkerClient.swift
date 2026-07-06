@@ -1,6 +1,4 @@
 import Foundation
-import RishiCore
-import RishiLogging
 
 /// Single networking surface for the Rishi worker. Inject one `WorkerClient`
 /// per app + per test; pass it around as `any Sendable`. The actor isolation
@@ -229,11 +227,7 @@ public actor WorkerClient {
 
     private func performAttempt<E: WorkerEndpoint>(_ endpoint: E, attempt: Int) async throws -> E.Response {
         let request = try await buildRequest(for: endpoint)
-        Log.event("worker.request", level: .info, data: [
-            "method": endpoint.method.rawValue,
-            "path": endpoint.path,
-            "attempt": String(attempt),
-        ])
+    
         let started = Date()
 
         let data: Data
@@ -248,10 +242,7 @@ public actor WorkerClient {
         let http = response as? HTTPURLResponse
         let status = http?.statusCode ?? -1
 
-        Log.event("worker.response", level: .info, data: [
-            "status": String(status),
-            "duration_ms": String(elapsedMs),
-        ])
+  
 
         switch status {
         case 200..<300:

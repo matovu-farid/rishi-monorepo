@@ -6,6 +6,7 @@ import RishiSync
 import SwiftUI
 import TipKit
 import SwiftData
+import StoreKit
 
 #if canImport(UIKit)
     import UIKit
@@ -33,15 +34,16 @@ struct rishiApp: App {
 
     var body: some Scene {
         WindowGroup {
+
         
             RootView()
                 .environment(currentUserBox)
-                .environment(\.rishiAuthService, deps.services?.authService)
                 .environment(\.appDependencies, deps)
+                .environment(deps)
                 .environment(\.macCommandRouter, deps.macCommandRouter)
                 .environment(SubscriptionService.shared)
                 .environment(router)
-        
+         
 
                 .task {
                     await deps.bootstrap()

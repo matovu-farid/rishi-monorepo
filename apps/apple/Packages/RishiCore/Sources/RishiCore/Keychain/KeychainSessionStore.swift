@@ -1,6 +1,5 @@
 import Foundation
 import Security
-import RishiLogging
 
 /// Persists a single ``Session`` JSON blob in the Keychain under
 /// `service=org.fidexa.rishi.session, account=current`.
@@ -39,14 +38,12 @@ public actor KeychainSessionStore {
 
         do {
             try await backend.add(query: query)
-            Log.event("auth.session.saved", level: .info)
         } catch KeychainError.unexpectedStatus(let status) where status == errSecDuplicateItem {
             // Item exists — update its data in place under the same (service, account).
             try await backend.update(
                 query: baseQuery(),
                 attributes: [kSecValueData as String: data]
             )
-            Log.event("auth.session.updated", level: .info)
         }
     }
 
@@ -67,7 +64,6 @@ public actor KeychainSessionStore {
 
     public func delete() async throws {
         try await backend.delete(query: baseQuery())
-        Log.event("auth.session.cleared", level: .info)
     }
 
     // MARK: - Helpers

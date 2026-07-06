@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiChat
 import RishiCore
-import RishiAPI
+import RishiCore
 import RishiTesting
 
 // MARK: - Slow-drip MockURLProtocol

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiSync
 import RishiCore
-import RishiAPI
+import RishiCore
 import RishiDB
 
 @Suite("RishiSync package smoke")

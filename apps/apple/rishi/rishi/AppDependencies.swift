@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 import Observation
-import RishiAPI
+import RishiCore
 import RishiAudio
 import RishiAuth
 import RishiBilling
@@ -98,8 +98,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let tokenProvider: RishiAuthTokenProvider
     let workerClient: WorkerClient
     let siwaPresenter: SystemSiwaPresenter
-    let siwaCoordinator: SignInWithAppleCoordinator
-    let authService: RishiAuthService
+   
 
     let dbQueue: any DatabaseWriter
     let bookStore: any BookStore

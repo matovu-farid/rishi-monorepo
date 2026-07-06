@@ -1,5 +1,5 @@
 import Foundation
-import RishiAPI
+import RishiCore
 import RishiLogging
 
 /// Production ``ReceiptVerifier`` wrapping ``WorkerClient``.

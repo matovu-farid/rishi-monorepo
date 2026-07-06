@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Phase 37 Plan 37-08 — ChangeApplier.applyBookmark (INBOUND arm).

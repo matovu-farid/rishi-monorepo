@@ -1,5 +1,4 @@
 import Foundation
-import RishiAPI
 
 /// ``RishiAPI.TokenProvider`` implementation backed by
 /// ``KeychainSessionStore``.

@@ -1,46 +1,20 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import SwiftUI
 import RishiAudio
 import RishiAuth
 import RishiBilling
 import RishiCore
 import RishiSettings
 import RishiSync
-
-
-
+import SwiftUI
 
 struct SettingsContent: View {
 
     let services: BootstrappedServices
     let user: User
-    
-    
+
     let onDismiss: () -> Void
 
-    
-    
-    
     @Environment(\.signOut) private var signOut
+    @Environment(CurrentUserBox.self) private var currentUserBox
 
     @State private var initialAudio: TTSSettings = .default
     @State private var audioLoaded = false
@@ -49,8 +23,7 @@ struct SettingsContent: View {
         Group {
             if audioLoaded {
                 let defaults = services.readerDefaults
-                let auth = services.authService
-//                let presenter = services.manageSubscriptionPresenter
+                //                let presenter = services.manageSubscriptionPresenter
                 let sync = services.syncEngine
                 SettingsScreen(
                     user: user,
@@ -71,36 +44,40 @@ struct SettingsContent: View {
                     audioStore: services.ttsSettingsStore,
                     onAudioChange: { _ in },
                     syncStatus: services.syncStatus,
-                    
+
                     onSyncNow: { Task { await sync.syncNow() } },
                     telemetryStore: services.telemetryStore,
                     footerDetectionStore: services.footerDetectionStore,
                     onSignOut: {
-                        try? await auth.signOut()
+                        //                        try? await auth.signOut()
+                        currentUserBox.signout()
+
                         await MainActor.run {
                             onDismiss()
                             signOut()
                         }
                     },
                     onDelete: {
-                        try await auth.deleteAccount()
+                        //try await auth.deleteAccount()
+                        currentUserBox.signout()
                     },
                     onDeleted: {
                         onDismiss()
                         signOut()
                     },
-             
+
                     onDismiss: { onDismiss() }
                 )
             } else {
+#if DEBUG
+                Text("AudioLoaded not loaded")
+#endif
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .task {
-            
-            
-            
+
             initialAudio = await services.ttsSettingsStore.load(userId: user.id)
             audioLoaded = true
         }

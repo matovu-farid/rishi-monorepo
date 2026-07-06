@@ -87,7 +87,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
         var committed = false
         var wroteBytes = 0
         do {
-            for try await chunk in upstream.stream(request: request) {
+            for try await chunk in await upstream.stream(request: request) {
                 try Task.checkCancellation()
                 continuation.yield(chunk)
                 try handle.write(contentsOf: chunk)
@@ -128,7 +128,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
         into continuation: AsyncThrowingStream<Data, Error>.Continuation
     ) async {
         do {
-            for try await chunk in upstream.stream(request: request) {
+            for try await chunk in await upstream.stream(request: request) {
                 try Task.checkCancellation()
                 continuation.yield(chunk)
             }

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import os
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Phase 37 Plan 37-08 — BookmarkUploader: drain pending bookmarks -> POST -> markClean / forget.

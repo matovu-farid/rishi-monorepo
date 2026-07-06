@@ -6,7 +6,7 @@ import RishiOnboarding
 import StoreKit
 import SwiftUI
 import RishiBilling
-import RishiAPI
+import RishiCore
 
 struct RootView: View {
 
@@ -32,6 +32,9 @@ struct RootView: View {
         if let deps, deps.services != nil {
             realBody(deps: deps)
         } else {
+#if DEBUG
+            Text("Dependencies or services not configured")
+#endif
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityLabel("Loading Rishi")
@@ -40,6 +43,7 @@ struct RootView: View {
 
     @ViewBuilder
     private func realBody(deps: AppDependencies) -> some View {
+ 
 
         realBodyContent(deps: deps)
             .environment(\.services, deps.services)
@@ -54,7 +58,6 @@ struct RootView: View {
                     
                 }
             )
-            .checkCustomerEntitlements()
             .loadProducts()
             .observeErrors()
             .task {
@@ -96,51 +99,87 @@ struct RootView: View {
     }
      @Environment(SubscriptionService.self) private var subscriptionService
 
-    private func resolvedGate(deps: AppDependencies) -> AppGate {
-        let gate = AppGate.resolve(
-            authProbeComplete: authProbeComplete,
-            isSignedIn: currentUserBox.isSigned,
-            entitlementResolved: entitlementResolved,
-            level: subscriptionService.currentSubscription
-        )
-       
-        return gate
-    }
+
 
     @ViewBuilder
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
-            if case .loading = currentUserBox.state {
+            switch currentUserBox.state {
+            case .signedOut:
+                signedOutView
+            case .loading:
+#if DEBUG
+                Text("Current UserBox loading")
+#endif
                 ProgressView()
-            } else {
                 
-                switch resolvedGate(deps: deps) {
-                case .loading:
-                    ProgressView()
-                    
-                    
-                case .signedOut:
-                    signedOutView
-                case .paywall:
+            case .signedIn(user: let user):
+                switch subscriptionService.currentSubscription {
+                case .subscribed(subscription:let sub):
+                    SignedInView()
+                case .unsubscribed:
                     if let groupID = deps.services?.groupID {
                         
-                        
-                        
                         SubscriptionsView(color: .rishiBrown, groupId: groupID)
+                       
                     }else {
-                        VStack{
-                            ProgressView()
-                        }
+                        #if DEBUG
+                        Text("GroupId not configured")
+                        #endif
+                        ProgressView()
+                        
                     }
-                case .app:
-                    
-                    SignedInView(
-                        
-                        
-                    )
-              
+                 
                 }
+//                if let groupID = deps.services?.groupID {
+//                    
+//                    SubscriptionsView(color: .rishiBrown, groupId: groupID)
+//                    SignedInView()
+//                }
+               
+                
             }
+//            if case .loading = currentUserBox.state {
+//#if DEBUG
+//                Text("Current UserBox loading")
+//#endif
+//                ProgressView()
+//            } else {
+//            
+//                
+//                switch resolvedGate(deps: deps) {
+//                case .loading:
+//#if DEBUG
+//                    Text("Loading from Resolve gate")
+//#endif
+//                    ProgressView()
+//                    
+//                    
+//                case .signedOut:
+//                    signedOutView
+//                case .paywall:
+//                    if let groupID = deps.services?.groupID {
+//                        
+//                        
+//                        
+//                        SubscriptionsView(color: .rishiBrown, groupId: groupID)
+//                    }else {
+//                        VStack{
+//#if DEBUG
+//                            Text("Failed to get groupId")
+//#endif
+//                            ProgressView()
+//                        }
+//                    }
+//                case .app:
+//                    
+//                    SignedInView(
+//                        
+//                        
+//                    )
+//              
+//                }
+//            }
         }
         
         .task {

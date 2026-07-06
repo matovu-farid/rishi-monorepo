@@ -1,4 +1,5 @@
 import axios from "axios";
+
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -49,6 +50,7 @@ import { requireAuth } from "./middleware";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "./jwt";
 import { findOrCreateUser } from "./findOrCreateUser";
 import { error } from "node:console";
+import { userRoutes } from "./routes/user";
 export { requireAuth } from "./middleware";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -280,6 +282,7 @@ app.get("/", (c) => {
 app.route("/api/sync/changes", changesRoutes);
 app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
+app.route("/api/user", userRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);
@@ -313,7 +316,7 @@ app.get(
   (c) => c.json({ ok: true }),
 );
 
-app.get("/api/groupID", requireAuth, async (c) => {
+app.get("/api/groupID", async (c) => {
   return c.json({
     value: "22149819",
   });
@@ -442,28 +445,7 @@ app.post("/api/billing/realtime-usage", requireAuth, async (c) => {
   );
   return c.json({ accepted: true });
 });
-app.get("/api/user", requireAuth, async (c) => {
-  try {
-    const userId = c.get("userId");
-    const db = createDb(c.env.DB);
 
-    const retrieveduser = await db.query.user.findFirst({
-      where: eq(user.id, userId),
-    });
-    if (!retrieveduser) {
-      return c.json({
-        error: "No user retrieved",
-      });
-    }
-
-    return c.json(retrieveduser);
-  } catch (e) {
-    console.log(e);
-    c.json({
-      error: "Failed to get a user",
-    });
-  }
-});
 // // Health check endpoint
 app.get("/health", (c) => {
   return c.json({
@@ -473,121 +455,109 @@ app.get("/health", (c) => {
   });
 });
 
-app.post(
-  "/api/audio/speech",
-  requireAuth,
-  requireActiveSubscription,
-  async (c) => {
-    try {
-      // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
-      // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
-      // The previous {input, voice} shape was an OpenAI passthrough that the iOS
-      // client never matched, so every TTSStreamer.swift call short-circuited
-      // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
-      // call so the user-facing voice playback rate actually changes.
-      const { text, voice, speed } = await c.req.json<{
-        text?: string;
-        voice?: string;
-        speed?: number;
-      }>();
+app.post("/api/audio/speech", requireAuth, async (c) => {
+  try {
+    // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
+    // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
+    // The previous {input, voice} shape was an OpenAI passthrough that the iOS
+    // client never matched, so every TTSStreamer.swift call short-circuited
+    // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
+    // call so the user-facing voice playback rate actually changes.
+    const { text, voice, speed } = await c.req.json<{
+      text?: string;
+      voice?: string;
+      speed?: number;
+    }>();
 
-      if (!text || typeof text !== "string" || text.trim().length === 0) {
-        return c.json({ error: "Missing or empty text" }, 400);
-      }
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      return c.json({ error: "Missing or empty text" }, 400);
+    }
 
-      if (text.length > 4096) {
-        return c.json({ error: "text must be 4096 characters or fewer" }, 400);
-      }
+    if (text.length > 4096) {
+      return c.json({ error: "text must be 4096 characters or fewer" }, 400);
+    }
 
-      const allowedVoices = [
-        "alloy",
-        "echo",
-        "fable",
-        "onyx",
-        "nova",
-        "shimmer",
-      ];
-      const validVoice = allowedVoices.includes(voice as string)
-        ? (voice as string)
-        : "alloy";
+    const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+    const validVoice = allowedVoices.includes(voice as string)
+      ? (voice as string)
+      : "alloy";
 
-      // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
-      // for missing / non-finite / out-of-range values so the AI SDK never sees
-      // a hostile float.
-      const validSpeed =
-        typeof speed === "number" &&
-        Number.isFinite(speed) &&
-        speed >= 0.25 &&
-        speed <= 4.0
-          ? speed
-          : 1.0;
+    // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
+    // for missing / non-finite / out-of-range values so the AI SDK never sees
+    // a hostile float.
+    const validSpeed =
+      typeof speed === "number" &&
+      Number.isFinite(speed) &&
+      speed >= 0.25 &&
+      speed <= 4.0
+        ? speed
+        : 1.0;
 
-      // Phase 22-01: R2-backed content-addressed cache gate.
-      // Hits skip both the OpenAI call AND metering; misses preserve all existing
-      // behavior verbatim and fire-and-forget a writeback via waitUntil.
-      const key = await ttsCacheKey(text, validVoice, validSpeed);
+    // Phase 22-01: R2-backed content-addressed cache gate.
+    // Hits skip both the OpenAI call AND metering; misses preserve all existing
+    // behavior verbatim and fire-and-forget a writeback via waitUntil.
+    const key = await ttsCacheKey(text, validVoice, validSpeed);
 
-      const cached = await c.env.TTS_CACHE.get(key);
-      if (cached !== null) {
-        const bytes = await cached.bytes();
-        return new Response(bytes, {
-          headers: {
-            "Content-Type": "audio/mpeg",
-            "Content-Length": bytes.byteLength.toString(),
-            "X-TTS-Cache": "hit",
-          },
-        });
-      }
-
-      const openai = getOpenAI(c.env.OPENAI_API_KEY);
-
-      const speech = await generateSpeech({
-        model: openai.speech("tts-1"),
-        text: text,
-        voice: validVoice,
-        speed: validSpeed,
-      });
-
-      c.executionCtx.waitUntil(
-        meterFromContext(c.env, c.get("userId"), {
-          type: "tts",
-          model: "tts-1",
-          characters: text.length,
-        }),
-      );
-
-      const audioBytes = speech.audio.uint8Array;
-
-      // Fire-and-forget writeback; put errors must not surface to the response.
-      c.executionCtx.waitUntil(
-        c.env.TTS_CACHE.put(key, audioBytes, {
-          httpMetadata: { contentType: "audio/mpeg" },
-        }).catch((e) => console.error("tts.cache.put.failed", e)),
-      );
-
-      return new Response(audioBytes, {
+    const cached = await c.env.TTS_CACHE.get(key);
+    if (cached !== null) {
+      const bytes = await cached.bytes();
+      return new Response(bytes, {
         headers: {
           "Content-Type": "audio/mpeg",
-          "Content-Length": audioBytes.byteLength.toString(),
-          "X-TTS-Cache": "miss",
+          "Content-Length": bytes.byteLength.toString(),
+          "X-TTS-Cache": "hit",
         },
       });
-    } catch (error) {
-      if (APICallError.isInstance(error)) {
-        console.error("OpenAI API error:", error.statusCode, error.message);
-        return c.json(
-          { error: "TTS generation failed" },
-          error.statusCode === 429 ? 429 : 502,
-        );
-      }
-      console.error(
-        "TTS error:",
-        error instanceof Error ? error.message : "unknown",
-      );
-      return c.json({ error: "TTS generation failed" }, 500);
     }
-  },
-);
+
+    const openai = getOpenAI(c.env.OPENAI_API_KEY);
+
+    const speech = await generateSpeech({
+      model: openai.speech("tts-1"),
+      text: text,
+      voice: validVoice,
+      speed: validSpeed,
+    });
+
+    c.executionCtx.waitUntil(
+      meterFromContext(c.env, c.get("userId"), {
+        type: "tts",
+        model: "tts-1",
+        characters: text.length,
+      }),
+    );
+
+    const audioBytes = speech.audio.uint8Array;
+
+    // Fire-and-forget writeback; put errors must not surface to the response.
+    c.executionCtx.waitUntil(
+      c.env.TTS_CACHE.put(key, audioBytes, {
+        httpMetadata: { contentType: "audio/mpeg" },
+      }).catch((e) => console.error("tts.cache.put.failed", e)),
+    );
+
+    return new Response(audioBytes, {
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Length": audioBytes.byteLength.toString(),
+        "X-TTS-Cache": "miss",
+      },
+    });
+  } catch (error) {
+    if (APICallError.isInstance(error)) {
+      console.error("OpenAI API error:", error.statusCode, error.message);
+      return c.json(
+        { error: "TTS generation failed" },
+        error.statusCode === 429 ? 429 : 502,
+      );
+    }
+    console.error(
+      "TTS error:",
+      error instanceof Error ? error.message : "unknown",
+    );
+    return c.json({ error: "TTS generation failed" }, 500);
+  }
+});
 
 // Phase 25-06: POST migration (was GET ?language=). Body shape matches the iOS
 // RishiAPI.RealtimeClientSecretsEndpoint.Body produced in Plan 25-08 — all

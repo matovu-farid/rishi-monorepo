@@ -5,6 +5,7 @@ import RishiReader
 import RishiSettings
 import RishiSync
 import SwiftUI
+import StoreKit
 
 struct LibraryTabView: View {
 
@@ -13,8 +14,12 @@ struct LibraryTabView: View {
     let model: SignedInViewModel
 
     @Environment(AppRouter.self) private var router
+    @Environment(AppDependencies.self) private var deps
+    
+    @Environment(CurrentUserBox.self) private var currentUserBox
+    @Environment(LibraryViewModel.self) private var vm
 
-    @State private var libraryVM: LibraryViewModel
+
 
     init(
         services: BootstrappedServices,
@@ -24,9 +29,7 @@ struct LibraryTabView: View {
         self.services = services
         self.user = user
         self.model = model
-        _libraryVM = State(
-            initialValue: LibraryViewModel.make(services: services, user: user)
-        )
+   
     }
 
     private var settingsHandler: (() -> Void) {
@@ -38,7 +41,7 @@ struct LibraryTabView: View {
         let bindableRouter = Bindable(router)
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
-                viewModel: libraryVM,
+          
                 path: bindableRouter.path,
                 importCoordinator: services.importCoordinator,
                 onOpenBook: { book in
@@ -69,6 +72,21 @@ struct LibraryTabView: View {
                     onSelect: { convo in model.present(conversation: convo) }
                 )
             }
+            .task {
+         
+                for await result in Transaction.currentEntitlements {
+                    guard case .verified(let transaction) = result else {
+                        
+                        continue
+                    }
+                    let _ = try? await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
+                    
+                    
+                    
+                    
+                }
+            }
+            
             .task(id: user.id) {
                 async let sample = services.sampleBookInstaller.installIfNeeded(
                     ownerId: user.id
@@ -78,7 +96,7 @@ struct LibraryTabView: View {
                 _ = await (sample, reader)
 
                 await model.performInitialLibrarySync(
-                    refresh: { await libraryVM.refresh() },
+                    refresh: { await vm.refresh() },
                     sync: {
                         if services.readerDefaults.autoSync {
                             _ = await services.syncEngine.runOnce()
@@ -96,6 +114,7 @@ struct LibraryTabView: View {
                 )
             }
         #endif
-        .deepLinkHandling(model: model, libraryVM: libraryVM)
+        
+        .deepLinkHandling(model: model)
     }
 }

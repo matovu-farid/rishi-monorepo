@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import RishiAPI
+import RishiCore
 import RishiAudio
 import RishiChat
 import RishiCore

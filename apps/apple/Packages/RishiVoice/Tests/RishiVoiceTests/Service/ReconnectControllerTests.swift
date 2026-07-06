@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiVoice
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Tests for `ReconnectController` — the reconnect engine extracted from

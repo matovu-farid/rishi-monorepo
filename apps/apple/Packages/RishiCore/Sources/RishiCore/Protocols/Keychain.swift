@@ -9,6 +9,13 @@ import Foundation
 import Security
 
 public enum Keychain {
+    public struct KeychainError: Error {
+        let status: OSStatus
+        init(_ status: OSStatus) {
+            self.status = status
+        }
+    }
+
     
     public enum Key: String {
         case accessToken
@@ -79,9 +86,3 @@ public enum Keychain {
     }
 }
 
-public struct KeychainError: Error {
-    let status: OSStatus
-    init(_ status: OSStatus) {
-        self.status = status
-    }
-}

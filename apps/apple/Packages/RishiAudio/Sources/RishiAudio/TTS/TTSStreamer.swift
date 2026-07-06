@@ -1,12 +1,12 @@
 import Foundation
-import RishiAPI
+import RishiCore
 import RishiLogging
 
 /// Source of MP3 byte chunks for a TTS request. Production is `WorkerClient`
 /// via ``WorkerTTSChunkSource``; tests inject ``FakeTTSChunkSource`` to avoid
 /// spinning up URLProtocol.
 public protocol TTSChunkSource: Sendable {
-    func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error>
+    func stream(request: TTSStreamRequest) async-> AsyncThrowingStream<Data, Error>
 }
 
 /// Production adapter — wraps the existing WorkerClient + SpeechStreamEndpoint.
@@ -17,11 +17,11 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
         self.client = client
     }
 
-    public func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+    public func stream(request: TTSStreamRequest) async  -> AsyncThrowingStream<Data, Error> {
         let endpoint = SpeechStreamEndpoint(
             body: .init(text: request.text, voice: request.voice, speed: request.speed)
         )
-        return client.stream(endpoint)
+        return await client.stream(endpoint)
     }
 }
 
@@ -85,8 +85,8 @@ public actor TTSStreamer {
         self.source = source
     }
 
-    public nonisolated func stream(_ request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
-        let upstream = source.stream(request: request)
+    public nonisolated func stream(_ request: TTSStreamRequest) async -> AsyncThrowingStream<Data, Error> {
+        let upstream = await source.stream(request: request)
         return AsyncThrowingStream { continuation in
             // KEEP: nonisolated wrapper on an actor; Task body forwards bytes
             // and emits Log breadcrumbs off the calling actor.

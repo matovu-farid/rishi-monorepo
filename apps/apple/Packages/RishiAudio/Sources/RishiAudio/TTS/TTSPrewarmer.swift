@@ -30,7 +30,7 @@ public actor TTSPrewarmer {
                     Task { [weak self] in await self?.removeInFlight(id: id) }
                 }
                 do {
-                    for try await _ in source.stream(request: req) {
+                    for try await _ in await source.stream(request: req) {
                         if Task.isCancelled { return }
                         // Drain only — bytes discarded. Side effect is the cache write.
                     }

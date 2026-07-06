@@ -46,7 +46,7 @@ extension View {
     /// root). On iPad accepts inter-app drops from Files split-view; on Mac
     /// Catalyst accepts drops from Finder. No-op on iPhone (the system has no
     /// drop affordance in single-app mode).
-    func libraryDropDestination(
+    public func libraryDropDestination(
         coordinator: ImportCoordinator,
         onImported: @escaping @MainActor ([ImportCoordinator.ImportOutcome]) -> Void
     ) -> some View {

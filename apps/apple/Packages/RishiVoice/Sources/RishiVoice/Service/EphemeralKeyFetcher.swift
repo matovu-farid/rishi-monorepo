@@ -1,6 +1,6 @@
 import Foundation
 import RishiCore
-import RishiAPI
+import RishiCore
 import RishiLogging
 
 /// Sendable response from the worker's `/api/realtime/client_secrets` endpoint.

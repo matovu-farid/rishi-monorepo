@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import RishiCore
-import RishiAPI
+import RishiCore
 @testable import RishiAuth
 
 /// Verifies that the concrete coordinator actor conforms to the driver

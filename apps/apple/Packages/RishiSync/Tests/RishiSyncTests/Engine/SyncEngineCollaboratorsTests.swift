@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Plan 34-10 (SRP) — focused tests for the three collaborators extracted out

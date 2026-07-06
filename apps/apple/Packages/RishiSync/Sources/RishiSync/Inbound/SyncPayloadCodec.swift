@@ -1,5 +1,5 @@
 import Foundation
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Single source of truth for re-decoding a `SyncOpaqueJSON.data` blob into

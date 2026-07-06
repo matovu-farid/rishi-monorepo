@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiVoice
 import RishiCore
-import RishiAPI
+import RishiCore
 
 /// Tests for `EphemeralKeyFetcher` — the actor that wraps
 /// `WorkerClient.send(RealtimeClientSecretsEndpoint)` and surfaces a

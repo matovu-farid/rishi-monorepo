@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiVoice
 @testable import RishiAudio
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Verifies the single-audio-owner invariant from the voice side: when

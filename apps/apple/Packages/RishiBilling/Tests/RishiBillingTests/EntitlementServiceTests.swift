@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiBilling
-import RishiAPI
+import RishiCore
 
 @Suite(.serialized)
 struct EntitlementServiceTests {

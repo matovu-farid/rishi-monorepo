@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiVoice
 import RishiCore
-import RishiAPI
+import RishiCore
 
 /// Tests for the Phase 25 (Plan 25-08) shape change on
 /// `EphemeralKeyFetcher.fetch(...)`. The protocol method now takes an

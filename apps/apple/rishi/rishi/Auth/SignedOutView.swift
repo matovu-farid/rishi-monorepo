@@ -1,5 +1,5 @@
 import AuthenticationServices
-import RishiAPI
+import RishiCore
 import RishiCore
 import RishiUIKit
 import SwiftUI
@@ -55,7 +55,7 @@ struct SignedOutView: View {
                     .padding(.horizontal, RishiSpacing.l)
                     .padding(.bottom, RishiSpacing.l)
                 }
-                .environment(\.currentUser, currentUser)
+          
                 
                 .task {
                     
@@ -185,6 +185,10 @@ struct SignedOutView: View {
     @ViewBuilder
     private var errorRow: some View {
         if viewModel.isLoading {
+            #if DEBUG
+                Text("View Model loading")
+            #endif
+            
             ProgressView()
                 .progressViewStyle(.circular)
                 .accessibilityIdentifier("signed-out-progress")

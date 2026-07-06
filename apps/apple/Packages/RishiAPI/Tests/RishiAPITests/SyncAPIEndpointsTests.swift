@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import RishiAPI
+@testable import RishiCore
 
 @Suite("Sync + Devices endpoint encoders/decoders")
 struct SyncAPIEndpointsTests {

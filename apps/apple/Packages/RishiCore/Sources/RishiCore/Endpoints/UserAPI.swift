@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import RishiCore
 
 
 public struct UserGetEndpoint: WorkerEndpoint {

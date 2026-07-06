@@ -1,5 +1,6 @@
 import SwiftUI
 import RishiUIKit
+import StoreKit
 
 /// Settings row that opens the system "Manage Subscriptions" sheet.
 ///

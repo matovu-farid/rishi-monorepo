@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// SYNC-04 — ChangeApplier conflict resolution policy:

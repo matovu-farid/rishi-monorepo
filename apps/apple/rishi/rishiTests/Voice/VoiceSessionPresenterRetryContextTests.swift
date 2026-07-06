@@ -4,7 +4,7 @@ import Testing
 import Foundation
 import RishiCore
 import RishiAudio
-import RishiAPI
+import RishiCore
 import RishiChat
 import RishiVoice
 @testable import rishi

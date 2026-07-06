@@ -7,7 +7,7 @@ import Testing
 import Foundation
 import BackgroundTasks
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 import RishiLibrary
 

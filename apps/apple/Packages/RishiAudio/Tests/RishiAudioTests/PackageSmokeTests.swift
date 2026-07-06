@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiAudio
 import RishiCore
-import RishiAPI
+import RishiCore
 
 @Suite("RishiAudio package smoke")
 struct PackageSmokeTests {

@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import RishiCore
 
 public struct JWTEndPoint: WorkerEndpointWithBody {
     public let body: BodyType

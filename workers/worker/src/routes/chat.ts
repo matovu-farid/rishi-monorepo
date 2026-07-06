@@ -38,7 +38,6 @@ import { streamText } from "ai";
 import { requireAuth } from "../index";
 import { requireActiveSubscription } from "../billing/sub-gate";
 import { meterFromContext } from "../billing/meter";
-import type { Env } from "../index";
 
 // Lowercase canonical UUID. iOS encodes UUIDs lowercase
 // (RishiChat/Models/ChatRequest.swift); enforce that on the wire so an
@@ -63,7 +62,7 @@ export const chatRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-chatRoutes.post("/", requireAuth, requireActiveSubscription, async (c) => {
+chatRoutes.post("/", requireAuth, async (c) => {
   const raw = await c.req.json().catch(() => null);
   const parsed = BodySchema.safeParse(raw);
   if (!parsed.success) {

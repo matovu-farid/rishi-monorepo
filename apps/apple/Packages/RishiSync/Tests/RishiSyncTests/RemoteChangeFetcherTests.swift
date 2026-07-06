@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import os
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// SYNC-02 — RemoteChangeFetcher: pull /api/sync/changes?since=<cursor>.

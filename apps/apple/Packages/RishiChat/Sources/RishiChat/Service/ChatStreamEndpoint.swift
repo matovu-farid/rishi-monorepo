@@ -1,5 +1,5 @@
 import Foundation
-import RishiAPI
+import RishiCore
 
 /// `POST /api/chat` — book-scoped streaming chat (cloud RAG).
 ///

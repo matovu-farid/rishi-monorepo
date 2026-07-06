@@ -3,7 +3,7 @@ import RishiCore
 
 /// Live reading context captured at the moment the reader launches voice.
 ///
-/// **Layer rule:** RishiReader must NOT import RishiAPI / RishiVoice, so this
+/// **Layer rule:** RishiReader must NOT import RishiCore / RishiVoice, so this
 /// is a reader-local value type. The app-layer adapter (`ReaderVoiceEntry`)
 /// maps it onto `RishiAPI.BookContextSnapshot` / `BookOutlineDTO` before
 /// handing it to the voice session.

@@ -5,6 +5,7 @@ import RishiUIKit
 import SwiftUI
 import UniformTypeIdentifiers
 import os.signpost
+import RishiLibrary
 
 
 private enum LibraryMacCommandNotification {
@@ -21,8 +22,9 @@ private let librarySignposter = OSSignposter(
 
 @MainActor
 public struct LibraryRootView: View {
+    @Environment(LibraryViewModel.self) private var vm: LibraryViewModel
 
-    private let viewModel: LibraryViewModel
+
     public let importCoordinator: ImportCoordinator
     public let onOpenBook: (Book) -> Void
 
@@ -40,14 +42,14 @@ public struct LibraryRootView: View {
     @State private var showDocumentPicker = false
 
     public init(
-        viewModel: LibraryViewModel,
+      
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil
     ) {
-        self.viewModel = viewModel
+ 
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
@@ -56,7 +58,7 @@ public struct LibraryRootView: View {
     }
 
     public init(
-        viewModel: LibraryViewModel,
+     
         path: Binding<NavigationPath>,
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
@@ -64,7 +66,7 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil
     ) {
-        self.viewModel = viewModel
+       
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
@@ -73,21 +75,9 @@ public struct LibraryRootView: View {
     }
 
     public var body: some View {
-        @Bindable var vm = viewModel
-        return Group {
-            if externalPath != nil {
-
-                libraryContent(vm: vm)
-            } else {
-                NavigationStack {
-                    libraryContent(vm: vm)
-                }
-            }
-        }
-        .librarySearchable(
-            text: $vm.searchText,
-            filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty
-        )
+   
+        return libraryContent(vm: vm)
+       
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
 
             Task {
@@ -115,13 +105,13 @@ public struct LibraryRootView: View {
                 )
             }
         }
-        .alert(item: $vm.importError) { failure in
-            Alert(
-                title: Text("Import Failed"),
-                message: Text(failure.message),
-                dismissButton: .default(Text("OK"))
-            )
-        }
+//        .alert(item: vm.importError) { failure in
+//            Alert(
+//                title: Text("Import Failed"),
+//                message: Text(failure.message),
+//                dismissButton: .default(Text("OK"))
+//            )
+//        }
         .task {
 
             let state = librarySignposter.beginInterval("library.first-paint")
@@ -154,6 +144,7 @@ public struct LibraryRootView: View {
     
     @ViewBuilder
     private func libraryContent(vm: LibraryViewModel) -> some View {
+        @Bindable var vm = vm
         LibraryView(
             books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
             positionLookup: { bookID in vm.position(for: bookID) },
@@ -161,6 +152,11 @@ public struct LibraryRootView: View {
             onOpen: onOpenBook,
 
             onDelete: { book in Task { await vm.delete(book) } }
+        )
+
+        .librarySearchable(
+            text: $vm.searchText,
+            filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty
         )
         .toolbar {
 

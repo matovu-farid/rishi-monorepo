@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiChat
 import RishiCore
-import RishiAPI
+import RishiCore
 
 @Suite("ChatRequest encoding")
 struct ChatRequestEncodingTests {

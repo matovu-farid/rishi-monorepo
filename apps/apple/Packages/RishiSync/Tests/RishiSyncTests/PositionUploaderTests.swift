@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// SYNC-03 — PositionUploader: drain pending positions → POST /api/sync/push → markClean.

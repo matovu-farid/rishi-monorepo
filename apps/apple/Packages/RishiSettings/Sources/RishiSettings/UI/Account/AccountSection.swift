@@ -60,11 +60,11 @@ struct AccountSection: View {
             .foregroundStyle(RishiColor.accent)
             .accessibilityIdentifier("settings-account-signout")
 
-            Button("Delete Account…") {
-                onShowDeleteFlow()
-            }
-            .foregroundStyle(RishiColor.danger)
-            .accessibilityIdentifier("settings-account-delete")
+//            Button("Delete Account…") {
+//                onShowDeleteFlow()
+//            }
+//            .foregroundStyle(RishiColor.danger)
+//            .accessibilityIdentifier("settings-account-delete")
         } header: {
             Text("Account")
                 .font(RishiTypography.titleM)

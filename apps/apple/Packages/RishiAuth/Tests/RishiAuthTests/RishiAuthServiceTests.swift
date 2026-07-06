@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import RishiCore
-import RishiAPI
+import RishiCore
 @testable import RishiAuth
 
 @Suite("RishiAuthService — end-to-end with mock drivers", .serialized)

@@ -5,7 +5,7 @@ import OSLog
 import StoreKit
 import SwiftUI
 import RishiBilling
-import RishiAPI
+import RishiCore
 
 
 // MARK: - Customer Entitlements
@@ -35,10 +35,12 @@ private struct CustomerEntitlementsViewModifier: ViewModifier {
             .onChange(of: customerEntitlements.subscriptionStatuses) { _, subscriptionStatuses in
                 do {
                     if  let groupID = services?.groupID{
+                        let subscriptionStatuses = subscriptionStatuses[groupID.value]
+                        let highestSubcription = try subscriptionStatuses?.activeSubscriptionStatuses.highestSubscriptionStatus
                         
-                        if let currentStatus = try transformStatus(subscriptionStatuses[groupID.value]){
+                        if let highestSubcription {
                             
-                            subscriptionService.saveSubscription(subscription: currentStatus)
+                            subscriptionService.saveSubscription(subscription: highestSubcription)
                             
                         }
                     }

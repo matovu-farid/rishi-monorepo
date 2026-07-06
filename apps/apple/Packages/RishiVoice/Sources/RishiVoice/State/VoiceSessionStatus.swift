@@ -1,6 +1,6 @@
 import Foundation
 import RishiCore
-import RishiAPI
+import RishiCore
 
 /// Why an ephemeral-key fetch failed. Distinguishes the four states that
 /// previously collapsed into one opaque `.keyFetch` reason so the UI (and

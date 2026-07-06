@@ -6,7 +6,7 @@
 
 import Foundation
 import OSLog
-import RishiAPI
+import RishiCore
 import RishiAuth
 import RishiBilling
 import RishiChat
@@ -49,16 +49,8 @@ enum ServiceGraphFactory {
         )
 
         let siwaPresenter = await MainActor.run { SystemSiwaPresenter() }
-        let siwaCoordinator = SignInWithAppleCoordinator(
-            workerClient: workerClient,
-            presenter: siwaPresenter
-        )
-        let authService = RishiAuthService(
-            workerClient: workerClient,
-            siwaCoordinator: siwaCoordinator,
-            keychain: keychain
-        )
-        let groupID = try? await workerClient.send(GroupIDEndpoint())
+    
+        let groupID = try? await GroupIDEndpoint().send()
         
 
         let documentsURL = FileManager.default.urls(
@@ -233,7 +225,7 @@ enum ServiceGraphFactory {
         let importCoordinator = ImportCoordinator(
             storage: bookFileStorage,
             currentUserId: {
-                await authService.currentUser?.id
+                await userIdBox.value
             },
             onBookImported: {
                 [syncEngine, bookStore, bookFileStorage, bookPrewarmer] bookId
@@ -340,8 +332,7 @@ enum ServiceGraphFactory {
             tokenProvider: tokenProvider,
             workerClient: workerClient,
             siwaPresenter: siwaPresenter,
-            siwaCoordinator: siwaCoordinator,
-            authService: authService,
+       
             dbQueue: dbQueue,
             bookStore: bookStore,
             positionStore: positionStore,

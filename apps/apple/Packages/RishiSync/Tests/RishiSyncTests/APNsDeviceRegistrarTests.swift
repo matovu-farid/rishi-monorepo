@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 
 /// SYNC-06 — APNs device registration calls `DevicesRegisterEndpoint`
 /// (POST /api/devices/register) once after sign-in. The registrar is

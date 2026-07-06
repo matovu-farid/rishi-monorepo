@@ -34,19 +34,29 @@ struct OnboardingHost: View {
 
     let services: BootstrappedServices
     let onCompleted: () -> Void
+    @Environment(CurrentUserBox.self) private var currentUserBox
 
     var body: some View {
+#if DEBUG
+        Button("Erase Keychain") {
+            Keychain.delete(.accessToken)
+            Keychain.delete(.refreshToken)
+            Keychain.delete(.userId)
+        }
+#endif
         OnboardingFlowView(
             coordinator: services.onboardingCoordinator,
             onSignIn: { 
                 
                 
                 
-//                _ = await services.entitlementService.refresh()
             },
             onUseSample: { [services] in
-                guard let userId = await services.authService.currentUser?.id else { return }
-                _ = await services.sampleBookInstaller.installIfNeeded(ownerId: userId)
+                if case .signedIn(user: let user) = currentUserBox.state{
+                    _ = await services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                }
+                
+               
             },
             onImport: {
                 

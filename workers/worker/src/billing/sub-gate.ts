@@ -39,30 +39,30 @@ export const requireActiveSubscription: MiddlewareHandler<{
   Variables: { userId: string };
 }> = async (c, next) => {
   const userId = c.get("userId");
-  const billingEnabled = Boolean(c.env.STRIPE_SECRET_KEY);
-  let subscriptionStatus: string | null = null;
-  if (billingEnabled && userId !== "dev-user") {
-    const db = createDb(c.env.DB);
-    const row = await db
-      .select({ status: subscription.status })
-      .from(subscription)
-      .where(eq(subscription.referenceId, userId))
-      .orderBy(desc(subscription.periodStart))
-      .get();
-    subscriptionStatus = row?.status ?? null;
-  }
-  if (
-    !isAllowedForBilledFeature({ billingEnabled, userId, subscriptionStatus })
-  ) {
-    return c.json(
-      {
-        error: "Active subscription required to use this feature",
-        code: "BILLING_INACTIVE",
-        subscriptionStatus,
-      },
-      402,
-    );
-  }
+  // const billingEnabled = Boolean(c.env.STRIPE_SECRET_KEY);
+  // let subscriptionStatus: string | null = null;
+  // if (billingEnabled && userId !== "dev-user") {
+  //   const db = createDb(c.env.DB);
+  //   const row = await db
+  //     .select({ status: subscription.status })
+  //     .from(subscription)
+  //     .where(eq(subscription.referenceId, userId))
+  //     .orderBy(desc(subscription.periodStart))
+  //     .get();
+  //   subscriptionStatus = row?.status ?? null;
+  // }
+  // if (
+  //   !isAllowedForBilledFeature({ billingEnabled, userId, subscriptionStatus })
+  // ) {
+  //   return c.json(
+  //     {
+  //       error: "Active subscription required to use this feature",
+  //       code: "BILLING_INACTIVE",
+  //       subscriptionStatus,
+  //     },
+  //     402,
+  //   );
+  // }
   await next();
 };
 

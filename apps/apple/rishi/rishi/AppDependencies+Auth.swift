@@ -1,7 +1,7 @@
 import Foundation
 import RishiCore
 import RishiAuth
-import RishiAPI
+import RishiCore
 
 
 
@@ -10,7 +10,4 @@ extension AppDependencies {
     var tokenProvider: RishiAuthTokenProvider { services!.tokenProvider }
     var workerClient: WorkerClient { services!.workerClient }
     var siwaPresenter: SystemSiwaPresenter { services!.siwaPresenter }
-    var siwaCoordinator: SignInWithAppleCoordinator { services!.siwaCoordinator }
-    var authService: RishiAuthService { services!.authService }
-    var authServiceForEnvironment: any AuthService { services!.authService }
 }

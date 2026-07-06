@@ -25,6 +25,29 @@ public protocol WorkerEndpoint: Sendable {
 
     /// Path relative to `WorkerClient`'s `baseURL` (must start with `/`).
     var path: String { get }
+    
+
+}
+
+extension WorkerEndpoint {
+    public func send() async throws -> Response {
+        let baseURLString =
+        ProcessInfo.processInfo.environment["RISHI_API_URL"]
+        ?? "https://api.fidexa.org"
+        let baseURL =
+        URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
+        
+        let keychain = KeychainSessionStore()
+        
+        let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
+        
+        let workerClient = WorkerClient(
+            baseURL: baseURL,
+            tokenProvider: tokenProvider,
+            
+        )
+        return await try workerClient.send(self)
+    }
 }
 
 // MARK: - Endpoints WITH a request body (POST/PUT/PATCH)
@@ -36,6 +59,8 @@ public protocol WorkerEndpointWithBody: WorkerEndpoint {
     associatedtype Body: Encodable & Sendable
     var body: Body { get }
 }
+
+
 
 // MARK: - Streaming endpoints (e.g. /api/audio/speech)
 

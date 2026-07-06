@@ -1,5 +1,5 @@
 import Foundation
-import RishiAPI
+import RishiCore
 import RishiLogging
 
 /// The reconnect engine extracted from `RealtimeVoiceSession` (plan 34-13).

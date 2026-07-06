@@ -1,5 +1,4 @@
 import Foundation
-import RishiCore
 
 /// A persisted authentication session.
 ///
@@ -26,7 +25,6 @@ public struct Session: Codable, Sendable, Equatable, Hashable {
     public let token: String
     public let userId: String
     public let email: String?
-    public let provider: SignInProvider
     public let issuedAt: Date
     public let expiresAt: Date?
 
@@ -34,14 +32,12 @@ public struct Session: Codable, Sendable, Equatable, Hashable {
         token: String,
         userId: String,
         email: String?,
-        provider: SignInProvider,
         issuedAt: Date = Date(),
         expiresAt: Date? = nil
     ) {
         self.token = token
         self.userId = userId
         self.email = email
-        self.provider = provider
         self.issuedAt = issuedAt
         self.expiresAt = expiresAt
     }

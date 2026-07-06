@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import RishiCore
-@testable import RishiAPI
+@testable import RishiCore
 
 @Suite("WorkerClient", .serialized)  // serialized because MockURLProtocol uses static state
 struct WorkerClientTests {

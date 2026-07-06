@@ -6,6 +6,7 @@
 
 
 import Foundation
+import RishiCore
 
 
 import OSLog
@@ -43,6 +44,7 @@ public final class CustomerEntitlements {
             await transaction.finish()
     }
     
+
     
     
     public func observeTransactionUpdates() {
@@ -51,7 +53,17 @@ public final class CustomerEntitlements {
             for await update in Transaction.updates {
                 guard let self else { return }
                 guard let transaction = await unwrapVerificationResult(update) else { continue }
+             
+               
+            
                 await self.process(transaction: transaction)
+                
+                do {
+                    try await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
+                }catch {
+                    print(error)
+                }
+             
             }
         }
     }
@@ -67,7 +79,7 @@ public final class CustomerEntitlements {
             Processing current entitlement \(transaction.id) for \
             \(transaction.productID)
             """)
-            SubscriptionService.shared.saveSubscription(subscription: .subscribed)
+//            SubscriptionService.shared.saveSubscription(subscription: .subscribed)
             Task.detached(priority: .background) {
                 await self.process(transaction: transaction)
                 

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RishiAPI
+@testable import RishiCore
 
 /// Contract tests for `POST /api/realtime/client_secrets` (Phase 25).
 ///

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import RishiAPI
+@testable import RishiCore
 
 @Suite("MessagesSyncAPI")
 struct MessagesSyncAPITests {

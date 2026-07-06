@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import RishiAPI
+import RishiCore
 @testable import RishiAudio
 
 /// OPT-IN, env-gated real TTS->STT round-trip (RESEARCH §5.1/§5.2/§5.4).

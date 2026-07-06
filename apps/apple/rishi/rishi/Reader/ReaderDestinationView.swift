@@ -9,12 +9,18 @@ struct ReaderDestinationView: View {
 
     @Environment(AppRouter.self) private var router
     @Environment(\.services) private var servicesEnv
-    @Environment(\.currentUser) private var currentUser
+    @Environment(CurrentUserBox.self) private var currentUser
+    var user:User? {
+        if case .signedIn(user: let user) = currentUser.state {
+            return user
+        }
+        return nil
+    }
 
     var body: some View {
 
         let services = servicesEnv!
-        let userId = currentUser!.id
+        let userId = user!.id
         switch route {
         case .pdf(let bookId):
             NavigationLazyBook(

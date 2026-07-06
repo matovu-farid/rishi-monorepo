@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RishiAPI
+@testable import RishiCore
 
 @Suite("Endpoint Codable + path correctness")
 struct EndpointCodableTests {

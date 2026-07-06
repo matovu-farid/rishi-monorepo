@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import os
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// SYNC-01 (highlights) — HighlightUploader: drain pending highlights → POST → markClean / forget.

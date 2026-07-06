@@ -1,5 +1,5 @@
 import Foundation
-import RishiAPI
+import RishiCore
 import RishiLogging
 
 /// Caches the user's current entitlement and exposes it as an `AsyncStream`.

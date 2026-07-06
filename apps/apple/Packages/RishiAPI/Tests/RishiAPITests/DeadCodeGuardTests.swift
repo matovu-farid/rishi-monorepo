@@ -1,5 +1,5 @@
 import Testing
-@testable import RishiAPI
+@testable import RishiCore
 
 /// Phase 17 wire-contract reconciliation: locks in the deletion of dead
 /// realtime usage plumbing on the iOS side. See:

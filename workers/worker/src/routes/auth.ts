@@ -12,6 +12,10 @@ import {
 import { findOrCreateUser } from "../findOrCreateUser";
 import { createDb, WorkerDb } from "../db/drizzle";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import {
+  AppleBucket,
+  verifySignedTransaction,
+} from "../apple-connect/functions";
 
 const authRoutes = new Hono<{
   Bindings: Env;
@@ -166,6 +170,42 @@ authRoutes.post("/verify", async (c) => {
       401,
     );
   }
+});
+
+authRoutes.post("/verify-transaction", async (c) => {
+  const { transactionId } = await c.req.json<{
+    transactionId: string;
+  }>();
+
+  if (transactionId === undefined) {
+    return c.json(
+      {
+        error: "Missing signedTransaction",
+      },
+      400,
+    );
+  }
+
+  const result = await Effect.runPromiseExit(
+    verifySignedTransaction(transactionId).pipe(
+      Effect.provideService(AppleBucket, c.env.APPLE),
+    ),
+  );
+
+  if (result._tag === "Failure") {
+    return c.json(
+      {
+        verified: false,
+        error: "Invalid transaction",
+      },
+      401,
+    );
+  }
+
+  return c.json({
+    verified: true,
+    transaction: result.value,
+  });
 });
 
 export default authRoutes;

@@ -7,10 +7,11 @@ import RishiLibrary
 struct DeepLinkHandlingModifier: ViewModifier {
 
     let model: SignedInViewModel
-    let libraryVM: LibraryViewModel
+
 
     @Environment(AppRouter.self) private var router
     @Environment(\.services) private var servicesEnv
+    @Environment(LibraryViewModel.self) private var libraryVM
 
     func body(content: Content) -> some View {
         content
@@ -39,7 +40,7 @@ struct DeepLinkHandlingModifier: ViewModifier {
 }
 
 extension View {
-    func deepLinkHandling(model: SignedInViewModel, libraryVM: LibraryViewModel) -> some View {
-        modifier(DeepLinkHandlingModifier(model: model, libraryVM: libraryVM))
+    func deepLinkHandling(model: SignedInViewModel,) -> some View {
+        modifier(DeepLinkHandlingModifier(model: model))
     }
 }

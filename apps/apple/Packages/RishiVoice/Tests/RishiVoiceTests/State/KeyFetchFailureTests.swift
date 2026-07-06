@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiVoice
 import RishiCore
-import RishiAPI
+import RishiCore
 
 /// Unit tests for the pure `KeyFetchFailure.classify` mapper. Each row feeds
 /// a `RishiError` (the type the network layer throws) and asserts the

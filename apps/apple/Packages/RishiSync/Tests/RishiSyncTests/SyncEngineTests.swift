@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import os
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 import RishiLibrary
 

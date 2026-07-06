@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RishiAPI
+@testable import RishiCore
 
 @Suite("ErrorEnvelope decoding")
 struct ErrorEnvelopeTests {

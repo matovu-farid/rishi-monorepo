@@ -21,4 +21,3 @@ public protocol AppleSignInDriver: Sendable {
 // hard-removed alongside its coordinator — SIWA is the sole social
 // provider for v1.
 
-extension SignInWithAppleCoordinator: AppleSignInDriver {}

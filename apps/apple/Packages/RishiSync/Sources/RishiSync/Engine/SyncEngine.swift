@@ -1,6 +1,6 @@
 import Foundation
 import os.signpost
-import RishiAPI
+import RishiCore
 import RishiCore
 import RishiLibrary
 import RishiLogging

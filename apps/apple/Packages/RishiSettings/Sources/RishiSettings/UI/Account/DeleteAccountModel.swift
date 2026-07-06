@@ -47,6 +47,7 @@ final class DeleteAccountModel {
             Log.event("settings.account.deleted", level: .info, data: [:])
             inFlight = false
             onDeleted()
+            
         } catch {
             Log.event(
                 "settings.account.delete_failed",

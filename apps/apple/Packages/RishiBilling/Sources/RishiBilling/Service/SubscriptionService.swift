@@ -8,7 +8,11 @@ public class SubscriptionService {
 
 
    
-    public var currentSubscription: EntitlementLevel = .unsubscribed
+    public var currentSubscription: SubscriptionState = .unsubscribed
+    public enum SubscriptionState {
+        case subscribed(subscription: SubscriptionStatus)
+        case unsubscribed
+    }
     private init() {
 
     }
@@ -17,11 +21,12 @@ public class SubscriptionService {
 
 
     public var isSubscribed: Bool {
-        currentSubscription == .subscribed
+        guard case  .subscribed(_) = currentSubscription else {return false}
+        return true
     }
 
-    public func saveSubscription(subscription: EntitlementLevel) {
-        self.currentSubscription = subscription
+    public func saveSubscription(subscription: SubscriptionStatus) {
+        self.currentSubscription = .subscribed(subscription: subscription)
     }
     
  

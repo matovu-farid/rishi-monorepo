@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import RishiSync
-import RishiAPI
+import RishiCore
 import RishiCore
 
 /// Phase 16-04 — ConversationUploader: drain pending conversations
