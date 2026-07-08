@@ -27,18 +27,6 @@ public enum RishiDB {
         try makePersistenceStore(at: url)
     }
 
-    /// Deprecated compatibility shim for legacy queue-shaped callers.
-    @available(*, deprecated, renamed: "makeStore(at:)")
-    public static func makeDatabaseQueue(at url: URL) throws -> RishiDBStore {
-        try makePersistenceStore(at: url)
-    }
-
-    /// Deprecated compatibility shim for legacy pool-shaped callers.
-    @available(*, deprecated, renamed: "makeStore(at:)")
-    public static func makeDatabasePool(at url: URL) throws -> RishiDBStore {
-        try makePersistenceStore(at: url)
-    }
-
     private static func makePersistenceStore(at url: URL) throws -> RishiDBStore {
         RishiDBStore(container: try makeModelContainer(at: url))
     }

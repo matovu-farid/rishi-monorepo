@@ -18,8 +18,6 @@
 //                                functions for the SwiftData stack.
 // RishiDB.makeModelContainer   — `RishiDB.swift`. Opens the SwiftData ModelContainer at the given URL.
 // RishiDB.makeStore            — `RishiDB.swift`. Returns the shared SwiftData-backed store facade.
-// RishiDB.makeDatabaseQueue    — `RishiDB.swift`. Deprecated compatibility shim for legacy callers.
-// RishiDB.makeDatabasePool     — `RishiDB.swift`. Deprecated compatibility shim for legacy callers.
 
 // MARK: - Stores (SwiftData implementations of RishiCore protocols)
 //
@@ -28,8 +26,6 @@
 // SwiftDataHighlightStore     — `Stores/SwiftDataHighlightStore.swift`. HighlightStore over SwiftData.
 // SwiftDataMessageStore       — `Stores/SwiftDataMessageStore.swift`. MessageStore over SwiftData.
 // SwiftDataPositionStore      — `Stores/SwiftDataPositionStore.swift`. PositionStore over SwiftData.
-// Deprecated queue/pool shims — compatibility names retained for old callers.
-//
 // Each store takes the shared `RishiDBStore` actor at init so callers can
 // keep the same construction pattern while the package migrates to SwiftData.
 
