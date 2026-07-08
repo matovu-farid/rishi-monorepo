@@ -7,11 +7,11 @@ import RishiLibrary
 struct DeepLinkHandlingModifier: ViewModifier {
 
     let model: SignedInViewModel
+    let refreshLibrary: () async -> Void
 
 
     @Environment(AppRouter.self) private var router
     @Environment(\.services) private var servicesEnv
-    @Environment(LibraryViewModel.self) private var libraryVM
 
     func body(content: Content) -> some View {
         content
@@ -23,11 +23,10 @@ struct DeepLinkHandlingModifier: ViewModifier {
                 router.onConversationResolved = { convo in
                     model.present(conversation: convo)
                 }
-                router.onFileURL = { [libraryVM] fileURL in
-                    
+                router.onFileURL = { fileURL in
                     Task {
                         _ = await services.importCoordinator.importBooks([fileURL])
-                        await libraryVM.refresh()
+                        await refreshLibrary()
                     }
                 }
                 router.handle(
@@ -40,7 +39,10 @@ struct DeepLinkHandlingModifier: ViewModifier {
 }
 
 extension View {
-    func deepLinkHandling(model: SignedInViewModel,) -> some View {
-        modifier(DeepLinkHandlingModifier(model: model))
+    func deepLinkHandling(
+        model: SignedInViewModel,
+        refreshLibrary: @escaping () async -> Void
+    ) -> some View {
+        modifier(DeepLinkHandlingModifier(model: model, refreshLibrary: refreshLibrary))
     }
 }

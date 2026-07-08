@@ -14,12 +14,7 @@ struct LibraryTabView: View {
     let model: SignedInViewModel
 
     @Environment(AppRouter.self) private var router
-    @Environment(AppDependencies.self) private var deps
-    
-    @Environment(CurrentUserBox.self) private var currentUserBox
-    @Environment(LibraryViewModel.self) private var vm
-
-
+    @State private var vm: LibraryViewModel
 
     init(
         services: BootstrappedServices,
@@ -29,7 +24,7 @@ struct LibraryTabView: View {
         self.services = services
         self.user = user
         self.model = model
-   
+        _vm = State(initialValue: LibraryViewModel.make(services: services, user: user))
     }
 
     private var settingsHandler: (() -> Void) {
@@ -105,6 +100,7 @@ struct LibraryTabView: View {
                 )
             }
         }
+        .environment(vm)
 
         #if !targetEnvironment(macCatalyst)
             .sheet(isPresented: Bindable(model).showSettings) {
@@ -115,6 +111,6 @@ struct LibraryTabView: View {
             }
         #endif
         
-        .deepLinkHandling(model: model)
+        .deepLinkHandling(model: model, refreshLibrary: { await vm.refresh() })
     }
 }

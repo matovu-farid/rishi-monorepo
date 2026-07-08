@@ -10,7 +10,6 @@ import RishiSync
 import RishiUIKit
 import RishiVoice
 import SwiftUI
-import RishiLibrary
 
 #if canImport(UIKit)
     import UIKit
@@ -32,22 +31,10 @@ struct SignedInView: View {
         return user
     }
     
-    private var libraryVM: LibraryViewModel? {
-        guard let services = appDependencies?.services, case .signedIn(user: let user) = currentUserBox.state else {
-            return nil
-        }
-        return LibraryViewModel.make(services: services, user: user)
-        
-    }
-    
-
-
-  
-
     @State private var model = SignedInViewModel()
 
     var body: some View {
-        if let services, let user, let libraryVM  {
+        if let services, let user  {
             
             @Bindable var model = model
             LibraryTabView(
@@ -55,7 +42,6 @@ struct SignedInView: View {
                 user: user,
                 model: model
             )
-            .environment(libraryVM)
             
             .sheet(item: $model.selectedConversation) { convo in
                 ConversationChatHost(
@@ -138,7 +124,7 @@ struct SignedInView: View {
         else {
             VStack{
 #if DEBUG
-                Text("Services or user or Library VM are missing")
+                Text("Services or user are missing")
 #endif
                 ProgressView()
             }

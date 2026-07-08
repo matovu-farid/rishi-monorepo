@@ -108,6 +108,7 @@ public final class LibraryViewModel {
     /// Reloads books for the current user and re-derives readingNow + filteredBooks.
     /// Silent on errors (logged via RishiLogging) — the UI shows empty state.
     public func refresh() async {
+        cancelSearchDebounce()
         guard let userId = currentUserId() else {
             books = []
             readingNow = []
@@ -140,6 +141,7 @@ public final class LibraryViewModel {
 
     /// Deletes the book on-disk + in the store; updates local state in place.
     public func delete(_ book: Book) async {
+        cancelSearchDebounce()
         do {
             try await storage.delete(book)
             books.removeAll { existing in existing.id == book.id }
@@ -186,6 +188,11 @@ public final class LibraryViewModel {
             if Task.isCancelled { return }
             filteredBooks = LibrarySearchFilter.filter(books: snapshotBooks, query: snapshotQuery)
         }
+    }
+
+    private func cancelSearchDebounce() {
+        searchTask?.cancel()
+        searchTask = nil
     }
 
     /// The Reading-Now shelf shows at most this many books — the most
