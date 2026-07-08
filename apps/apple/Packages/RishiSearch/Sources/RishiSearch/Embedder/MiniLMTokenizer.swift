@@ -34,6 +34,10 @@ struct MiniLMTokenizer: Sendable {
     private let padId: Int32
     let maxLength: Int
 
+    static func defaultVocabURL() -> URL? {
+        Bundle.module.url(forResource: "vocab", withExtension: "txt")
+    }
+
     init(vocabURL: URL, maxLength: Int = 64) throws {
         guard let content = try? String(contentsOf: vocabURL, encoding: .utf8) else {
             throw LoadError.vocabUnreadable

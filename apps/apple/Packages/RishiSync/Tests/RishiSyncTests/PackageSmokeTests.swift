@@ -2,8 +2,6 @@ import Testing
 import Foundation
 @testable import RishiSync
 import RishiCore
-import RishiCore
-import RishiDB
 
 @Suite("RishiSync package smoke")
 struct PackageSmokeTests {
@@ -40,16 +38,10 @@ struct PackageSmokeTests {
         #expect(endpoint.method == .POST)
     }
 
-    @Test("RishiDB Tables.SyncMetadata column names match v1 schema")
-    func syncMetadataColumnsMatchV1Schema() {
-        // v1 migration in RishiDB/Schema/Migrations.swift created sync_metadata
-        // with these exact column names. RishiSync's SyncMetadataStore (07-02)
-        // will write/read against this table — lock the contract here.
-        #expect(Tables.SyncMetadata.table == "sync_metadata")
-        #expect(Tables.SyncMetadata.entityId == "entity_id")
-        #expect(Tables.SyncMetadata.entityType == "entity_type")
-        #expect(Tables.SyncMetadata.remoteEtag == "remote_etag")
-        #expect(Tables.SyncMetadata.lastSyncedAt == "last_synced_at")
-        #expect(Tables.SyncMetadata.dirty == "dirty")
+    @Test("SwiftData bootstrap yields an empty sync metadata store")
+    func syncMetadataBootstrapYieldsEmptyStore() async throws {
+        let store = try SyncMetadataStoreBootstrap.makeStore(inMemory: true)
+        #expect(try await store.pendingCount() == 0)
+        #expect(try await store.allDirty().isEmpty)
     }
 }

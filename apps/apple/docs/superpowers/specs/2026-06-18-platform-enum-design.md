@@ -117,7 +117,7 @@ Two structural sub-cases:
 
 ## Non-goals
 
-- No changes to underlying engines (Readium, PDFKit, GRDB, StoreKit,
+- No changes to underlying engines (Readium, PDFKit, database layer, StoreKit,
   AVFoundation).
 - No `project.pbxproj` edits (synchronized groups; new file is picked up
   automatically).

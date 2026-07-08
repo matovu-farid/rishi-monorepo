@@ -1,12 +1,11 @@
 import Foundation
 import RishiCore
-import RishiCore
 
 /// Single source of truth for re-decoding a `SyncOpaqueJSON.data` blob into
 /// a concrete RishiCore model and vice-versa.
 ///
-/// Wire format (sync-v1) is snake_case to match the existing RishiDB column
-/// names + the worker's `sync_metadata` / R2 payload shape. Wire DTOs are
+/// Wire format (sync-v1) is snake_case to match the worker's `sync_metadata`
+/// / R2 payload shape. Wire DTOs are
 /// declared as private nested structs with explicit `CodingKeys` so the
 /// in-memory RishiCore models remain camelCase but the bytes on the wire stay
 /// stable for forward compat.

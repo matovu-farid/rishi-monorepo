@@ -14,7 +14,7 @@ import RishiLibrary
 ///   BookContextResponder -> USearchBookSearch.search(queryText:bookId:)
 ///     -> CoreMLMiniLMEmbedder.embed(query)        // embed the query
 ///     -> USearch HNSW index.search(vector:count:) // ANN over book chunks
-///     -> ChunkStore.lookup(chunkIds:)             // GRDB row fetch
+///     -> ChunkStore.lookup(chunkIds:)             // SwiftData row fetch
 ///
 /// These tests reproduce that exact retrieval (the responder is a thin JSON
 /// wrapper over `search`) against the real corpora, assert the response is a

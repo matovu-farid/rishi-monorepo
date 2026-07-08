@@ -8,7 +8,6 @@ let package = Package(
         .library(name: "RishiDB", targets: ["RishiDB"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
         .package(path: "../RishiCore"),
         .package(path: "../RishiLogging"),
         .package(path: "../RishiTesting"),  // test-only consumer; not linked into RishiDB main target
@@ -17,7 +16,6 @@ let package = Package(
         .target(
             name: "RishiDB",
             dependencies: [
-                .product(name: "GRDB", package: "GRDB.swift"),
                 "RishiCore",
                 "RishiLogging",
             ]

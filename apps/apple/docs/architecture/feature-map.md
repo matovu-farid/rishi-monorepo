@@ -48,7 +48,7 @@ omitted by default.
 |---|---|---|
 | Domain types (Book, User, Conversation, etc.) | RishiCore | Models + protocols. Universal import. |
 | API client / network layer | RishiAPI | HTTP, auth headers, retry, contract types. |
-| Persistence (GRDB / SQLite) | RishiDB | Schema, migrations, DAOs. |
+| Persistence (SQLite) | RishiDB | Schema, migrations, DAOs. |
 | Logging / Sentry bridge | RishiLogging | `Log.info`, sinks, simulator dump. |
 | Design tokens (colors, spacing, motion) | RishiUIKit | Pure tokens + a few modifiers. |
 | Test fakes & helpers | RishiTesting | Linked only by `Tests/` targets. |

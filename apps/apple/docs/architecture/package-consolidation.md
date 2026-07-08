@@ -206,9 +206,9 @@ are audio-related) or into the app target. Rejected:
   RishiUIKit) since it's the universal-leaf anyway.
 - **RishiAPI**: 1,260 LOC, imported by 6 sibling packages. Network contract
   module; clear identity. Keep.
-- **RishiDB**: 847 LOC, owns GRDB schema/migrations/DAO. Test-critical
-  isolation: GRDB needs SQLite link, and isolating it means the rest of the
-  app can be type-checked without it. Keep.
+- **RishiDB**: 847 LOC, owns the database schema/migrations/DAO. Test-critical
+  isolation: the database layer needs SQLite, and isolating it means the rest
+  of the app can be type-checked without it. Keep.
 - **RishiLibrary**: 2,284 LOC, 3 sibling consumers, owns the book-library
   domain. Keep.
 - **RishiReader**: 4,432 LOC, the heaviest package, owns PDF + EPUB rendering.

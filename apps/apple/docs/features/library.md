@@ -36,7 +36,7 @@ Files app or by sharing a file into Rishi.
 ## What it depends on
 
 - `RishiCore` — `Book`, `Position`, `BookID` types.
-- `RishiDB` — GRDB-backed stores for books and positions.
+- `RishiDB` — stores for books and positions.
 - `RishiUIKit` — shared color, typography, spacing tokens.
 - `RishiLogging` — for `os.Logger` and Sentry breadcrumbs.
 

@@ -15,7 +15,6 @@ let package = Package(
         // RishiSearch (no cycle: RishiLibrary does NOT depend on RishiSearch).
         .package(path: "../RishiLibrary"),
         .package(url: "https://github.com/unum-cloud/usearch", from: "2.25.3"),
-        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.0"),
     ],
     targets: [
         .target(
@@ -25,7 +24,6 @@ let package = Package(
                 "RishiLogging",
                 "RishiLibrary",
                 .product(name: "USearch", package: "usearch"),
-                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             resources: [
                 .process("Resources/AllMiniLML6V2.mlmodel"),
@@ -39,7 +37,6 @@ let package = Package(
                 "RishiSearch",
                 "RishiLogging",
                 "RishiLibrary",
-                .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "USearch", package: "usearch"),
             ],
             resources: [

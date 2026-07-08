@@ -7,7 +7,7 @@ import RishiCore
 struct SyncQueueTests {
 
     /// Minimal in-memory `SyncMetadataStore` stub for queue tests. The real
-    /// GRDB impl is covered by `SyncMetadataStoreTests`.
+    /// SwiftData-backed implementation is covered by `SyncMetadataStoreTests`.
     private actor StubMetadataStore: SyncMetadataStore {
         private var dirty: [SyncPendingItem] = []
 

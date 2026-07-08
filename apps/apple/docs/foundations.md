@@ -10,7 +10,7 @@ Foundations are the horizontal Swift packages that user-facing features depend o
 
 ## RishiDB
 
-`apps/apple/Packages/RishiDB/` owns the on-device database. It wraps GRDB (the Swift SQLite library) and exposes one factory, `RishiDB.makeDatabaseQueue(at:)`, plus a set of `GRDB*Store` classes that conform to the RishiCore store protocols. Migrations, the schema, and the column-name source of truth (`Tables.*`) all live inside the package — typos become compile errors instead of runtime SQL failures. Features never import GRDB directly; they import RishiDB and use the store protocols. The non-obvious rule: `PRAGMA foreign_keys = ON` is installed per connection, so foreign-key violations are real errors at runtime. If a test inserts an orphan row to exercise a code path, it must use a queue that disables foreign keys explicitly.
+`apps/apple/Packages/RishiDB/` owns the on-device database. It exposes one factory for opening the local database plus a set of store classes that conform to the RishiCore store protocols. Migrations, the schema, and the column-name source of truth (`Tables.*`) all live inside the package — typos become compile errors instead of runtime SQL failures. Features never import the database driver directly; they import RishiDB and use the store protocols. The non-obvious rule: `PRAGMA foreign_keys = ON` is installed per connection, so foreign-key violations are real errors at runtime. If a test inserts an orphan row to exercise a code path, it must use a queue that disables foreign keys explicitly.
 
 ## RishiAPI
 
@@ -26,7 +26,7 @@ Foundations are the horizontal Swift packages that user-facing features depend o
 
 ## RishiTesting
 
-`apps/apple/Packages/RishiTesting/` is the test-support package. It owns the in-memory fakes for every RishiCore store (`InMemoryBookStore`, `InMemoryPositionStore`, and the rest), service fakes (`FakeAuthService`, `FakeChatService`, `MockWorkerClient`), book and message fixtures, and the conformance helpers (`assertBookStoreConformance`, and so on) that GRDB stores and in-memory stores both run against. The rule that catches people: RishiTesting has zero dependency on XCTest. The conformance helpers `throw RishiTestingError` rather than calling `XCTAssert`, because they are reused from Swift Testing targets (`@Test`, `#expect`). All tests in this project use Swift Testing — no XCTest. If you find yourself wanting to add `import XCTest`, stop and use `#expect` instead.
+`apps/apple/Packages/RishiTesting/` is the test-support package. It owns the in-memory fakes for every RishiCore store (`InMemoryBookStore`, `InMemoryPositionStore`, and the rest), service fakes (`FakeAuthService`, `FakeChatService`, `MockWorkerClient`), book and message fixtures, and the conformance helpers (`assertBookStoreConformance`, and so on) that the database-backed stores and in-memory stores both run against. The rule that catches people: RishiTesting has zero dependency on XCTest. The conformance helpers `throw RishiTestingError` rather than calling `XCTAssert`, because they are reused from Swift Testing targets (`@Test`, `#expect`). All tests in this project use Swift Testing — no XCTest. If you find yourself wanting to add `import XCTest`, stop and use `#expect` instead.
 
 ---
 

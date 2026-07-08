@@ -1,10 +1,10 @@
 # Third-party licenses (Rishi for Apple)
 
 This document tracks the licensing attribution for third-party assets and
-source vendored into `apps/apple/`. SwiftPM dependencies (Sentry, GRDB,
-Readium, USearch, swift-realtime-openai, ...) carry their own LICENSE files
-in the SwiftPM checkout — they are not duplicated here. This file covers
-artifacts that are checked into the repo directly.
+source vendored into `apps/apple/`. SwiftPM dependencies (Sentry, Readium,
+USearch, swift-realtime-openai, ...) carry their own LICENSE files in the
+SwiftPM checkout — they are not duplicated here. This file covers artifacts
+that are checked into the repo directly.
 
 ## Phase 25 RAG — vendored models and tokenizers
 

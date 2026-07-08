@@ -24,7 +24,7 @@ Broken into four diagrams by lifecycle phase:
 | `BookContextResponder` | `Packages/RishiVoice/Service/BookContextResponder.swift` | actor, handles `bookContext` tool |
 | `USearchBookSearch` + `CoreMLMiniLMEmbedder` | `Packages/RishiSearch/...` | HNSW + on-device embeddings |
 | `VoiceTranscriptBridge` | `Packages/RishiVoice/Service/VoiceTranscriptBridge.swift` | actor, persists finalized transcripts |
-| `MessageStore` | GRDB-backed | chat persistence + sync hook |
+| `MessageStore` | database-backed | chat persistence + sync hook |
 | `VoiceSessionState` | `Packages/RishiVoice/State/VoiceSessionState.swift` | `@Observable` partial-transcript buffers |
 
 ---
@@ -153,7 +153,7 @@ sequenceDiagram
     autonumber
     participant SDK as RealtimeAPIAdapter
     participant Bridge as VoiceTranscriptBridge
-    participant Store as MessageStore (GRDB)
+    participant Store as MessageStore
     participant Sync as SyncEngine
 
     Note over Bridge: spawned by VoiceSessionPresenter<br/>as bridgeTask at session start

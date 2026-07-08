@@ -34,11 +34,11 @@ struct AppDependenciesBootstrapTests {
     func test_bootstrap_idempotent() async {
         let deps = AppDependencies()
         await deps.bootstrap()
-        let firstQueue = deps.services?.dbQueue as AnyObject?
+        let firstStore = deps.services?.dbStore as AnyObject?
         await deps.bootstrap()
-        let secondQueue = deps.services?.dbQueue as AnyObject?
+        let secondStore = deps.services?.dbStore as AnyObject?
 
-        #expect(firstQueue === secondQueue)
+        #expect(firstStore === secondStore)
     }
 
     @Test("bootstrap runs heavy work off MainActor")
@@ -51,13 +51,13 @@ struct AppDependenciesBootstrapTests {
         #expect(deps.services != nil)
     }
 
-    @Test("Wave A populates dbQueue AND ttsEngine via async let")
+    @Test("Wave A populates dbStore AND ttsEngine via async let")
     func test_waveA_dbAndAudio_bothBuilt() async {
         let deps = AppDependencies()
         await deps.bootstrap()
         let svcs = deps.services
         #expect(svcs != nil)
-        #expect((svcs?.dbQueue as AnyObject?) != nil)
+        #expect((svcs?.dbStore as AnyObject?) != nil)
         #expect((svcs?.ttsEngine as AnyObject?) != nil)
         #expect((svcs?.audioCoordinator as AnyObject?) != nil)
     }

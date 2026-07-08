@@ -59,19 +59,19 @@ enum ServiceGraphFactory {
         ).first!
         let dbURL = documentsURL.appendingPathComponent("rishi.sqlite")
 
-        async let dbWriterTask: any DatabaseWriter = Self.openDatabaseWriter(
+        async let dbStoreTask: RishiDBStore = Self.openPersistenceStore(
             at: dbURL
         )
         async let audioStackTask: AudioStack = AudioStackFactory.make(
             workerClient: workerClient
         )
 
-        let dbQueue = await dbWriterTask
+        let dbStore = await dbStoreTask
 
-        let bookStore = GRDBBookStore(dbQueue: dbQueue)
-        let positionStore = GRDBPositionStore(dbQueue: dbQueue)
-        let highlightStore = GRDBHighlightStore(dbQueue: dbQueue)
-        let bookmarkStore = GRDBBookmarkStore(dbQueue: dbQueue)
+        let bookStore = SwiftDataBookStore(dbStore: dbStore)
+        let positionStore = SwiftDataPositionStore(dbStore: dbStore)
+        let highlightStore = SwiftDataHighlightStore(dbStore: dbStore)
+        let bookmarkStore = SwiftDataBookmarkStore(dbStore: dbStore)
 
         let readerSettingsStore = UserDefaultsReaderSettingsStore()
 
@@ -123,7 +123,12 @@ enum ServiceGraphFactory {
             bookIndexingHook: indexingHook
         )
 
-        let syncMetadataStore = GRDBSyncMetadataStore(dbQueue: dbQueue)
+        let syncMetadataStore: SwiftDataSyncMetadataStore
+        do {
+            syncMetadataStore = try SyncMetadataStoreBootstrap.makeStore()
+        } catch {
+            fatalError("Failed to initialize sync metadata store: \(error)")
+        }
         let syncQueue = SyncQueue(metadataStore: syncMetadataStore)
         let syncStatus = SyncStatus()
 
@@ -152,8 +157,8 @@ enum ServiceGraphFactory {
             metadataStore: syncMetadataStore
         )
 
-        let conversationStore = GRDBConversationStore(dbQueue: dbQueue)
-        let messageStore = GRDBMessageStore(dbQueue: dbQueue)
+        let conversationStore = SwiftDataConversationStore(dbStore: dbStore)
+        let messageStore = SwiftDataMessageStore(dbStore: dbStore)
 
         let conversationUploader = ConversationUploader(
             workerClient: workerClient,
@@ -333,7 +338,7 @@ enum ServiceGraphFactory {
             workerClient: workerClient,
             siwaPresenter: siwaPresenter,
        
-            dbQueue: dbQueue,
+            dbStore: dbStore,
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
@@ -385,13 +390,13 @@ enum ServiceGraphFactory {
 
     
 
-    nonisolated static func openDatabaseWriter(
+    nonisolated static func openPersistenceStore(
         at dbURL: URL
-    ) async -> any DatabaseWriter {
+    ) async -> RishiDBStore {
         let dbState = signposter.beginInterval("db.open")
         defer { signposter.endInterval("db.open", dbState) }
         do {
-            return try RishiDB.makeDatabasePool(at: dbURL)
+            return try RishiDB.makeStore(at: dbURL)
         } catch {
             fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
         }

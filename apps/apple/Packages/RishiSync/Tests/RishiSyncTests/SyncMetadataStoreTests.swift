@@ -1,20 +1,13 @@
 import Testing
 import Foundation
-import GRDB
 @testable import RishiSync
 import RishiCore
-import RishiDB
 
-@Suite("SyncMetadataStore — GRDB round-trips", .serialized)
+@Suite("SyncMetadataStore — SwiftData round-trips", .serialized)
 struct SyncMetadataStoreTests {
 
-    private func makeStore() throws -> (GRDBSyncMetadataStore, DatabaseQueue) {
-        // Use the real makeDatabaseQueue(at:) so the v1 migration installs sync_metadata.
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let dbURL = dir.appendingPathComponent("rishi.sqlite")
-        let queue = try RishiDB.makeDatabaseQueue(at: dbURL)
-        return (GRDBSyncMetadataStore(dbQueue: queue), queue)
+    private func makeStore() throws -> SwiftDataSyncMetadataStore {
+        try SyncMetadataStoreBootstrap.makeStore(inMemory: true)
     }
 
     @Test("SyncEntityKind raw values are pinned to sync-v2 wire format")
@@ -26,7 +19,7 @@ struct SyncMetadataStoreTests {
 
     @Test("Empty DB returns 0 pending + nil cursors")
     func emptyDBBaseline() async throws {
-        let (store, _) = try makeStore()
+        let store = try makeStore()
         let pendingCount = try await store.pendingCount()
         #expect(pendingCount == 0)
         let allDirty = try await store.allDirty()
@@ -39,7 +32,7 @@ struct SyncMetadataStoreTests {
 
     @Test("markDirty inserts then sets dirty=1 idempotently")
     func markDirtyIsIdempotent() async throws {
-        let (store, _) = try makeStore()
+        let store = try makeStore()
         let id = UUID()
         try await store.markDirty(entityId: id, kind: .position)
         try await store.markDirty(entityId: id, kind: .position)
@@ -51,7 +44,7 @@ struct SyncMetadataStoreTests {
 
     @Test("markClean clears dirty + writes cursor + remote etag")
     func markCleanClearsAndWritesCursor() async throws {
-        let (store, _) = try makeStore()
+        let store = try makeStore()
         let id = UUID()
         let ts = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.markDirty(entityId: id, kind: .highlight)
@@ -69,7 +62,7 @@ struct SyncMetadataStoreTests {
 
     @Test("pending(forKind:limit:) filters by kind and caps")
     func pendingFiltersAndCaps() async throws {
-        let (store, _) = try makeStore()
+        let store = try makeStore()
         for _ in 0..<5 { try await store.markDirty(entityId: UUID(), kind: .position) }
         for _ in 0..<3 { try await store.markDirty(entityId: UUID(), kind: .highlight) }
 
@@ -84,7 +77,7 @@ struct SyncMetadataStoreTests {
 
     @Test("forget removes the row")
     func forgetRemovesRow() async throws {
-        let (store, _) = try makeStore()
+        let store = try makeStore()
         let id = UUID()
         try await store.markDirty(entityId: id, kind: .book)
         let beforeCount = try await store.pendingCount()

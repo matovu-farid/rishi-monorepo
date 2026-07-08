@@ -49,8 +49,10 @@
 
 // MARK: - Storage
 //
-// GRDBSyncMetadataStore       — `Storage/GRDBSyncMetadataStore.swift`. SyncMetadataStore over
-//                                GRDB. Persists per-kind cursors and dirty bits.
+// SwiftDataSyncMetadataStore  — `Storage/SwiftDataSyncMetadataStore.swift`. SyncMetadataStore
+//                                over SwiftData. Persists per-kind cursors and dirty bits.
+// SyncMetadataStoreBootstrap  — `Storage/SwiftDataSyncMetadataStore.swift`. Helper for creating
+//                                an in-memory SwiftData container/store in tests and previews.
 
 // MARK: - Background / Wake-up
 //

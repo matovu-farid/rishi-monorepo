@@ -4,12 +4,11 @@ import RishiDB
 import RishiLibrary
 import RishiReader
 import RishiSearch
-import GRDB
 
 
 
 extension AppDependencies {
-    var dbQueue: any DatabaseWriter { services!.dbQueue }
+    var dbStore: RishiDBStore { services!.dbStore }
     var bookStore: any BookStore { services!.bookStore }
     var positionStore: any PositionStore { services!.positionStore }
     var highlightStore: any HighlightStore { services!.highlightStore }

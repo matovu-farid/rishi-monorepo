@@ -6,7 +6,7 @@ import Foundation
 /// `<rootURL>/Books/<bookId>/`:
 ///
 ///   - `vectors.hnsw`     — USearch native binary index (memory-mapped at search time)
-///   - `chunks.db`        — GRDB SQLite holding `(chunk_id, page, text)` rows
+///   - `chunks.db`        — SwiftData store holding `(chunk_id, page, text)` rows
 ///   - `index.status.json` — cold-start status sidecar consumed by `BookSearch.status`
 ///
 /// This struct is a pure value/utility — it does not touch the filesystem

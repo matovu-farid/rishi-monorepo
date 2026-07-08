@@ -51,7 +51,7 @@ public final class CoreMLMiniLMEmbedder: BookEmbedder, @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
 
     public init() throws {
-        guard let vocabURL = Bundle.module.url(forResource: "vocab", withExtension: "txt") else {
+        guard let vocabURL = MiniLMTokenizer.defaultVocabURL() else {
             throw EmbedderError.vocabMissing
         }
         // SwiftPM compiles `.mlmodel` resources to `.mlmodelc` at build time —

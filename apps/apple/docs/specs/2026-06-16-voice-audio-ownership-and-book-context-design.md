@@ -57,7 +57,7 @@ Goals:
 Non-goals (explicitly out of scope):
 - "Index exists but no good match for this specific query" handling — user flagged as very
   hard; keep the responder's top-k best-effort and revisit later.
-- Replacing engines (Readium/PDFKit/GRDB/AVFoundation/USearch) — call patterns only.
+- Replacing engines (Readium/PDFKit/database layer/AVFoundation/USearch) — call patterns only.
 
 ## 3. Resolved decisions
 

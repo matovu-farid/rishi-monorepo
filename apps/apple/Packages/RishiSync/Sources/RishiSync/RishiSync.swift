@@ -11,11 +11,11 @@ import Foundation
 ///   - Background: BackgroundTaskCoordinator (BGTaskScheduler) + SilentPushHandler (APNs)
 ///   - UI: SyncStatusView (last-sync time, pending count, manual "Sync now")
 ///
-/// Depends DOWN on RishiCore (models + protocols), RishiDB (GRDB stores +
-/// sync_metadata table from the v1 migration), RishiAPI (WorkerClient +
-/// SyncAPI endpoints), RishiAuth (Session for user id), RishiUIKit (design
-/// tokens for the status view), RishiLogging (os.Logger), and the sibling
-/// Feature package RishiLibrary (BookFileStorage for resolving file URLs).
+/// Depends DOWN on RishiCore (models + protocols), SwiftData-backed sync
+/// metadata storage inside this package, RishiAPI (WorkerClient + SyncAPI
+/// endpoints), RishiAuth (Session for user id), RishiUIKit (design tokens for
+/// the status view), RishiLogging (os.Logger), and the sibling Feature package
+/// RishiLibrary (BookFileStorage for resolving file URLs).
 /// Has no dependency on RishiReader — the reader writes Positions; this
 /// package reads them.
 enum RishiSync {

@@ -17,7 +17,7 @@ import Testing
 @Suite("MiniLMTokenizer")
 struct MiniLMTokenizerTests {
     private func makeTokenizer(maxLength: Int = 64) throws -> MiniLMTokenizer {
-        guard let url = Bundle.module.url(forResource: "vocab", withExtension: "txt") else {
+        guard let url = MiniLMTokenizer.defaultVocabURL() else {
             Issue.record("vocab.txt not found in Bundle.module — Resources wiring broken")
             throw MiniLMTokenizer.LoadError.vocabUnreadable
         }

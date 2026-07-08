@@ -29,12 +29,12 @@ for now.
 | `HighlightUploader` | `RishiSync/Outbound/HighlightUploader.swift` | Same. |
 | `BookUploader` | `RishiSync/Outbound/BookUploader.swift` | All let; URLSession + BookFileStorage (actor) + Sendable protocols. |
 | `ConversationUploader` | `RishiSync/Outbound/ConversationUploader.swift` | Same uploader pattern. |
-| `GRDBSyncMetadataStore` | `RishiSync/Storage/GRDBSyncMetadataStore.swift` | Only `let dbQueue: any DatabaseWriter`; DatabaseWriter inherits Sendable. |
-| `GRDBBookStore` | `RishiDB/Stores/GRDBBookStore.swift` | Only `let dbQueue: any DatabaseWriter`. |
-| `GRDBMessageStore` | `RishiDB/Stores/GRDBMessageStore.swift` | Same. |
-| `GRDBHighlightStore` | `RishiDB/Stores/GRDBHighlightStore.swift` | Same. |
-| `GRDBPositionStore` | `RishiDB/Stores/GRDBPositionStore.swift` | Same. |
-| `GRDBConversationStore` | `RishiDB/Stores/GRDBConversationStore.swift` | Same. |
+| `SyncMetadataStore` | `RishiSync/Storage/SyncMetadataStore.swift` | Only `let dbQueue`; the database layer serializes access. |
+| `BookStore` | `RishiDB/Stores/BookStore.swift` | Only `let dbQueue`. |
+| `MessageStore` | `RishiDB/Stores/MessageStore.swift` | Same. |
+| `HighlightStore` | `RishiDB/Stores/HighlightStore.swift` | Same. |
+| `PositionStore` | `RishiDB/Stores/PositionStore.swift` | Same. |
+| `ConversationStore` | `RishiDB/Stores/ConversationStore.swift` | Same. |
 | `SystemAudioApplicationProbe` | `RishiVoice/Permissions/SystemMicPermissionGate.swift` | Stateless struct over OS singletons; no stored props. |
 | `InMemoryKeychainBackend` | `RishiAuth/Keychain/InMemoryKeychainBackend.swift` | Only stored prop is `OSAllocatedUnfairLock<[Key: Data]>`, which is Sendable. |
 | `EPUBPublicationLoader` | `RishiReader/EPUB/EPUBPublicationLoader.swift` | Only stored prop is `EPUBUnpackedCache?` (actor). Non-Sendable Readium types are method-local. |
@@ -83,10 +83,10 @@ a Sendable hygiene change, and is out of scope for this audit.
 ## Patterns seen
 
 - The biggest single bucket of promotions was RishiSync uploaders / fetchers
-  and the GRDB-backed stores in RishiDB / RishiSync. They were copy-pasted
-  out of an earlier era where the project was still on Swift 5 + GRDB pre-6
-  and `DatabaseWriter` didn't yet inherit `Sendable`. The compiler can now
-  prove these directly.
+  and the database-backed stores in RishiDB / RishiSync. They were copy-pasted
+  out of an earlier era where the project was still on Swift 5 and the
+  persistence layer had not yet been audited for strict-concurrency
+  friendliness. The compiler can now prove these directly.
 - `UserDefaults` is the single biggest reason a class stays `@unchecked`.
   Foundation still doesn't mark it Sendable despite the documented thread
   safety of its scalar accessors. Six classes (in onboarding / TTS settings /

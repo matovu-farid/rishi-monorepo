@@ -9,7 +9,6 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../RishiCore"),
-        .package(path: "../RishiDB"),
         .package(path: "../RishiAPI"),
         .package(path: "../RishiAuth"),
         .package(path: "../RishiUIKit"),
@@ -22,7 +21,6 @@ let package = Package(
             name: "RishiSync",
             dependencies: [
                 "RishiCore",
-                "RishiDB",
                 "RishiAPI",
                 "RishiAuth",
                 "RishiUIKit",
@@ -35,7 +33,6 @@ let package = Package(
             dependencies: [
                 "RishiSync",
                 "RishiCore",
-                "RishiDB",
                 "RishiAPI",
                 "RishiLibrary",
                 .product(name: "RishiTesting", package: "RishiTesting"),

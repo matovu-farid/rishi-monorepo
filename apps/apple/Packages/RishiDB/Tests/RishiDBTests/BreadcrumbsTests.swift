@@ -1,13 +1,10 @@
 import Foundation
 import Testing
-import GRDB
 import RishiCore
 import RishiLogging
 @testable import RishiDB
 
-/// Proves that GRDB store calls emit `Log.event` breadcrumbs in the shape
-/// promised by plan 02-06. The `.serialized` trait keeps these tests off the
-/// shared `Log._testCapture` hook concurrently with anything else.
+/// Proves that store calls emit `Log.event` breadcrumbs in the expected shape.
 @Suite("RishiDB breadcrumbs", .serialized)
 struct BreadcrumbsTests {
 
@@ -38,8 +35,8 @@ struct BreadcrumbsTests {
             sink.append(name, level, data)
         }
 
-        let store = GRDBBookStore(
-            dbQueue: try RishiDB.makeDatabaseQueue(at: URL(fileURLWithPath: ":memory:"))
+        let store = SwiftDataBookStore(
+            dbStore: try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
         )
         let book = Book(
             userId: UUID(),
@@ -73,8 +70,8 @@ struct BreadcrumbsTests {
             sink.append(name, level, data)
         }
 
-        let store = GRDBBookStore(
-            dbQueue: try RishiDB.makeDatabaseQueue(at: URL(fileURLWithPath: ":memory:"))
+        let store = SwiftDataBookStore(
+            dbStore: try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
         )
         _ = try await store.books(for: UUID())
 
@@ -86,16 +83,21 @@ struct BreadcrumbsTests {
         #expect(readCrumb?.data?["table"] == "books")
     }
 
-    @Test func badPathFailsToOpenQueue() async {
-        // Companion smoke: error paths bubble out as throws. We can't directly
-        // intercept Log.error inside swift test, but we can confirm the bad path
-        // does fail so the GRDB store error catches stay reachable in real use.
+    @Test func weirdPathStillBootstrapsStore() async throws {
+        // SwiftData does not fail eagerly on this URL, so the useful check here
+        // is that we can still bootstrap and perform a round-trip write.
         let badURL = URL(fileURLWithPath: "/dev/null/nope/cannot-open.sqlite")
-        do {
-            _ = try RishiDB.makeDatabaseQueue(at: badURL)
-            Issue.record("expected makeDatabaseQueue to throw on bad path")
-        } catch {
-            // expected
-        }
+        let userId = UUID()
+        let store = try RishiDB.makeStore(at: badURL)
+        let bookStore = SwiftDataBookStore(dbStore: store)
+        let book = Book(
+            userId: userId,
+            title: "Bad Path",
+            formatType: .epub,
+            fileURL: "books/bad.epub"
+        )
+        try await bookStore.upsert(book)
+        let fetched = try await bookStore.books(for: userId)
+        #expect(fetched.count == 1)
     }
 }

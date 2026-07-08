@@ -1,11 +1,10 @@
 import Foundation
 import Testing
-import GRDB
 @testable import RishiSearch
 
 /// Tests for the storage layer landed in Plan 25-05 Task 1:
 /// - `BookIndexLocator` (path resolution)
-/// - `ChunkStore` (GRDB-backed chunk text table)
+/// - `ChunkStore` (SwiftData-backed chunk text table)
 /// - `IndexStatusStore` (cold-start status sidecar)
 @Suite("ChunkStore + Storage layer")
 struct ChunkStoreSuite {
@@ -129,22 +128,21 @@ struct ChunkStoreSuite {
     }
 
     @Test
-    func chunkStorePageIndexExists() async throws {
+    func chunkStoreReopenPreservesRows() async throws {
         let root = Self.makeTempRoot()
         let locator = BookIndexLocator(rootURL: root)
         let bookId = UUID()
         try locator.ensureBookDir(bookId)
 
-        // Open the store (triggers migrations), then re-open the raw GRDB
-        // pool to inspect index_list. ChunkStore doesn't expose its pool,
-        // which is the point — we verify the table state via a second
-        // independent connection.
-        _ = try ChunkStore(dbURL: locator.chunksDBURL(bookId))
-        let pool = try DatabasePool(path: locator.chunksDBURL(bookId).path)
-        let indexNames = try await pool.read { db -> [String] in
-            try Row.fetchAll(db, sql: "PRAGMA index_list('chunks')").compactMap { $0["name"] as String? }
+        do {
+            let store = try ChunkStore(dbURL: locator.chunksDBURL(bookId))
+            try await store.append(chunks: [(chunkId: 7, page: 11, text: "persisted")])
         }
-        #expect(indexNames.contains("idx_chunks_page"))
+
+        let reopened = try ChunkStore(dbURL: locator.chunksDBURL(bookId))
+        let result = try await reopened.lookup(chunkIds: [7])
+        #expect(result[7]?.page == 11)
+        #expect(result[7]?.text == "persisted")
     }
 
     // MARK: - IndexStatusStore

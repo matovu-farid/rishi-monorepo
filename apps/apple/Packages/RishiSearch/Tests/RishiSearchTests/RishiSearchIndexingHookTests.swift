@@ -143,9 +143,9 @@ struct RishiSearchIndexingHookTests {
         #expect(ready, "Status should reach .ready")
 
         // Once `.ready` is on disk the builder has finished writing — but the
-        // ChunkStore actor inside the detached Task may still hold the GRDB
-        // DatabasePool (and its WAL lock) for a brief tear-down moment.
-        // Poll the actual search path (which opens its own DatabasePool):
+        // ChunkStore actor inside the detached Task may still hold the
+        // SwiftData-backed store open for a brief tear-down moment.
+        // Poll the actual search path (which opens its own SwiftData store):
         // a successful open + non-empty result is the real readiness signal.
         let search = USearchBookSearch(rootURL: root, embedder: embedder, k: 3)
         var hits: [BookSearchHit] = []

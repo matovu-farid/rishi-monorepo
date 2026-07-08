@@ -6,7 +6,7 @@ import RishiLogging
 ///
 /// On-disk layout per book (set in `BookIndexLocator`):
 ///   `<rootURL>/Books/<bookId>/vectors.hnsw`   — USearch native binary (memory-mapped at search time)
-///   `<rootURL>/Books/<bookId>/chunks.db`      — GRDB SQLite: `(chunk_id, page, text)`
+///   `<rootURL>/Books/<bookId>/chunks.db`      — SwiftData store: `(chunk_id, page, text)`
 ///   `<rootURL>/Books/<bookId>/index.status.json` — sidecar consumed by `status(bookId:)`
 ///
 /// Search flow:
@@ -204,6 +204,10 @@ public actor USearchBookSearch: BookSearch {
             || lower.contains("sqlite error 5")
             || lower.contains("sqlite error 10")
             || lower.contains("begin immediate transaction")
+            || lower.contains("locked")
+            || lower.contains("busy")
+            || lower.contains("persistent store")
+            || lower.contains("cocoa")
     }
 
     private static func describe(_ status: BookSearchStatus) -> String {

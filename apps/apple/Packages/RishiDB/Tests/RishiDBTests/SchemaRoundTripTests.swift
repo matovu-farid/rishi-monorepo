@@ -1,6 +1,6 @@
 import Foundation
+import SwiftData
 import Testing
-import GRDB
 import RishiCore
 @testable import RishiDB
 
@@ -9,14 +9,14 @@ struct SchemaRoundTripTests {
 
     // MARK: - Helpers
 
-    private func makeQueue() throws -> DatabaseQueue {
-        try RishiDB.makeDatabaseQueue(at: URL(fileURLWithPath: ":memory:"))
+    private func makeContext() throws -> ModelContext {
+        ModelContext(try RishiDB.makeModelContainer(at: URL(fileURLWithPath: ":memory:")))
     }
 
     // MARK: - Books
 
     @Test func bookRoundTrips() async throws {
-        let queue = try makeQueue()
+        let context = try makeContext()
         let book = Book(
             userId: UUID(),
             title: "Round Trip Manor",
@@ -28,38 +28,31 @@ struct SchemaRoundTripTests {
             coverPath: "covers/round-trip.jpg"
         )
 
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Books.table)
-                  (\(Tables.Books.id), \(Tables.Books.userId), \(Tables.Books.title), \(Tables.Books.author),
-                   \(Tables.Books.formatType), \(Tables.Books.addedAt), \(Tables.Books.openedAt),
-                   \(Tables.Books.fileURL), \(Tables.Books.coverPath),
-                   \(Tables.Books.positionId), \(Tables.Books.conversationId))
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, arguments: [
-                book.id.uuidString, book.userId.uuidString, book.title, book.author,
-                book.formatType.rawValue, book.addedAt.timeIntervalSince1970, book.openedAt?.timeIntervalSince1970,
-                book.fileURL, book.coverPath,
-                book.positionId?.uuidString, book.conversationId?.uuidString,
-            ])
-        }
+        context.insert(
+            BookEntity(
+                id: book.id,
+                userId: book.userId,
+                title: book.title,
+                author: book.author,
+                formatTypeRawValue: book.formatType.rawValue,
+                addedAt: book.addedAt,
+                openedAt: book.openedAt,
+                fileURL: book.fileURL,
+                coverPath: book.coverPath,
+                positionId: book.positionId,
+                conversationId: book.conversationId
+            )
+        )
+        try context.save()
 
-        let row: Row? = try await queue.read { db in
-            try Row.fetchOne(db, sql: "SELECT * FROM \(Tables.Books.table) WHERE \(Tables.Books.id) = ?",
-                             arguments: [book.id.uuidString])
-        }
-        let unwrapped = try #require(row)
+        let fetched: [BookEntity] = try context.fetch(FetchDescriptor<BookEntity>())
+        let unwrapped = try #require(fetched.first?.bookValue)
 
-        #expect(unwrapped[Tables.Books.id] as String? == book.id.uuidString)
-        #expect(unwrapped[Tables.Books.title] as String? == "Round Trip Manor")
-        #expect(unwrapped[Tables.Books.author] as String? == "A. Schema")
-        #expect(unwrapped[Tables.Books.formatType] as String? == "epub")
-        let storedAddedAt: Double? = unwrapped[Tables.Books.addedAt]
-        #expect(abs((storedAddedAt ?? 0) - book.addedAt.timeIntervalSince1970) < 0.001)
+        #expect(unwrapped == book)
     }
 
     @Test func bookOptionalsRoundTripAsNil() async throws {
-        let queue = try makeQueue()
+        let context = try makeContext()
         let book = Book(
             userId: UUID(),
             title: "Sparse",
@@ -69,159 +62,128 @@ struct SchemaRoundTripTests {
             coverPath: nil
         )
 
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Books.table)
-                  (\(Tables.Books.id), \(Tables.Books.userId), \(Tables.Books.title), \(Tables.Books.author),
-                   \(Tables.Books.formatType), \(Tables.Books.addedAt), \(Tables.Books.openedAt),
-                   \(Tables.Books.fileURL), \(Tables.Books.coverPath),
-                   \(Tables.Books.positionId), \(Tables.Books.conversationId))
-                VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, NULL, NULL, NULL)
-            """, arguments: [
-                book.id.uuidString, book.userId.uuidString, book.title,
-                book.formatType.rawValue, book.addedAt.timeIntervalSince1970,
-                book.fileURL,
-            ])
-        }
+        context.insert(
+            BookEntity(
+                id: book.id,
+                userId: book.userId,
+                title: book.title,
+                author: nil,
+                formatTypeRawValue: book.formatType.rawValue,
+                addedAt: book.addedAt,
+                openedAt: nil,
+                fileURL: book.fileURL,
+                coverPath: nil,
+                positionId: nil,
+                conversationId: nil
+            )
+        )
+        try context.save()
 
-        let row: Row? = try await queue.read { db in
-            try Row.fetchOne(db, sql: "SELECT * FROM \(Tables.Books.table)")
-        }
-        let r = try #require(row)
-        #expect(r[Tables.Books.author] as String? == nil)
-        #expect(r[Tables.Books.coverPath] as String? == nil)
-        #expect(r[Tables.Books.openedAt] as Double? == nil)
+        let books: [BookEntity] = try context.fetch(FetchDescriptor<BookEntity>())
+        let r = try #require(books.first)
+        #expect(r.author == nil)
+        #expect(r.coverPath == nil)
+        #expect(r.openedAt == nil)
     }
 
     // MARK: - Position
 
     @Test func positionRoundTrips() async throws {
-        let queue = try makeQueue()
+        let context = try makeContext()
         let bookId = UUID()
-        // need a parent books row because of FK
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Books.table)
-                  (\(Tables.Books.id), \(Tables.Books.userId), \(Tables.Books.title),
-                   \(Tables.Books.formatType), \(Tables.Books.addedAt), \(Tables.Books.fileURL))
-                VALUES (?, ?, 'host', 'epub', ?, 'books/host.epub')
-            """, arguments: [bookId.uuidString, UUID().uuidString, Date().timeIntervalSince1970])
-        }
 
         let pos = Position(bookId: bookId, locator: "epubcfi(/6/4!/4/2)", percentComplete: 0.42, updatedAt: Date())
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Positions.table)
-                  (\(Tables.Positions.id), \(Tables.Positions.bookId), \(Tables.Positions.locator),
-                   \(Tables.Positions.percentComplete), \(Tables.Positions.updatedAt))
-                VALUES (?, ?, ?, ?, ?)
-            """, arguments: [pos.id.uuidString, pos.bookId.uuidString, pos.locator,
-                             pos.percentComplete, pos.updatedAt.timeIntervalSince1970])
-        }
+        context.insert(PositionEntity(
+            id: pos.id,
+            bookId: pos.bookId,
+            locator: pos.locator,
+            percentComplete: pos.percentComplete,
+            updatedAt: pos.updatedAt
+        ))
+        try context.save()
 
-        let row: Row? = try await queue.read { db in
-            try Row.fetchOne(db, sql: "SELECT * FROM \(Tables.Positions.table) WHERE \(Tables.Positions.id) = ?",
-                             arguments: [pos.id.uuidString])
-        }
-        let r = try #require(row)
-        #expect(r[Tables.Positions.locator] as String? == "epubcfi(/6/4!/4/2)")
-        #expect(abs((r[Tables.Positions.percentComplete] as Double? ?? -1) - 0.42) < 0.0001)
+        let positions: [PositionEntity] = try context.fetch(FetchDescriptor<PositionEntity>())
+        let fetched = try #require(positions.first)
+        #expect(fetched.positionValue == pos)
     }
 
     // MARK: - Highlight
 
     @Test func highlightRoundTrips() async throws {
-        let queue = try makeQueue()
+        let context = try makeContext()
         let bookId = UUID()
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Books.table)
-                  (\(Tables.Books.id), \(Tables.Books.userId), \(Tables.Books.title),
-                   \(Tables.Books.formatType), \(Tables.Books.addedAt), \(Tables.Books.fileURL))
-                VALUES (?, ?, 'host', 'pdf', ?, 'books/host.pdf')
-            """, arguments: [bookId.uuidString, UUID().uuidString, Date().timeIntervalSince1970])
-        }
 
         let h = Highlight(bookId: bookId, locatorStart: "{page:3,offset:120}", locatorEnd: "{page:3,offset:160}",
                           color: .blue, text: "highlighted span", note: "remember this")
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Highlights.table)
-                  (\(Tables.Highlights.id), \(Tables.Highlights.bookId), \(Tables.Highlights.locatorStart),
-                   \(Tables.Highlights.locatorEnd), \(Tables.Highlights.color), \(Tables.Highlights.text),
-                   \(Tables.Highlights.note), \(Tables.Highlights.createdAt))
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, arguments: [h.id.uuidString, h.bookId.uuidString, h.locatorStart, h.locatorEnd,
-                             h.color.rawValue, h.text, h.note, h.createdAt.timeIntervalSince1970])
-        }
+        context.insert(HighlightEntity(
+            id: h.id,
+            bookId: h.bookId,
+            locatorStart: h.locatorStart,
+            locatorEnd: h.locatorEnd,
+            colorRawValue: h.color.rawValue,
+            text: h.text,
+            note: h.note,
+            createdAt: h.createdAt
+        ))
+        try context.save()
 
-        let row: Row? = try await queue.read { db in
-            try Row.fetchOne(db, sql: "SELECT * FROM \(Tables.Highlights.table) WHERE \(Tables.Highlights.id) = ?",
-                             arguments: [h.id.uuidString])
-        }
-        let r = try #require(row)
-        #expect(r[Tables.Highlights.color] as String? == "blue")
-        #expect(r[Tables.Highlights.note] as String? == "remember this")
+        let highlights: [HighlightEntity] = try context.fetch(FetchDescriptor<HighlightEntity>())
+        let fetched = try #require(highlights.first)
+        #expect(fetched.highlightValue == h)
     }
 
     // MARK: - Conversation + Message
 
     @Test func conversationAndMessageRoundTrip() async throws {
-        let queue = try makeQueue()
+        let context = try makeContext()
         let conv = Conversation(userId: UUID(), bookId: nil, title: "Untitled chat")
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Conversations.table)
-                  (\(Tables.Conversations.id), \(Tables.Conversations.userId), \(Tables.Conversations.bookId),
-                   \(Tables.Conversations.title), \(Tables.Conversations.createdAt), \(Tables.Conversations.updatedAt))
-                VALUES (?, ?, NULL, ?, ?, ?)
-            """, arguments: [conv.id.uuidString, conv.userId.uuidString, conv.title,
-                             conv.createdAt.timeIntervalSince1970, conv.updatedAt.timeIntervalSince1970])
-        }
+        context.insert(ConversationEntity(
+            id: conv.id,
+            userId: conv.userId,
+            bookId: conv.bookId,
+            title: conv.title,
+            createdAt: conv.createdAt,
+            updatedAt: conv.updatedAt
+        ))
 
         let msg = Message(conversationId: conv.id, role: .assistant, content: "hello", toolCalls: "{\"tool\":\"x\"}")
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Messages.table)
-                  (\(Tables.Messages.id), \(Tables.Messages.conversationId), \(Tables.Messages.role),
-                   \(Tables.Messages.content), \(Tables.Messages.toolCalls), \(Tables.Messages.createdAt))
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, arguments: [msg.id.uuidString, msg.conversationId.uuidString, msg.role.rawValue,
-                             msg.content, msg.toolCalls, msg.createdAt.timeIntervalSince1970])
-        }
+        context.insert(MessageEntity(
+            id: msg.id,
+            conversationId: msg.conversationId,
+            roleRawValue: msg.role.rawValue,
+            content: msg.content,
+            toolCalls: msg.toolCalls,
+            createdAt: msg.createdAt
+        ))
+        try context.save()
 
-        let mRow: Row? = try await queue.read { db in
-            try Row.fetchOne(db, sql: "SELECT * FROM \(Tables.Messages.table) WHERE \(Tables.Messages.id) = ?",
-                             arguments: [msg.id.uuidString])
-        }
-        let m = try #require(mRow)
-        #expect(m[Tables.Messages.role] as String? == "assistant")
-        #expect(m[Tables.Messages.toolCalls] as String? == "{\"tool\":\"x\"}")
+        let conversations: [ConversationEntity] = try context.fetch(FetchDescriptor<ConversationEntity>())
+        let fetchedConversation = try #require(conversations.first)
+        #expect(fetchedConversation.conversationValue == conv)
+
+        let messages: [MessageEntity] = try context.fetch(FetchDescriptor<MessageEntity>())
+        let m = try #require(messages.first)
+        #expect(m.messageValue == msg)
     }
 
     // MARK: - User
 
     @Test func userRoundTrips() async throws {
-        let queue = try makeQueue()
-        let user = User(email: "test@example.com", displayName: "Test", avatarURL: URL(string: "https://x/y.jpg"),
-                        hasPro: true)
-        try await queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO \(Tables.Users.table)
-                  (\(Tables.Users.id), \(Tables.Users.email), \(Tables.Users.displayName),
-                   \(Tables.Users.avatarURL), \(Tables.Users.hasPro), \(Tables.Users.createdAt))
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, arguments: [user.id.uuidString, user.email, user.displayName,
-                             user.avatarURL?.absoluteString, user.hasPro ? 1 : 0,
-                             user.createdAt.timeIntervalSince1970])
-        }
+        let context = try makeContext()
+        let user = User(email: "test@example.com", name: "Test")
+        context.insert(UserEntity(
+            id: user.id,
+            email: user.email ?? "",
+            displayName: user.name,
+            avatarURL: nil,
+            hasPro: true,
+            createdAt: .now
+        ))
+        try context.save()
 
-        let row: Row? = try await queue.read { db in
-            try Row.fetchOne(db, sql: "SELECT * FROM \(Tables.Users.table) WHERE \(Tables.Users.id) = ?",
-                             arguments: [user.id.uuidString])
-        }
-        let r = try #require(row)
-        #expect(r[Tables.Users.email] as String? == "test@example.com")
-        #expect(r[Tables.Users.hasPro] as Int? == 1)
+        let users: [UserEntity] = try context.fetch(FetchDescriptor<UserEntity>())
+        let r = try #require(users.first)
+        #expect(r.email == "test@example.com")
+        #expect(r.hasPro == true)
     }
 }

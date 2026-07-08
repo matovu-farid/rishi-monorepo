@@ -27,7 +27,7 @@ Behavior is preserved. The existing test suite must stay green at every step.
 ## Non-Goals
 
 - No changes to package-internal architecture beyond call-site updates required by the moves above.
-- No replacement of underlying engines (Readium, PDFKit, GRDB, Better Auth, StoreKit, AVFoundation).
+- No replacement of underlying engines (Readium, PDFKit, database layer, Better Auth, StoreKit, AVFoundation).
 - No flip of default-isolation = MainActor.
 - The two-phase bootstrap (sync `init` + async `bootstrap`) is **retained** — it exists for first-frame launch performance, not as tangle.
 

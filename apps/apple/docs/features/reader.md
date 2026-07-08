@@ -40,7 +40,7 @@ and on EPUB tune typography.
 ## What it depends on
 
 - `RishiCore` — `Book`, `Position`, `Highlight`, `HighlightColor`.
-- `RishiDB` — GRDB stores for positions and highlights.
+- `RishiDB` — stores for positions and highlights.
 - `RishiLibrary` — `BookFileStorage` for resolving file URLs on disk.
 - `RishiUIKit` — colors, typography, highlight color swatches.
 - `Readium 3.9` (EPUB only) and `PDFKit` (PDF only). Engine swaps are

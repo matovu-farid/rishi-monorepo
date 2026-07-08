@@ -53,7 +53,7 @@ Button("Refresh") {
 
 ### Pattern B — I/O on stores: `await store.read { ... }` (store owns its own queue)
 
-GRDB stores ship as `final class @unchecked Sendable`. The lock is provided by `DatabaseQueue`, not by Swift's actor system (STATE.md Phase 2 decision). Any read or write goes through the store's async API; the store hops onto its own queue internally and returns the result.
+Database-backed stores ship as `final class @unchecked Sendable`. Serialization comes from the store's own queue, not Swift's actor system (STATE.md Phase 2 decision). Any read or write goes through the store's async API; the store hops onto its own queue internally and returns the result.
 
 ```swift
 // caller may be MainActor or nonisolated; the store hops itself
@@ -112,7 +112,7 @@ Swift book references: [Tasks and Task Groups → Unstructured Concurrency](http
 
 When two or more concurrency domains write to the same state, model it as a Swift `actor`. Phase 19 has not added any new actors; the existing `SyncEngine`, `PositionDebouncer`, `BookFileStorage`, `PDFThumbnailCache`, and `EntitlementService` are the prior art. New shared state should follow the same pattern unless the lock-not-actor exception below applies.
 
-**Lock-not-actor exception (kept deviation).** `GRDB` stores in `RishiDB` and `RishiSync` and the `OSAllocatedUnfairLock`-backed `KeychainBackend` implementations stay as `final class @unchecked Sendable` — see STATE.md Phase 2 and Phase 3 decisions. Wrapping them in an actor would double-hop every read/write and break the synchronous `read { db in ... }` closure ergonomics GRDB depends on.
+**Lock-not-actor exception (kept deviation).** Database-backed stores in `RishiDB` and `RishiSync` and the `OSAllocatedUnfairLock`-backed `KeychainBackend` implementations stay as `final class @unchecked Sendable` — see STATE.md Phase 2 and Phase 3 decisions. Wrapping them in an actor would double-hop every read/write and break the synchronous `read { db in ... }` closure ergonomics the store API depends on.
 
 Swift book reference: [Actors](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/#Actors).
 
@@ -164,7 +164,7 @@ Reviewers run these grep / `rg` queries on any diff that touches async code unde
   ```
   Polling MainActor at 50ms / 100ms / 250ms cadences is the pattern Phase 19 spent three plans removing (Plans 19-06, 19-08, 19-12). Re-introducing it is a regression.
 
-- [ ] **No new synchronous GRDB read inside `AppDependencies.init()` or a `@MainActor` SwiftUI body.**
+- [ ] **No new synchronous database read inside `AppDependencies.init()` or a `@MainActor` SwiftUI body.**
   ```bash
   rg "try .*queue\.read|try .*queue\.write" apps/apple/rishi/rishi --type swift
   ```
@@ -180,7 +180,7 @@ Reviewers run these grep / `rg` queries on any diff that touches async code unde
   ```bash
   rg "OSAllocatedUnfairLock|NSLock|DispatchSemaphore" apps/apple --type swift
   ```
-  Every instance must either match a kept-deviation entry below (GRDB stores, KeychainBackend, RishiSync, PDFThumbnailCache `nonisolated(unsafe) NSCache`, RishiAudio Fake helpers) or come with an actor rewrite proposal in the PR description.
+  Every instance must either match a kept-deviation entry below (database stores, KeychainBackend, RishiSync, PDFThumbnailCache `nonisolated(unsafe) NSCache`, RishiAudio Fake helpers) or come with an actor rewrite proposal in the PR description.
 
 - [ ] **Long `Task` bodies cooperatively check cancellation.**
   ```bash
@@ -232,7 +232,7 @@ The patterns below look non-idiomatic at first glance but are defensible. Do NOT
 - **`PDFThumbnailCache.memoryCache` as `nonisolated(unsafe) NSCache`** — `NSCache` is documented thread-safe (TN1170); the `nonisolated(unsafe)` opts out of Swift 6 race checks because the lock is in `NSCache` itself, not in the actor system. Wrapping it in an actor would double-hop every cache get / set. Location: `apps/apple/Packages/RishiReader/Sources/RishiReader/PDF/PDFThumbnailCache.swift:50`. Audit verdict: "starter areas reported clean" in 19-RESEARCH.md.
 - **`RishiAudio` Fake test helpers ship with `NSLock`** — `FakeAudioEngine`, `FakeAudioSessionConfigurator`, `FakeNowPlayingInfoSurface`, `FakeRemoteCommandSurface` use `NSLock` for call-count recording. Tests-only; not on the production path. Same rationale as the RishiSync `@unchecked Sendable` pattern documented in `SWIFTUI-NATIVE-CHOICES.md` Deviation 5.
 - **TTS index boxes (`PDFReadAloudIndexBox`, `EPUBReadAloudIndexBox`)** — defensive `OSAllocatedUnfairLock` over a dictionary that is in practice only mutated on MainActor. Closed by Phase 18 plan 18-05 (commit `ac1bc228d`). Cross-reference F-P1-06.
-- **GRDB stores as `final class @unchecked Sendable`** — STATE.md Phase 2 decision. `DatabaseQueue` already serialises access; an outer actor would double-hop every read/write.
+- **Database-backed stores as `final class @unchecked Sendable`** — STATE.md Phase 2 decision. The queue already serialises access; an outer actor would double-hop every read/write.
 - **`RishiSync` uploaders / fetchers / `EngineHolder` / `SyncStatus` as `@unchecked Sendable`** — STATE.md Phase 7 decision. URLSession callbacks are inherently nonisolated; forcing them onto MainActor would be wrong. Already documented in `SWIFTUI-NATIVE-CHOICES.md` Deviation 5; restated here so the concurrency story is in one place.
 - **`NowPlayingController` / `TTSPassageTracker` / `ReaderTTSBridge` 50ms / 100ms polls** — deferred to v1.1 backlog below. Phase 19 elected not to migrate these because the existing transition-coalesce logic keeps user-visible call counts low; the structural fix (`withObservationTracking` re-arm) is queued as a single follow-up plan.
 
@@ -281,7 +281,7 @@ Deferred to post-v1.0 (NOT shipping in Phase 19):
 - Plan 19-08 commit `310bed397` (OSSignposter wrapping of 4 remaining hot paths)
 - Plan 19-09 commit `61459faf3` (EPUB publication load + parse off-MainActor)
 - Plan 19-11 commit `97b655b8e` (scene-restore decode off-MainActor)
-- STATE.md — `apps/apple/.planning/STATE.md` (Phase 2 GRDB decision, Phase 3 Keychain decision, Phase 7 RishiSync decision)
+- STATE.md — `apps/apple/.planning/STATE.md` (Phase 2 database decision, Phase 3 Keychain decision, Phase 7 RishiSync decision)
 - Apple TN1170 — `NSCache` thread safety (cited in `PDFThumbnailCache` kept-deviation)
 
 ## Phase 20 addendum — canonical-simplicity revert

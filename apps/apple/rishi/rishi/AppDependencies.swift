@@ -100,7 +100,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let siwaPresenter: SystemSiwaPresenter
    
 
-    let dbQueue: any DatabaseWriter
+    let dbStore: RishiDBStore
     let bookStore: any BookStore
     let positionStore: any PositionStore
     let highlightStore: any HighlightStore
@@ -118,7 +118,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let nowPlayingController: NowPlayingController
     let ttsPrewarmer: TTSPrewarmer
 
-    let syncMetadataStore: GRDBSyncMetadataStore
+    let syncMetadataStore: any SyncMetadataStore
     let syncQueue: SyncQueue
     let syncStatus: SyncStatus
     let bookUploader: BookUploader

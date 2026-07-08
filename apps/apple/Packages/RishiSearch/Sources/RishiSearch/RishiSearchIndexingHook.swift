@@ -15,7 +15,7 @@ import RishiLogging
 ///
 /// Lifetime: the hook itself returns immediately after spawning a
 /// `Task.detached(priority: .background)` — the extraction + embedding + USearch
-/// + GRDB writes happen in that detached task. `IndexBuilder` writes
+/// + SwiftData writes happen in that detached task. `IndexBuilder` writes
 /// `index.status.json` (`.indexing` -> `.ready` or `.failed`) so the cold-start
 /// sentinel in `USearchBookSearch.search` covers the in-flight window.
 public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendable {

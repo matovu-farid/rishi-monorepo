@@ -114,31 +114,31 @@ This entry exists in the ADR ONLY to prevent reflexive migration. There is no na
 
 ## Deviation 5 — Legacy `@unchecked Sendable` patterns in `RishiSync` (F-P2-04)
 
-**Decision:** Keep the eleven `public final class @unchecked Sendable` declarations in `apps/apple/Packages/RishiSync/Sources/` (`GRDBSyncMetadataStore`, all uploaders, all fetchers, `ChangeApplier`, `EngineHolder`, `SyncStatus`). Do NOT rewrite to default-isolation `MainActor` or actor-wrap any of them in Phase 18.
+**Decision:** Keep the eleven `public final class @unchecked Sendable` declarations in `apps/apple/Packages/RishiSync/Sources/` (the sync metadata store, all uploaders, all fetchers, `ChangeApplier`, `EngineHolder`, `SyncStatus`). Do NOT rewrite to default-isolation `MainActor` or actor-wrap any of them in Phase 18.
 
-**Why (Constraint):** This is documented as an intentional pattern in `apps/apple/.planning/STATE.md` at the Phase 2 and Phase 7 decision entries (line ~141 of STATE.md: *"GRDB stores ship as `final class @unchecked Sendable` (not actors) — DatabaseQueue already serialises access; an outer actor would double-hop every read/write and break the synchronous `read { db in ... }` ergonomics"*). The pattern is correct for two distinct reasons that cannot both be satisfied by default-isolation MainActor:
+**Why (Constraint):** This is documented as an intentional pattern in `apps/apple/.planning/STATE.md` at the Phase 2 and Phase 7 decision entries (line ~141 of STATE.md: *"database-backed stores ship as `final class @unchecked Sendable` (not actors) — the queue already serialises access; an outer actor would double-hop every read/write and break the synchronous `read { db in ... }` ergonomics"*). The pattern is correct for two distinct reasons that cannot both be satisfied by default-isolation MainActor:
 
-1. **GRDB internals serialise via `DatabaseQueue`.** Wrapping a GRDB store in an actor would force every `read { db in ... }` closure through an extra actor hop, breaking the synchronous closure ergonomics that GRDB's API depends on. `@unchecked Sendable` is the right escape hatch: the lock is in the queue, not in Swift's actor system.
+1. **Store internals serialise via their queue.** Wrapping a store in an actor would force every `read { db in ... }` closure through an extra actor hop, breaking the synchronous closure ergonomics that the API depends on. `@unchecked Sendable` is the right escape hatch: the lock is in the queue, not in Swift's actor system.
 2. **URLSession callbacks are inherently nonisolated.** The uploaders / fetchers receive `URLSession` delegate / completion callbacks on URLSession's own queue. Marking them `@MainActor` would force every callback through a hop to main, which is wrong for background sync work.
 
 Phase 18's scope is the UI surface (presentation, navigation, gestures, toolbars). Rewriting the entire RishiSync package to default-isolation would expand the Phase 18 budget by an estimated 2+ weeks for zero user-visible behavior change, and would risk introducing subtle data-race regressions in code that has shipped through Phase 7 (sync engine) and Phase 16 (D1 conversation sync) without incident. The locks are correct; the pattern is documented; rewriting is "improve, don't fix."
 
-Compare to F-P1-06 (the TTS extension `@unchecked Sendable` boxes), which WAS migrated in plan 18-05 because access was main-actor-only — the boxes were unnecessary. The RishiSync classes are different: their `@unchecked Sendable` is load-bearing for the GRDB and URLSession integrations.
+Compare to F-P1-06 (the TTS extension `@unchecked Sendable` boxes), which WAS migrated in plan 18-05 because access was main-actor-only — the boxes were unnecessary. The RishiSync classes are different: their `@unchecked Sendable` is load-bearing for the storage and URLSession integrations.
 
 **Evidence:**
 
-- `apps/apple/Packages/RishiSync/Sources/RishiSync/Stores/GRDBSyncMetadataStore.swift` — `final class @unchecked Sendable`.
+- `apps/apple/Packages/RishiSync/Sources/RishiSync/Stores/SyncMetadataStore.swift` — `final class @unchecked Sendable`.
 - `apps/apple/Packages/RishiSync/Sources/RishiSync/Uploaders/*.swift` — all uploaders.
 - `apps/apple/Packages/RishiSync/Sources/RishiSync/Fetchers/*.swift` — all fetchers.
 - `apps/apple/Packages/RishiSync/Sources/RishiSync/Engine/ChangeApplier.swift`, `EngineHolder.swift`, `SyncStatus.swift`.
-- `apps/apple/.planning/STATE.md` line ~141 (Phase 2 GRDB decision).
+- `apps/apple/.planning/STATE.md` line ~141 (Phase 2 database decision).
 - `apps/apple/.planning/STATE.md` line ~152 (Phase 3 KeychainBackend `OSAllocatedUnfairLock` precedent — same lock-not-actor rationale).
 - Commit `4bffec8f8` — `AppChatRefreshAdapter` `@unchecked Sendable` REMOVAL, the contrasting case (main-actor-only access, plan 18-05 / F-P1-06).
 - 18-RESEARCH.md lines 218-226.
 
 **Trigger for revisit:** Re-evaluate when ALL of the following are true:
 1. A future Phase explicitly budgets a full Swift 6 strict-concurrency audit of `RishiSync` (estimated 2+ weeks; track as v1.1 follow-up).
-2. GRDB ships a Swift Concurrency-native API that removes the synchronous closure ergonomics dependency.
+2. The storage layer ships a Swift Concurrency-native API that removes the synchronous closure ergonomics dependency.
 3. URLSession async/await APIs cover 100% of the delegate/callback surface we use today (currently true for `data(for:)` but not for resumable upload tasks).
 
 Until then, keep the `@unchecked Sendable` pattern and the locks they imply.
@@ -174,7 +174,7 @@ For clarity, the following Phase 18 findings DID land as migrations (so future r
 ## Sources
 
 - `apps/apple/.planning/phases/18-native-swiftui-audit-and-migration-sweep-for-the-ios-app/18-RESEARCH.md` — audit findings F-P1-03, F-P1-07, F-P2-02, F-P2-03, F-P2-04.
-- `apps/apple/.planning/STATE.md` — Accumulated Decisions section (Phase 2 GRDB, Phase 3 Keychain, Phase 3 SIWA, Phase 18 reader-chrome).
+- `apps/apple/.planning/STATE.md` — Accumulated Decisions section (Phase 2 database, Phase 3 Keychain, Phase 3 SIWA, Phase 18 reader-chrome).
 - Commit `dbc1c7d6d` — engine-coexistence reader-chrome fix referenced by F-P1-03.
 - Commit `4bffec8f8` — `AppChatRefreshAdapter` `@unchecked Sendable` removal, the contrasting case for F-P2-04.
 - App Review Guideline 3.1.2 — subscription disclosure requirement (F-P2-03).

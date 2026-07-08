@@ -40,7 +40,7 @@ one device wakes the others up to pull.
 ## What it depends on
 
 - `RishiCore` — protocol contracts for every store the engine touches.
-- `RishiDB` — every GRDB store; the engine reads dirty rows and writes
+- `RishiDB` — every store; the engine reads dirty rows and writes
   applied remote changes here.
 - `RishiAPI` — `WorkerClient` for the upload/download/changes endpoints
   on the Cloudflare Worker.

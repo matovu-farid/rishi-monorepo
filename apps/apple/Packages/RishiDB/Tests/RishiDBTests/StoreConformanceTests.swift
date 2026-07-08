@@ -1,64 +1,44 @@
 import Foundation
 import Testing
-import GRDB
 import RishiCore
 import RishiTesting
 @testable import RishiDB
 
-/// Run every RishiTesting conformance helper against the GRDB-backed stores.
-/// These are the same helpers that exercise the InMemory* fakes in RishiTesting's
-/// own tests — passing both proves contract-equivalence and lets feature code
-/// swap implementations without rewriting tests.
+/// Run every RishiTesting conformance helper against the SwiftData-backed stores.
 @Suite("RishiDB store conformance")
 struct StoreConformanceTests {
 
-    /// Conformance tests deliberately exercise the protocol contract — they
-    /// insert highlights/positions/messages with synthetic parent ids that
-    /// have no `books`/`conversations` row, so the test queue runs with FK
-    /// enforcement disabled. Real callers always upsert the parent first;
-    /// FK behaviour is covered by `MigrationsTests.foreignKeysEnforced`.
-    ///
-    /// `defer_foreign_keys` only postpones checks until COMMIT — it doesn't
-    /// skip them — so plan 02-06's per-txn pragma is insufficient on its
-    /// own. We bypass `RishiDB.makeDatabaseQueue(at:)` here and configure a
-    /// queue without the FK preparer, then run the migrator manually.
-    private func makeQueue() throws -> DatabaseQueue {
-        var config = Configuration()
-        config.prepareDatabase { db in
-            try db.execute(sql: "PRAGMA foreign_keys = OFF")
-        }
-        let queue = try DatabaseQueue(configuration: config)
-        try Migrations.migrator.migrate(queue)
-        return queue
+    private func makeStore() throws -> RishiDBStore {
+        try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
     }
 
-    @Test func grdbBookStoreSatisfiesContract() async throws {
-        let store = GRDBBookStore(dbQueue: try makeQueue())
+    @Test func bookStoreSatisfiesContract() async throws {
+        let store = SwiftDataBookStore(dbStore: try makeStore())
         try await assertBookStoreConformance(store)
     }
 
-    @Test func grdbHighlightStoreSatisfiesContract() async throws {
-        let store = GRDBHighlightStore(dbQueue: try makeQueue())
+    @Test func highlightStoreSatisfiesContract() async throws {
+        let store = SwiftDataHighlightStore(dbStore: try makeStore())
         try await assertHighlightStoreConformance(store)
     }
 
-    @Test func grdbBookmarkStoreSatisfiesContract() async throws {
-        let store = GRDBBookmarkStore(dbQueue: try makeQueue())
+    @Test func bookmarkStoreSatisfiesContract() async throws {
+        let store = SwiftDataBookmarkStore(dbStore: try makeStore())
         try await assertBookmarkStoreConformance(store)
     }
 
-    @Test func grdbPositionStoreSatisfiesContract() async throws {
-        let store = GRDBPositionStore(dbQueue: try makeQueue())
+    @Test func positionStoreSatisfiesContract() async throws {
+        let store = SwiftDataPositionStore(dbStore: try makeStore())
         try await assertPositionStoreConformance(store)
     }
 
-    @Test func grdbConversationStoreSatisfiesContract() async throws {
-        let store = GRDBConversationStore(dbQueue: try makeQueue())
+    @Test func conversationStoreSatisfiesContract() async throws {
+        let store = SwiftDataConversationStore(dbStore: try makeStore())
         try await assertConversationStoreConformance(store)
     }
 
-    @Test func grdbMessageStoreSatisfiesContract() async throws {
-        let store = GRDBMessageStore(dbQueue: try makeQueue())
+    @Test func messageStoreSatisfiesContract() async throws {
+        let store = SwiftDataMessageStore(dbStore: try makeStore())
         try await assertMessageStoreConformance(store)
     }
 }

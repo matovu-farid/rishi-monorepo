@@ -1,11 +1,10 @@
 import Foundation
 import RishiSync
-import RishiDB
 
 
 
 extension AppDependencies {
-    var syncMetadataStore: GRDBSyncMetadataStore { services!.syncMetadataStore }
+    var syncMetadataStore: any SyncMetadataStore { services!.syncMetadataStore }
     var syncQueue: SyncQueue { services!.syncQueue }
     var syncStatus: SyncStatus { services!.syncStatus }
     var bookUploader: BookUploader { services!.bookUploader }

@@ -157,5 +157,5 @@ new contributor-facing docs, put them here.
 
 Read `apps/apple/CLAUDE.md` for the durable per-orchestration rules:
 allowed commit paths, the build-first review rule, and the engines we
-have committed to keeping (Readium, PDFKit, GRDB, Better Auth, StoreKit,
+have committed to keeping (Readium, PDFKit, Better Auth, StoreKit,
 AVFoundation).

@@ -63,7 +63,7 @@ public actor IndexBuilder {
     ///   Already paragraph-chunked by the caller (typically via
     ///   `RishiCore.ParagraphChunker.chunk(_:)`).
     ///
-    /// - Throws: any error from the embedder, USearch, or GRDB. On throw,
+    /// - Throws: any error from the embedder, USearch, or SwiftData store. On throw,
     ///   the status sidecar is updated to `.failed(reason: ...)` and the
     ///   progress callback fires before the error propagates.
     public func buildIndex(
@@ -78,8 +78,9 @@ public actor IndexBuilder {
             try statusStore.write(.indexing(chunksDone: 0, chunksTotal: total))
             await progress(bookId, .indexing(chunksDone: 0, chunksTotal: total))
 
-            // Wipe prior chunks.db + vectors.hnsw for idempotent rebuilds.
-            try? FileManager.default.removeItem(at: locator.chunksDBURL(bookId))
+            // Wipe prior chunks.db + SQLite sidecars + vectors.hnsw for
+            // idempotent rebuilds.
+            Self.removeChunkStoreArtifacts(at: locator.chunksDBURL(bookId))
             try? FileManager.default.removeItem(at: locator.vectorsURL(bookId))
 
             let chunks = try ChunkStore(dbURL: locator.chunksDBURL(bookId))
@@ -193,6 +194,15 @@ public actor IndexBuilder {
 }
 
 // MARK: - Helpers
+
+private extension IndexBuilder {
+    static func removeChunkStoreArtifacts(at url: URL) {
+        let fm = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            try? fm.removeItem(atPath: url.path + suffix)
+        }
+    }
+}
 
 private extension Array {
     /// Splits the array into batches of `size` consecutive elements.

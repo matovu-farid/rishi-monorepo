@@ -1,50 +1,70 @@
 import Foundation
 import Testing
-import GRDB
+import SwiftData
+import RishiCore
 @testable import RishiDB
 
-@Suite("v3_bookmarks migration")
+@Suite("RishiDB cascade semantics")
 struct BookmarkMigrationTests {
 
-    @Test func bookmarkTableExistsAfterMigration() throws {
-        let queue = try RishiDB.makeDatabaseQueue(at: URL(fileURLWithPath: ":memory:"))
+    @Test func deletingBookRemovesDependentRowsButNotConversation() async throws {
+        let store = try makeStore()
+        let bookId = UUID()
+        let userId = UUID()
+        let conversationId = UUID()
 
-        let tableName = try queue.read { db -> String? in
-            try String.fetchOne(db, sql: """
-                SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?
-            """, arguments: [Tables.Bookmarks.table])
-        }
-        #expect(tableName == Tables.Bookmarks.table)
+        let book = Book(id: bookId, userId: userId, title: "Cascade", formatType: .epub, fileURL: "books/cascade.epub")
+        let position = Position(bookId: bookId, locator: "cfi-1")
+        let highlight = Highlight(bookId: bookId, locatorStart: "a", locatorEnd: "b", color: .yellow, text: "note")
+        let bookmark = Bookmark(bookId: bookId, locator: "loc-1", label: "label")
+        let conversation = Conversation(id: conversationId, userId: userId, bookId: bookId, title: "Thread")
+        let message = Message(conversationId: conversationId, role: .user, content: "hello")
+
+        let books = SwiftDataBookStore(dbStore: store)
+        let positions = SwiftDataPositionStore(dbStore: store)
+        let highlights = SwiftDataHighlightStore(dbStore: store)
+        let bookmarks = SwiftDataBookmarkStore(dbStore: store)
+        let conversations = SwiftDataConversationStore(dbStore: store)
+        let messages = SwiftDataMessageStore(dbStore: store)
+
+        try await books.upsert(book)
+        try await positions.upsert(position)
+        try await highlights.upsert(highlight)
+        try await bookmarks.upsert(bookmark)
+        try await conversations.upsert(conversation)
+        try await messages.upsert(message)
+
+        try await books.delete(bookId)
+
+        #expect((try await positions.position(for: bookId)) == nil)
+        #expect((try await highlights.highlights(for: bookId)) == [])
+        #expect((try await bookmarks.bookmarks(for: bookId)) == [])
+        #expect((try await conversations.conversation(conversationId)) != nil)
+        #expect((try await messages.message(message.id)) != nil)
     }
 
-    @Test func bookmarkBookIdIndexExistsAfterMigration() throws {
-        let queue = try RishiDB.makeDatabaseQueue(at: URL(fileURLWithPath: ":memory:"))
+    @Test func deletingConversationRemovesMessages() async throws {
+        let store = try makeStore()
+        let conversationId = UUID()
+        let userId = UUID()
+        let conversation = Conversation(id: conversationId, userId: userId, title: "Thread")
+        let messageA = Message(conversationId: conversationId, role: .user, content: "hello")
+        let messageB = Message(conversationId: conversationId, role: .assistant, content: "world")
 
-        let indexName = try queue.read { db -> String? in
-            try String.fetchOne(db, sql: """
-                SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_bookmark_book_id'
-            """)
-        }
-        #expect(indexName == "idx_bookmark_book_id")
+        let conversations = SwiftDataConversationStore(dbStore: store)
+        let messages = SwiftDataMessageStore(dbStore: store)
+
+        try await conversations.upsert(conversation)
+        try await messages.upsert(messageA)
+        try await messages.upsert(messageB)
+
+        try await conversations.delete(conversationId)
+
+        #expect((try await conversations.conversation(conversationId)) == nil)
+        #expect((try await messages.messages(for: conversationId)).isEmpty)
     }
 
-    @Test func bookmarkForeignKeyCascadeEnforced() async throws {
-        let queue = try RishiDB.makeDatabaseQueue(at: URL(fileURLWithPath: ":memory:"))
-
-        // Inserting a bookmark with a non-existent book_id MUST fail because
-        // foreign_keys = ON and the bookmark table has a FK on book_id.
-        var didThrow = false
-        do {
-            try await queue.write { db in
-                try db.execute(sql: """
-                    INSERT INTO \(Tables.Bookmarks.table)
-                      (id, book_id, locator, created_at)
-                    VALUES (?, ?, ?, ?)
-                """, arguments: [UUID().uuidString, UUID().uuidString, "{}", Date().timeIntervalSince1970])
-            }
-        } catch {
-            didThrow = true
-        }
-        #expect(didThrow == true)
+    private func makeStore() throws -> RishiDBStore {
+        try RishiDB.makeStore(at: URL(fileURLWithPath: ":memory:"))
     }
 }
