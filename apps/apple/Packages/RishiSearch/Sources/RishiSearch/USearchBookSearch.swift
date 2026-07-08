@@ -77,7 +77,7 @@ public actor USearchBookSearch: BookSearch {
         }
 
         let index = try openOrReuseIndex(bookId: bookId, vectorsURL: vectorsURL)
-        let chunks = try openOrReuseChunkStore(bookId: bookId)
+        let chunks = try await openOrReuseChunkStore(bookId: bookId)
 
         let queryVec: [Float32]
         do {
@@ -154,11 +154,56 @@ public actor USearchBookSearch: BookSearch {
         return idx
     }
 
-    private func openOrReuseChunkStore(bookId: UUID) throws -> ChunkStore {
+    private func openOrReuseChunkStore(bookId: UUID) async throws -> ChunkStore {
         if let cached = openChunks[bookId] { return cached }
-        let store = try ChunkStore(dbURL: locator.chunksDBURL(bookId))
+        let store = try await openChunkStoreWithRetry(bookId: bookId)
         openChunks[bookId] = store
         return store
+    }
+
+    private func openChunkStoreWithRetry(bookId: UUID) async throws -> ChunkStore {
+        let dbURL = locator.chunksDBURL(bookId)
+        let maxAttempts = 5
+        var backoffNs: UInt64 = 50_000_000
+
+        for attempt in 1...maxAttempts {
+            do {
+                return try ChunkStore(dbURL: dbURL)
+            } catch let error as ChunkStore.StorageError {
+                guard case let .dbOpenFailed(message) = error,
+                      Self.isTransientSQLiteOpenFailure(message) else {
+                    throw error
+                }
+
+                Log.event("rag.search.chunk_store_retry", level: .warning, data: [
+                    "bookId": bookId.uuidString,
+                    "attempt": String(attempt),
+                    "maxAttempts": String(maxAttempts),
+                    "error": message,
+                ])
+
+                if attempt < maxAttempts {
+                    try await Task.sleep(nanoseconds: backoffNs)
+                    backoffNs = min(backoffNs * 2, 400_000_000)
+                    continue
+                }
+
+                throw error
+            } catch {
+                throw error
+            }
+        }
+
+        throw BookContextSearchError.indexNotReady
+    }
+
+    private static func isTransientSQLiteOpenFailure(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("database is locked")
+            || lower.contains("database is busy")
+            || lower.contains("sqlite error 5")
+            || lower.contains("sqlite error 10")
+            || lower.contains("begin immediate transaction")
     }
 
     private static func describe(_ status: BookSearchStatus) -> String {

@@ -61,6 +61,8 @@ public actor RealtimeVoiceSession {
     /// finishes underneath it.
     private var responderTask: Task<Void, Never>?
     private var isEnding: Bool = false
+    /// Current book snapshot used to seed the realtime session and reconnects.
+    private var currentBookContext: BookContextSnapshot?
 
     public init(
         micGate: any MicPermissionGate,
@@ -127,6 +129,13 @@ public actor RealtimeVoiceSession {
             return
         }
 
+        // Claim shared audio ownership up front so the coordinator knows this
+        // voice session is the active owner before we fetch the key or connect.
+        await coordinator.registerPreemption(for: .voice) { [weak self] in
+            await self?.end()
+        }
+        await coordinator.requestActiveMode(.voice)
+
         // Single-audio-owner invariant: let the coordinator end this session if
         // another owner (read-aloud TTS) takes the session. end() is our full
         // teardown and releases .voice itself. [weak self] so the coordinator's
@@ -145,6 +154,7 @@ public actor RealtimeVoiceSession {
                 activeParagraphText: activeParagraphText
             )
         }
+        currentBookContext = snapshot
 
         // Plan 25-10 / RESEARCH OQ-4 — run the embedder prewarm in PARALLEL
         // with the key fetch so the first `bookContext` tool call doesn't
@@ -169,7 +179,7 @@ public actor RealtimeVoiceSession {
 
         await update(.connecting)
         do {
-            try await client.connect(ephemeralKey: key.secret)
+            try await client.connect(ephemeralKey: key.secret, bookContext: snapshot)
         } catch {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
@@ -213,6 +223,7 @@ public actor RealtimeVoiceSession {
         await coordinator.releaseActiveMode(.voice)
         await update(.ended)
         Log.event("voice.session.ended", level: .info)
+        currentBookContext = nil
     }
 
     // MARK: - Reconnect
@@ -246,6 +257,7 @@ public actor RealtimeVoiceSession {
         let controller = ReconnectController(
             client: client,
             keyFetcher: keyFetcher,
+            bookContext: currentBookContext,
             backoff: backoff,
             maxReconnects: maxReconnects,
             disconnectConfirmations: disconnectConfirmations,

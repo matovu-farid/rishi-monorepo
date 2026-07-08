@@ -3,7 +3,6 @@ import Foundation
 @testable import RishiVoice
 @testable import RishiAudio
 import RishiCore
-import RishiCore
 
 /// Tests for `RealtimeVoiceSession` — the lifecycle FSM actor that owns
 /// voice chat sessions end-to-end. Every transition + the Spike-B
@@ -185,7 +184,7 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.configurator.configureCalls.count == 1)
         let first = fakes.configurator.configureCalls.first
         #expect(first?.category == .playAndRecord)
-        #expect(first?.mode == .voiceChat)
+        #expect(first?.mode == .videoChat)
         #expect(fakes.client.connectCalls == ["k"])
     }
 

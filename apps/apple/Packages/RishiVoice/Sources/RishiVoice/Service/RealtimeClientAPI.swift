@@ -1,4 +1,5 @@
 import Foundation
+import RishiCore
 
 /// Status snapshot of a realtime voice connection. Mirrors the swift-realtime-openai
 /// SDK's status surface but decoupled so RishiVoice consumers never import
@@ -86,7 +87,7 @@ public struct RealtimeToolCallEvent: Sendable, Equatable {
 public protocol RealtimeClientAPI: Sendable {
     /// Open a WebRTC voice session with the given ephemeral key. Throws on
     /// negotiation failure (network, key rejected, SDP failure).
-    func connect(ephemeralKey: String) async throws
+    func connect(ephemeralKey: String, bookContext: BookContextSnapshot?) async throws
 
     /// Tear down the WebRTC session. Idempotent — calling on an already-closed
     /// client is a no-op.
@@ -111,4 +112,10 @@ public protocol RealtimeClientAPI: Sendable {
     /// the SDK forwards it as `Item.FunctionCallOutput.output`. Throws when not
     /// connected or when the SDK rejects the send.
     func sendToolResult(callId: String, payload: String) async throws
+}
+
+public extension RealtimeClientAPI {
+    func connect(ephemeralKey: String) async throws {
+        try await connect(ephemeralKey: ephemeralKey, bookContext: nil)
+    }
 }

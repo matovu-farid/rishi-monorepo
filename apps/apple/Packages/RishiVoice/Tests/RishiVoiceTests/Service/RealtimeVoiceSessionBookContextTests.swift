@@ -100,6 +100,8 @@ struct RealtimeVoiceSessionBookContextTests {
         #expect(snapshot?.pageText == "page body")
         #expect(snapshot?.outline == outline)
         #expect(snapshot?.activeParagraphText == "paragraph body")
+        #expect(fakes.client.connectBookContexts.count == 1)
+        #expect(fakes.client.connectBookContexts[0] == snapshot)
 
         await fakes.session.end()
     }

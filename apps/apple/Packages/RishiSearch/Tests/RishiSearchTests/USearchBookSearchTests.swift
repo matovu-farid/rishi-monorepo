@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import USearch
+import SQLite3
 import RishiLogging
 @testable import RishiSearch
 
@@ -187,6 +188,41 @@ struct USearchBookSearchSuite {
         let recorded = captureBox.snapshot()
         #expect(recorded.contains(where: { $0.name == "rag.search.missing_vectors" }))
     }
+
+    @Test
+    func searchRecoversWhenChunksDBIsTemporarilyLocked() async throws {
+        let root = Self.makeTempRoot()
+        let embedder = IdentityEmbedder()
+        let bookId = try await Self.seedReadyBook(
+            root: root,
+            embedder: embedder,
+            chunks: [
+                (chunkId: 1, page: 1, text: "alpha-1"),
+                (chunkId: 2, page: 2, text: "alpha-2"),
+                (chunkId: 3, page: 3, text: "alpha-3"),
+            ]
+        )
+
+        let locator = BookIndexLocator(rootURL: root)
+        let lock = try SQLiteWriterLock(url: locator.chunksDBURL(bookId))
+        defer { lock.release() }
+
+        let search = USearchBookSearch(rootURL: root, embedder: embedder, k: 1)
+        let task = Task {
+            try await search.search(queryText: "alpha-3", bookId: bookId)
+        }
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        lock.release()
+
+        let hits = try await withTimeout(seconds: 5) {
+            try await task.value
+        }
+
+        #expect(hits.count == 1)
+        #expect(hits.first?.text == "alpha-3")
+        #expect(hits.first?.page == 3)
+    }
 }
 
 /// Thread-safe collector for `Log._testCapture` notifications.
@@ -202,5 +238,76 @@ private final class LogEventBox: @unchecked Sendable {
     func snapshot() -> [(name: String, data: [String: String]?)] {
         lock.lock(); defer { lock.unlock() }
         return events
+    }
+}
+
+/// Holds a real SQLite writer transaction open on a database file so tests can
+/// reproduce lock contention against the production `ChunkStore` open path.
+private final class SQLiteWriterLock {
+    private var db: OpaquePointer?
+    private let lock = NSLock()
+
+    init(url: URL) throws {
+        var handle: OpaquePointer?
+        let openResult = sqlite3_open_v2(
+            url.path,
+            &handle,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+        guard openResult == SQLITE_OK, let handle else {
+            let message = handle.map(Self.sqliteErrorMessage) ?? "sqlite open failed"
+            if let handle { sqlite3_close(handle) }
+            throw NSError(domain: "SQLiteWriterLock", code: Int(openResult), userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
+
+        sqlite3_busy_timeout(handle, 0)
+
+        let beginResult = sqlite3_exec(handle, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil)
+        guard beginResult == SQLITE_OK else {
+            let message = Self.sqliteErrorMessage(handle)
+            sqlite3_close(handle)
+            throw NSError(domain: "SQLiteWriterLock", code: Int(beginResult), userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
+
+        self.db = handle
+    }
+
+    func release() {
+        lock.lock(); defer { lock.unlock() }
+        guard let db else { return }
+        sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+        sqlite3_close(db)
+        self.db = nil
+    }
+
+    deinit {
+        release()
+    }
+
+    private static func sqliteErrorMessage(_ db: OpaquePointer) -> String {
+        String(cString: sqlite3_errmsg(db))
+    }
+}
+
+private func withTimeout<T: Sendable>(
+    seconds: Double,
+    _ operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw NSError(domain: "Timeout", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "operation exceeded \(seconds)s budget",
+            ])
+        }
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
     }
 }

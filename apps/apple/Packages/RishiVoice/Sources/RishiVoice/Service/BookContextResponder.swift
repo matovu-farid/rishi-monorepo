@@ -108,9 +108,27 @@ public actor BookContextResponder {
             return
         }
 
-        // 2. Status gate (cold-start sentinel).
+        // 2. Status gate. Ready proceeds to search; in-progress or missing
+        //    index keeps the cold-start sentinel; failed indexing surfaces a
+        //    real error so we don't tell the user "still indexing" when the
+        //    database actually broke.
         let status = await search.status(bookId: bookId)
-        guard case .ready = status else {
+        switch status {
+        case .ready:
+            break
+        case .failed(let reason):
+            Log.event("voice.tool.status.failed", level: .error, data: [
+                "callId": event.callId,
+                "reason": reason,
+            ])
+            await sendPayload(
+                callId: event.callId,
+                payload: Self.lookupFailedMessage,
+                logEvent: "voice.tool.error.sent",
+                reason: "status_failed"
+            )
+            return
+        case .indexing, .notIndexed, .staleIndexing:
             Log.event("voice.tool.coldstart", level: .info, data: [
                 "callId": event.callId,
                 "status": String(describing: status),

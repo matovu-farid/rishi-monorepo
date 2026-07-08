@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import RishiVoice
 import RishiSearch
+import RishiLogging
 
 /// Behavioral coverage of `BookContextResponder` against `FakeRealtimeClient`
 /// + `StubBookSearch`. Each test follows the same skeleton:
@@ -97,6 +98,47 @@ struct BookContextResponderTests {
         let sent = fake.sentToolResultsSnapshot()
         #expect(sent.count == 1)
         #expect(sent.first?.payload == BookContextResponder.coldStartSentinel)
+    }
+
+    @Test
+    func failedIndexStatus_returnsFailureMessageAndLogsReason() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let stub = StubBookSearch(hits: [], status: .failed(reason: "SQLite error 10: disk I/O error"))
+        let responder = BookContextResponder(client: fake, search: stub, bookId: UUID())
+
+        let events = LogEventBox()
+        Log._testCapture.handler = { name, level, data in
+            events.append(name: name, level: level, data: data)
+        }
+        defer { Log._testCapture.reset() }
+
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+
+        fake.inject(toolCall: RealtimeToolCallEvent(
+            callId: "c-failed-status",
+            name: "bookContext",
+            argumentsJSON: "{\"queryText\":\"x\"}"
+        ))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        consumeTask.cancel()
+
+        let sent = fake.sentToolResultsSnapshot()
+        #expect(sent.count == 1)
+        #expect(sent.first?.payload == BookContextResponder.lookupFailedMessage)
+
+        let recorded = events.snapshot()
+        let sawFailedStatusLog = recorded.contains { event in
+            event.name == "voice.tool.status.failed"
+            && event.level == .error
+            && event.data?["reason"] == "SQLite error 10: disk I/O error"
+        }
+        let sawFailureSentLog = recorded.contains { event in
+            event.name == "voice.tool.error.sent"
+            && event.data?["reason"] == "status_failed"
+        }
+        #expect(sawFailedStatusLog)
+        #expect(sawFailureSentLog)
     }
 
     @Test
@@ -293,4 +335,20 @@ private actor HangingSearch: BookSearch {
     }
 
     func status(bookId: UUID) async -> BookSearchStatus { .ready }
+}
+
+/// Thread-safe collector for `Log._testCapture` notifications in this suite.
+private final class LogEventBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [(name: String, level: LogLevel, data: [String: String]?)] = []
+
+    func append(name: String, level: LogLevel, data: [String: String]?) {
+        lock.lock(); defer { lock.unlock() }
+        events.append((name: name, level: level, data: data))
+    }
+
+    func snapshot() -> [(name: String, level: LogLevel, data: [String: String]?)] {
+        lock.lock(); defer { lock.unlock() }
+        return events
+    }
 }

@@ -172,6 +172,12 @@ public final class Conversation: @unchecked Sendable {
 	public func send(result output: Item.FunctionCallOutput) throws {
 		try send(event: .createConversationItem(.functionCallOutput(output)))
 	}
+
+	/// Test seam for the SDK event handler. Allows a unit test to drive the
+	/// same code path the WebRTC connector uses when server events arrive.
+	internal func ingestForTesting(_ event: ServerEvent) throws {
+		try handleEvent(event)
+	}
 }
 
 /// Event handling private API
@@ -192,6 +198,8 @@ private extension Conversation {
 				entries.append(item)
 			case let .conversationItemDeleted(_, itemId):
 				entries.removeAll { $0.id == itemId }
+			case let .responseOutputItemAdded(_, _, _, item):
+				entries.append(item)
 			case let .conversationItemInputAudioTranscriptionCompleted(_, itemId, contentIndex, transcript, _, _):
 				updateEvent(id: itemId) { message in
 					guard case let .inputAudio(audio) = message.content[contentIndex] else { return }
@@ -257,13 +265,36 @@ private extension Conversation {
 			case .outputAudioBufferStopped:
 				isModelSpeaking = false
 			case let .responseOutputItemDone(_, _, _, item):
-				updateEvent(id: item.id) { message in
-					guard case let .message(newMessage) = item else { return }
-
-					message = newMessage
+				switch item {
+				case let .message(newMessage):
+					if !replaceMessage(id: newMessage.id, with: newMessage) {
+						entries.append(.message(newMessage))
+					}
+				case let .functionCall(newFunctionCall):
+					if !replaceFunctionCall(id: newFunctionCall.id, with: newFunctionCall) {
+						entries.append(.functionCall(newFunctionCall))
+					}
+				default:
+					break
 				}
 			default: break
 		}
+	}
+
+	func replaceMessage(id: String, with message: Item.Message) -> Bool {
+		guard let index = entries.firstIndex(where: { $0.id == id }), case .message = entries[index] else {
+			return false
+		}
+		entries[index] = .message(message)
+		return true
+	}
+
+	func replaceFunctionCall(id: String, with functionCall: Item.FunctionCall) -> Bool {
+		guard let index = entries.firstIndex(where: { $0.id == id }), case .functionCall = entries[index] else {
+			return false
+		}
+		entries[index] = .functionCall(functionCall)
+		return true
 	}
 
 	func updateEvent(id: String, modifying closure: (inout Item.Message) -> Void) {

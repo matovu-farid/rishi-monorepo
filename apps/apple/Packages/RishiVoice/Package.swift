@@ -18,13 +18,8 @@ let package = Package(
         .package(path: "../RishiLibrary"),
         .package(path: "../RishiTesting"), // test-only consumer
         .package(path: "../NumKong"),
-        // VENDORED, locally-maintained copy of the realtime SDK (we own it; no
-        // upstream-compatibility concern). Absorbed from our fork
-        // matovu-farid/swift-realtime-openai (was pinned revision
-        // 0471374…) into the monorepo so we can patch and keep patching it —
-        // e.g. the `usage` token-detail optional fix and the WebRTC peer-leak
-        // teardown. Edit the source directly under
-        // `apps/apple/Packages/swift-realtime-openai`.
+        // Vendored realtime SDK with the compatibility patches we need for the
+        // current server event shapes.
         .package(path: "../swift-realtime-openai"),
         // App-level manual control of WebRTC's process-global audio unit so it
         // re-initializes on every voice session (fixes dead-audio on session 2+).

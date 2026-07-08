@@ -1,4 +1,5 @@
 import Foundation
+import RishiCore
 @testable import RishiVoice
 
 /// Test fake conforming to `RealtimeClientAPI`. Records connect/disconnect
@@ -17,6 +18,7 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     private var _status: RealtimeConnectionStatus = .disconnected
     private var _statusScript: [RealtimeConnectionStatus] = []
     private var _connectCalls: [String] = []   // ephemeral keys received, in order
+    private var _connectBookContexts: [BookContextSnapshot?] = []
     private var _disconnectCalls = 0
     private var _connectShouldThrow: Error?
 
@@ -38,6 +40,12 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     /// Ephemeral keys passed to `connect(ephemeralKey:)`, in call order.
     public var connectCalls: [String] {
         lock.withLock { _connectCalls }
+    }
+
+    /// Book-context snapshots passed to `connect(ephemeralKey:bookContext:)`,
+    /// in call order.
+    public var connectBookContexts: [BookContextSnapshot?] {
+        lock.withLock { _connectBookContexts }
     }
 
     /// Number of times `disconnect()` was called.
@@ -126,12 +134,13 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
 
     // MARK: - RealtimeClientAPI
 
-    public func connect(ephemeralKey: String) async throws {
+    public func connect(ephemeralKey: String, bookContext: BookContextSnapshot?) async throws {
         let throwError: Error? = lock.withLock {
             // One-shot failure wins over fail-all, then is cleared.
             let oneShot = _connectShouldThrow
             _connectShouldThrow = nil
             _connectCalls.append(ephemeralKey)
+            _connectBookContexts.append(bookContext)
             return oneShot ?? _failAllConnectsWith
         }
         if let throwError { throw throwError }

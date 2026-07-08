@@ -1,6 +1,11 @@
 import Foundation
+import RishiCore
+import UI
 import RealtimeAPI
 import RishiLogging
+
+typealias SDKConversation = UI.Conversation
+typealias SDKSession = Core.Session
 
 /// Production impl of `RealtimeClientAPI` backed by `swift-realtime-openai`'s
 /// `Conversation` type.
@@ -29,7 +34,7 @@ import RishiLogging
 public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     private let lock = NSLock()
-    private var conversation: Conversation?
+    private var conversation: SDKConversation?
 
     // Persistent stream continuations across the adapter's lifetime. New
     // consumers re-call to get a new stream backed by the same continuation
@@ -67,12 +72,54 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         set { pump.toolCallPump = newValue }
     }
 
-    static func makePCM24kFormat() -> Session.AudioFormat {
+    static func makePCM24kFormat() -> SDKSession.AudioFormat {
         RealtimeSessionConfigBuilder.makePCM24kFormat()
     }
 
-    static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
+    static var inputNoiseReduction: SDKSession.Audio.Input.NoiseReduction {
         RealtimeSessionConfigBuilder.inputNoiseReduction
+    }
+
+    /// Build the exact realtime session payload the adapter hands to the SDK.
+    /// Exposed internally so tests can verify adapter wiring without needing a
+    /// live WebRTC peer.
+    internal func makeConfiguredSession(bookContext: BookContextSnapshot?) -> SDKSession {
+        var session = SDKSession(
+            audio: configBuilder.makeSessionAudio(),
+            instructions: "",
+            model: .gptRealtime
+        )
+        configBuilder.configure(session: &session, bookContext: bookContext)
+        return session
+    }
+
+    /// Wait for the realtime session to become visible on the conversation and
+    /// confirm that the expected book-aware config landed.
+    static func waitUntilConfiguredSession(
+        timeout: Duration = .seconds(5),
+        pollInterval: Duration = .milliseconds(50),
+        sessionSnapshot: @escaping @Sendable () async -> SDKSession?
+    ) async throws -> SDKSession {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+
+        while clock.now < deadline {
+            if let session = await sessionSnapshot(),
+               sessionHasBookContext(session) {
+                return session
+            }
+            try await Task.sleep(for: pollInterval)
+        }
+
+        if let session = await sessionSnapshot(),
+           sessionHasBookContext(session) {
+            return session
+        }
+
+        throw RealtimeClientError(
+            code: "session_not_ready",
+            message: "Realtime session never exposed the configured book tool and instructions"
+        )
     }
 
     internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
@@ -81,7 +128,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     // MARK: - RealtimeClientAPI
 
-    public func connect(ephemeralKey: String) async throws {
+    public func connect(ephemeralKey: String, bookContext: BookContextSnapshot? = nil) async throws {
         // Single-peer invariant: opening a new peer always closes the old one
         // first. On RECONNECT the session re-calls `connect()` WITHOUT a
         // preceding `disconnect()` (so transcript/tool/error streams stay
@@ -95,9 +142,9 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         audioUnit.enableManualModeOnce()
         await teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info)
-        let convo = await MainActor.run { () -> Conversation in
-            Conversation(debug: false) { [configBuilder] session in
-                session.audio = configBuilder.makeSessionAudio()
+        let convo = await MainActor.run { () -> SDKConversation in
+            SDKConversation(debug: false) { [self] session in
+                session = makeConfiguredSession(bookContext: bookContext)
             }
         }
         lock.withLock { self.conversation = convo }
@@ -117,6 +164,22 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             }
         }
         Log.event("voice.adapter.connected", level: .info)
+
+        Log.event("voice.adapter.session.wait", level: .info)
+        let sessionSnapshot = try await Self.waitUntilConfiguredSession { [convo] in
+            await MainActor.run { convo.session }
+        }
+        let entryCount = await MainActor.run { convo.entries.count }
+        Log.event("voice.adapter.session.snapshot", level: .info, data: [
+            "hasSession": String(true),
+            "entryCount": String(entryCount),
+            "toolCount": String(sessionSnapshot.tools?.count ?? 0),
+            "hasBookTool": String(Self.sessionHasBookContext(sessionSnapshot)),
+            "toolChoice": String(describing: sessionSnapshot.toolChoice),
+            "instructionsBytes": String(sessionSnapshot.instructions.utf8.count),
+            "instructionsHasBookContext": String(sessionSnapshot.instructions.contains("bookContext")),
+        ])
+
         // Permit WebRTC to (re)initialize the VoIP audio unit now that the peer
         // is connected. In manual mode this is what actually starts mic capture
         // + playout — and it re-runs on EVERY connect, fixing dead-audio on
@@ -162,7 +225,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// on the main actor before niling.
     internal func teardownActiveConversation() async {
         pump.cancel()
-        let convo: Conversation? = lock.withLock { self.conversation }
+        let convo: SDKConversation? = lock.withLock { self.conversation }
         if let convo {
             await MainActor.run { convo.disconnect() }
         }
@@ -201,7 +264,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     }
 
     public func currentStatus() async -> RealtimeConnectionStatus {
-        let convo: Conversation? = lock.withLock { self.conversation }
+        let convo: SDKConversation? = lock.withLock { self.conversation }
         guard let convo else { return .disconnected }
         // SDK's status enum: .connected | .connecting | .disconnected (no
         // .disconnecting). Read on the main actor since Conversation is
@@ -234,7 +297,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     }
 
     public func sendToolResult(callId: String, payload: String) async throws {
-        let convo: Conversation? = lock.withLock { self.conversation }
+        let convo: SDKConversation? = lock.withLock { self.conversation }
         guard let convo else {
             Log.event("voice.adapter.tool.result.dropped", level: .error, data: [
                 "callId": callId,
@@ -258,7 +321,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// Delegates to `RealtimeEventPump`, passing lock-guarded accessors so each
     /// yield reads the adapter's CURRENT continuation under the adapter's lock —
     /// identical to the prior inline pump code.
-    private func startPumps(for convo: Conversation) {
+    private func startPumps(for convo: SDKConversation) {
         pump.start(
             for: convo,
             errorContinuation: { [weak self] in
@@ -271,5 +334,14 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
                 self?.lock.withLock { self?.toolCallContinuation }
             }
         )
+    }
+
+    private static func sessionHasBookContext(_ session: SDKSession) -> Bool {
+        session.toolChoice == .auto
+            && session.instructions.contains("bookContext")
+            && session.tools?.contains { tool in
+                guard case let .function(function) = tool else { return false }
+                return function.name == "bookContext"
+            } == true
     }
 }

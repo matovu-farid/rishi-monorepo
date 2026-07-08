@@ -1,5 +1,5 @@
 {
-  "originHash" : "160b82c7dc8768068a832a0becfbc533a4eb5b45447fd20ebbca93df683b8b8e",
+  "originHash" : "76bd3b5facae879f61d566caecb3cec48eb07b4dbd300fd9e92ca2304f2f42d3",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/SwiftyLab/MetaCodable.git",
       "state" : {
-        "revision" : "c2a6cc907e2f95463ba8f2b55432bd2aee8a4bfd",
-        "version" : "1.6.0"
+        "revision" : "3d4bfeb949c0f31ef80fdc3af8f77c5b35ecaea4",
+        "version" : "1.6.1"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax.git",
       "state" : {
-        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
-        "version" : "602.0.0"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {
