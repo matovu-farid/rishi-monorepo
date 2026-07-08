@@ -1,0 +1,72 @@
+name: Test Rust
+
+on:
+  pull_request:
+    branches: ["main", "main-*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test_rust:
+    name: Test Rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Print Machine Specs
+        shell: bash
+        run: |
+          echo "::group::Machine Information"
+          uname -a || true
+          cat /proc/cpuinfo 2>/dev/null | head -30 || sysctl -a machdep.cpu 2>/dev/null | head -30 || wmic cpu get Name,NumberOfCores,MaxClockSpeed 2>/dev/null || true
+          free -h 2>/dev/null || vm_stat 2>/dev/null || systeminfo 2>/dev/null | head -20 || true
+          echo "::endgroup::"
+
+      - name: Install Rust Toolchain
+        uses: moonrepo/setup-rust@v1
+
+      - name: Install Cross-Compilation Targets and Dependencies
+        run: |
+          rustup target add i686-unknown-linux-gnu
+          rustup target add armv7-unknown-linux-gnueabihf
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          # Install i686 multilib and ARM cross-compiler separately to avoid
+          # gcc-multilib vs gcc-arm-linux-gnueabihf package conflicts.
+          sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
+          sudo apt-get install -y gcc-14-arm-linux-gnueabihf
+
+      - name: Test Default Build
+        run: cargo test
+
+      - name: Test with All Features
+        run: cargo test --all-features
+
+      - name: Test No-Std Build (Check Only)
+        run: cargo check --no-default-features
+
+      - name: Test i686 Cross-Compilation Build
+        run: cargo build --target i686-unknown-linux-gnu --features std
+
+      - name: Test i686 Cross-Compilation (No-Std)
+        run: cargo build --target i686-unknown-linux-gnu --no-default-features
+
+      # 32-bit ARM — catches AArch64-only intrinsics leaking into NEON paths
+      - name: Test ARMv7 Cross-Compilation Build
+        env:
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc-14
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc-14
+        run: cargo build --target armv7-unknown-linux-gnueabihf --features std
+
+      - name: Test ARMv7 Cross-Compilation (No-Std)
+        env:
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc-14
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc-14
+        run: cargo build --target armv7-unknown-linux-gnueabihf --no-default-features

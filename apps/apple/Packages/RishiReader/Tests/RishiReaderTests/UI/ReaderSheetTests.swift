@@ -25,6 +25,8 @@ struct ReaderSheetTests {
         #expect(ReaderSheet.typography.id == ReaderSheet.typography.id)
         #expect(ReaderSheet.ttsControls.id == ReaderSheet.ttsControls.id)
         #expect(ReaderSheet.ttsPicker.id == ReaderSheet.ttsPicker.id)
+        #expect(ReaderSheet.bookmarks.id == ReaderSheet.bookmarks.id)
+        #expect(ReaderSheet.search.id == ReaderSheet.search.id)
     }
 
     // MARK: - Distinct cases yield distinct ids
@@ -37,9 +39,11 @@ struct ReaderSheetTests {
             ReaderSheet.theme.id,
             ReaderSheet.ttsControls.id,
             ReaderSheet.ttsPicker.id,
+            ReaderSheet.bookmarks.id,
+            ReaderSheet.search.id,
         ]
-        // All five must be unique.
-        #expect(ids.count == 5)
+        // All seven must be unique.
+        #expect(ids.count == 7)
     }
 
     // MARK: - highlightNote id == highlight id
@@ -86,10 +90,12 @@ struct ReaderSheetTests {
             .theme,
             .ttsControls,
             .ttsPicker,
+            .bookmarks,
+            .search,
         ]
         for c in cases {
             switch c {
-            case .toc, .typography, .theme, .ttsControls, .ttsPicker, .highlightNote:
+            case .toc, .typography, .theme, .ttsControls, .ttsPicker, .bookmarks, .search, .highlightNote:
                 #expect(Bool(true))
             }
         }

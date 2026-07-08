@@ -15,7 +15,9 @@ let package = Package(
         .package(path: "../RishiLogging"),
         .package(path: "../RishiAudio"),
         .package(path: "../RishiSearch"),
+        .package(path: "../RishiLibrary"),
         .package(path: "../RishiTesting"), // test-only consumer
+        .package(path: "../NumKong"),
         // VENDORED, locally-maintained copy of the realtime SDK (we own it; no
         // upstream-compatibility concern). Absorbed from our fork
         // matovu-farid/swift-realtime-openai (was pinned revision
@@ -56,7 +58,11 @@ let package = Package(
                 "RishiAPI",
                 "RishiAudio",
                 .product(name: "RishiSearch", package: "RishiSearch"),
+                .product(name: "RishiLibrary", package: "RishiLibrary"),
                 .product(name: "RishiTesting", package: "RishiTesting"),
+            ],
+            resources: [
+                .copy("Fixtures/how-to-prove-it.pdf"),
             ]
         ),
     ]

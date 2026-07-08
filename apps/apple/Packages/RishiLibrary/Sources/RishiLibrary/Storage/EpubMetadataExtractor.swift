@@ -17,6 +17,7 @@ public struct EpubMetadataExtractor: MetadataExtractor {
     public func extractMetadata(from fileURL: URL) async -> BookMetadata {
         do {
             let archive = try await Archive(url: fileURL, accessMode: .read)
+            
 
             guard let containerEntry = try await archive.get("META-INF/container.xml") else {
                 return BookMetadata()

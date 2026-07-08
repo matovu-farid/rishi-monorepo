@@ -84,16 +84,16 @@ struct EPUBUnpackedCachePolicyTests {
         }
 
         func unzip(sourceFileURL: URL, to destination: URL) async throws {
-            lock.lock()
-            let shouldThrow = unzipShouldThrow
-            lock.unlock()
-            if shouldThrow { throw UnzipFailure() }
-            lock.lock()
-            unzipCount += 1
-            if let id = bookId(forDirectory: destination) {
-                entries[id, default: Entry(directoryExists: false, sidecarMtime: nil)].directoryExists = true
+            let shouldThrow = lock.withLock {
+                unzipShouldThrow
             }
-            lock.unlock()
+            if shouldThrow { throw UnzipFailure() }
+            lock.withLock {
+                unzipCount += 1
+                if let id = bookId(forDirectory: destination) {
+                    entries[id, default: Entry(directoryExists: false, sidecarMtime: nil)].directoryExists = true
+                }
+            }
         }
     }
 

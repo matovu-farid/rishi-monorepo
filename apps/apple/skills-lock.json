@@ -12,6 +12,30 @@
       "sourceType": "github",
       "skillPath": "skills/swiftui-patterns/SKILL.md",
       "computedHash": "ad91e48814fd954e9416776bf799b47497bdcefe414089ab8c71ba22b33607c3"
+    },
+    "subagent-driven-development": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/subagent-driven-development/SKILL.md",
+      "computedHash": "73b43347c1bdc10f6ab81a5cdb036dd1c8098cc0"
+    },
+    "systematic-debugging": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/systematic-debugging/SKILL.md",
+      "computedHash": "e96f5f2620c17069d668be1880d5492e34c84ceb"
+    },
+    "tdd": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/test-driven-development/SKILL.md",
+      "computedHash": "98904a7d8e0e04b9bd46220b9b17298f45fe0b72"
+    },
+    "verification-before-completion": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/verification-before-completion/SKILL.md",
+      "computedHash": "ceb2f1f67f4cadb29b32a06e54d3d0be832071f5"
     }
   }
 }

@@ -48,42 +48,36 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     public init() {}
 
     // MARK: - White-box test seams (preserved)
-//    //
-//    // These forward to the pump / config builder / dispatcher so the existing
-//    // `@testable` tests (`RealtimeAPIAdapterTeardownTests`,
-//    // `RealtimeAPIAdapterAudioFormatTests`, `RealtimeAPIAdapterToolCallTests`)
-//    // keep pointing at the same symbols after the decomposition.
-//
-//    /// Test seam: the error pump handle now lives on `RealtimeEventPump`.
-//    internal var errorPump: Task<Void, Never>? {
-//        get { pump.errorPump }
-//        set { pump.errorPump = newValue }
-//    }
-//    /// Test seam: the transcript pump handle now lives on `RealtimeEventPump`.
-//    internal var transcriptPump: Task<Void, Never>? {
-//        get { pump.transcriptPump }
-//        set { pump.transcriptPump = newValue }
-//    }
-//    /// Test seam: the tool-call pump handle now lives on `RealtimeEventPump`.
-//    internal var toolCallPump: Task<Void, Never>? {
-//        get { pump.toolCallPump }
-//        set { pump.toolCallPump = newValue }
-//    }
-//
-//    /// Test seam: PCM 24kHz format (delegates to the config builder).
-//    static func makePCM24kFormat() -> Session.AudioFormat {
-//        RealtimeSessionConfigBuilder.makePCM24kFormat()
-//    }
-//
-//    /// Test seam: per-platform input noise reduction (delegates to the builder).
-//    static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
-//        RealtimeSessionConfigBuilder.inputNoiseReduction
-//    }
-//
-//    /// Test seam: tool-call readiness gate (delegates to the dispatcher).
-//    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
-//        toolDispatcher.isArgumentsReady(fc: fc)
-//    }
+
+    // These forward to the pump / config builder / dispatcher so the existing
+    // `@testable` tests keep pointing at the same symbols after decomposition.
+
+    internal var errorPump: Task<Void, Never>? {
+        get { pump.errorPump }
+        set { pump.errorPump = newValue }
+    }
+
+    internal var transcriptPump: Task<Void, Never>? {
+        get { pump.transcriptPump }
+        set { pump.transcriptPump = newValue }
+    }
+
+    internal var toolCallPump: Task<Void, Never>? {
+        get { pump.toolCallPump }
+        set { pump.toolCallPump = newValue }
+    }
+
+    static func makePCM24kFormat() -> Session.AudioFormat {
+        RealtimeSessionConfigBuilder.makePCM24kFormat()
+    }
+
+    static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
+        RealtimeSessionConfigBuilder.inputNoiseReduction
+    }
+
+    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
+        toolDispatcher.isArgumentsReady(fc: fc)
+    }
 
     // MARK: - RealtimeClientAPI
 
@@ -235,17 +229,26 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     public func toolCallStream() -> AsyncStream<RealtimeToolCallEvent> {
         AsyncStream { continuation in
             lock.withLock { toolCallContinuation = continuation }
+            Log.event("voice.adapter.tool.stream.opened", level: .info)
         }
     }
 
     public func sendToolResult(callId: String, payload: String) async throws {
         let convo: Conversation? = lock.withLock { self.conversation }
         guard let convo else {
+            Log.event("voice.adapter.tool.result.dropped", level: .error, data: [
+                "callId": callId,
+                "reason": "not_connected",
+            ])
             throw RealtimeClientError(
                 code: "not_connected",
                 message: "Cannot send tool result: not connected"
             )
         }
+        Log.event("voice.adapter.tool.result.forwarding", level: .info, data: [
+            "callId": callId,
+            "payloadBytes": String(payload.utf8.count),
+        ])
         try await toolDispatcher.sendResult(callId: callId, payload: payload, on: convo)
     }
 

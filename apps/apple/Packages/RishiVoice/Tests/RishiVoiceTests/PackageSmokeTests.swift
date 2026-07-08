@@ -45,7 +45,7 @@ struct PackageSmokeTests {
         // user-facing `Conversation` type collides with `RishiCore.Conversation`
         // and would force ambiguity. `Session` has no such collision and is a
         // public top-level type from `Core` that proves the dep chain links.
-        let typeName = String(describing: Session.self)
+        let typeName = String(describing: Core.Session.self)
         #expect(typeName.contains("Session"))
     }
 

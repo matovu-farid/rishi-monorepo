@@ -237,7 +237,7 @@ enum ServiceGraphFactory {
                     guard let book = try? await bookStore.book(bookId) else {
                         return
                     }
-                    let url = await bookFileStorage.absoluteFileURL(for: book)
+                    let url = bookFileStorage.absoluteFileURL(for: book)
                     await bookPrewarmer.prewarm(book: book, fileURL: url)
                 }
             }

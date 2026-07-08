@@ -13,10 +13,7 @@ extension User {
         User(
             id: id,
             email: email,
-            displayName: displayName,
-            avatarURL: avatarURL,
-            hasPro: hasPro,
-            createdAt: createdAt
+            name: displayName
         )
     }
 }

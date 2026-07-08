@@ -1,0 +1,38 @@
+name: Test Go
+
+on:
+  pull_request:
+    branches: ["main", "main-*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test_golang:
+    name: Test Go
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Print Machine Specs
+        shell: bash
+        run: |
+          echo "::group::Machine Information"
+          uname -a || true
+          cat /proc/cpuinfo 2>/dev/null | head -30 || true
+          free -h 2>/dev/null || true
+          echo "::endgroup::"
+
+      - name: Set Up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+
+      - name: Test Go Bindings
+        run: go test -v -count=1 ./golang/

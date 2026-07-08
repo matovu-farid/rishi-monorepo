@@ -63,10 +63,7 @@ final class StubAuthService: AuthService, @unchecked Sendable {
         User(
             id: UUID(),
             email: "stub@example.test",
-            displayName: nil,
-            avatarURL: nil,
-            hasPro: false,
-            createdAt: Date()
+            name: nil,
         )
     }
 }
@@ -265,7 +262,7 @@ final class HangingAuthService: AuthService, @unchecked Sendable {
 
     func signInWithApple() async throws -> User {
         await suspendUntilReleased()
-        return User(id: UUID(), email: "h@b.c", displayName: nil, avatarURL: nil, hasPro: false, createdAt: Date())
+        return User(id: UUID(), email: "h@b.c", name: nil)
     }
 
     func signOut() async throws {}

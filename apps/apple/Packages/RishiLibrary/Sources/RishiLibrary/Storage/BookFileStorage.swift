@@ -1,7 +1,7 @@
 import Foundation
 import RishiCore
 
-public actor BookFileStorage {
+public struct BookFileStorage:Sendable {
     public enum StorageError: Error, Sendable {
         case sourceUnreadable
         case copyFailed(underlying: Error)
@@ -14,7 +14,8 @@ public actor BookFileStorage {
     private let bookStore: any BookStore
     private let coverExtractors: [String: any CoverExtractor]
     private let metadataExtractors: [String: any MetadataExtractor]
-    private let fileManager: FileManager
+   
+    private var fileManager: FileManager { .default }
     private let coverCache: CoverCache?
 
     private let bookIndexingHook: any BookIndexingHook
@@ -24,7 +25,6 @@ public actor BookFileStorage {
         bookStore: any BookStore,
         coverExtractors: [String: any CoverExtractor],
         metadataExtractors: [String: any MetadataExtractor] = [:],
-        fileManager: FileManager = .default,
         bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook()
     ) {
         self.rootURL = rootURL
@@ -35,7 +35,6 @@ public actor BookFileStorage {
         self.bookStore = bookStore
         self.coverExtractors = coverExtractors
         self.metadataExtractors = metadataExtractors
-        self.fileManager = fileManager
         self.bookIndexingHook = bookIndexingHook
 
         if coverExtractors.isEmpty {

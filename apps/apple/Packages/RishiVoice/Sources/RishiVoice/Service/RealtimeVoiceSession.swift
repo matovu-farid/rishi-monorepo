@@ -185,9 +185,17 @@ public actor RealtimeVoiceSession {
         // search target.
         if let bookId, let factory = responderFactory {
             let responder = factory(bookId)
+            Log.event("voice.session.tool_responder.started", level: .info, data: [
+                "bookId": bookId.uuidString,
+            ])
             responderTask = Task {
                 await responder.consume(stream: client.toolCallStream())
             }
+        } else {
+            Log.event("voice.session.tool_responder.skipped", level: .info, data: [
+                "bookId": bookId?.uuidString ?? "<none>",
+                "hasFactory": String(responderFactory != nil),
+            ])
         }
 
         Log.event("voice.session.live", level: .info, data: [

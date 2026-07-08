@@ -1,5 +1,6 @@
 import Foundation
 import RealtimeAPI
+import RishiLogging
 
 /// Owns the three SDK→stream polling loops that `RealtimeAPIAdapter` previously
 /// inlined in `startPumps(for:)`: the error forward, the transcript snapshot
@@ -28,6 +29,12 @@ final class RealtimeEventPump: @unchecked Sendable {
     /// Tool-call dedupe: tracks which `callId`s have already been emitted to
     /// the tool-call stream this connection. Cleared on `reset()`.
     private var emittedCallIds: Set<String> = []
+    /// Tracks which `callId`s we have already logged as "seen" so we do not
+    /// spam the console every 200ms while the SDK is still assembling args.
+    private var observedCallIds: Set<String> = []
+    /// Throttles diagnostic scan logs so we can tell whether the SDK is
+    /// surfacing any function-call entries without logging every 200ms tick.
+    private var lastToolScanLogAt: ContinuousClock.Instant?
 
     private let dispatcher: RealtimeToolCallDispatcher
 
@@ -52,7 +59,11 @@ final class RealtimeEventPump: @unchecked Sendable {
     /// Clear the dedupe set. Called from the adapter's `disconnect()` under the
     /// adapter's lock-guarded teardown, matching the prior `emittedCallIds.removeAll()`.
     func reset() {
-        lock.withLock { emittedCallIds.removeAll() }
+        lock.withLock {
+            emittedCallIds.removeAll()
+            observedCallIds.removeAll()
+            lastToolScanLogAt = nil
+        }
     }
 
     /// Start the three polling loops for the given `Conversation`, yielding into
@@ -66,6 +77,7 @@ final class RealtimeEventPump: @unchecked Sendable {
         toolCallContinuation: @escaping @Sendable () -> AsyncStream<RealtimeToolCallEvent>.Continuation?
     ) {
         let dispatcher = self.dispatcher
+        let clock = ContinuousClock()
 
         // Error pump — direct forward from the SDK's AsyncStream<ServerError>.
         // The explicit MainActor.run hops are required to read the SDK's
@@ -126,20 +138,64 @@ final class RealtimeEventPump: @unchecked Sendable {
         toolCallPump = Task { [weak self] in
             while !Task.isCancelled {
                 let snapshot: [Item] = await MainActor.run { convo.entries }
+                if let self {
+                    let (toolCallCount, readyCount, shouldLog): (Int, Int, Bool) = self.lock.withLock {
+                        let toolCalls = snapshot.compactMap { item -> Item.FunctionCall? in
+                            guard case let .functionCall(fc) = item else { return nil }
+                            return fc
+                        }
+                        let toolCallCount = toolCalls.count
+                        let readyCount = toolCalls.filter { dispatcher.isArgumentsReady(fc: $0) }.count
+                        let now = clock.now
+                        let shouldLog: Bool
+                        if let last = self.lastToolScanLogAt {
+                            shouldLog = now >= last.advanced(by: .seconds(2))
+                        } else {
+                            shouldLog = true
+                        }
+                        if shouldLog { self.lastToolScanLogAt = now }
+                        return (toolCallCount, readyCount, shouldLog)
+                    }
+                    if shouldLog {
+                        Log.event("voice.tool.sdk.scan", level: .info, data: [
+                            "entries": String(snapshot.count),
+                            "functionCalls": String(toolCallCount),
+                            "readyFunctionCalls": String(readyCount),
+                        ])
+                    }
+                }
                 for item in snapshot {
                     guard case let .functionCall(fc) = item else { continue }
                     guard let self else { return }
-                    let alreadyEmitted: Bool = self.lock.withLock {
-                        self.emittedCallIds.contains(fc.callId)
+                    let (alreadyEmitted, firstObserved): (Bool, Bool) = self.lock.withLock {
+                        let alreadyEmitted = self.emittedCallIds.contains(fc.callId)
+                        let firstObserved = self.observedCallIds.insert(fc.callId).inserted
+                        return (alreadyEmitted, firstObserved)
+                    }
+                    if firstObserved {
+                        Log.event("voice.tool.sdk.observed", level: .info, data: [
+                            "callId": fc.callId,
+                            "name": fc.name,
+                            "status": String(describing: fc.status),
+                            "argumentsBytes": String(fc.arguments.utf8.count),
+                        ])
                     }
                     if alreadyEmitted { continue }
                     guard dispatcher.isArgumentsReady(fc: fc) else { continue }
+                    Log.event("voice.tool.sdk.ready", level: .info, data: [
+                        "callId": fc.callId,
+                        "name": fc.name,
+                    ])
                     self.lock.withLock { _ = self.emittedCallIds.insert(fc.callId) }
                     let event = RealtimeToolCallEvent(
                         callId: fc.callId,
                         name: fc.name,
                         argumentsJSON: fc.arguments
                     )
+                    Log.event("voice.tool.sdk.emitted", level: .info, data: [
+                        "callId": event.callId,
+                        "name": event.name,
+                    ])
                     toolCallContinuation()?.yield(event)
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms

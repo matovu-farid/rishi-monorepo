@@ -1,0 +1,91 @@
+/build*/
+_deps
+*.egg-info
+CMakeFiles
+__pycache__
+wheelhouse/
+node_modules/
+package-ci/
+prebuilds/
+wasm/
+build/
+nk_probes.h
+dist/
+javascript/dist
+bun.lockb
+.build/
+.venv/
+.cache/
+.claude/
+tmp/
+
+# Playwright and test artifacts
+playwright-report/
+test-results/
+.pytest_cache/
+
+# for Google Benchmark
+compare.py
+gbench/
+
+cmake_install.cmake
+CMakeCache.txt
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+*.pyd
+*.node
+
+# Fortran module files
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.wasm
+
+# Rust crate
+target/
+
+# Swift Package Manager
+.swiftpm/
+
+# Mac OS
+.DS_Store
+
+# VS Code
+.devcontainer/
+
+# perfplot charts
+*.png
+\n
+
+# Python wheel archives
+*.whl
+
+# Library: don't commit lockfiles!
+Cargo.lock
+uv.lock
+package-lock.json
