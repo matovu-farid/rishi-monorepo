@@ -353,6 +353,7 @@ enum ServiceGraphFactory {
             ttsEngine: audioStack.engine,
             ttsSettingsStore: audioStack.settingsStore,
             nowPlayingController: audioStack.nowPlaying,
+            ttsPresenceController: audioStack.presence,
             ttsPrewarmer: audioStack.prewarmer,
             syncMetadataStore: syncMetadataStore,
             syncQueue: syncQueue,

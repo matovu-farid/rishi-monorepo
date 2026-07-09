@@ -116,6 +116,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let ttsEngine: TTSEngine
     let ttsSettingsStore: any TTSSettingsStore
     let nowPlayingController: NowPlayingController
+    let ttsPresenceController: TTSPresenceController
     let ttsPrewarmer: TTSPrewarmer
 
     let syncMetadataStore: any SyncMetadataStore

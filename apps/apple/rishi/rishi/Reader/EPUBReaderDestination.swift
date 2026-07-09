@@ -22,6 +22,7 @@ import RishiReader
 import RishiSearch
 import RishiSync
 import RishiUIKit
+import RishiSettings
 
 struct EPUBReaderDestination: View {
     let services: BootstrappedServices
@@ -48,6 +49,7 @@ struct EPUBReaderDestination: View {
         self.onRequestPaywall = onRequestPaywall
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
+            voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -73,6 +75,7 @@ struct EPUBReaderDestination: View {
                             ttsState: services.ttsState,
                             ttsSettingsStore: services.ttsSettingsStore,
                             ttsPrewarmer: services.ttsPrewarmer,
+                            ttsPresence: services.ttsPresenceController,
                             coordidator: services.audioCoordinator,
                             userId: userId
                         )
@@ -103,7 +106,7 @@ struct EPUBReaderDestination: View {
             
             
             if await services.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
-                let url = await services.bookFileStorage.absoluteFileURL(for: vm.book)
+                let url =  services.bookFileStorage.absoluteFileURL(for: vm.book)
                 await services.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
             }
         }
@@ -113,18 +116,19 @@ struct EPUBReaderDestination: View {
             Task { await readAloud?.stop() }
         }
         .overlay(alignment: .bottom) {
-            if let ra = readAloud {
-                ReadAloudControlsOverlay(
-                    controller: ra,
-                    ttsState: services.ttsState
+            VStack(spacing: RishiSpacing.s) {
+                if let ra = readAloud {
+                    ReadAloudControlsOverlay(
+                        controller: ra,
+                        ttsState: services.ttsState
+                    )
+                }
+                IndexingIndicatorChip(
+                    bookId: vm.book.id,
+                    bookSearch: services.bookSearch
                 )
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            IndexingIndicatorChip(
-                bookId: vm.book.id,
-                bookSearch: services.bookSearch
-            )
         }
         .sheet(isPresented: Binding(
             get: { readAloud?.showPicker ?? false },
@@ -137,6 +141,12 @@ struct EPUBReaderDestination: View {
                     store: services.ttsSettingsStore,
                     onDismiss: { settings in
                         ra.pickerInitial = settings
+                        Task {
+                            await services.ttsPresenceController.updatePlaybackSettings(
+                                voice: settings.voice,
+                                speed: settings.speed
+                            )
+                        }
                         ra.showPicker = false
                     }
                 )

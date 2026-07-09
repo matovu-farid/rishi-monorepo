@@ -9,5 +9,6 @@ extension AppDependencies {
     var ttsEngine: TTSEngine { services!.ttsEngine }
     var ttsSettingsStore: any TTSSettingsStore { services!.ttsSettingsStore }
     var nowPlayingController: NowPlayingController { services!.nowPlayingController }
+    var ttsPresenceController: TTSPresenceController { services!.ttsPresenceController }
     var ttsPrewarmer: TTSPrewarmer { services!.ttsPrewarmer }
 }

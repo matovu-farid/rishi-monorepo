@@ -10,6 +10,7 @@ struct AudioStack: @unchecked Sendable {
     let engine: TTSEngine
     let settingsStore: any TTSSettingsStore
     let nowPlaying: NowPlayingController
+    let presence: TTSPresenceController
 
     let prewarmer: TTSPrewarmer
 }
@@ -88,12 +89,15 @@ enum AudioStackFactory {
             infoSurface: infoSurface,
             commandSurface: commandSurface
         )
+        let presenceStore = UserDefaultsTTSPresenceStore()
+        let presence = TTSPresenceController(state: state, store: presenceStore)
         return AudioStack(
             coordinator: coordinator,
             state: state,
             engine: engine,
             settingsStore: settingsStore,
             nowPlaying: nowPlaying,
+            presence: presence,
             prewarmer: prewarmer
         )
     }

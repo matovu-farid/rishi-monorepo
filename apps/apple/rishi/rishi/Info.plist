@@ -47,6 +47,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>LSEnvironment</key>
 	<dict>
 		<!-- Workaround for a PDFKit bug: PDFPageAnalyzerV2 form-field
