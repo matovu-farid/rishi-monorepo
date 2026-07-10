@@ -16,27 +16,39 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  * These tests assert the iOS body shape end-to-end against the Hono `app`:
  *   1. Happy path: { text, voice, speed=1.0 } -> 200 + audio/mpeg.
  *   2. Old shape rejection: { input, voice } (no `text`) -> 400 envelope.
- *   3. Speed forwarded: speed=1.5 reaches the AI SDK's generateSpeech call.
- *   4. Voice fallback unchanged: invalid voice falls back to "alloy".
+ *   3. Speed forwarded: speed=1.5 reaches the OpenAI speech.create call.
+ *   4. Voice fallback updated: invalid voice falls back to "marin".
+ *   5. Model bump: the worker calls gpt-4o-mini-tts.
  */
 
-// ─── Capture the args passed to experimental_generateSpeech ──────────────────
+// ─── Capture the args passed to openai.audio.speech.create ──────────────────
 const { speechCalls, speechAudioBytes } = vi.hoisted(() => ({
   speechCalls: [] as Array<Record<string, unknown>>,
   speechAudioBytes: new Uint8Array([1, 2, 3, 4]),
 }))
 
-vi.mock("ai", async () => {
-  // Preserve APICallError for the error-handling branch in the handler.
-  const actual = await vi.importActual<typeof import("ai")>("ai")
+vi.mock("openai", () => {
+  class MockOpenAI {
+    audio = {
+      speech: {
+        create: vi.fn(async (args: Record<string, unknown>) => {
+          speechCalls.push(args)
+          return {
+            arrayBuffer: async () =>
+              speechAudioBytes.buffer.slice(
+                speechAudioBytes.byteOffset,
+                speechAudioBytes.byteOffset + speechAudioBytes.byteLength,
+              ),
+          }
+        }),
+      },
+    }
+
+    constructor(_config?: unknown) {}
+  }
+
   return {
-    ...actual,
-    experimental_generateSpeech: vi.fn(async (args: Record<string, unknown>) => {
-      speechCalls.push(args)
-      return {
-        audio: { uint8Array: speechAudioBytes },
-      }
-    }),
+    default: MockOpenAI,
   }
 })
 
@@ -63,6 +75,13 @@ vi.mock("./billing/sub-gate", () => ({
     _c: unknown,
     next: () => Promise<void>,
   ) => {
+    await next()
+  },
+}))
+
+// ─── Stub auth middleware so these endpoint tests can focus on speech logic ─
+vi.mock("./middleware", () => ({
+  requireAuth: async (_c: unknown, next: () => Promise<void>) => {
     await next()
   },
 }))
@@ -260,17 +279,20 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
     expect(speechCalls.length).toBe(0)
   })
 
-  it("speed is forwarded into experimental_generateSpeech args", async () => {
+  it("speed is forwarded into speech.create args", async () => {
     const res = await callSpeech({ text: "hi", voice: "alloy", speed: 1.5 })
     expect(res.status).toBe(200)
     expect(speechCalls.length).toBe(1)
     expect(speechCalls[0]).toMatchObject({ speed: 1.5 })
+    expect(speechCalls[0]).toMatchObject({
+      model: "gpt-4o-mini-tts",
+    })
   })
 
-  it("invalid voice falls back to 'alloy' (existing whitelist behavior)", async () => {
+  it("invalid voice falls back to 'marin' (preferred default voice)", async () => {
     const res = await callSpeech({ text: "hi", voice: "invalid-voice", speed: 1.0 })
     expect(res.status).toBe(200)
     expect(speechCalls.length).toBe(1)
-    expect(speechCalls[0]).toMatchObject({ voice: "alloy" })
+    expect(speechCalls[0]).toMatchObject({ voice: "marin" })
   })
 })

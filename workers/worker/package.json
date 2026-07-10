@@ -28,6 +28,7 @@
     "effect": "^3.21.4",
     "hono": "^4.10.6",
     "jose": "^6.2.3",
+    "openai": "6.46.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "reflect-metadata": "^0.2.2",

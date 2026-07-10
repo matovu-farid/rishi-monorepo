@@ -27,15 +27,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *     writeback, and returns X-TTS-Cache: hit.
  *   - Cache key is stable: same (text, voice, speed) yields same 64-char hex.
  *   - Cache key is sensitive to speed: 1.00 and 1.50 differ.
- *   - Cache key is sensitive to voice: alloy and nova differ.
+ *   - Cache key is sensitive to voice: alloy and cedar differ.
  *   - Cross-runner symmetry: a pinned canonical string produces a known hex
  *     that the companion iOS test in 22-02 must reproduce byte-for-byte.
+ *   - Model bump: miss path calls gpt-4o-mini-tts and meters that model slug.
  */
 
 // ─── Cross-runner symmetry constants ─────────────────────────────────────────
 // This exact canonical string and resulting hex MUST also appear verbatim in
 // apps/apple/Packages/RishiAudio/Tests/RishiAudioTests/TTSCacheKeyTests.swift.
-const PINNED_CANONICAL = "tts-1|alloy|1.00|hello world"
+const PINNED_CANONICAL = "gpt-4o-mini-tts|alloy|1.00|hello world"
 const PINNED_TEXT = "hello world"
 const PINNED_VOICE = "alloy"
 const PINNED_SPEED = 1.0
@@ -47,16 +48,28 @@ const { speechCalls, speechAudioBytes, meterMock } = vi.hoisted(() => ({
   meterMock: vi.fn(async () => undefined),
 }))
 
-vi.mock("ai", async () => {
-  const actual = await vi.importActual<typeof import("ai")>("ai")
+vi.mock("openai", () => {
+  class MockOpenAI {
+    audio = {
+      speech: {
+        create: vi.fn(async (args: Record<string, unknown>) => {
+          speechCalls.push(args)
+          return {
+            arrayBuffer: async () =>
+              speechAudioBytes.buffer.slice(
+                speechAudioBytes.byteOffset,
+                speechAudioBytes.byteOffset + speechAudioBytes.byteLength,
+              ),
+          }
+        }),
+      },
+    }
+
+    constructor(_config?: unknown) {}
+  }
+
   return {
-    ...actual,
-    experimental_generateSpeech: vi.fn(async (args: Record<string, unknown>) => {
-      speechCalls.push(args)
-      return {
-        audio: { uint8Array: speechAudioBytes },
-      }
-    }),
+    default: MockOpenAI,
   }
 })
 
@@ -80,6 +93,12 @@ vi.mock("./billing/sub-gate", () => ({
     _c: unknown,
     next: () => Promise<void>,
   ) => {
+    await next()
+  },
+}))
+
+vi.mock("./middleware", () => ({
+  requireAuth: async (_c: unknown, next: () => Promise<void>) => {
     await next()
   },
 }))
@@ -232,7 +251,7 @@ async function computeKey(
   voice: string,
   speed: number,
 ): Promise<string> {
-  const canonical = `tts-1|${voice}|${speed.toFixed(2)}|${text}`
+  const canonical = `gpt-4o-mini-tts|${voice}|${speed.toFixed(2)}|${text}`
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(canonical),
@@ -306,11 +325,17 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     expect(res.headers.get("X-TTS-Cache")).toBe("miss")
 
     expect(speechCalls.length).toBe(1)
+    expect(speechCalls[0]).toMatchObject({
+      model: "gpt-4o-mini-tts",
+    })
 
     // Flush waitUntil-deferred work (metering + R2 put).
     await Promise.all(waited)
 
     expect(meterMock).toHaveBeenCalledTimes(1)
+    expect(meterMock.mock.calls[0]?.[2]).toMatchObject({
+      model: "gpt-4o-mini-tts",
+    })
 
     expect(ttsCachePutMock).toHaveBeenCalledTimes(1)
     const [putKey, putValue] = ttsCachePutMock.mock.calls[0] as [
@@ -369,7 +394,7 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
 
   it("different voice produces different cache key", async () => {
     const k1 = await computeKey("hello", "alloy", 1.0)
-    const k2 = await computeKey("hello", "nova", 1.0)
+    const k2 = await computeKey("hello", "cedar", 1.0)
     expect(k1).not.toBe(k2)
   })
 

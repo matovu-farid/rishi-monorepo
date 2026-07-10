@@ -1,15 +1,11 @@
 import axios from "axios";
+import OpenAI from "openai";
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { createOpenAI } from "@ai-sdk/openai";
-import {
-  experimental_generateSpeech as generateSpeech,
-  generateText,
-  embedMany,
-  APICallError,
-} from "ai";
+import { generateText, embedMany, APICallError } from "ai";
 import { z } from "zod";
 
 import * as Sentry from "@sentry/cloudflare";
@@ -86,6 +82,16 @@ function getOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
   _openai = createOpenAI({ apiKey });
   _openaiApiKey = apiKey;
   return _openai;
+}
+
+// Separate client for the direct Speech API path.
+let _speechOpenAI: OpenAI | null = null;
+let _speechOpenAIKey: string | null = null;
+function getSpeechOpenAI(apiKey: string): OpenAI {
+  if (_speechOpenAI && _speechOpenAIKey === apiKey) return _speechOpenAI;
+  _speechOpenAI = new OpenAI({ apiKey });
+  _speechOpenAIKey = apiKey;
+  return _speechOpenAI;
 }
 
 /**
@@ -169,22 +175,23 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
 /**
  * Phase 22-01: TTS R2 cache key.
  *
- * Canonical string: "tts-1|" + voice + "|" + speed.toFixed(2) + "|" + text
+ * Canonical string: "gpt-4o-mini-tts|" + voice + "|" + speed.toFixed(2) + "|" + text
  * Hash: SHA-256 of the UTF-8 bytes, hex-encoded lowercase.
  *
- * The model literal "tts-1" lets a future bump (e.g. "tts-1-hd") invalidate
+ * The model literal "gpt-4o-mini-tts" lets a future bump invalidate
  * the cache namespace cleanly without manual purge. The iOS companion at
  * apps/apple/Packages/RishiAudio/Sources/RishiAudio/TTS/TTSCacheKey.swift
  * computes the SAME hex for the SAME (text, voice, speed) tuple — a paired
  * test in audio-speech-cache.test.ts and TTSCacheKeyTests.swift asserts this
- * symmetry against the pinned canonical string "tts-1|alloy|1.00|hello world".
+ * symmetry against the pinned canonical string
+ * "gpt-4o-mini-tts|alloy|1.00|hello world".
  */
 async function ttsCacheKey(
   text: string,
   voice: string,
   speed: number,
 ): Promise<string> {
-  const canonical = `tts-1|${voice}|${speed.toFixed(2)}|${text}`;
+  const canonical = `gpt-4o-mini-tts|${voice}|${speed.toFixed(2)}|${text}`;
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(canonical),
@@ -461,8 +468,8 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
     // The previous {input, voice} shape was an OpenAI passthrough that the iOS
     // client never matched, so every TTSStreamer.swift call short-circuited
-    // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
-    // call so the user-facing voice playback rate actually changes.
+    // to 400. Speed is forwarded into OpenAI's speech.create call so the
+    // user-facing voice playback rate actually changes.
     const { text, voice, speed } = await c.req.json<{
       text?: string;
       voice?: string;
@@ -477,10 +484,24 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       return c.json({ error: "text must be 4096 characters or fewer" }, 400);
     }
 
-    const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+    const allowedVoices = [
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "fable",
+      "nova",
+      "onyx",
+      "sage",
+      "shimmer",
+      "verse",
+      "marin",
+      "cedar",
+    ];
     const validVoice = allowedVoices.includes(voice as string)
       ? (voice as string)
-      : "alloy";
+      : "marin";
 
     // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
     // for missing / non-finite / out-of-range values so the AI SDK never sees
@@ -510,24 +531,25 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       });
     }
 
-    const openai = getOpenAI(c.env.OPENAI_API_KEY);
+    const openai = getSpeechOpenAI(c.env.OPENAI_API_KEY);
 
-    const speech = await generateSpeech({
-      model: openai.speech("tts-1"),
-      text: text,
+    const speech = await openai.audio.speech.create({
+      model: "gpt-4o-mini-tts",
       voice: validVoice,
+      input: text,
       speed: validSpeed,
+      response_format: "mp3",
     });
 
     c.executionCtx.waitUntil(
       meterFromContext(c.env, c.get("userId"), {
         type: "tts",
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
         characters: text.length,
       }),
     );
 
-    const audioBytes = speech.audio.uint8Array;
+    const audioBytes = new Uint8Array(await speech.arrayBuffer());
 
     // Fire-and-forget writeback; put errors must not surface to the response.
     c.executionCtx.waitUntil(
