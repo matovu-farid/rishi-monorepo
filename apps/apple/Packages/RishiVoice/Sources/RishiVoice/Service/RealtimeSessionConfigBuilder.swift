@@ -44,12 +44,12 @@ struct RealtimeSessionConfigBuilder: Sendable {
     /// `Conversation { session in ... }` builder. Voice + VAD parity with
     /// electron / Spike B (INTEGRATIONS.md:44): server VAD threshold 0.7,
     /// silence 700ms, prefix padding 300ms, voice=alloy, PCM 24kHz.
-    func makeSessionAudio() -> Core.Session.Audio {
+    func makeSessionAudio(language: String? = "en") -> Core.Session.Audio {
         let pcm24k = Self.makePCM24kFormat()
         let input = Core.Session.Audio.Input(
             format: pcm24k,
             noiseReduction: Self.inputNoiseReduction,
-            transcription: nil,
+            transcription: .init(language: language),
             turnDetection: .serverVad(
                 prefixPaddingMs: 300,
                 silenceDurationMs: 700,
@@ -69,9 +69,14 @@ struct RealtimeSessionConfigBuilder: Sendable {
     /// - it is in a book reader
     /// - it should call `bookContext` for book-grounded questions
     /// - the current reading state is already available in the snapshot
-    func makeInstructions(bookContext: BookContextSnapshot?) -> String {
+    func makeInstructions(
+        bookContext: BookContextSnapshot?,
+        language: String? = "en"
+    ) -> String {
+        let responseLanguage = Self.languageLabel(for: language)
         var lines: [String] = [
             "You are a voice assistant inside a book reader.",
+            "Respond in \(responseLanguage).",
             "Use the bookContext tool when the user asks about the book, asks for passages, or needs context from the book.",
         ]
 
@@ -119,10 +124,31 @@ struct RealtimeSessionConfigBuilder: Sendable {
     }
 
     /// Apply the audio + book-context configuration to an SDK session.
-    func configure(session: inout Core.Session, bookContext: BookContextSnapshot?) {
-        session.audio = makeSessionAudio()
-        session.instructions = makeInstructions(bookContext: bookContext)
+    func configure(
+        session: inout Core.Session,
+        bookContext: BookContextSnapshot?,
+        language: String? = "en"
+    ) {
+        session.audio = makeSessionAudio(language: language)
+        session.instructions = makeInstructions(bookContext: bookContext, language: language)
         session.tools = makeTools()
         session.toolChoice = Core.Tool.Choice.auto
+    }
+
+    private static func languageLabel(for code: String?) -> String {
+        switch code {
+        case "es": return "Spanish"
+        case "fr": return "French"
+        case "de": return "German"
+        case "it": return "Italian"
+        case "pt": return "Portuguese"
+        case "hi": return "Hindi"
+        case "ja": return "Japanese"
+        case "ko": return "Korean"
+        case "zh": return "Chinese"
+        case "ar": return "Arabic"
+        case "en", nil: return "English"
+        default: return "English"
+        }
     }
 }

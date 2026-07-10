@@ -12,7 +12,7 @@ struct TTSStreamerTests {
         let streamer = TTSStreamer(source: source)
         let request = TTSStreamRequest(text: "hi", voice: "alloy", speed: 1.0)
         var received: [Data] = []
-        for try await chunk in streamer.stream(request) {
+        for try await chunk in await streamer.stream(request) {
             received.append(chunk)
         }
         #expect(received == chunks)
@@ -27,7 +27,7 @@ struct TTSStreamerTests {
         var thrown: Error?
         var received: [Data] = []
         do {
-            for try await chunk in streamer.stream(request) {
+            for try await chunk in await streamer.stream(request) {
                 received.append(chunk)
             }
         } catch {
@@ -42,7 +42,7 @@ struct TTSStreamerTests {
         let source = FakeTTSChunkSource(chunks: [])
         let streamer = TTSStreamer(source: source)
         let request = TTSStreamRequest(text: "alpha", voice: "nova", speed: 1.5, passageId: "p-1")
-        for try await _ in streamer.stream(request) {}
+        for try await _ in await streamer.stream(request) {}
         let requests = await source.requests()
         #expect(requests.count == 1)
         #expect(requests[0] == request)
@@ -70,7 +70,7 @@ struct TTSStreamerTests {
         }
         let streamer = TTSStreamer(source: SlowSource())
         let request = TTSStreamRequest(text: "x", voice: "alloy", speed: 1.0)
-        let stream = streamer.stream(request)
+        let stream = await streamer.stream(request)
         var iter = stream.makeAsyncIterator()
         _ = try await iter.next()
         // Drop the iterator (end of scope) — should cancel upstream Task.

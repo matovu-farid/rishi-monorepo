@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Foundation
+import ReadiumShared
 
 /// Sequences the read-aloud follow-highlight choreography on the navigator
 /// coordinator.
@@ -44,6 +45,16 @@ public struct EPUBReadAloudPresenter {
         } else {
             coordinator.clearReadAloudHighlight()
         }
+    }
+
+    /// Follows the live read-aloud locator while a paragraph is playing.
+    /// This keeps the viewport moving when the paragraph spans a page
+    /// boundary, without changing the visible paragraph highlight.
+    public func follow(locator: Locator?) {
+        guard let coordinator = coordinatorRef.coordinator,
+              coordinator.isFollowingReadAloud,
+              let locator else { return }
+        coordinator.followReadAloudLocator(locator)
     }
 }
 #endif

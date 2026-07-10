@@ -169,6 +169,7 @@ final class ReaderTTSBridge {
         let request = TTSStreamRequest(
             text: paragraph,
             voice: settings.voice,
+            model: settings.model,
             speed: settings.speed,
             passageId: String(currentIndex)
         )
@@ -177,6 +178,7 @@ final class ReaderTTSBridge {
             after: currentIndex,
             in: paragraphs,
             voice: settings.voice,
+            model: settings.model,
             speed: settings.speed
         )
         await engine.start(request: request)
@@ -223,7 +225,6 @@ final class ReaderTTSBridge {
         return true
     }
 }
-
 
 
 

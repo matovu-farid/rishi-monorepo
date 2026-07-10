@@ -83,13 +83,16 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// Build the exact realtime session payload the adapter hands to the SDK.
     /// Exposed internally so tests can verify adapter wiring without needing a
     /// live WebRTC peer.
-    internal func makeConfiguredSession(bookContext: BookContextSnapshot?) -> SDKSession {
+    internal func makeConfiguredSession(
+        bookContext: BookContextSnapshot?,
+        language: String? = "en"
+    ) -> SDKSession {
         var session = SDKSession(
-            audio: configBuilder.makeSessionAudio(),
+            audio: configBuilder.makeSessionAudio(language: language),
             instructions: "",
             model: .gptRealtime
         )
-        configBuilder.configure(session: &session, bookContext: bookContext)
+        configBuilder.configure(session: &session, bookContext: bookContext, language: language)
         return session
     }
 
@@ -128,7 +131,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     // MARK: - RealtimeClientAPI
 
-    public func connect(ephemeralKey: String, bookContext: BookContextSnapshot? = nil) async throws {
+    public func connect(
+        ephemeralKey: String,
+        bookContext: BookContextSnapshot? = nil,
+        language: String? = nil
+    ) async throws {
         // Single-peer invariant: opening a new peer always closes the old one
         // first. On RECONNECT the session re-calls `connect()` WITHOUT a
         // preceding `disconnect()` (so transcript/tool/error streams stay
@@ -144,7 +151,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         Log.event("voice.adapter.connecting", level: .info)
         let convo = await MainActor.run { () -> SDKConversation in
             SDKConversation(debug: false) { [self] session in
-                session = makeConfiguredSession(bookContext: bookContext)
+                session = makeConfiguredSession(bookContext: bookContext, language: language)
             }
         }
         lock.withLock { self.conversation = convo }

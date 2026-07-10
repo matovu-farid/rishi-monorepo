@@ -25,9 +25,25 @@ public struct TTSPresenceSnapshot: Codable, Sendable, Hashable {
     public let currentPassageID: String?
     public let currentPassageIndex: Int?
     public let voice: String
+    public let model: String
     public let speed: Double
     public let elapsed: TimeInterval
     public let updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID
+        case bookID
+        case bookTitle
+        case bookAuthor
+        case status
+        case currentPassageID
+        case currentPassageIndex
+        case voice
+        case model
+        case speed
+        case elapsed
+        case updatedAt
+    }
 
     public init(
         sessionID: String,
@@ -38,6 +54,7 @@ public struct TTSPresenceSnapshot: Codable, Sendable, Hashable {
         currentPassageID: String?,
         currentPassageIndex: Int?,
         voice: String,
+        model: String = TTSModelCatalog.defaultModel,
         speed: Double,
         elapsed: TimeInterval,
         updatedAt: Date = .init()
@@ -50,9 +67,42 @@ public struct TTSPresenceSnapshot: Codable, Sendable, Hashable {
         self.currentPassageID = currentPassageID
         self.currentPassageIndex = currentPassageIndex
         self.voice = voice
+        self.model = model
         self.speed = speed
         self.elapsed = elapsed
         self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionID = try container.decode(String.self, forKey: .sessionID)
+        self.bookID = try container.decode(String.self, forKey: .bookID)
+        self.bookTitle = try container.decode(String.self, forKey: .bookTitle)
+        self.bookAuthor = try container.decodeIfPresent(String.self, forKey: .bookAuthor)
+        self.status = try container.decode(TTSStatus.self, forKey: .status)
+        self.currentPassageID = try container.decodeIfPresent(String.self, forKey: .currentPassageID)
+        self.currentPassageIndex = try container.decodeIfPresent(Int.self, forKey: .currentPassageIndex)
+        self.voice = try container.decode(String.self, forKey: .voice)
+        self.model = try container.decodeIfPresent(String.self, forKey: .model) ?? TTSModelCatalog.defaultModel
+        self.speed = try container.decode(Double.self, forKey: .speed)
+        self.elapsed = try container.decode(TimeInterval.self, forKey: .elapsed)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sessionID, forKey: .sessionID)
+        try container.encode(bookID, forKey: .bookID)
+        try container.encode(bookTitle, forKey: .bookTitle)
+        try container.encodeIfPresent(bookAuthor, forKey: .bookAuthor)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(currentPassageID, forKey: .currentPassageID)
+        try container.encodeIfPresent(currentPassageIndex, forKey: .currentPassageIndex)
+        try container.encode(voice, forKey: .voice)
+        try container.encode(model, forKey: .model)
+        try container.encode(speed, forKey: .speed)
+        try container.encode(elapsed, forKey: .elapsed)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     public var isActive: Bool {

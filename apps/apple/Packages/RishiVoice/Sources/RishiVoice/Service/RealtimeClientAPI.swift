@@ -87,7 +87,11 @@ public struct RealtimeToolCallEvent: Sendable, Equatable {
 public protocol RealtimeClientAPI: Sendable {
     /// Open a WebRTC voice session with the given ephemeral key. Throws on
     /// negotiation failure (network, key rejected, SDP failure).
-    func connect(ephemeralKey: String, bookContext: BookContextSnapshot?) async throws
+    func connect(
+        ephemeralKey: String,
+        bookContext: BookContextSnapshot?,
+        language: String?
+    ) async throws
 
     /// Tear down the WebRTC session. Idempotent — calling on an already-closed
     /// client is a no-op.
@@ -116,6 +120,18 @@ public protocol RealtimeClientAPI: Sendable {
 
 public extension RealtimeClientAPI {
     func connect(ephemeralKey: String) async throws {
-        try await connect(ephemeralKey: ephemeralKey, bookContext: nil)
+        try await connect(ephemeralKey: ephemeralKey, bookContext: nil, language: nil)
+    }
+
+    func connect(ephemeralKey: String, bookContext: BookContextSnapshot?) async throws {
+        try await connect(ephemeralKey: ephemeralKey, bookContext: bookContext, language: nil)
+    }
+
+    func connect(
+        ephemeralKey: String,
+        bookContext: BookContextSnapshot?,
+        language: String
+    ) async throws {
+        try await connect(ephemeralKey: ephemeralKey, bookContext: bookContext, language: Optional(language))
     }
 }

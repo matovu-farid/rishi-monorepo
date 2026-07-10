@@ -9,9 +9,6 @@ public protocol OnboardingState: Sendable {
 
     func primerShownMic() async -> Bool
     func setPrimerShownMic(_ value: Bool) async
-
-    func primerShownNotifications() async -> Bool
-    func setPrimerShownNotifications(_ value: Bool) async
 }
 
 /// UserDefaults-backed implementation. Defaults to `.standard`; tests pass a
@@ -25,7 +22,6 @@ public final class UserDefaultsOnboardingState: OnboardingState, @unchecked Send
 
     fileprivate static let keyCompleted    = "onboarding.completed"
     fileprivate static let keyPrimerMic    = "onboarding.primer.mic"
-    fileprivate static let keyPrimerNotifs = "onboarding.primer.notifications"
 
     private let defaults: UserDefaults
 
@@ -46,21 +42,12 @@ public final class UserDefaultsOnboardingState: OnboardingState, @unchecked Send
     public func setPrimerShownMic(_ value: Bool) async {
         defaults.set(value, forKey: Self.keyPrimerMic)
     }
-
-    public func primerShownNotifications() async -> Bool {
-        defaults.bool(forKey: Self.keyPrimerNotifs)
-    }
-    public func setPrimerShownNotifications(_ value: Bool) async {
-        defaults.set(value, forKey: Self.keyPrimerNotifs)
-    }
-    
 }
 
 /// Test/preview-only in-memory implementation.
 actor InMemoryOnboardingState: OnboardingState {
     private var completed = false
     private var mic = false
-    private var notifs = false
 
     public init() {}
 
@@ -68,6 +55,4 @@ actor InMemoryOnboardingState: OnboardingState {
     public func setHasCompletedOnboarding(_ value: Bool) async { completed = value }
     public func primerShownMic() async -> Bool { mic }
     public func setPrimerShownMic(_ value: Bool) async { mic = value }
-    public func primerShownNotifications() async -> Bool { notifs }
-    public func setPrimerShownNotifications(_ value: Bool) async { notifs = value }
 }

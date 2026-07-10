@@ -58,14 +58,14 @@ struct ReadAheadCoordinatorTests {
         let coordinator = ReadAheadCoordinator(prewarmer: TTSPrewarmer(source: source), readAhead: 2)
         let paragraphs = ["a", "b", "c", "d", "e"]
 
-        await coordinator.warm(after: 0, in: paragraphs, voice: "v", speed: 1.0)
+        await coordinator.warm(after: 0, in: paragraphs, voice: "v", model: "eleven_v3", speed: 1.0)
 
         let requested = await waitForRequests(source, count: 2)
         
         #expect(requested.map { $0.text } == ["b", "c"])
         
         #expect(requested.allSatisfy { $0.passageId == nil })
-        #expect(requested.allSatisfy { $0.voice == "v" && $0.speed == 1.0 })
+        #expect(requested.allSatisfy { $0.voice == "v" && $0.model == "eleven_v3" && $0.speed == 1.0 })
     }
 
     @Test("clamps the window to the end of the batch")
@@ -75,7 +75,7 @@ struct ReadAheadCoordinatorTests {
         let paragraphs = ["a", "b", "c"]
 
         
-        await coordinator.warm(after: 1, in: paragraphs, voice: "v", speed: 1.0)
+        await coordinator.warm(after: 1, in: paragraphs, voice: "v", model: "eleven_v3", speed: 1.0)
 
         let requested = await waitForRequests(source, count: 1)
         #expect(requested.map { $0.text } == ["c"])
@@ -88,7 +88,7 @@ struct ReadAheadCoordinatorTests {
         let paragraphs = ["a", "b", "c"]
 
         
-        await coordinator.warm(after: 2, in: paragraphs, voice: "v", speed: 1.0)
+        await coordinator.warm(after: 2, in: paragraphs, voice: "v", model: "eleven_v3", speed: 1.0)
 
         
         try? await Task.sleep(nanoseconds: 150_000_000)
@@ -103,13 +103,13 @@ struct ReadAheadCoordinatorTests {
 
         
         
-        await coordinator.warm(after: 0, in: ["a", "b", "c", "d"], voice: "v", speed: 1.0)
+        await coordinator.warm(after: 0, in: ["a", "b", "c", "d"], voice: "v", model: "eleven_v3", speed: 1.0)
         await coordinator.cancelAll()  
 
         
         
         
-        await coordinator.warm(after: 0, in: ["x", "y"], voice: "v", speed: 1.0)
+        await coordinator.warm(after: 0, in: ["x", "y"], voice: "v", model: "eleven_v3", speed: 1.0)
         let deadline = Date().addingTimeInterval(2)
         var sawY = false
         while Date() < deadline {

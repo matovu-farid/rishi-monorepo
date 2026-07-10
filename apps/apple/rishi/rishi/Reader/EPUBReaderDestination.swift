@@ -144,6 +144,7 @@ struct EPUBReaderDestination: View {
                         Task {
                             await services.ttsPresenceController.updatePlaybackSettings(
                                 voice: settings.voice,
+                                model: settings.model,
                                 speed: settings.speed
                             )
                         }

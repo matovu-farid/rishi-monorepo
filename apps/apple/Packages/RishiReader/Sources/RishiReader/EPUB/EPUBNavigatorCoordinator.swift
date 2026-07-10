@@ -53,6 +53,7 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// back to the spoken paragraph anyway. Set and read on the MainActor, so
     /// no synchronization is needed.
     public var isFollowingReadAloud = false
+    private var readAloudFollowTask: Task<Void, Never>?
 
     /// Forwarded to the screen so it can present the highlight context
     /// menu. The closure is also called with `nil` when the user clears
@@ -136,6 +137,8 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// Clears the active read-aloud passage decoration (called when TTS
     /// stops). No-ops before the navigator is built.
     public func clearReadAloudHighlight() {
+        readAloudFollowTask?.cancel()
+        readAloudFollowTask = nil
         navigator?.apply(decorations: [], in: EPUBReadAloudDecorationBuilder.groupName)
     }
 
@@ -158,6 +161,20 @@ public final class EPUBNavigatorCoordinator: NSObject {
         // (a read-aloud session owns navigation for its whole duration), so no
         // per-call marker is needed here.
         return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+    }
+
+    /// Follows a live read-aloud locator without touching the visible
+    /// paragraph highlight. Used while an utterance is in flight so the
+    /// viewport can keep up with a paragraph that spans a page boundary.
+    public func followReadAloudLocator(_ locator: Locator) {
+        guard isFollowingReadAloud, readAloudFollowTask == nil else { return }
+        readAloudFollowTask = Task { [weak self] in
+            guard let self else { return }
+            _ = await self.go(to: locator)
+            await MainActor.run { [weak self] in
+                self?.readAloudFollowTask = nil
+            }
+        }
     }
 
     /// Translates our reader settings into Readium's `EPUBPreferences`

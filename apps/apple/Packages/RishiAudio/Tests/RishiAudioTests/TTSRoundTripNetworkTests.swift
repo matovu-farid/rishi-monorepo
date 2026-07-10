@@ -76,7 +76,7 @@ struct TTSRoundTripNetworkTests {
         let request = TTSStreamRequest(text: expectedText, voice: "alloy", speed: 1.0)
 
         var mp3 = Data()
-        for try await chunk in source.stream(request: request) {
+        for try await chunk in await source.stream(request: request) {
             mp3.append(chunk)
         }
         #expect(mp3.count > 1000, "worker speech route returned too few bytes: \(mp3.count)")

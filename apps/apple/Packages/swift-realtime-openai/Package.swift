@@ -16,13 +16,9 @@ let package = Package(
 	],
 	dependencies: [
 		.package(url: "https://github.com/livekit/webrtc-xcframework.git", branch: "main"),
-		.package(url: "https://github.com/SwiftyLab/MetaCodable.git", .upToNextMajor(from: "1.0.0")),
 	],
 	targets: [
-		.target(name: "Core", dependencies: [
-			.product(name: "MetaCodable", package: "MetaCodable"),
-			.product(name: "HelperCoders", package: "MetaCodable"),
-		]),
+		.target(name: "Core", dependencies: []),
 		.target(name: "WebSocket", dependencies: ["Core"]),
 		.target(name: "UI", dependencies: ["Core", "WebRTC"]),
 		.target(name: "RealtimeAPI", dependencies: ["Core", "WebSocket", "WebRTC", "UI"]),

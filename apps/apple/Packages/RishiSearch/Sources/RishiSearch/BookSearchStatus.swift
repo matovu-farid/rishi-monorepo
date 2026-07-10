@@ -56,14 +56,14 @@ public extension BookSearchStatus {
 
     /// Low-salience chip text, or nil when the chip should be hidden.
     ///
-    /// `.indexing` -> "Indexing… NN%" (or "Indexing…" when total is 0);
+    /// `.indexing` -> "Indexing NN%" (or "Indexing 0%" when total is 0);
     /// every other case returns nil so the chip disappears once the index
     /// is ready, never built, or failed.
     var indicatorText: String? {
         guard case let .indexing(_, total) = self else { return nil }
         if total > 0, let percent = indexingProgressPercent {
-            return "Indexing… \(percent)%"
+            return "Indexing \(percent)%"
         }
-        return "Indexing…"
+        return "Indexing 0%"
     }
 }

@@ -103,10 +103,11 @@ struct Phase22CacheThroughNewEngineTests {
         let request = TTSStreamRequest(
             text: "The quick brown fox.",
             voice: "alloy",
+            model: "eleven_v3",
             speed: 1.0,
             passageId: "p-orthogonality"
         )
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
         let seeded = Data((0..<8192).map { UInt8($0 % 256) })
         try seeded.write(to: tmp.appendingPathComponent("\(key).mp3"))
 

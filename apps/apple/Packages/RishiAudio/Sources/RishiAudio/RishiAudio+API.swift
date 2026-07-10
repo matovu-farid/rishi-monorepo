@@ -89,4 +89,4 @@
 // UserDefaultsTTSSettingsStore — `Settings/TTSSettingsStore.swift`. Production store.
 // InMemoryTTSSettingsStore    — `Settings/TTSSettingsStore.swift`. Test-only store.
 // VoiceCatalog                — `UI/VoiceCatalog.swift`. The hard-coded list of available
-//                                voices the picker shows.
+//                                reader voice presets the picker shows.

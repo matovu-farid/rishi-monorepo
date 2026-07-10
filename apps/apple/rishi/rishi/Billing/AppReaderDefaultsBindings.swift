@@ -1,5 +1,7 @@
 import Foundation
+import Observation
 import RishiReader
+import RishiSettings
 import SwiftUI
 
 @MainActor
@@ -12,6 +14,7 @@ final class AppReaderDefaults {
     private static let pdfViewModeKey = "reader.defaults.pdfViewMode"
 
     private static let autoSyncKey = "reader.defaults.autoSync"
+    private static let voiceLanguageKey = "voice.language"
 
     private let defaults: UserDefaults
 
@@ -58,4 +61,15 @@ final class AppReaderDefaults {
         }
         set { defaults.set(newValue, forKey: Self.autoSyncKey) }
     }
+
+    var voiceLanguage: VoiceLanguageOption {
+        get {
+            guard let raw = defaults.string(forKey: Self.voiceLanguageKey),
+                let language = VoiceLanguageOption(rawValue: raw)
+            else { return .english }
+            return language
+        }
+        set { defaults.set(newValue.rawValue, forKey: Self.voiceLanguageKey) }
+    }
+
 }

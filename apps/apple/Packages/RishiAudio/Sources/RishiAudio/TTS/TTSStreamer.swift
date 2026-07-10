@@ -9,7 +9,7 @@ public protocol TTSChunkSource: Sendable {
     func stream(request: TTSStreamRequest) async-> AsyncThrowingStream<Data, Error>
 }
 
-/// Production adapter — wraps the existing WorkerClient + SpeechStreamEndpoint.
+/// Production adapter — wraps the existing WorkerClient + ElevenLabs speech endpoint.
 public struct WorkerTTSChunkSource: TTSChunkSource {
     private let client: WorkerClient
 
@@ -18,8 +18,13 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
     }
 
     public func stream(request: TTSStreamRequest) async  -> AsyncThrowingStream<Data, Error> {
-        let endpoint = SpeechStreamEndpoint(
-            body: .init(text: request.text, voice: request.voice, speed: request.speed)
+        let endpoint = ElevenLabsSpeechStreamEndpoint(
+            body: .init(
+                text: request.text,
+                voice: request.voice,
+                model: request.model,
+                speed: request.speed
+            )
         )
         return await client.stream(endpoint)
     }
@@ -95,6 +100,7 @@ public actor TTSStreamer {
                 do {
                     Log.event("tts.stream.start", level: .info, data: [
                         "voice": request.voice,
+                        "model": request.model,
                         "speed": String(format: "%.2f", request.speed),
                         "textLen": String(request.text.count),
                     ])

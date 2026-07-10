@@ -1,30 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import Foundation
-import RishiCore
 import RishiChat
+import RishiCore
 import RishiSync
 import RishiVoice
-
-
-
-
-
-
-
 
 struct AppVoiceDirtyAdapter: ChatDirtyHook, VoiceTranscriptDirtyHook {
     private let syncEngine: SyncEngine
@@ -32,8 +10,6 @@ struct AppVoiceDirtyAdapter: ChatDirtyHook, VoiceTranscriptDirtyHook {
     init(syncEngine: SyncEngine) {
         self.syncEngine = syncEngine
     }
-
-    
 
     func conversationDidUpdate(_ id: ConversationID) async {
         await syncEngine.markConversationDirty(id)

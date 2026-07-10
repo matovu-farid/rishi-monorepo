@@ -24,6 +24,7 @@ final class MacReaderPrefsMenuViewModel {
     @Observable
     final class AudioPrefs {
         var voice: String = TTSSettings.default.voice
+        var model: String = TTSSettings.default.model
         var speed: Double = TTSSettings.default.speed
         
         var isSeeded: Bool = false
@@ -84,6 +85,7 @@ final class MacReaderPrefsMenuViewModel {
     func seed() async {
         let loaded = await loadSettings()
         audioPrefs.voice = loaded.voice
+        audioPrefs.model = loaded.model
         audioPrefs.speed = loaded.speed
         audioPrefs.isSeeded = true
     }
@@ -91,7 +93,11 @@ final class MacReaderPrefsMenuViewModel {
 
     func persistAudio() {
         guard audioPrefs.isSeeded else { return }
-        let settings = TTSSettings(voice: audioPrefs.voice, speed: audioPrefs.speed)
+        let settings = TTSSettings(
+            voice: audioPrefs.voice,
+            model: audioPrefs.model,
+            speed: audioPrefs.speed
+        )
         Task { await saveSettings(settings) }
     }
 
@@ -107,6 +113,13 @@ final class MacReaderPrefsMenuViewModel {
                 get: { self.audioPrefs.voice },
                 set: { newValue in
                     self.audioPrefs.voice = newValue
+                    self.persistAudio()
+                }
+            ),
+            model: Binding(
+                get: { self.audioPrefs.model },
+                set: { newValue in
+                    self.audioPrefs.model = newValue
                     self.persistAudio()
                 }
             ),

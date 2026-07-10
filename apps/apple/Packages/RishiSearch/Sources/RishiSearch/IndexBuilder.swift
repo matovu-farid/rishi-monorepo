@@ -56,6 +56,19 @@ public actor IndexBuilder {
         self.progress = progressUpdate
     }
 
+    /// Mark a book as actively indexing before extraction finishes.
+    ///
+    /// The indexing hook calls this as soon as scheduling begins so the
+    /// reader chip can appear during the long extraction phase. The real
+    /// chunk counts are written later by `buildIndex(bookId:paragraphs:)`
+    /// once extraction has produced paragraph rows.
+    public func markIndexing(bookId: UUID) async {
+        let status = BookSearchStatus.indexing(chunksDone: 0, chunksTotal: 0)
+        try? locator.ensureBookDir(bookId)
+        try? IndexStatusStore(url: locator.statusURL(bookId)).write(status)
+        await progress(bookId, status)
+    }
+
     /// Build (or rebuild) the per-book index from a list of paragraph entries.
     ///
     /// - Parameter bookId: target book identifier.

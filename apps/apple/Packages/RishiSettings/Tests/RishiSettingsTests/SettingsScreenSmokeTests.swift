@@ -43,11 +43,16 @@ struct SettingsScreenSmokeTests {
     func readerDefaultsConstructs() {
         var theme: ReaderTheme = .light
         var font: ReaderFontFamily = .system
+        var language: VoiceLanguageOption = .english
         let s = ReaderDefaultsSection(
             defaultTheme: .init(get: { theme }, set: { theme = $0 }),
             defaultFontFamily: .init(get: { font }, set: { font = $0 })
         )
         _ = s.body
+        let voice = VoiceLanguageSection(
+            selection: .init(get: { language }, set: { language = $0 })
+        )
+        _ = voice.body
     }
 
     @Test("SyncSettingsSection constructs with a real SyncStatus")
@@ -79,11 +84,13 @@ struct SettingsScreenSmokeTests {
         )
         var theme: ReaderTheme = .light
         var font: ReaderFontFamily = .system
+        var language: VoiceLanguageOption = .english
         var pdfViewMode: PDFViewModeSetting = .automatic
         let screen = SettingsScreen(
             user: user,
             readerTheme: .init(get: { theme }, set: { theme = $0 }),
             readerFontFamily: .init(get: { font }, set: { font = $0 }),
+            voiceLanguage: .init(get: { language }, set: { language = $0 }),
             pdfViewMode: .init(get: { pdfViewMode }, set: { pdfViewMode = $0 }),
             audioUserId: user.id,
             audioInitial: .default,
@@ -97,7 +104,6 @@ struct SettingsScreenSmokeTests {
             onSignOut: {},
             onDelete: {},
             onDeleted: {},
-            onManageSubscription: {},
             onDismiss: {}
         )
         _ = screen.body

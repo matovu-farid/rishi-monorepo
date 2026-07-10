@@ -39,10 +39,11 @@ struct Phase24PrewarmOrthogonalityTests {
         let req = TTSStreamRequest(
             text: "Paragraph N plus one body text.",
             voice: "alloy",
+            model: "eleven_v3",
             speed: 1.0,
             passageId: nil
         )
-        let key = TTSCacheKey.compute(text: req.text, voice: req.voice, speed: req.speed)
+        let key = TTSCacheKey.compute(text: req.text, voice: req.voice, model: req.model, speed: req.speed)
         let expectedURL = tmpDir.appendingPathComponent("\(key).mp3", isDirectory: false)
 
         // 5. Warm. The warm call returns once the per-request Task is spawned;

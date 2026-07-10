@@ -33,7 +33,7 @@ struct CachingTTSChunkSourceTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest()
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         // Seed: write a known byte sequence to <key>.mp3 directly.
         let seeded = Data((0..<8192).map { UInt8($0 % 256) })
@@ -59,7 +59,7 @@ struct CachingTTSChunkSourceTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest()
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         let upstreamChunks: [Data] = [
             Data([0x01, 0x02, 0x03]),
@@ -141,25 +141,66 @@ struct CachingTTSChunkSourceTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest()
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
-        // Upstream that emits one chunk then would emit more — we cancel after the first.
-        let upstream = FakeTTSChunkSource(chunks: [
-            Data([0x01, 0x02, 0x03]),
-            Data([0x04, 0x05, 0x06]),
-            Data([0x07, 0x08, 0x09]),
-        ])
+        // Slow upstream so cancellation has time to land before the writer can
+        // finish and commit a final file.
+        actor SlowSource: TTSChunkSource {
+            private(set) var requests: [TTSStreamRequest] = []
+
+            nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+                Task { await self.record(request) }
+                return AsyncThrowingStream { continuation in
+                    let task = Task {
+                        continuation.yield(Data([0x01, 0x02, 0x03]))
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        if Task.isCancelled {
+                            continuation.finish()
+                            return
+                        }
+                        continuation.yield(Data([0x04, 0x05, 0x06]))
+                        continuation.finish()
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            }
+
+            private func record(_ request: TTSStreamRequest) {
+                requests.append(request)
+            }
+
+            func count() async -> Int { requests.count }
+        }
+        let upstream = SlowSource()
         let cache = CachingTTSChunkSource(upstream: upstream, store: store)
 
-        let consumer = Task {
-            var count = 0
-            for try await _ in cache.stream(request: request) {
+        actor ChunkCounter {
+            private var count = 0
+            func increment() -> Int {
                 count += 1
-                if count >= 1 { break }  // bail out after first chunk -> triggers onTermination
+                return count
+            }
+            func value() -> Int { count }
+        }
+        let counter = ChunkCounter()
+
+        let consumer = Task {
+            for try await _ in cache.stream(request: request) {
+                _ = await counter.increment()
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 10_000_000)
+                }
+                return
             }
         }
-        try await consumer.value
-        // Give the cleanup task a moment to run.
+
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            if await counter.value() >= 1 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        consumer.cancel()
+        _ = await consumer.result
         try await Task.sleep(nanoseconds: 100_000_000)
 
         let finalURL = tmp.appendingPathComponent("\(key).mp3")
@@ -168,7 +209,7 @@ struct CachingTTSChunkSourceTests {
 
         // Next call must be a miss (upstream invoked a second time).
         _ = try await consume(cache.stream(request: request))
-        let calls = await upstream.requests().count
+        let calls = await upstream.count()
         #expect(calls >= 2, "next stream after cancel must be a miss — upstream invoked again")
     }
 
@@ -181,7 +222,7 @@ struct CachingTTSChunkSourceTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest()
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         // Seed only a .partial — NOT a .mp3.
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -253,7 +294,7 @@ struct CachingTTSChunkSourceTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest(text: "Paragraph the worker synthesises to nothing.")
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         // The uncached next paragraph forces an upstream call that yields NOTHING.
         let upstream = FakeTTSChunkSource(chunks: [])
@@ -282,7 +323,7 @@ struct CachingTTSChunkSourceTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest(text: "Already-poisoned paragraph.")
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         // Simulate a cache poisoned by an older build: a committed but EMPTY .mp3.
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)

@@ -69,10 +69,10 @@
 		092254A32FD83186008C5ADE /* rishiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		092254AD2FD83186008C5ADE /* rishiUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Rishi Reader.storekit"; sourceTree = "<group>"; };
+		1A1111122FD83183008C5ADE /* TTSPresenceWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TTSPresenceWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSPresenceWidgetBundle.swift; sourceTree = "<group>"; };
 		1A1111212FD83183008C5ADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A1111222FD83183008C5ADE /* TTSPresenceWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TTSPresenceWidget.entitlements; sourceTree = "<group>"; };
-		1A1111122FD83183008C5ADE /* TTSPresenceWidget.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; includeInIndex = 0; path = TTSPresenceWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -243,6 +243,13 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		09B561A42FF1256400972BA3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		1A1111102FD83183008C5ADE /* TTSPresenceWidget */ = {
 			isa = PBXGroup;
 			children = (
@@ -251,13 +258,6 @@
 				1A1111222FD83183008C5ADE /* TTSPresenceWidget.entitlements */,
 			);
 			path = TTSPresenceWidget;
-			sourceTree = "<group>";
-		};
-		09B561A42FF1256400972BA3 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

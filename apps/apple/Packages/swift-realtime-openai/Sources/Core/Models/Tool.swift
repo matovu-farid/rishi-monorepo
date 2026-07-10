@@ -1,7 +1,6 @@
 import Foundation
-import MetaCodable
 
-@Codable @CodedAt("type") public enum Tool: Equatable, Hashable, Sendable {
+public enum Tool: Codable, Equatable, Hashable, Sendable {
 	public enum Choice: Equatable, Hashable, Sendable {
 		/// The model will not call any tool and instead generates a message.
 		case none
@@ -41,7 +40,7 @@ import MetaCodable
 		}
 	}
 
-	@Codable public struct MCP: Equatable, Hashable, Sendable {
+	public struct MCP: Codable, Equatable, Hashable, Sendable {
 		public enum Connector: String, Equatable, Hashable, Codable, Sendable {
 			case gmail = "connector_gmail"
 			case dropbox = "connector_dropbox"
@@ -71,15 +70,15 @@ import MetaCodable
 		}
 
 		/// A label for this MCP server, used to identify it in tool calls.
-		@CodedAt("server_label") public var label: String
+		public var label: String
 
 		/// The URL for the MCP server.
-		@CodedAt("server_url") public var url: URL?
+		public var url: URL?
 
 		/// Identifier for service connectors, like those available in ChatGPT.
 		///
 		/// Learn more about service connectors [here](https://platform.openai.com/docs/guides/tools-remote-mcp#connectors).
-		@CodedAt("connector_id") public var connector: Connector?
+		public var connector: Connector?
 
 		/// An OAuth access token that can be used with a remote MCP server, either with a custom MCP server URL or a service connector.
 		///
@@ -98,7 +97,7 @@ import MetaCodable
 		public var requireApproval: RequireApproval?
 
 		/// Optional description of the MCP server, used to provide more context.
-		@CodedAt("server_description") public var description: String?
+		public var description: String?
 
 		/// Create a new `MCP` instance for a remote MCP server.
 		///
@@ -141,6 +140,95 @@ import MetaCodable
 
 	case mcp(MCP)
 	case function(Function)
+}
+
+extension Tool {
+	private enum CodingKeys: String, CodingKey {
+		case type
+		case label = "server_label"
+		case url = "server_url"
+		case connector = "connector_id"
+		case authorization
+		case allowedTools
+		case headers
+		case requireApproval
+		case description = "server_description"
+		case name
+		case parameters
+	}
+
+	public func encode(to encoder: any Encoder) throws {
+		var container = encoder.container(keyedBy: CodingKeys.self)
+
+		switch self {
+			case let .mcp(mcp):
+				try container.encode("mcp", forKey: .type)
+				try container.encode(mcp.label, forKey: .label)
+				try container.encodeIfPresent(mcp.url, forKey: .url)
+				try container.encodeIfPresent(mcp.connector, forKey: .connector)
+				try container.encodeIfPresent(mcp.authorization, forKey: .authorization)
+				try container.encodeIfPresent(mcp.allowedTools, forKey: .allowedTools)
+				try container.encodeIfPresent(mcp.headers, forKey: .headers)
+				try container.encodeIfPresent(mcp.requireApproval, forKey: .requireApproval)
+				try container.encodeIfPresent(mcp.description, forKey: .description)
+			case let .function(function):
+				try container.encode("function", forKey: .type)
+				try container.encode(function.name, forKey: .name)
+				try container.encodeIfPresent(function.description, forKey: .description)
+				try container.encode(function.parameters, forKey: .parameters)
+		}
+	}
+
+	public init(from decoder: any Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		let type = try container.decode(String.self, forKey: .type)
+
+		switch type {
+			case "mcp":
+				self = .mcp(try MCP(from: decoder))
+			case "function":
+				self = .function(try Function(from: decoder))
+			default:
+				throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Invalid tool type: \(type)")
+		}
+	}
+}
+
+extension Tool.MCP {
+	private enum CodingKeys: String, CodingKey {
+		case label = "server_label"
+		case url = "server_url"
+		case connector = "connector_id"
+		case authorization
+		case allowedTools
+		case headers
+		case requireApproval
+		case description = "server_description"
+	}
+
+	public func encode(to encoder: any Encoder) throws {
+		var container = encoder.container(keyedBy: CodingKeys.self)
+		try container.encode(label, forKey: .label)
+		try container.encodeIfPresent(url, forKey: .url)
+		try container.encodeIfPresent(connector, forKey: .connector)
+		try container.encodeIfPresent(authorization, forKey: .authorization)
+		try container.encodeIfPresent(allowedTools, forKey: .allowedTools)
+		try container.encodeIfPresent(headers, forKey: .headers)
+		try container.encodeIfPresent(requireApproval, forKey: .requireApproval)
+		try container.encodeIfPresent(description, forKey: .description)
+	}
+
+	public init(from decoder: any Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		self.label = try container.decode(String.self, forKey: .label)
+		self.url = try container.decodeIfPresent(URL.self, forKey: .url)
+		self.connector = try container.decodeIfPresent(Connector.self, forKey: .connector)
+		self.authorization = try container.decodeIfPresent(String.self, forKey: .authorization)
+		self.allowedTools = try container.decodeIfPresent([String].self, forKey: .allowedTools)
+		self.headers = try container.decodeIfPresent([String: String].self, forKey: .headers)
+		self.requireApproval = try container.decodeIfPresent(RequireApproval.self, forKey: .requireApproval)
+		self.description = try container.decodeIfPresent(String.self, forKey: .description)
+	}
 }
 
 extension Tool.Choice: Codable {
@@ -206,7 +294,11 @@ extension Tool.MCP.RequireApproval: Codable {
 	}
 
 	private struct ToolList: Codable {
-		var tool_names: [String]
+		var toolNames: [String]
+
+		private enum CodingKeys: String, CodingKey {
+			case toolNames = "tool_names"
+		}
 	}
 
 	public func encode(to encoder: any Encoder) throws {
@@ -217,10 +309,10 @@ extension Tool.MCP.RequireApproval: Codable {
 			case let .granular(always, never):
 				var container = encoder.container(keyedBy: CodingKeys.self)
 				if let always {
-					try container.encode(ToolList(tool_names: always), forKey: .always)
+					try container.encode(ToolList(toolNames: always), forKey: .always)
 				}
 				if let never {
-					try container.encode(ToolList(tool_names: never), forKey: .never)
+					try container.encode(ToolList(toolNames: never), forKey: .never)
 				}
 		}
 	}
@@ -233,8 +325,8 @@ extension Tool.MCP.RequireApproval: Codable {
 
 		let container = try decoder.container(keyedBy: CodingKeys.self)
 		self = try .granular(
-			always: container.decode(ToolList?.self, forKey: .always)?.tool_names,
-			never: container.decode(ToolList?.self, forKey: .never)?.tool_names
+			always: container.decode(ToolList?.self, forKey: .always)?.toolNames,
+			never: container.decode(ToolList?.self, forKey: .never)?.toolNames
 		)
 	}
 }

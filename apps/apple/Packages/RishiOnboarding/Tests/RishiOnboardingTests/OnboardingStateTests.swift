@@ -17,7 +17,6 @@ struct OnboardingStateTests {
         let s = UserDefaultsOnboardingState(defaults: freshDefaults())
         #expect(await s.hasCompletedOnboarding() == false)
         #expect(await s.primerShownMic() == false)
-        #expect(await s.primerShownNotifications() == false)
     }
 
     @Test("setHasCompletedOnboarding(true) persists")
@@ -36,21 +35,12 @@ struct OnboardingStateTests {
         #expect(await s.primerShownMic() == true)
     }
 
-    @Test("setPrimerShownNotifications(true) persists")
-    func setNotifsPrimerPersists() async {
-        let s = UserDefaultsOnboardingState(defaults: freshDefaults())
-        await s.setPrimerShownNotifications(true)
-        #expect(await s.primerShownNotifications() == true)
-    }
-
-    @Test("InMemoryOnboardingState round-trips all three flags")
+    @Test("InMemoryOnboardingState round-trips the remaining flags")
     func inMemoryRoundTrips() async {
         let s = InMemoryOnboardingState()
         await s.setHasCompletedOnboarding(true)
         await s.setPrimerShownMic(true)
-        await s.setPrimerShownNotifications(true)
         #expect(await s.hasCompletedOnboarding() == true)
         #expect(await s.primerShownMic() == true)
-        #expect(await s.primerShownNotifications() == true)
     }
 }

@@ -60,6 +60,61 @@ struct AVAudioEngineAdapterRenderTests {
         return peak
     }
 
+    private final class CompletionCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _count = 0
+
+        func increment() {
+            lock.withLock { _count += 1 }
+        }
+
+        var count: Int {
+            lock.withLock { _count }
+        }
+    }
+
+    private func poll(timeout: Duration, until predicate: @Sendable () -> Bool) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if predicate() { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    @Test("buffer completion is not emitted before offline rendering consumes the buffer")
+    func completionWaitsForRenderedFrames() async throws {
+        let adapter = AVAudioEngineAdapter()
+        try adapter.attach()
+        let format = adapter.targetFormat
+        try adapter.enableOfflineRendering(format: format, maximumFrameCount: 4096)
+        try adapter.start()
+
+        let chunk = sineChunk(format: format, frames: 48_000, passageId: "0")
+        let completions = adapter.play(stream([chunk]))
+        let counter = CompletionCounter()
+        let consumer = Task {
+            for await _ in completions {
+                counter.increment()
+            }
+        }
+
+        adapter.resume()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(
+            counter.count == 0,
+            "completion fired before any frames were rendered; final-passage auto-advance would be allowed to reset the player before audible audio finished"
+        )
+
+        _ = try renderPeak(adapter, totalFrames: 48_000)
+        await poll(timeout: .seconds(1)) { counter.count == 1 }
+
+        #expect(counter.count == 1, "completion should fire after the buffer has rendered")
+        consumer.cancel()
+        adapter.stop()
+    }
+
     @Test("re-playing after a mid-stream stop still renders audio")
     func midStreamStopThenPlayRendersAudio() async throws {
         let adapter = AVAudioEngineAdapter()

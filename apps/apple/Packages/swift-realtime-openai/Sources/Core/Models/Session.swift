@@ -1,8 +1,6 @@
 import Foundation
-import MetaCodable
-import HelperCoders
 
-@Codable public struct Session: Equatable, Hashable, Sendable {
+public struct Session: Codable, Equatable, Hashable, Sendable {
 	public enum Modality: String, Equatable, Hashable, Codable, Sendable {
 		case text, audio
 	}
@@ -328,6 +326,57 @@ import HelperCoders
 		self.temperature = temperature
 		self.instructions = instructions
 		self.maxResponseOutputTokens = maxResponseOutputTokens
+	}
+}
+
+extension Session {
+	private enum CodingKeys: String, CodingKey {
+		case type
+		case id
+		case audio
+		case instructions
+		case maxResponseOutputTokens
+		case modalities
+		case model
+		case prompt
+		case temperature
+		case toolChoice
+		case tools
+	}
+
+	public func encode(to encoder: any Encoder) throws {
+		var container = encoder.container(keyedBy: CodingKeys.self)
+
+		try container.encode(type, forKey: .type)
+		try container.encodeIfPresent(id, forKey: .id)
+		try container.encode(audio, forKey: .audio)
+		try container.encode(instructions, forKey: .instructions)
+		try container.encodeIfPresent(maxResponseOutputTokens, forKey: .maxResponseOutputTokens)
+		try container.encodeIfPresent(modalities, forKey: .modalities)
+		try container.encode(model, forKey: .model)
+		try container.encodeIfPresent(prompt, forKey: .prompt)
+		try container.encodeIfPresent(temperature, forKey: .temperature)
+		try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
+		try container.encodeIfPresent(tools, forKey: .tools)
+	}
+
+	public init(from decoder: any Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+
+		if let type = try container.decodeIfPresent(String.self, forKey: .type), type != "realtime" {
+			throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown session type: \(type)")
+		}
+
+		self.id = try container.decodeIfPresent(String.self, forKey: .id)
+		self.audio = try container.decode(Audio.self, forKey: .audio)
+		self.instructions = try container.decode(String.self, forKey: .instructions)
+		self.maxResponseOutputTokens = try container.decodeIfPresent(MaxResponseOutputTokens.self, forKey: .maxResponseOutputTokens)
+		self.modalities = try container.decodeIfPresent([Modality].self, forKey: .modalities)
+		self.model = try container.decode(Model.self, forKey: .model)
+		self.prompt = try container.decodeIfPresent(Prompt.self, forKey: .prompt)
+		self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+		self.toolChoice = try container.decodeIfPresent(Tool.Choice.self, forKey: .toolChoice)
+		self.tools = try container.decodeIfPresent([Tool].self, forKey: .tools)
 	}
 }
 

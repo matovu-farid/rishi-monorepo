@@ -2,7 +2,6 @@ import Testing
 import Foundation
 @testable import RishiAudio
 import RishiCore
-import RishiCore
 
 @Suite("RishiAudio package smoke")
 struct PackageSmokeTests {
@@ -29,6 +28,15 @@ struct PackageSmokeTests {
         let body = SpeechStreamEndpoint.Body(text: "hello", voice: "alloy", speed: 1.25)
         #expect(body.text == "hello")
         #expect(body.voice == "alloy")
+        #expect(body.speed == 1.25)
+    }
+
+    @Test("ElevenLabsSpeechStreamEndpoint.Body shape matches the app worker contract")
+    func elevenLabsSpeechEndpointBodyShape() {
+        let body = ElevenLabsSpeechStreamEndpoint.Body(text: "hello", voice: "alloy", model: "eleven_flash_v2_5", speed: 1.25)
+        #expect(body.text == "hello")
+        #expect(body.voice == "alloy")
+        #expect(body.model == "eleven_flash_v2_5")
         #expect(body.speed == 1.25)
     }
 }

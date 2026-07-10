@@ -58,4 +58,5 @@ struct AppReaderDefaultsAutoSyncTests {
         #expect(prefs.autoSync == true)
         #expect(defaults.object(forKey: "reader.defaults.autoSync") != nil)
     }
+
 }

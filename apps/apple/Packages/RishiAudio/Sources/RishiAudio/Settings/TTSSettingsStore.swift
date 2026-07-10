@@ -4,7 +4,7 @@ import RishiLogging
 
 /// Per-user TTS settings persistence (TTS-07). The Picker UI in plan 08-06
 /// updates settings; TTSEngine (plan 08-04) reads them when constructing
-/// the next /api/audio/speech request body.
+/// the next worker speech request body.
 public protocol TTSSettingsStore: Sendable {
     func load(userId: UserID) async -> TTSSettings
     func save(_ settings: TTSSettings, userId: UserID) async
@@ -42,6 +42,7 @@ public final class UserDefaultsTTSSettingsStore: TTSSettingsStore, @unchecked Se
         Log.event("tts.settings.saved", level: .info, data: [
             "userId": userId.uuidString,
             "voice": settings.voice,
+            "model": settings.model,
             "speed": String(format: "%.2f", settings.speed),
         ])
     }

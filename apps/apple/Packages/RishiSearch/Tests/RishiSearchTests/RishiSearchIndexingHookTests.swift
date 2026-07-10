@@ -39,6 +39,20 @@ struct RishiSearchIndexingHookTests {
         }
     }
 
+    /// Slow extractor used to verify the hook publishes an indexing status
+    /// before paragraph extraction finishes.
+    private struct SlowTextExtractor: PerBookTextExtractor {
+        let rows: [(page: Int, text: String)]
+        let delayNs: UInt64
+
+        func extractParagraphs(
+            from _: URL
+        ) async throws -> [(page: Int, text: String)] {
+            try await Task.sleep(nanoseconds: delayNs)
+            return rows
+        }
+    }
+
     private static func makeTempRoot(_ label: String = #function) -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("HookTests-\(label)-\(UUID().uuidString)", isDirectory: true)
@@ -110,6 +124,37 @@ struct RishiSearchIndexingHookTests {
                 && IndexStatusStore(url: locator.statusURL(bookId)).read() == .ready
         }
         #expect(ready, "Detached indexing task should produce vectors.hnsw + chunks.db + .ready sidecar")
+    }
+
+    @Test("scheduleIndexing marks .indexing before extraction finishes")
+    func scheduleIndexing_marksIndexingBeforeExtractionCompletes() async throws {
+        let root = Self.makeTempRoot()
+        let bookId = UUID()
+        let book = Self.makeBook(id: bookId)
+
+        let builder = IndexBuilder(rootURL: root, embedder: IdentityEmbedder())
+        let extractor = SlowTextExtractor(
+            rows: [(page: 1, text: "alpha")],
+            delayNs: 750_000_000
+        )
+        let hook = RishiSearchIndexingHook(
+            builder: builder,
+            extractors: ["pdf": extractor]
+        )
+
+        await hook.scheduleIndexing(
+            for: book,
+            fileURL: URL(fileURLWithPath: "/tmp/fixture.pdf")
+        )
+
+        let locator = BookIndexLocator(rootURL: root)
+        let indexingVisible = await Self.waitUntil(timeout: 1.0) { @Sendable in
+            if case .indexing = IndexStatusStore(url: locator.statusURL(bookId)).read() {
+                return true
+            }
+            return false
+        }
+        #expect(indexingVisible, "The hook should publish .indexing before extraction completes")
     }
 
     @Test("Built index is searchable via USearchBookSearch")

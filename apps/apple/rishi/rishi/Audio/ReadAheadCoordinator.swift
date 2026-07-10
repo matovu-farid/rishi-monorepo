@@ -21,6 +21,7 @@ final class ReadAheadCoordinator {
         after index: Int,
         in paragraphs: [String],
         voice: String,
+        model: String,
         speed: Double
     ) async {
         let windowStart = index + 1
@@ -30,6 +31,7 @@ final class ReadAheadCoordinator {
                 TTSStreamRequest(
                     text: text,
                     voice: voice,
+                    model: model,
                     speed: speed,
                     passageId: nil
                 )

@@ -158,6 +158,7 @@ final class ReadAloudController {
             title: metadata.title,
             author: metadata.author,
             voice: pickerInitial.voice,
+            model: pickerInitial.model,
             speed: pickerInitial.speed
         )
         showControls = true

@@ -53,6 +53,7 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
             "bookId": bookId.uuidString,
             "ext": ext,
         ])
+        await builder.markIndexing(bookId: bookId)
         Task.detached(priority: .background) {
             do {
                 let paragraphs = try await extractor.extractParagraphs(from: fileURL)

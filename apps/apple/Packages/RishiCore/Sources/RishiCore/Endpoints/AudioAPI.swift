@@ -14,17 +14,60 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
     public struct Body: Encodable, Sendable, Equatable {
         public let text: String
         public let voice: String
+        public let model: String
         public let speed: Double
 
-        public init(text: String, voice: String, speed: Double = 1.0) {
+        public init(
+            text: String,
+            voice: String,
+            model: String = "eleven_v3",
+            speed: Double = 1.0
+        ) {
             self.text = text
             self.voice = voice
+            self.model = model
             self.speed = speed
         }
     }
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/audio/speech"
+    public let body: Body
+
+    public init(body: Body) {
+        self.body = body
+    }
+}
+
+// MARK: - Streaming TTS: POST /api/audio/speech/elevenlabs
+
+/// `POST /api/audio/speech/elevenlabs` — ElevenLabs-backed streaming MP3 synthesis.
+///
+/// Keeps the same request body as the legacy OpenAI route so the reader code can
+/// switch providers without changing its local settings model.
+public struct ElevenLabsSpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
+
+    public struct Body: Encodable, Sendable, Equatable {
+        public let text: String
+        public let voice: String
+        public let model: String
+        public let speed: Double
+
+        public init(
+            text: String,
+            voice: String,
+            model: String = "eleven_v3",
+            speed: Double = 1.0
+        ) {
+            self.text = text
+            self.voice = voice
+            self.model = model
+            self.speed = speed
+        }
+    }
+
+    public let method: HTTPMethod = .POST
+    public let path: String = "/api/audio/speech/elevenlabs"
     public let body: Body
 
     public init(body: Body) {

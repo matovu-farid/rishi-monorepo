@@ -28,10 +28,12 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
         let session = adapter.makeConfiguredSession(bookContext: bookContext)
 
         #expect(session.instructions.contains("You are a voice assistant inside a book reader."))
+        #expect(session.instructions.contains("Respond in English."))
         #expect(session.instructions.contains("Use the bookContext tool"))
         #expect(session.instructions.contains("The Book"))
         #expect(session.instructions.contains("Ada Lovelace"))
         #expect(session.instructions.contains("Current page: 12"))
+        #expect(session.audio.input.transcription?.language == "en")
         #expect(session.tools?.count == 1)
         #expect(session.toolChoice == .auto)
 
@@ -42,6 +44,15 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
         }
         #expect(function.name == "bookContext")
         #expect(function.description?.contains("current book") == true)
+    }
+
+    @Test("Adapter session payload respects a selected language")
+    func configuredSessionIncludesSelectedLanguage() {
+        let adapter = RealtimeAPIAdapter()
+        let session = adapter.makeConfiguredSession(bookContext: nil, language: "es")
+
+        #expect(session.instructions.contains("Respond in Spanish."))
+        #expect(session.audio.input.transcription?.language == "es")
     }
 
     @Test("waitUntilConfiguredSession returns once the configured session appears")

@@ -60,7 +60,7 @@ struct TTSPrewarmerTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let req = makeRequest(text: "needs synthesis", voice: "alloy", speed: 1.0)
-        let key = TTSCacheKey.compute(text: req.text, voice: req.voice, speed: req.speed)
+        let key = TTSCacheKey.compute(text: req.text, voice: req.voice, model: req.model, speed: req.speed)
 
         let fake = FakeTTSChunkSource(chunks: [Data("hello".utf8), Data("world".utf8)])
         let cachingSource = CachingTTSChunkSource(upstream: fake, store: store)
@@ -92,7 +92,7 @@ struct TTSPrewarmerTests {
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let req = makeRequest(text: "already cached", voice: "alloy", speed: 1.0)
-        let key = TTSCacheKey.compute(text: req.text, voice: req.voice, speed: req.speed)
+        let key = TTSCacheKey.compute(text: req.text, voice: req.voice, model: req.model, speed: req.speed)
 
         // Pre-populate the cache by writing <key>.mp3 directly.
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)

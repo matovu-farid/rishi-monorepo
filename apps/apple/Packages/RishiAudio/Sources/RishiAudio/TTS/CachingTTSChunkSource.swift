@@ -22,6 +22,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
                 let key = TTSCacheKey.compute(
                     text: request.text,
                     voice: request.voice,
+                    model: request.model,
                     speed: request.speed
                 )
 

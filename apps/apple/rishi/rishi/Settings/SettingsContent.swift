@@ -35,6 +35,10 @@ struct SettingsContent: View {
                         get: { defaults.fontFamily },
                         set: { defaults.fontFamily = $0 }
                     ),
+                    voiceLanguage: Binding(
+                        get: { defaults.voiceLanguage },
+                        set: { defaults.voiceLanguage = $0 }
+                    ),
                     pdfViewMode: Binding(
                         get: { defaults.pdfViewMode },
                         set: { defaults.pdfViewMode = $0 }

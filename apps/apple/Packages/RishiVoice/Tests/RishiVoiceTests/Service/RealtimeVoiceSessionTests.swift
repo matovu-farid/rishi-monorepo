@@ -21,16 +21,25 @@ struct RealtimeVoiceSessionTests {
     @Test("Happy path: idle → requestingMic → fetchingKey → connecting → live")
     func happyPath() async throws {
         let fakes = makeSession(micDecision: .granted)
-        await fakes.session.start(language: "en")
+        await fakes.session.start()
         #expect(fakes.state.status == .live)
         #expect(fakes.client.connectCalls == ["k"])
+        #expect(fakes.fetcher.lastLanguage() == "en")
         #expect(await fakes.coordinator.currentMode == .voice)
+    }
+
+    @Test("Explicit language is forwarded into the ephemeral-key fetch")
+    func explicitLanguageIsForwarded() async throws {
+        let fakes = makeSession(micDecision: .granted)
+        await fakes.session.start(language: "es")
+        #expect(fakes.state.status == .live)
+        #expect(fakes.fetcher.lastLanguage() == "es")
     }
 
     @Test("End: live → ending → ended releases audio mode + disconnects client")
     func endReleasesAudioMode() async throws {
         let fakes = makeSession(micDecision: .granted)
-        await fakes.session.start(language: "en")
+        await fakes.session.start()
         #expect(fakes.state.status == .live)
         await fakes.session.end()
         #expect(fakes.state.status == .ended)
@@ -102,7 +111,7 @@ struct RealtimeVoiceSessionTests {
     @Test("Reconnect: transient disconnect → reconnecting(1) → live")
     func reconnectThenLive() async throws {
         let fakes = makeSession(micDecision: .granted)
-        await fakes.session.start()
+        await fakes.session.start(language: "es")
         #expect(fakes.state.status == .live)
 
         // Simulate a transient disconnect via the fake client status.
@@ -120,6 +129,7 @@ struct RealtimeVoiceSessionTests {
         // Give the actor a tick to update state after connect succeeds.
         try? await Task.sleep(for: .milliseconds(50))
         #expect(fakes.client.connectCalls.count == 2)  // initial + 1 reconnect
+        #expect(fakes.fetcher.lastLanguage() == "es")
         #expect(fakes.state.status == .live)
     }
 
@@ -196,6 +206,7 @@ struct RealtimeVoiceSessionTests {
         let coordinator: AudioSessionCoordinator
         let configurator: FakeAudioSessionConfigurator
         let client: FakeRealtimeClient
+        let fetcher: CapturingEphemeralKeyFetcher
         let micGate: FakeMicPermissionGate
     }
 
@@ -209,7 +220,7 @@ struct RealtimeVoiceSessionTests {
         let coordinator = AudioSessionCoordinator(configurator: configurator)
         let client = FakeRealtimeClient()
         let micGate = FakeMicPermissionGate(decision: micDecision)
-        let fetcher = StubEphemeralKeyFetcher(result: keyFetchResult)
+        let fetcher = CapturingEphemeralKeyFetcher(result: keyFetchResult)
 
         let session = RealtimeVoiceSession(
             micGate: micGate,
@@ -227,23 +238,9 @@ struct RealtimeVoiceSessionTests {
             coordinator: coordinator,
             configurator: configurator,
             client: client,
+            fetcher: fetcher,
             micGate: micGate
         )
-    }
-}
-
-// MARK: - Test doubles
-
-/// Stub conforming to `EphemeralKeyFetching` so tests can inject canned
-/// success/failure responses without going near WorkerClient or URLProtocol.
-///
-/// Phase 25 (Plan 25-08) widened the protocol surface with an optional
-/// `BookContextSnapshot`; the stub ignores it because these tests only
-/// care about the success/failure branch in `RealtimeVoiceSession.start`.
-struct StubEphemeralKeyFetcher: EphemeralKeyFetching, @unchecked Sendable {
-    let result: Result<EphemeralKey, Error>
-    func fetch(language: String?, bookContext: BookContextSnapshot?) async throws -> EphemeralKey {
-        try result.get()
     }
 }
 
