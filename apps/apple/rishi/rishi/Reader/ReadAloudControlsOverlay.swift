@@ -14,6 +14,7 @@ import RishiUIKit
 struct ReadAloudControlsOverlay: View {
     let controller: ReadAloudController
     let ttsState: TTSPlaybackState
+    let onOpenVoiceChat: () -> Void
 
     @State private var location: CGPoint?
     @State private var controlSize: CGSize = .zero
@@ -69,6 +70,7 @@ struct ReadAloudControlsOverlay: View {
             onStop: {
                 Task { await controller.stop() }
             },
+            onOpenVoiceChat: onOpenVoiceChat,
             onOpenPicker: {
                 controller.showPicker = true
             },

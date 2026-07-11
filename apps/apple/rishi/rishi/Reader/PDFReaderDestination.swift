@@ -131,7 +131,17 @@ struct PDFReaderDestination: View {
             if let ra = readAloud {
                 ReadAloudControlsOverlay(
                     controller: ra,
-                    ttsState: services.ttsState
+                    ttsState: services.ttsState,
+                    onOpenVoiceChat: {
+                        Task {
+                            await ra.stop()
+                            voiceEntry.presentVoice(
+                                bookId: vm.book.id,
+                                context: vm.voiceContext(),
+                                initialQuote: nil
+                            )
+                        }
+                    }
                 )
             }
         }

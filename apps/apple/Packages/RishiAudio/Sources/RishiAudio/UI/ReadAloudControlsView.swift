@@ -14,6 +14,7 @@ public struct ReadAloudControlsView: View {
     @State private var buttonHapticTick = 0
     let onPlayPause: () -> Void
     let onStop: () -> Void
+    let onOpenVoiceChat: () -> Void
     let onOpenPicker: () -> Void
     let onPreviousParagraph: () -> Void
     let onNextParagraph: () -> Void
@@ -23,6 +24,7 @@ public struct ReadAloudControlsView: View {
         state: TTSPlaybackState,
         onPlayPause: @escaping () -> Void,
         onStop: @escaping () -> Void,
+        onOpenVoiceChat: @escaping () -> Void = {},
         onOpenPicker: @escaping () -> Void,
         onPreviousParagraph: @escaping () -> Void = {},
         onNextParagraph: @escaping () -> Void = {},
@@ -31,6 +33,7 @@ public struct ReadAloudControlsView: View {
         self.state = state
         self.onPlayPause = onPlayPause
         self.onStop = onStop
+        self.onOpenVoiceChat = onOpenVoiceChat
         self.onOpenPicker = onOpenPicker
         self.onPreviousParagraph = onPreviousParagraph
         self.onNextParagraph = onNextParagraph
@@ -44,6 +47,15 @@ public struct ReadAloudControlsView: View {
             // next. Spacers either side keep the cluster centered while the
             // settings button sits at the trailing edge.
             Spacer(minLength: 0)
+
+            Button(action: performButtonAction(onOpenVoiceChat)) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(RishiTypography.titleM)
+                    .foregroundStyle(RishiColor.accent)
+                    .frame(width: 40, height: 40)
+            }
+            .accessibilityIdentifier("tts-open-voice-chat")
+            .accessibilityLabel("Voice Chat")
 
             transportCluster
 
