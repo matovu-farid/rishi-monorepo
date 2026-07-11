@@ -256,6 +256,48 @@ async function callSpeech(body: unknown) {
   return app.fetch(req, env, ctx)
 }
 
+async function callSpeechOptions() {
+  const req = new Request("https://api.fidexa.org/api/audio/speech/options", {
+    method: "GET",
+  })
+  return app.fetch(req, env, ctx)
+}
+
+function parseEventFrames(text: string) {
+  return text
+    .trim()
+    .split(/\n\n/)
+    .filter(Boolean)
+    .map((frameText) => {
+      const frame: { id?: string; event?: string; data?: string } = {}
+      for (const line of frameText.split("\n")) {
+        const separator = line.indexOf(": ")
+        if (separator === -1) continue
+        const key = line.slice(0, separator)
+        const value = line.slice(separator + 2)
+        if (key === "id" || key === "event" || key === "data") {
+          frame[key] = value
+        }
+      }
+      return frame
+    })
+}
+
+async function computeKey(
+  text: string,
+  voice: string,
+  speed: number,
+): Promise<string> {
+  const canonical = `gpt-4o-mini-tts|${voice}|${speed.toFixed(2)}|${text}`
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  )
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+}
+
 beforeEach(() => {
   speechCalls.length = 0
   setUser("user_alice")
@@ -294,5 +336,70 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
     expect(res.status).toBe(200)
     expect(speechCalls.length).toBe(1)
     expect(speechCalls[0]).toMatchObject({ voice: "marin" })
+  })
+
+  it("response_mode=events streams chunk and done SSE frames with stable ids", async () => {
+    const text = "hello world"
+    const res = await callSpeech({
+      text,
+      voice: "alloy",
+      speed: 1.0,
+      response_mode: "events",
+    })
+
+    expect(res.status).toBe(200)
+    expect((res.headers.get("Content-Type") ?? "").toLowerCase()).toContain(
+      "text/event-stream",
+    )
+    expect(res.headers.get("X-TTS-Cache")).toBe("miss")
+
+    const frames = parseEventFrames(await res.text())
+    expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
+
+    const requestId = await computeKey(text, "alloy", 1.0)
+    const chunkFrame = frames[0]
+    const doneFrame = frames[1]
+
+    expect(chunkFrame.id).toBe(`${requestId}#00000000`)
+    expect(JSON.parse(chunkFrame.data!)).toMatchObject({
+      request_id: requestId,
+      chunk_id: `${requestId}#00000000`,
+      index: 0,
+      audio_b64: "AQIDBA==",
+    })
+
+    expect(doneFrame.id).toBe(`${requestId}#done`)
+    expect(JSON.parse(doneFrame.data!)).toMatchObject({
+      request_id: requestId,
+      done: true,
+      cache: "miss",
+      chunk_count: 1,
+      byte_length: 4,
+    })
+
+    expect(speechCalls.length).toBe(1)
+  })
+})
+
+describe("GET /api/audio/speech/options", () => {
+  it("returns the worker-driven OpenAI voice/model catalog", async () => {
+    const res = await callSpeechOptions()
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      provider: string
+      voices: Array<{ id: string; name: string }>
+      models: Array<{ id: string; name: string }>
+      default_voice_id: string
+      default_model_id: string
+    }
+
+    expect(body.provider).toBe("openai")
+    expect(body.default_voice_id).toBe("marin")
+    expect(body.default_model_id).toBe("gpt-4o-mini-tts")
+    expect(body.voices.map((choice) => choice.id)).toContain("alloy")
+    expect(body.models).toEqual([
+      { id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS" },
+    ])
   })
 })

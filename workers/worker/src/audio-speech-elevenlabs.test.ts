@@ -232,6 +232,26 @@ async function callSpeech(body: unknown) {
   return app.fetch(req, env, ctx)
 }
 
+function parseEventFrames(text: string) {
+  return text
+    .trim()
+    .split(/\n\n/)
+    .filter(Boolean)
+    .map((frameText) => {
+      const frame: { id?: string; event?: string; data?: string } = {}
+      for (const line of frameText.split("\n")) {
+        const separator = line.indexOf(": ")
+        if (separator === -1) continue
+        const key = line.slice(0, separator)
+        const value = line.slice(separator + 2)
+        if (key === "id" || key === "event" || key === "data") {
+          frame[key] = value
+        }
+      }
+      return frame
+    })
+}
+
 async function computeKey(text: string, voice: string, model: string, speed: number): Promise<string> {
   const canonical = `elevenlabs-tts|${model}|${voice}|${speed.toFixed(2)}|${text}`
   const digest = await crypto.subtle.digest(
@@ -294,7 +314,12 @@ describe("POST /api/audio/speech/elevenlabs", () => {
     })
 
     expect(meterMock).toHaveBeenCalledTimes(1)
-    expect(meterMock.mock.calls[0]?.[2]).toMatchObject({
+    const meterCall = meterMock.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { model?: string },
+    ]
+    expect(meterCall[2]).toMatchObject({
       model: "eleven_v3",
     })
 
@@ -377,5 +402,56 @@ describe("POST /api/audio/speech/elevenlabs", () => {
       model_id?: string
     }
     expect(parsedBody.model_id).toBe("eleven_v3")
+  })
+
+  it("response_mode=events streams chunk and done SSE frames with stable ids", async () => {
+    const cache = env.TTS_CACHE as unknown as {
+      get: ReturnType<typeof vi.fn>
+      put: ReturnType<typeof vi.fn>
+    }
+    cache.get.mockResolvedValue(null)
+
+    const text = "hello world"
+    const res = await callSpeech({
+      text,
+      voice: "alloy",
+      model: "eleven_v3",
+      speed: 1.0,
+      response_mode: "events",
+    })
+
+    expect(res.status).toBe(200)
+    expect((res.headers.get("Content-Type") ?? "").toLowerCase()).toContain(
+      "text/event-stream",
+    )
+    expect(res.headers.get("X-TTS-Cache")).toBe("miss")
+
+    const frames = parseEventFrames(await res.text())
+    expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
+
+    const requestId = await computeKey(
+      text,
+      "JBFqnCBsd6RMkjVDRZzb",
+      "eleven_v3",
+      1.0,
+    )
+    expect(frames[0].id).toBe(`${requestId}#00000000`)
+    expect(JSON.parse(frames[0].data!)).toMatchObject({
+      request_id: requestId,
+      chunk_id: `${requestId}#00000000`,
+      index: 0,
+      audio_b64: "BQYHCA==",
+    })
+    expect(frames[1].id).toBe(`${requestId}#done`)
+    expect(JSON.parse(frames[1].data!)).toMatchObject({
+      request_id: requestId,
+      done: true,
+      cache: "miss",
+      chunk_count: 1,
+      byte_length: 4,
+    })
+
+    expect(fetchCalls.length).toBe(1)
+    expect(meterMock).toHaveBeenCalledTimes(1)
   })
 })

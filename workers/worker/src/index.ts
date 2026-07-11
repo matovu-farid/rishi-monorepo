@@ -118,6 +118,33 @@ const ELEVENLABS_VOICE_IDS: Record<string, string> = {
   cedar: "N2lVS1w4EtoT3dr4eOWO",
 };
 
+const OPENAI_TTS_VOICE_PRESETS = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "fable",
+  "nova",
+  "onyx",
+  "sage",
+  "shimmer",
+  "verse",
+  "marin",
+  "cedar",
+];
+const OPENAI_TTS_DEFAULT_VOICE = "marin";
+const OPENAI_TTS_MODEL_ID = "gpt-4o-mini-tts";
+const OPENAI_TTS_MODEL_NAME = "GPT-4o mini TTS";
+
+function displayName(id: string): string {
+  return id
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function resolveElevenLabsVoiceId(voice: string | undefined): string {
   if (!voice) return ELEVENLABS_DEFAULT_VOICE_ID;
   return ELEVENLABS_VOICE_IDS[voice] ?? ELEVENLABS_DEFAULT_VOICE_ID;
@@ -253,6 +280,130 @@ async function elevenLabsTtsCacheKey(
   return [...new Uint8Array(digest)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+type TtsResponseMode = "raw" | "events";
+
+const TTS_EVENT_CHUNK_BYTES = 4096;
+
+function resolveTtsResponseMode(value: unknown): TtsResponseMode {
+  return value === "events" ? "events" : "raw";
+}
+
+function splitTtsBytes(bytes: Uint8Array, chunkSize = TTS_EVENT_CHUNK_BYTES) {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(bytes.slice(offset, offset + chunkSize));
+  }
+  return chunks;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function encodeSseFrame(fields: Array<[string, string]>): string {
+  return `${fields.map(([key, value]) => `${key}: ${value}`).join("\n")}\n\n`;
+}
+
+function ttsChunkId(requestKey: string, index: number): string {
+  return `${requestKey}#${index.toString().padStart(8, "0")}`;
+}
+
+function ttsDoneId(requestKey: string): string {
+  return `${requestKey}#done`;
+}
+
+function buildTtsRawResponse(
+  bytes: Uint8Array,
+  cacheStatus: "hit" | "miss",
+): Response {
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": "audio/mpeg",
+      "Content-Length": bytes.byteLength.toString(),
+      "X-TTS-Cache": cacheStatus,
+    },
+  });
+}
+
+function buildTtsEventResponse(
+  bytes: Uint8Array,
+  requestKey: string,
+  cacheStatus: "hit" | "miss",
+): Response {
+  const encoder = new TextEncoder();
+  const chunks = splitTtsBytes(bytes);
+
+  const stream = new ReadableStream({
+    start(controller) {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunkId = ttsChunkId(requestKey, index);
+        controller.enqueue(
+          encoder.encode(
+            encodeSseFrame([
+              ["id", chunkId],
+              ["event", "chunk"],
+              [
+                "data",
+                JSON.stringify({
+                  request_id: requestKey,
+                  chunk_id: chunkId,
+                  index,
+                  audio_b64: bytesToBase64(chunks[index]!),
+                }),
+              ],
+            ]),
+          ),
+        );
+      }
+
+      controller.enqueue(
+        encoder.encode(
+          encodeSseFrame([
+            ["id", ttsDoneId(requestKey)],
+            ["event", "done"],
+            [
+              "data",
+              JSON.stringify({
+                request_id: requestKey,
+                done: true,
+                cache: cacheStatus,
+                chunk_count: chunks.length,
+                byte_length: bytes.byteLength,
+              }),
+            ],
+          ]),
+        ),
+      );
+
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-TTS-Cache": cacheStatus,
+    },
+  });
+}
+
+function respondWithTtsBytes(
+  bytes: Uint8Array,
+  requestKey: string,
+  cacheStatus: "hit" | "miss",
+  mode: TtsResponseMode,
+): Response {
+  if (mode === "events") {
+    return buildTtsEventResponse(bytes, requestKey, cacheStatus);
+  }
+  return buildTtsRawResponse(bytes, cacheStatus);
 }
 
 export const app = new Hono<{
@@ -524,11 +675,23 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     // client never matched, so every TTSStreamer.swift call short-circuited
     // to 400. Speed is forwarded into OpenAI's speech.create call so the
     // user-facing voice playback rate actually changes.
-    const { text, voice, speed } = await c.req.json<{
-      text?: string;
-      voice?: string;
-      speed?: number;
-    }>();
+    const rawBody = await c.req
+      .json<{
+        text?: string;
+        voice?: string;
+        speed?: number;
+        response_mode?: string;
+      }>()
+      .catch(
+        (): {
+          text?: string;
+          voice?: string;
+          speed?: number;
+          response_mode?: string;
+        } => ({}),
+      );
+    const { text, voice, speed, response_mode } = rawBody;
+    const responseMode = resolveTtsResponseMode(response_mode);
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return c.json({ error: "Missing or empty text" }, 400);
@@ -576,13 +739,7 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     const cached = await c.env.TTS_CACHE.get(key);
     if (cached !== null) {
       const bytes = await cached.bytes();
-      return new Response(bytes, {
-        headers: {
-          "Content-Type": "audio/mpeg",
-          "Content-Length": bytes.byteLength.toString(),
-          "X-TTS-Cache": "hit",
-        },
-      });
+      return respondWithTtsBytes(bytes, key, "hit", responseMode);
     }
 
     const openai = getSpeechOpenAI(c.env.OPENAI_API_KEY);
@@ -612,13 +769,7 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       }).catch((e) => console.error("tts.cache.put.failed", e)),
     );
 
-    return new Response(audioBytes, {
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Length": audioBytes.byteLength.toString(),
-        "X-TTS-Cache": "miss",
-      },
-    });
+    return respondWithTtsBytes(audioBytes, key, "miss", responseMode);
   } catch (error) {
     if (APICallError.isInstance(error)) {
       console.error("OpenAI API error:", error.statusCode, error.message);
@@ -635,14 +786,45 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
   }
 });
 
+app.get("/api/audio/speech/options", (_c) => {
+  return _c.json({
+    provider: "openai",
+    voices: OPENAI_TTS_VOICE_PRESETS.map((id) => ({
+      id,
+      name: displayName(id),
+    })),
+    models: [
+      {
+        id: OPENAI_TTS_MODEL_ID,
+        name: OPENAI_TTS_MODEL_NAME,
+      },
+    ],
+    default_voice_id: OPENAI_TTS_DEFAULT_VOICE,
+    default_model_id: OPENAI_TTS_MODEL_ID,
+  });
+});
+
 app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
   try {
-    const { text, voice, model, speed } = await c.req.json<{
-      text?: string;
-      voice?: string;
-      model?: string;
-      speed?: number;
-    }>();
+    const rawBody = await c.req
+      .json<{
+        text?: string;
+        voice?: string;
+        model?: string;
+        speed?: number;
+        response_mode?: string;
+      }>()
+      .catch(
+        (): {
+          text?: string;
+          voice?: string;
+          model?: string;
+          speed?: number;
+          response_mode?: string;
+        } => ({}),
+      );
+    const { text, voice, model, speed, response_mode } = rawBody;
+    const responseMode = resolveTtsResponseMode(response_mode);
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return c.json({ error: "Missing or empty text" }, 400);
@@ -675,13 +857,7 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
     const cached = await c.env.TTS_CACHE.get(key);
     if (cached !== null) {
       const bytes = await cached.bytes();
-      return new Response(bytes, {
-        headers: {
-          "Content-Type": "audio/mpeg",
-          "Content-Length": bytes.byteLength.toString(),
-          "X-TTS-Cache": "hit",
-        },
-      });
+      return respondWithTtsBytes(bytes, key, "hit", responseMode);
     }
 
     if (!c.env.ELEVEN_LABS_API_KEY) {
@@ -699,12 +875,12 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
         "Content-Type": "application/json",
         "xi-api-key": c.env.ELEVEN_LABS_API_KEY,
       },
-        body: JSON.stringify({
-          text,
-          model_id: validModel,
-          voice_settings: {
-            speed: validSpeed,
-          },
+      body: JSON.stringify({
+        text,
+        model_id: validModel,
+        voice_settings: {
+          speed: validSpeed,
+        },
       }),
     });
 
@@ -733,13 +909,7 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       }).catch((e) => console.error("tts.cache.put.failed", e)),
     );
 
-    return new Response(audioBytes, {
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Length": audioBytes.byteLength.toString(),
-        "X-TTS-Cache": "miss",
-      },
-    });
+    return respondWithTtsBytes(audioBytes, key, "miss", responseMode);
   } catch (error) {
     console.error(
       "TTS error:",

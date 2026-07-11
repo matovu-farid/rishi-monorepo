@@ -1,0 +1,569 @@
+#!/usr/bin/env tsx
+/**
+ * billing-e2e-clock.ts — Phase 1 of workers/worker/BILLING-HANDOFF.md.
+ *
+ * Drives four end-of-period Stripe billing scenarios against the local
+ * worker (must be running on :8787 with `stripe listen` forwarding
+ * webhooks to /api/auth/stripe/webhook). Prints pass/fail and exits
+ * 0/1. See docs/superpowers/specs/2026-06-03-billing-test-clock-design.md
+ * for design rationale.
+ */
+import { spawnSync } from "node:child_process";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+function parseFlags(argv) {
+    const flags = { keep: false, dryRun: false, help: false };
+    for (const a of argv) {
+        if (a === "--keep")
+            flags.keep = true;
+        else if (a === "--dry-run")
+            flags.dryRun = true;
+        else if (a === "--help" || a === "-h")
+            flags.help = true;
+        else {
+            console.error(`Unknown flag: ${a}`);
+            console.error("Run with --help for usage.");
+            process.exit(1);
+        }
+    }
+    return flags;
+}
+function printHelp() {
+    console.log(`
+Usage: pnpm tsx scripts/billing-e2e-clock.ts [--keep] [--dry-run]
+
+Runs four end-of-period Stripe billing scenarios against the local
+worker. Requires:
+  - workers/worker running on :8787 (pnpm run dev)
+  - stripe listen --forward-to localhost:8787/api/auth/stripe/webhook
+  - .dev.vars: STRIPE_SECRET_KEY (sk_test_...), TEST_AUTH_SECRET
+
+Flags:
+  --keep      Preserve test clock, customers, D1 rows after run
+              (default: delete everything on exit)
+  --dry-run   Walk the lifecycle without touching Stripe or D1
+              (for catching regressions in CI)
+  --help      Show this message
+
+Exit codes:
+  0  All scenarios passed
+  1  At least one scenario failed (or preflight aborted)
+`);
+}
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WORKER_DIR = resolve(__dirname, "..");
+const DEV_VARS = resolve(WORKER_DIR, ".dev.vars");
+const WORKER_URL = "http://localhost:8787";
+/**
+ * Read .dev.vars (or process.env as fallback) and return the secrets
+ * the script needs. Throws if anything required is missing or
+ * STRIPE_SECRET_KEY is a live key (sk_live_...).
+ */
+function loadEnv() {
+    const env = {};
+    if (existsSync(DEV_VARS)) {
+        for (const line of readFileSync(DEV_VARS, "utf8").split("\n")) {
+            const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+            if (m)
+                env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+        }
+    }
+    // process.env overrides .dev.vars so CI / one-off shells can swap values.
+    for (const k of ["STRIPE_SECRET_KEY", "TEST_AUTH_SECRET"]) {
+        if (process.env[k])
+            env[k] = process.env[k];
+    }
+    const STRIPE_SECRET_KEY = env.STRIPE_SECRET_KEY;
+    const TEST_AUTH_SECRET = env.TEST_AUTH_SECRET;
+    if (!STRIPE_SECRET_KEY)
+        throw new Error("STRIPE_SECRET_KEY is not set (check .dev.vars).");
+    if (STRIPE_SECRET_KEY.startsWith("sk_live_")) {
+        throw new Error("Refusing to run against a live Stripe key. Use sk_test_... only.");
+    }
+    if (!STRIPE_SECRET_KEY.startsWith("sk_test_")) {
+        throw new Error(`STRIPE_SECRET_KEY does not look like a test key: ${STRIPE_SECRET_KEY.slice(0, 8)}...`);
+    }
+    if (!TEST_AUTH_SECRET)
+        throw new Error("TEST_AUTH_SECRET is not set (check .dev.vars).");
+    return { STRIPE_SECRET_KEY, TEST_AUTH_SECRET };
+}
+/**
+ * Confirms the worker is reachable. Hits /health which always exists.
+ */
+async function probeWorker() {
+    let res;
+    try {
+        res = await fetch(`${WORKER_URL}/health`);
+    }
+    catch (err) {
+        throw new Error(`Worker not reachable at ${WORKER_URL}. Is \`pnpm run dev\` running?`);
+    }
+    if (!res.ok) {
+        throw new Error(`Worker /health returned ${res.status}; expected 200.`);
+    }
+}
+async function preflight(_env) {
+    console.log("→ Preflight…");
+    console.log(`  ✓ STRIPE_SECRET_KEY is a test key`);
+    console.log(`  ✓ TEST_AUTH_SECRET present`);
+    await probeWorker();
+    console.log(`  ✓ Worker reachable at ${WORKER_URL}`);
+    // We deliberately do NOT probe `stripe listen` here: the CLI has no
+    // cheap no-op event to trigger (every `stripe trigger <event>`
+    // creates real Stripe objects). If the operator forgot to start
+    // `stripe listen`, scenarios B/C/D will surface it within 30s as
+    // `waitForSubStatus` returns the seeded "active" instead of the
+    // expected post-invoice status.
+}
+import Stripe from "stripe";
+import { MICRO_DOLLARS_PER_USD, STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config";
+import { DEFAULT_RATES } from "@rishi/shared/billing/default-rates";
+import { ensureCreditAndSubscription } from "../src/billing/backfill";
+import { reportMeterEvent } from "../src/billing/meter";
+/**
+ * Construct a Stripe client suitable for Node. The worker's own
+ * createStripeClient uses Stripe.createFetchHttpClient() which works
+ * on Node 18+ because fetch is global there. We pass the test-mode
+ * secret key.
+ */
+function makeStripe(env) {
+    return new Stripe(env.STRIPE_SECRET_KEY, {
+        httpClient: Stripe.createFetchHttpClient(),
+    });
+}
+/**
+ * Create a test clock frozen at "now". Reused across all four
+ * scenarios.
+ */
+async function createTestClock(stripe) {
+    const clock = await stripe.testHelpers.testClocks.create({
+        frozen_time: Math.floor(Date.now() / 1000),
+        name: `billing-e2e-clock-${Date.now()}`,
+    });
+    return clock.id;
+}
+/**
+ * Create a Stripe customer attached to a test clock, with userId
+ * stored in metadata. The customer is "the" user from the script's
+ * point of view.
+ *
+ * We also set an explicit `address` (US, zip 94103). Stripe Tax
+ * (enabled by commit f9936fd6) requires a resolvable customer
+ * location for any customers.update that would lead to invoice
+ * generation. The IP-based mode (set via `tax.ip_address`) won't
+ * work because Stripe can't geo-resolve a sentinel IP and the
+ * script's clocked customers don't have a real signup-time IP. An
+ * explicit address bypasses geo-resolution entirely.
+ */
+async function createClockedCustomer(stripe, clockId, userId, email) {
+    const cust = await stripe.customers.create({
+        email,
+        test_clock: clockId,
+        metadata: { userId },
+        address: { country: "US", postal_code: "94103", line1: "1 Test St" },
+    });
+    return cust.id;
+}
+/**
+ * Attach a payment method (a Stripe test card) to a customer and set
+ * as the invoice default. Used for scenarios C (valid card) and D
+ * (declining card).
+ *
+ * Stripe test payment-method tokens:
+ *   pm_card_visa                — always succeeds
+ *   pm_card_chargeCustomerFail  — declines on charge
+ */
+async function attachCardAndSetDefault(stripe, customerId, pmTokenOrId) {
+    // Stripe accepts the shared test-method aliases (pm_card_visa,
+    // pm_card_chargeCustomerFail) here. The attach call clones the
+    // alias into a customer-specific pm_… id we get back; that's the
+    // id we must reference in customers.update — passing the original
+    // alias 400s because the customer "doesn't have" that id (the
+    // alias is global, not customer-scoped).
+    const attached = await stripe.paymentMethods.attach(pmTokenOrId, {
+        customer: customerId,
+    });
+    await stripe.customers.update(customerId, {
+        invoice_settings: { default_payment_method: attached.id },
+    });
+}
+/**
+ * Advance the clock to a future timestamp and wait until Stripe
+ * finishes the advance (status returns to "ready"). The .advance()
+ * call returns immediately while Stripe processes asynchronously; any
+ * subsequent call on the same clock 429s with "Test clock advancement
+ * underway" until status flips back. We poll every second up to 60s.
+ * Downstream invoice + webhook effects manifest within another ~10–30s
+ * after status is ready.
+ */
+async function advanceClockTo(stripe, clockId, unixSeconds) {
+    await stripe.testHelpers.testClocks.advance(clockId, { frozen_time: unixSeconds });
+    const timeoutMs = 600_000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const clock = await stripe.testHelpers.testClocks.retrieve(clockId);
+        if (clock.status === "ready")
+            return;
+        if (clock.status === "internal_failure") {
+            throw new Error(`Test clock advance failed for ${clockId} (internal_failure).`);
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+    }
+    throw new Error(`Test clock ${clockId} did not return to ready within ${timeoutMs / 1000}s of advance.`);
+}
+/**
+ * Convert a USD amount to micro-dollars (the units Stripe meter
+ * events expect, per stripe-config.ts).
+ */
+function usdToMicros(usd) {
+    return Math.round(usd * MICRO_DOLLARS_PER_USD);
+}
+/**
+ * Embed-token cost in USD, using the rate card. Decoupled from the
+ * markup (which is applied in Stripe's Price unit_amount_decimal, not
+ * here).
+ */
+function embedTokensToUsd(tokens) {
+    return (tokens * DEFAULT_RATES.embedding["text-embedding-3-small"].per1MTokens) / 1_000_000;
+}
+// Deterministic test amounts derived from the rate card at load time.
+// Low: $0.20 OpenAI cost = $0.24 customer cost (under $1 welcome credit).
+// High: $2.00 OpenAI cost = $2.40 customer cost (over the credit).
+const LOW_USAGE_TOKENS = 10_000_000;
+const HIGH_USAGE_TOKENS = 100_000_000;
+const LOW_USAGE_MICROS = usdToMicros(embedTokensToUsd(LOW_USAGE_TOKENS));
+const HIGH_USAGE_MICROS = usdToMicros(embedTokensToUsd(HIGH_USAGE_TOKENS));
+/**
+ * Run a SQL command against local D1 via wrangler. Returns stdout as
+ * a string. Throws on non-zero exit.
+ *
+ * We shell out (not import Drizzle) because the script runs in Node
+ * and doesn't have the Workers DB binding. wrangler's --local mode
+ * uses the same SQLite file the dev server uses, so changes are
+ * immediately visible to the worker.
+ */
+function d1Exec(sqlCmd) {
+    const res = spawnSync("pnpm", ["wrangler", "d1", "execute", "rishi-sync", "--local", "--command", sqlCmd, "--json"], { cwd: WORKER_DIR, encoding: "utf8" });
+    if (res.status !== 0) {
+        throw new Error(`wrangler d1 execute failed:\n${res.stderr}\n${res.stdout}`);
+    }
+    return res.stdout;
+}
+/**
+ * SELECT one row's first column, or null if no rows. wrangler --json
+ * output is a JSON array of { results: [...] } per command run.
+ */
+function d1Scalar(sqlCmd) {
+    const out = d1Exec(sqlCmd);
+    const parsed = JSON.parse(out);
+    const results = Array.isArray(parsed) ? parsed[0]?.results : parsed.results;
+    const row = results?.[0];
+    if (!row)
+        return null;
+    const firstCol = Object.values(row)[0];
+    return firstCol ?? null;
+}
+/**
+ * Escape a single value for inline SQL. We only handle strings,
+ * numbers, and null — that's all the script uses. NEVER pass
+ * untrusted input here; this is fine for the test script's controlled
+ * values but not for general use.
+ */
+function sql(value) {
+    if (value === null)
+        return "NULL";
+    if (typeof value === "number")
+        return String(value);
+    return `'${value.replace(/'/g, "''")}'`;
+}
+/**
+ * Insert a Better Auth user row with a known userId. The script
+ * controls every field; no signup flow is exercised.
+ */
+function insertUser(userId, email, stripeCustomerId) {
+    const now = Math.floor(Date.now() / 1000);
+    d1Exec(`INSERT INTO user (id, name, email, email_verified, image, created_at, updated_at, stripe_customer_id) VALUES (${sql(userId)}, ${sql("test-" + userId)}, ${sql(email)}, 1, NULL, ${now}, ${now}, ${sql(stripeCustomerId)});`);
+}
+/**
+ * Mint a Better Auth session by inserting a row with a random token.
+ * The bearer() plugin (auth.ts:50) authenticates `Authorization: Bearer ${token}`
+ * by looking up the token in this table — no further mechanism
+ * needed.
+ */
+function insertSession(userId) {
+    const sessionId = `sess_e2e_${cryptoRandomHex(12)}`;
+    const token = `tok_e2e_${cryptoRandomHex(32)}`;
+    const now = Math.floor(Date.now() / 1000);
+    const expires = now + 3600;
+    d1Exec(`INSERT INTO session (id, expires_at, token, created_at, updated_at, ip_address, user_agent, user_id) VALUES (${sql(sessionId)}, ${expires}, ${sql(token)}, ${now}, ${now}, NULL, ${sql("billing-e2e-clock")}, ${sql(userId)});`);
+    return { sessionId, token };
+}
+function cryptoRandomHex(bytes) {
+    const buf = new Uint8Array(bytes);
+    crypto.getRandomValues(buf);
+    return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+/**
+ * Insert a subscription row (cache layer — webhooks normally
+ * populate this, but for scenarios where we're driving Stripe
+ * directly we seed the row at "active" and let webhook updates flip
+ * the status as the clock advances).
+ */
+function insertSubscription(subscriptionId, userId, stripeCustomerId) {
+    const now = Math.floor(Date.now() / 1000);
+    d1Exec(`INSERT INTO subscription (id, plan, reference_id, stripe_customer_id, stripe_subscription_id, status, period_start, period_end) VALUES (${sql(subscriptionId)}, 'usage', ${sql(userId)}, ${sql(stripeCustomerId)}, ${sql(subscriptionId)}, 'active', ${now}, ${now + 30 * 24 * 3600});`);
+}
+/**
+ * Poll the subscription row's status until it matches `expected`, or
+ * until `timeoutMs` elapses. Returns the final observed status.
+ */
+async function waitForSubStatus(subscriptionId, expected, timeoutMs) {
+    const start = Date.now();
+    let last = null;
+    while (Date.now() - start < timeoutMs) {
+        const v = d1Scalar(`SELECT status FROM subscription WHERE stripe_subscription_id = ${sql(subscriptionId)};`);
+        last = typeof v === "string" ? v : null;
+        if (last === expected)
+            return last;
+        await new Promise((r) => setTimeout(r, 1500));
+    }
+    return last;
+}
+/**
+ * Delete D1 rows for a single test user/customer/subscription. Idempotent.
+ */
+function deleteUserCascade(userId, subscriptionId) {
+    d1Exec(`DELETE FROM subscription WHERE stripe_subscription_id = ${sql(subscriptionId)};`);
+    d1Exec(`DELETE FROM session WHERE user_id = ${sql(userId)};`);
+    d1Exec(`DELETE FROM user WHERE id = ${sql(userId)};`);
+}
+async function runScenario(input) {
+    console.log(`\n→ ${input.label}`);
+    const userId = `user_e2e_${cryptoRandomHex(8)}`;
+    const email = `${userId}@e2e.fidexa.org`;
+    // 0. Create a dedicated test clock for this scenario. Sharing a
+    //    clock across scenarios introduced a timing race: the second
+    //    scenario's meter event stamped at the shared clock's already-
+    //    advanced time, which coincided with the new sub's period_start,
+    //    so Stripe rolled the period forward without invoicing.
+    const clockId = await createTestClock(input.stripe);
+    console.log(`  • clock ${clockId}`);
+    // 1. Create Stripe customer attached to the clock.
+    const customerId = await createClockedCustomer(input.stripe, clockId, userId, email);
+    console.log(`  • customer ${customerId}`);
+    // 2. Seed D1 user + session BEFORE creating the subscription. The
+    //    Better Auth Stripe plugin's customer.subscription.created
+    //    webhook handler looks up the user by stripe_customer_id and
+    //    no-ops with a "No user found" warning if the row is missing.
+    //    Seeding now lets the plugin's webhook find the user and
+    //    populate the subscription row on its own.
+    insertUser(userId, email, customerId);
+    const { token } = insertSession(userId);
+    // 3. Apply welcome credit + start subscription via worker's own helper.
+    //    Pass null for IP — script bypasses the signup path where IP is captured.
+    const { subscriptionId } = await ensureCreditAndSubscription(input.stripe, customerId, STRIPE_TEST_IDS.priceId, null);
+    console.log(`  • subscription ${subscriptionId}`);
+    // 4. Seed subscription row as a fallback. The Better Auth plugin
+    //    likely also inserts (or upserts) a row from the webhook; this
+    //    seeded row is what waitForSubStatus polls against if the
+    //    webhook hasn't landed yet. If both write the same id, the
+    //    plugin's later .updated webhook still flips the status row in
+    //    place.
+    insertSubscription(subscriptionId, userId, customerId);
+    // 4. Card attach (scenarios C, D).
+    if (input.attachCardKind === "valid") {
+        await attachCardAndSetDefault(input.stripe, customerId, "pm_card_visa");
+        console.log(`  • attached pm_card_visa`);
+    }
+    else if (input.attachCardKind === "decline") {
+        await attachCardAndSetDefault(input.stripe, customerId, "pm_card_chargeCustomerFail");
+        console.log(`  • attached pm_card_chargeCustomerFail`);
+    }
+    // 5. Ingest meter usage via the worker's own reportMeterEvent.
+    await reportMeterEvent(input.stripe, customerId, input.usageMicros);
+    console.log(`  • metered ${input.usageMicros} micro-dollars`);
+    // 6. Advance the clock in steps. Poll D1 between each step. The
+    //    final observed status is what we assert.
+    const baseTime = Math.floor(Date.now() / 1000);
+    let accumulated = 0;
+    let observedStatus = "active";
+    for (const stepSeconds of input.advanceSchedule) {
+        accumulated += stepSeconds;
+        const target = baseTime + accumulated;
+        console.log(`  • advancing clock +${stepSeconds}s`);
+        await advanceClockTo(input.stripe, clockId, target);
+        observedStatus = await waitForSubStatus(subscriptionId, input.expectedStatus, 120_000);
+        if (observedStatus === input.expectedStatus)
+            break;
+    }
+    // 7. Probe the gate via the dedicated /test/billing-gate-check endpoint
+    //    (same middleware stack as the AI routes, no downstream work). 200 =
+    //    gate let request through; 402 = gate blocked with BILLING_INACTIVE.
+    const httpRes = await fetch(`${WORKER_URL}/test/billing-gate-check`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    const observedHttp = httpRes.status;
+    console.log(`  • /test/billing-gate-check → ${observedHttp}`);
+    const httpPass = observedHttp === input.expectedHttp;
+    const expected = `${input.expectedStatus}/${input.expectedHttp}`;
+    const got = `${observedStatus ?? "null"}/${observedHttp}`;
+    const pass = observedStatus === input.expectedStatus && httpPass;
+    const diagnostic = pass
+        ? undefined
+        : `expected ${expected}, got ${got}` +
+            (!httpPass
+                ? ` (response body: ${(await httpRes.text()).slice(0, 200)})`
+                : "");
+    return {
+        label: input.label,
+        expected,
+        got,
+        pass,
+        diagnostic,
+        clockId,
+        userId,
+        customerId,
+        subscriptionId,
+    };
+}
+const ONE_DAY = 24 * 3600;
+const ONE_MONTH = 31 * ONE_DAY;
+function scenarioInputs(stripe, env) {
+    return [
+        {
+            label: "A: low usage, no card",
+            stripe,
+            env,
+            usageMicros: LOW_USAGE_MICROS,
+            advanceSchedule: [ONE_MONTH + ONE_DAY],
+            expectedStatus: "active",
+            expectedHttp: 200,
+        },
+        {
+            label: "B: high usage, no card",
+            stripe,
+            env,
+            usageMicros: HIGH_USAGE_MICROS,
+            advanceSchedule: [ONE_MONTH + ONE_DAY],
+            expectedStatus: "past_due",
+            expectedHttp: 402,
+        },
+        {
+            label: "C: high usage, valid card",
+            stripe,
+            env,
+            usageMicros: HIGH_USAGE_MICROS,
+            attachCardKind: "valid",
+            advanceSchedule: [ONE_MONTH + ONE_DAY],
+            expectedStatus: "active",
+            expectedHttp: 200,
+        },
+        {
+            label: "D: high usage, declining card (dunning)",
+            stripe,
+            env,
+            usageMicros: HIGH_USAGE_MICROS,
+            attachCardKind: "decline",
+            // Stripe smart-retry schedule plays out over ~3 weeks. After
+            // invoice generation + first failed charge, retries at ~1d, ~3d,
+            // ~7d, ~14d. We advance past each. The terminal status under
+            // Stripe's default config is `canceled`, not `unpaid` — Stripe
+            // cancels the sub once smart retries are exhausted unless the
+            // sub explicitly opts into "mark as unpaid". Either way the
+            // gate returns 402 BILLING_INACTIVE.
+            advanceSchedule: [
+                ONE_MONTH + ONE_DAY,
+                ONE_DAY,
+                3 * ONE_DAY,
+                7 * ONE_DAY,
+                14 * ONE_DAY,
+            ],
+            expectedStatus: "canceled",
+            expectedHttp: 402,
+        },
+    ];
+}
+async function realRun(flags) {
+    const env = loadEnv();
+    await preflight(env);
+    const stripe = makeStripe(env);
+    const results = [];
+    try {
+        for (const input of scenarioInputs(stripe, env)) {
+            results.push(await runScenario(input));
+        }
+    }
+    catch (err) {
+        console.error("FATAL during scenario run:", err);
+        // Still attempt cleanup unless --keep.
+    }
+    // Output table.
+    console.log("\n" + "─".repeat(72));
+    const headerLabel = "Scenario".padEnd(40);
+    const headerExpected = "Expected".padEnd(15);
+    const headerGot = "Got".padEnd(15);
+    console.log(`${headerLabel}${headerExpected}${headerGot}Result`);
+    console.log("─".repeat(72));
+    for (const r of results) {
+        const label = r.label.padEnd(40).slice(0, 40);
+        const exp = r.expected.padEnd(15);
+        const got = r.got.padEnd(15);
+        const result = r.pass ? "PASS" : "FAIL";
+        console.log(`${label}${exp}${got}${result}`);
+        if (r.diagnostic)
+            console.log(`  ↳ ${r.diagnostic}`);
+    }
+    const passed = results.filter((r) => r.pass).length;
+    console.log("─".repeat(72));
+    console.log(`${passed}/${results.length} PASS`);
+    // Cleanup.
+    if (flags.keep) {
+        console.log("\n--keep: artifacts preserved");
+        for (const r of results) {
+            console.log(`  ${r.label}`);
+            console.log(`    clock:        ${r.clockId}`);
+            console.log(`    user:         ${r.userId}`);
+            console.log(`    customer:     ${r.customerId}`);
+            console.log(`    subscription: ${r.subscriptionId}`);
+        }
+    }
+    else {
+        console.log("\nCleanup…");
+        for (const r of results) {
+            try {
+                // Deleting the per-scenario clock cascades its customer + sub.
+                await stripe.testHelpers.testClocks.del(r.clockId);
+            }
+            catch (err) {
+                console.error(`  ✗ failed to delete clock ${r.clockId}:`, err);
+            }
+            try {
+                deleteUserCascade(r.userId, r.subscriptionId);
+            }
+            catch (err) {
+                console.error(`  ✗ D1 cleanup failed for ${r.userId}:`, err);
+            }
+        }
+        console.log(`  ✓ D1 rows removed`);
+    }
+    process.exit(passed === results.length && results.length > 0 ? 0 : 1);
+}
+async function main() {
+    const flags = parseFlags(process.argv.slice(2));
+    if (flags.help) {
+        printHelp();
+        process.exit(0);
+    }
+    if (flags.dryRun) {
+        console.log("[dry-run] Would run scenarios A, B, C, D");
+        console.log("[dry-run] Would preflight: STRIPE_SECRET_KEY, TEST_AUTH_SECRET, worker, stripe listen");
+        console.log("[dry-run] No Stripe or D1 calls made.");
+        process.exit(0);
+    }
+    await realRun(flags);
+}
+main().catch((err) => {
+    console.error("FATAL:", err);
+    process.exit(1);
+});

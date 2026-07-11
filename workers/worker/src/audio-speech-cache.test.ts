@@ -299,6 +299,26 @@ async function callSpeech(body: unknown) {
   return app.fetch(req, env, ctx)
 }
 
+function parseEventFrames(text: string) {
+  return text
+    .trim()
+    .split(/\n\n/)
+    .filter(Boolean)
+    .map((frameText) => {
+      const frame: { id?: string; event?: string; data?: string } = {}
+      for (const line of frameText.split("\n")) {
+        const separator = line.indexOf(": ")
+        if (separator === -1) continue
+        const key = line.slice(0, separator)
+        const value = line.slice(separator + 2)
+        if (key === "id" || key === "event" || key === "data") {
+          frame[key] = value
+        }
+      }
+      return frame
+    })
+}
+
 beforeEach(() => {
   speechCalls.length = 0
   waited = []
@@ -333,7 +353,12 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     await Promise.all(waited)
 
     expect(meterMock).toHaveBeenCalledTimes(1)
-    expect(meterMock.mock.calls[0]?.[2]).toMatchObject({
+    const meterCall = meterMock.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { model?: string },
+    ]
+    expect(meterCall[2]).toMatchObject({
       model: "gpt-4o-mini-tts",
     })
 
@@ -418,5 +443,50 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     // The iOS Swift Testing companion in 22-02 will assert the SAME canonical
     // string produces the SAME hex via CryptoKit.SHA256.hash(data:
     // Data(canonical.utf8)).
+  })
+
+  it("event mode cache hit streams chunk and done frames with cache-key-derived ids", async () => {
+    const cachedBytes = new Uint8Array([9, 9, 9, 9])
+    ttsCacheGetMock.mockResolvedValue({
+      bytes: async () => cachedBytes,
+    })
+
+    const text = "hello world"
+    const res = await callSpeech({
+      text,
+      voice: "alloy",
+      speed: 1.0,
+      response_mode: "events",
+    })
+
+    expect(res.status).toBe(200)
+    expect((res.headers.get("Content-Type") ?? "").toLowerCase()).toContain(
+      "text/event-stream",
+    )
+    expect(res.headers.get("X-TTS-Cache")).toBe("hit")
+
+    const frames = parseEventFrames(await res.text())
+    expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
+
+    const requestId = await computeKey(text, "alloy", 1.0)
+    expect(frames[0].id).toBe(`${requestId}#00000000`)
+    expect(JSON.parse(frames[0].data!)).toMatchObject({
+      request_id: requestId,
+      chunk_id: `${requestId}#00000000`,
+      index: 0,
+      audio_b64: "CQkJCQ==",
+    })
+    expect(frames[1].id).toBe(`${requestId}#done`)
+    expect(JSON.parse(frames[1].data!)).toMatchObject({
+      request_id: requestId,
+      done: true,
+      cache: "hit",
+      chunk_count: 1,
+      byte_length: 4,
+    })
+
+    expect(speechCalls.length).toBe(0)
+    expect(meterMock).not.toHaveBeenCalled()
+    expect(ttsCachePutMock).not.toHaveBeenCalled()
   })
 })
