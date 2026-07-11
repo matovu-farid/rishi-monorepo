@@ -115,19 +115,20 @@ struct EPUBReaderDestination: View {
             
             Task { await readAloud?.stop() }
         }
-        .overlay(alignment: .bottom) {
-            VStack(spacing: RishiSpacing.s) {
-                if let ra = readAloud {
-                    ReadAloudControlsOverlay(
-                        controller: ra,
-                        ttsState: services.ttsState
-                    )
-                }
-                IndexingIndicatorChip(
-                    bookId: vm.book.id,
-                    bookSearch: services.bookSearch
+        .overlay(alignment: .bottomTrailing) {
+            IndexingIndicatorChip(
+                bookId: vm.book.id,
+                bookSearch: services.bookSearch
+            )
+            .padding(.trailing, RishiSpacing.m)
+            .padding(.bottom, RishiSpacing.s)
+        }
+        .overlay {
+            if let ra = readAloud {
+                ReadAloudControlsOverlay(
+                    controller: ra,
+                    ttsState: services.ttsState
                 )
-                .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .sheet(isPresented: Binding(
