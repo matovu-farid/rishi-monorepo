@@ -17,6 +17,7 @@ struct ReadAloudControlsOverlay: View {
 
     @State private var location: CGPoint?
     @State private var controlSize: CGSize = .zero
+    @State private var dragHapticTick = 0
 
     #if targetEnvironment(macCatalyst)
     
@@ -37,6 +38,7 @@ struct ReadAloudControlsOverlay: View {
                         .position(resolvedLocation(in: containerSize))
                 }
                 .frame(width: containerSize.width, height: containerSize.height)
+                .sensoryFeedback(.selection, trigger: dragHapticTick)
                 .onDisappear { location = nil }
             }
             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -109,10 +111,15 @@ struct ReadAloudControlsOverlay: View {
                 )
             }
             .onEnded { value in
-                location = CGPoint(
+                let finalLocation = CGPoint(
                     x: containerSize.width / 2,
                     y: clampedVerticalLocation(value.location.y, in: containerSize)
                 )
+                let didMove = abs(value.translation.height) > 8
+                location = finalLocation
+                if didMove {
+                    dragHapticTick &+= 1
+                }
             }
     }
 

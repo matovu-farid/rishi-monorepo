@@ -11,6 +11,7 @@ import RishiUIKit
 public struct ReadAloudControlsView: View {
 
     @Bindable var state: TTSPlaybackState
+    @State private var buttonHapticTick = 0
     let onPlayPause: () -> Void
     let onStop: () -> Void
     let onOpenPicker: () -> Void
@@ -48,7 +49,7 @@ public struct ReadAloudControlsView: View {
 
             Spacer(minLength: 0)
 
-            Button(action: onOpenPicker) {
+            Button(action: performButtonAction(onOpenPicker)) {
                 Image(systemName: "slider.horizontal.3")
                     .font(RishiTypography.titleM)
                     .foregroundStyle(RishiColor.accent)
@@ -58,6 +59,7 @@ public struct ReadAloudControlsView: View {
             .accessibilityLabel("Voice and Speed")
         }
         .padding(RishiSpacing.l)
+        .sensoryFeedback(.impact(weight: .light), trigger: buttonHapticTick)
         // No opaque fill here: the host (RootView) supplies the card surface —
         // an iOS 26 Liquid Glass effect, or `.regularMaterial` on iOS 18 — so
         // the panel reads as a translucent floating control over the page.
@@ -113,7 +115,7 @@ public struct ReadAloudControlsView: View {
 
     @ViewBuilder
     private var playPauseButton: some View {
-        Button(action: onPlayPause) {
+        Button(action: performButtonAction(onPlayPause)) {
             playPauseBody
                 .frame(width: 56, height: 56)
         }
@@ -145,7 +147,7 @@ public struct ReadAloudControlsView: View {
         action: @escaping () -> Void,
         disabled: Bool
     ) -> some View {
-        Button(action: action) {
+        Button(action: performButtonAction(action)) {
             Image(systemName: systemName)
                 .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.textSecondary)
@@ -161,6 +163,13 @@ public struct ReadAloudControlsView: View {
     /// Paragraph navigation only applies while a session is active.
     private var navigationDisabled: Bool {
         state.status == .idle || state.status == .stopped
+    }
+
+    private func performButtonAction(_ action: @escaping () -> Void) -> () -> Void {
+        {
+            buttonHapticTick &+= 1
+            action()
+        }
     }
 }
 
