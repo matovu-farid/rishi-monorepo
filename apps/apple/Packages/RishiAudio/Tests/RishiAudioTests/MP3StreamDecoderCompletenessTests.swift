@@ -45,6 +45,7 @@ struct MP3StreamDecoderCompletenessTests {
     private func decodeTotalFrames(sliceSize: Int) async throws -> Int {
         let mp3 = try loadFixtureMP3()
         let decoder = try MP3StreamDecoder(targetFormat: makeTargetFormat())
+        let request = TTSStreamRequest(text: "fixture", voice: "alloy", speed: 1.0)
         let stream = decoder.pcmStream()
 
         // Count ALL chunks: the final chunk now carries the last real audio
@@ -58,10 +59,19 @@ struct MP3StreamDecoderCompletenessTests {
         }
 
         var index = 0
+        var sequenceIndex = 0
         while index < mp3.count {
             let end = min(index + sliceSize, mp3.count)
-            try await decoder.append(mp3.subdata(in: index..<end), passageId: "0")
+            try await decoder.append(
+                TTSChunk.make(
+                    request: request,
+                    sequenceIndex: sequenceIndex,
+                    data: mp3.subdata(in: index..<end)
+                ),
+                passageId: request.passageId
+            )
             index = end
+            sequenceIndex += 1
             await Task.yield()
         }
         try? await Task.sleep(nanoseconds: 300_000_000)
@@ -104,6 +114,7 @@ struct MP3StreamDecoderCompletenessTests {
     private func decodeChunkShapes(sliceSize: Int) async throws -> [(frames: Int, isFinal: Bool)] {
         let mp3 = try loadFixtureMP3()
         let decoder = try MP3StreamDecoder(targetFormat: makeTargetFormat())
+        let request = TTSStreamRequest(text: "fixture", voice: "alloy", speed: 1.0)
         let stream = decoder.pcmStream()
         let drain = Task<[(Int, Bool)], Never> {
             var out: [(Int, Bool)] = []
@@ -113,10 +124,19 @@ struct MP3StreamDecoderCompletenessTests {
             return out
         }
         var index = 0
+        var sequenceIndex = 0
         while index < mp3.count {
             let end = min(index + sliceSize, mp3.count)
-            try await decoder.append(mp3.subdata(in: index..<end), passageId: "0")
+            try await decoder.append(
+                TTSChunk.make(
+                    request: request,
+                    sequenceIndex: sequenceIndex,
+                    data: mp3.subdata(in: index..<end)
+                ),
+                passageId: request.passageId
+            )
             index = end
+            sequenceIndex += 1
             await Task.yield()
         }
         try? await Task.sleep(nanoseconds: 300_000_000)
@@ -141,6 +161,7 @@ struct MP3StreamDecoderCompletenessTests {
     @Test("garbage input does not crash and yields no spurious audio")
     func garbageInputIsHandledGracefully() async throws {
         let decoder = try MP3StreamDecoder(targetFormat: makeTargetFormat())
+        let request = TTSStreamRequest(text: "junk", voice: "alloy", speed: 1.0)
         let stream = decoder.pcmStream()
         let drain = Task<Int, Never> {
             var total = 0
@@ -151,7 +172,10 @@ struct MP3StreamDecoderCompletenessTests {
         }
         let junk = Data((0..<4096).map { _ in UInt8.random(in: 0...255) })
         // May or may not throw parseFailed depending on header luck; must never crash.
-        _ = try? await decoder.append(junk, passageId: "x")
+        _ = try? await decoder.append(
+            TTSChunk.make(request: request, sequenceIndex: 0, data: junk),
+            passageId: request.passageId
+        )
         try? await Task.sleep(nanoseconds: 100_000_000)
         await decoder.finish()
         let frames = await drain.value

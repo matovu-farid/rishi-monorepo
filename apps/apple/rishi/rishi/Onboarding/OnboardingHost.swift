@@ -40,6 +40,9 @@ struct OnboardingHost: View {
             Keychain.delete(.accessToken)
             Keychain.delete(.refreshToken)
             Keychain.delete(.userId)
+            Task {
+                try? await KeychainSessionStore().delete()
+            }
         }
 #endif
         OnboardingFlowView(

@@ -7,10 +7,10 @@ import CryptoKit
 struct TTSCacheKeyTests {
     // ----------------------------------------------------------------------------
     // Cross-runner symmetry constant: this exact canonical string and resulting hex
-    // MUST also appear verbatim in workers/worker/src/audio-speech-elevenlabs.test.ts.
-    // Canonical: "elevenlabs-tts|eleven_v3|JBFqnCBsd6RMkjVDRZzb|1.00|hello world"
+    // MUST also appear verbatim in workers/worker/src/audio-speech-cache.test.ts.
+    // Canonical: "gpt-4o-mini-tts|alloy|1.00|hello world"
     // ----------------------------------------------------------------------------
-    static let pinnedCanonical = "elevenlabs-tts|eleven_v3|JBFqnCBsd6RMkjVDRZzb|1.00|hello world"
+    static let pinnedCanonical = "gpt-4o-mini-tts|alloy|1.00|hello world"
     static let pinnedText = "hello world"
     static let pinnedVoice = "alloy"
     static let pinnedSpeed = 1.0
@@ -45,8 +45,8 @@ struct TTSCacheKeyTests {
 
     @Test("different model produces different hex")
     func modelSensitive() {
-        let a = TTSCacheKey.compute(text: "hello", voice: "alloy", model: "eleven_v3", speed: 1.0)
-        let b = TTSCacheKey.compute(text: "hello", voice: "alloy", model: "eleven_flash_v2_5", speed: 1.0)
+        let a = TTSCacheKey.compute(text: "hello", voice: "alloy", model: "gpt-4o-mini-tts", speed: 1.0)
+        let b = TTSCacheKey.compute(text: "hello", voice: "alloy", model: "gpt-4o", speed: 1.0)
         #expect(a != b)
     }
 
@@ -62,7 +62,7 @@ struct TTSCacheKeyTests {
     func pinnedCanonicalSymmetry() {
         // The helper's canonical string for these inputs MUST be byte-identical with
         // the worker test's PINNED_CANONICAL constant.
-        let canonical = "elevenlabs-tts|\(TTSModelCatalog.defaultModel)|\(VoiceCatalog.providerVoiceID(for: Self.pinnedVoice) ?? Self.pinnedVoice)|\(String(format: "%.2f", Self.pinnedSpeed))|\(Self.pinnedText)"
+        let canonical = "\(TTSModelCatalog.defaultModel)|\(Self.pinnedVoice)|\(String(format: "%.2f", Self.pinnedSpeed))|\(Self.pinnedText)"
         #expect(canonical == Self.pinnedCanonical)
 
         // The hex MUST be byte-identical with the worker test's hex computed via

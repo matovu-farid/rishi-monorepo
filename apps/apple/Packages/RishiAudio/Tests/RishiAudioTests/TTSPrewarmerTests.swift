@@ -140,10 +140,14 @@ struct TTSPrewarmerTests {
 /// A `TTSChunkSource` whose `stream(request:)` yields ONE chunk then suspends on a
 /// 60-second sleep. Used to prove cooperative cancellation by `TTSPrewarmer.cancelAll()`.
 private actor BlockingFakeChunkSource: TTSChunkSource {
-    nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+    nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                continuation.yield(Data([0x01]))
+                continuation.yield(TTSChunk.make(
+                    request: request,
+                    sequenceIndex: 0,
+                    data: Data([0x01])
+                ))
                 do {
                     try await Task.sleep(nanoseconds: 60_000_000_000) // 60s
                     continuation.finish()

@@ -7,7 +7,7 @@ import RishiLogging
 struct AudioStack: @unchecked Sendable {
     let coordinator: AudioSessionCoordinator
     let state: TTSPlaybackState
-    let engine: TTSEngine
+    let engine: any TTSPlaying
     let settingsStore: any TTSSettingsStore
     let nowPlaying: NowPlayingController
     let presence: TTSPresenceController
@@ -76,14 +76,7 @@ enum AudioStackFactory {
 
         let prewarmer = TTSPrewarmer(source: chunkSource)
         let streamer = TTSStreamer(source: chunkSource)
-        let engineAdapter = AVAudioEngineAdapter()
-        let engine = TTSEngine(
-            streamer: streamer,
-            decoderFactory: { try MP3StreamDecoder(targetFormat: $0) },
-            engine: engineAdapter,
-            coordinator: coordinator,
-            state: state
-        )
+        let engine = ChunkedAudioPlayerTTSEngine(streamer: streamer, state: state)
         let settingsStore = UserDefaultsTTSSettingsStore()
         let nowPlaying = NowPlayingController(
             infoSurface: infoSurface,

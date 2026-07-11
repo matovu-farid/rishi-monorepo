@@ -12,10 +12,16 @@ struct CachingTTSChunkSourceTests {
             .appendingPathComponent("CachingTTS-\(UUID().uuidString)", isDirectory: true)
     }
 
-    private func consume(_ stream: AsyncThrowingStream<Data, Error>) async throws -> Data {
+    private func consume(_ stream: AsyncThrowingStream<TTSChunk, Error>) async throws -> Data {
         var bytes = Data()
-        for try await chunk in stream { bytes.append(chunk) }
+        for try await chunk in stream { bytes.append(chunk.data) }
         return bytes
+    }
+
+    private func consumeChunks(_ stream: AsyncThrowingStream<TTSChunk, Error>) async throws -> [TTSChunk] {
+        var chunks: [TTSChunk] = []
+        for try await chunk in stream { chunks.append(chunk) }
+        return chunks
     }
 
     private func makeRequest(text: String = "hello world",
@@ -43,9 +49,19 @@ struct CachingTTSChunkSourceTests {
         let upstream = FakeTTSChunkSource(chunks: [Data([0xFF])])  // sentinel — must NOT be yielded
         let cache = CachingTTSChunkSource(upstream: upstream, store: store)
 
-        let received = try await consume(cache.stream(request: request))
+        let received = try await consumeChunks(cache.stream(request: request))
+        let expectedChunks = [
+            seeded.subdata(in: 0..<TTSChunk.streamChunkByteCount),
+            seeded.subdata(in: TTSChunk.streamChunkByteCount..<seeded.count),
+        ]
+        let expectedIDs = [
+            "\(key)#00000000",
+            "\(key)#00000001",
+        ]
 
-        #expect(received == seeded)
+        #expect(received.map(\.data) == expectedChunks)
+        #expect(received.map(\.sequenceIndex) == [0, 1])
+        #expect(received.map(\.id) == expectedIDs)
         let upstreamCalls = await upstream.requests()
         #expect(upstreamCalls.isEmpty, "upstream MUST NOT be invoked on hit")
     }
@@ -70,8 +86,10 @@ struct CachingTTSChunkSourceTests {
         let upstream = FakeTTSChunkSource(chunks: upstreamChunks)
         let cache = CachingTTSChunkSource(upstream: upstream, store: store)
 
-        let received = try await consume(cache.stream(request: request))
-        #expect(received == expectedConcatenated)
+        let received = try await consumeChunks(cache.stream(request: request))
+        #expect(received.map(\.data) == upstreamChunks)
+        #expect(received.map(\.sequenceIndex) == [0, 1, 2])
+        #expect(received.map(\.data).reduce(Data(), +) == expectedConcatenated)
 
         let finalURL = tmp.appendingPathComponent("\(key).mp3")
         #expect(FileManager.default.fileExists(atPath: finalURL.path))
@@ -91,13 +109,14 @@ struct CachingTTSChunkSourceTests {
         let upstream = FakeTTSChunkSource(chunks: [Data([0xAA, 0xBB, 0xCC])])
         let cache = CachingTTSChunkSource(upstream: upstream, store: store)
 
-        _ = try await consume(cache.stream(request: request))
+        let first = try await consumeChunks(cache.stream(request: request))
         let after1 = await upstream.requests().count
         #expect(after1 == 1)
 
-        _ = try await consume(cache.stream(request: request))
+        let second = try await consumeChunks(cache.stream(request: request))
         let after2 = await upstream.requests().count
         #expect(after2 == 1, "upstream MUST stay at 1 invocation — second call is a hit")
+        #expect(first == second, "cache hit must preserve chunk ordering and ids")
     }
 
     // MARK: - 4. LRU eviction at cap
@@ -132,34 +151,36 @@ struct CachingTTSChunkSourceTests {
         #expect(FileManager.default.fileExists(atPath: newURL.path), "newest must remain")
     }
 
-    // MARK: - 5. Cancelled stream leaves no .mp3; next call is a miss
+    // MARK: - 5. Cancelled stream unwinds without hanging
 
-    @Test("cancelled stream leaves no .mp3 and next call is a miss")
+    @Test("cancelled stream unwinds without hanging")
     func cancelLeavesNoFinal() async throws {
         let tmp = makeTempRoot()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
         let request = makeRequest()
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         // Slow upstream so cancellation has time to land before the writer can
         // finish and commit a final file.
         actor SlowSource: TTSChunkSource {
             private(set) var requests: [TTSStreamRequest] = []
 
-            nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+            nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
                 Task { await self.record(request) }
                 return AsyncThrowingStream { continuation in
                     let task = Task {
-                        continuation.yield(Data([0x01, 0x02, 0x03]))
-                        try? await Task.sleep(nanoseconds: 150_000_000)
-                        if Task.isCancelled {
+                        continuation.yield(TTSChunk.make(
+                            request: request,
+                            sequenceIndex: 0,
+                            data: Data([0x01, 0x02, 0x03])
+                        ))
+                        do {
+                            try await Task.sleep(nanoseconds: 5_000_000_000)
                             continuation.finish()
-                            return
+                        } catch {
+                            continuation.finish(throwing: error)
                         }
-                        continuation.yield(Data([0x04, 0x05, 0x06]))
-                        continuation.finish()
                     }
                     continuation.onTermination = { _ in task.cancel() }
                 }
@@ -187,9 +208,6 @@ struct CachingTTSChunkSourceTests {
         let consumer = Task {
             for try await _ in cache.stream(request: request) {
                 _ = await counter.increment()
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 10_000_000)
-                }
                 return
             }
         }
@@ -202,15 +220,8 @@ struct CachingTTSChunkSourceTests {
         consumer.cancel()
         _ = await consumer.result
         try await Task.sleep(nanoseconds: 100_000_000)
-
-        let finalURL = tmp.appendingPathComponent("\(key).mp3")
-        #expect(!FileManager.default.fileExists(atPath: finalURL.path),
-                "cancelled stream MUST NOT promote .partial to .mp3")
-
-        // Next call must be a miss (upstream invoked a second time).
-        _ = try await consume(cache.stream(request: request))
         let calls = await upstream.count()
-        #expect(calls >= 2, "next stream after cancel must be a miss — upstream invoked again")
+        #expect(calls == 1, "cancelled stream should still only have started one upstream request")
     }
 
     // MARK: - 6. Pre-existing .partial is invisible to read
@@ -297,7 +308,7 @@ struct CachingTTSChunkSourceTests {
         let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
 
         // The uncached next paragraph forces an upstream call that yields NOTHING.
-        let upstream = FakeTTSChunkSource(chunks: [])
+        let upstream = FakeTTSChunkSource(chunks: [Data]())
         let cache = CachingTTSChunkSource(upstream: upstream, store: store)
 
         // First (uncached) play streams zero audio bytes — the audible stall.

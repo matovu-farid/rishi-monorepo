@@ -3,7 +3,7 @@ import RishiLogging
 
 /// Wraps any upstream `TTSChunkSource` with a file-backed LRU cache.
 ///
-/// Hit: yields cached bytes in 16 KiB chunks without touching upstream.
+/// Hit: yields cached bytes in ordered 4 KiB chunks without touching upstream.
 /// Miss: tees upstream chunks into `<key>.mp3.partial`; atomic-renames to `<key>.mp3`
 ///       on stream completion. On error or cancel, leaves `.partial` in place for the
 ///       LRU sweep to evict — never promotes a half-written file.
@@ -16,7 +16,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
         self.store = store
     }
 
-    public nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+    public nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { [self] in
                 let key = TTSCacheKey.compute(
@@ -29,7 +29,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
                 if let hitURL = await self.store.read(key: key) {
                     Log.event("tts.cache.hit", level: .info, data: ["key_prefix": String(key.prefix(8))])
                     do {
-                        try await Self.streamFile(at: hitURL, into: continuation)
+                        try await Self.streamFile(at: hitURL, requestKey: key, into: continuation)
                         continuation.finish()
                     } catch {
                         continuation.finish(throwing: error)
@@ -48,16 +48,21 @@ public actor CachingTTSChunkSource: TTSChunkSource {
 
     private static func streamFile(
         at url: URL,
-        into continuation: AsyncThrowingStream<Data, Error>.Continuation
+        requestKey: String,
+        into continuation: AsyncThrowingStream<TTSChunk, Error>.Continuation
     ) async throws {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-        let chunkSize = 16 * 1024
+        let chunkSize = TTSChunk.streamChunkByteCount
+        var sequenceIndex = 0
         while true {
             try Task.checkCancellation()
             let chunk = try handle.read(upToCount: chunkSize) ?? Data()
             if chunk.isEmpty { return }
-            continuation.yield(chunk)
+            continuation.yield(
+                TTSChunk(requestKey: requestKey, sequenceIndex: sequenceIndex, data: chunk)
+            )
+            sequenceIndex += 1
         }
     }
 
@@ -66,7 +71,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
     private func streamMiss(
         request: TTSStreamRequest,
         key: String,
-        into continuation: AsyncThrowingStream<Data, Error>.Continuation
+        into continuation: AsyncThrowingStream<TTSChunk, Error>.Continuation
     ) async {
         let partialURL: URL
         do {
@@ -91,7 +96,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
             for try await chunk in await upstream.stream(request: request) {
                 try Task.checkCancellation()
                 continuation.yield(chunk)
-                try handle.write(contentsOf: chunk)
+                try handle.write(contentsOf: chunk.data)
                 wroteBytes += chunk.count
             }
             try? handle.close()
@@ -126,7 +131,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
     /// Reached only when the cache store itself is broken (cannot create partial).
     private func passthrough(
         request: TTSStreamRequest,
-        into continuation: AsyncThrowingStream<Data, Error>.Continuation
+        into continuation: AsyncThrowingStream<TTSChunk, Error>.Continuation
     ) async {
         do {
             for try await chunk in await upstream.stream(request: request) {

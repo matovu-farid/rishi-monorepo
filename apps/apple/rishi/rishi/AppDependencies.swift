@@ -113,7 +113,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let audioCoordinator: AudioSessionCoordinator
     let ttsState: TTSPlaybackState
-    let ttsEngine: TTSEngine
+    let ttsEngine: any TTSPlaying
     let ttsSettingsStore: any TTSSettingsStore
     let nowPlayingController: NowPlayingController
     let ttsPresenceController: TTSPresenceController

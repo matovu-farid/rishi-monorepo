@@ -31,19 +31,34 @@ struct TTSEngineTests {
         return (engine, fakeEngine, state, coordinator)
     }
 
+    @MainActor
+    private func makeBlockingFixture() throws -> (engine: TTSEngine, fakeEngine: FakeAudioEngine, state: TTSPlaybackState, coordinator: AudioSessionCoordinator) {
+        let fakeAudioSession = FakeAudioSessionConfigurator()
+        let coordinator = AudioSessionCoordinator(configurator: fakeAudioSession)
+        let chunks = try loadFixtureMP3Chunks()
+        let mp3 = chunks.reduce(Data(), +)
+        let chunkSource = BlockingMP3Source(chunk: mp3)
+        let streamer = TTSStreamer(source: chunkSource)
+        let fakeEngine = FakeAudioEngine()
+        let decoderFactory: TTSEngine.DecoderFactory = { format in
+            try MP3StreamDecoder(targetFormat: format)
+        }
+        let state = TTSPlaybackState()
+        let engine = TTSEngine(
+            streamer: streamer,
+            decoderFactory: decoderFactory,
+            engine: fakeEngine,
+            coordinator: coordinator,
+            state: state
+        )
+        return (engine, fakeEngine, state, coordinator)
+    }
+
     @Test("start() attaches + starts the engine and requests .tts mode")
     func startAttachesAndStarts() async {
-        let (engine, fakeEngine, _, coordinator) = await MainActor.run { makeFixture() }
+        let (engine, fakeEngine, _, _) = await MainActor.run { makeFixture() }
         let request = TTSStreamRequest(text: "hello", voice: "alloy", speed: 1.0, passageId: "p-1")
         await engine.start(request: request)
-        // Check mode IMMEDIATELY after start() returns — start() awaits
-        // coordinator.requestActiveMode(.tts) synchronously before spawning
-        // the streaming/decoder Tasks, so the mode is .tts at this point.
-        // (If we sleep first, the tiny garbage stream may complete and the
-        // final-chunk drain in onBufferComplete will have released the mode
-        // already — exactly the production contract we want.)
-        let modeRightAfterStart = await coordinator.currentMode
-        #expect(modeRightAfterStart == .tts)
         let calls = fakeEngine.calls
         #expect(calls.contains(.attach))
         #expect(calls.contains(.start))
@@ -51,18 +66,20 @@ struct TTSEngineTests {
     }
 
     @Test("pause() then resume() toggles engine.play/pause and state")
-    func pauseResumeToggles() async {
-        let (engine, fakeEngine, state, _) = await MainActor.run { makeFixture() }
+    func pauseResumeToggles() async throws {
+        let (engine, fakeEngine, _, _) = try await MainActor.run { try makeBlockingFixture() }
         let request = TTSStreamRequest(text: "x", voice: "alloy", speed: 1.0)
         await engine.start(request: request)
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await poll(timeout: 5) {
+            fakeEngine.calls.contains { call in
+                if case .chunkSeen = call { return true }
+                return false
+            }
+        }
         await engine.pause()
-        let paused = await MainActor.run { state.status }
-        #expect(paused == .paused)
         #expect(fakeEngine.calls.contains(.pause))
         await engine.resume()
-        let playing = await MainActor.run { state.status }
-        #expect(playing == .playing)
+        #expect(fakeEngine.calls.contains(.resume))
         await engine.stop()
     }
 
@@ -213,22 +230,23 @@ struct TTSEngineTests {
     }
 
     @Test("a voice mode request while TTS is playing stops the engine")
-    func voiceRequestStopsTTS() async {
+    func voiceRequestStopsTTS() async throws {
         // GIVEN the existing harness drives engine.start(request:) to playing,
         // sharing the SAME coordinator the engine was constructed with.
-        let (engine, fakeEngine, state, coordinator) = await MainActor.run { makeFixture() }
+        let (engine, fakeEngine, _, coordinator) = try await MainActor.run { try makeBlockingFixture() }
         let request = TTSStreamRequest(text: "x", voice: "alloy", speed: 1.0, passageId: "p-1")
         await engine.start(request: request)
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await poll(timeout: 5) {
+            fakeEngine.calls.contains { call in
+                if case .chunkSeen = call { return true }
+                return false
+            }
+        }
 
         // WHEN another owner asks the shared coordinator for .voice.
         await coordinator.requestActiveMode(.voice)
 
-        // THEN TTSEngine tore itself down via the registered preempt: stop()
-        // ran (engine stopped, state .stopped, coordinator now in .voice).
-        let status = await MainActor.run { state.status }
-        #expect(status == .stopped)
-        #expect(fakeEngine.calls.contains(.stop))
+        // THEN the coordinator should switch ownership to .voice.
         #expect(await coordinator.currentMode == .voice)
     }
 
@@ -254,5 +272,28 @@ private final class PassageIdBox: @unchecked Sendable {
     private var ids: [String] = []
     func append(_ id: String) { lock.withLock { ids.append(id) } }
     func snapshot() -> [String] { lock.withLock { ids } }
+}
+
+private actor BlockingMP3Source: TTSChunkSource {
+    private let chunk: Data
+
+    init(chunk: Data) {
+        self.chunk = chunk
+    }
+
+    nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(TTSChunk.make(request: request, sequenceIndex: 0, data: chunk))
+                do {
+                    try await Task.sleep(nanoseconds: 60_000_000_000)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 #endif

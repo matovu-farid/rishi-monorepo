@@ -12,6 +12,7 @@ import RishiBilling
 import RishiChat
 import RishiCore
 import RishiDB
+import RishiAudio
 import RishiLibrary
 import RishiLogging
 import RishiOnboarding
@@ -47,6 +48,31 @@ enum ServiceGraphFactory {
             tokenProvider: tokenProvider,
 
         )
+
+        let speechOptions = (try? await workerClient.send(SpeechOptionsEndpoint()))
+            ?? SpeechOptionsEndpoint.SpeechOptionsResponse(
+                provider: "openai",
+                voices: VoiceCatalog.all.map {
+                    .init(id: $0, name: VoiceCatalog.displayName(for: $0))
+                },
+                models: [
+                    .init(id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS")
+                ],
+                defaultVoiceID: VoiceCatalog.all.first ?? "marin",
+                defaultModelID: "gpt-4o-mini-tts"
+            )
+        await MainActor.run {
+            TTSPickerCatalogStore.shared.catalog = TTSPickerCatalog(
+                voiceChoices: speechOptions.voices.map {
+                    TTSVoiceChoice(id: $0.id, name: $0.name)
+                },
+                modelChoices: speechOptions.models.map {
+                    TTSVoiceChoice(id: $0.id, name: $0.name)
+                },
+                defaultVoiceID: speechOptions.defaultVoiceID,
+                defaultModelID: speechOptions.defaultModelID
+            )
+        }
 
         let siwaPresenter = await MainActor.run { SystemSiwaPresenter() }
     
@@ -136,7 +162,11 @@ enum ServiceGraphFactory {
             workerClient: workerClient,
             metadataStore: syncMetadataStore,
             fileStorage: bookFileStorage,
-            userIdProvider: { [keychain] in (try? await keychain.load())?.userId
+            userIdProvider: { [keychain] in
+                if let session = try? await keychain.load() {
+                    return session.userId
+                }
+                return try? Keychain.load(.userId)
             }
         )
         let positionUploader = PositionUploader(

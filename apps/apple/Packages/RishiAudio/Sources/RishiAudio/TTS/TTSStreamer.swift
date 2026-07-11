@@ -2,14 +2,15 @@ import Foundation
 import RishiCore
 import RishiLogging
 
-/// Source of MP3 byte chunks for a TTS request. Production is `WorkerClient`
+/// Source of ordered MP3 chunks for a TTS request. Production is `WorkerClient`
 /// via ``WorkerTTSChunkSource``; tests inject ``FakeTTSChunkSource`` to avoid
 /// spinning up URLProtocol.
 public protocol TTSChunkSource: Sendable {
-    func stream(request: TTSStreamRequest) async-> AsyncThrowingStream<Data, Error>
+    func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error>
 }
 
-/// Production adapter — wraps the existing WorkerClient + ElevenLabs speech endpoint.
+/// Production adapter — wraps the existing WorkerClient + OpenAI-backed speech
+/// endpoint in SSE event mode and turns ordered chunk frames into `TTSChunk`.
 public struct WorkerTTSChunkSource: TTSChunkSource {
     private let client: WorkerClient
 
@@ -17,16 +18,84 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
         self.client = client
     }
 
-    public func stream(request: TTSStreamRequest) async  -> AsyncThrowingStream<Data, Error> {
-        let endpoint = ElevenLabsSpeechStreamEndpoint(
+    public func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+        let endpoint = SpeechStreamEndpoint(
             body: .init(
                 text: request.text,
                 voice: request.voice,
                 model: request.model,
-                speed: request.speed
+                speed: request.speed,
+                responseMode: .events
             )
         )
-        return await client.stream(endpoint)
+        let upstream = await client.stream(endpoint)
+        let requestKey = TTSCacheKey.compute(
+            text: request.text,
+            voice: request.voice,
+            model: request.model,
+            speed: request.speed
+        )
+        return AsyncThrowingStream { continuation in
+            let parser = TTSStreamEventParser()
+            let task = Task {
+                do {
+                    for try await bytes in upstream {
+                        if Task.isCancelled {
+                            continuation.finish()
+                            return
+                        }
+                        for frame in await parser.consume(bytes) {
+                            if Task.isCancelled {
+                                continuation.finish()
+                                return
+                            }
+                            let chunk = TTSChunk.make(
+                                request: request,
+                                sequenceIndex: frame.index,
+                                data: frame.audio
+                            )
+                            if frame.requestID != requestKey {
+                                Log.event("tts.sse.request_id_mismatch", level: .error, data: [
+                                    "expected": requestKey,
+                                    "got": frame.requestID,
+                                ])
+                            }
+                            if let chunkID = frame.chunkID, chunkID != chunk.id {
+                                Log.event("tts.sse.chunk_id_mismatch", level: .error, data: [
+                                    "expected": chunk.id,
+                                    "got": chunkID,
+                                ])
+                            }
+                            continuation.yield(chunk)
+                        }
+                    }
+                    for frame in await parser.finalize() {
+                        let chunk = TTSChunk.make(
+                            request: request,
+                            sequenceIndex: frame.index,
+                            data: frame.audio
+                        )
+                        if frame.requestID != requestKey {
+                            Log.event("tts.sse.request_id_mismatch", level: .error, data: [
+                                "expected": requestKey,
+                                "got": frame.requestID,
+                            ])
+                        }
+                        if let chunkID = frame.chunkID, chunkID != chunk.id {
+                            Log.event("tts.sse.chunk_id_mismatch", level: .error, data: [
+                                "expected": chunk.id,
+                                "got": chunkID,
+                            ])
+                        }
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 
@@ -35,21 +104,31 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
 public actor FakeTTSChunkSource: TTSChunkSource {
 
     public private(set) var receivedRequests: [TTSStreamRequest] = []
-    private let chunks: [Data]
+    private enum ChunkTemplate: Sendable {
+        case raw(Data)
+        case chunk(TTSChunk)
+    }
+
+    private let chunks: [ChunkTemplate]
     private let throwAfter: Int?
 
     public init(chunks: [Data], throwAfter: Int? = nil) {
-        self.chunks = chunks
+        self.chunks = chunks.map { .raw($0) }
         self.throwAfter = throwAfter
     }
 
-    nonisolated public func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+    public init(chunks: [TTSChunk], throwAfter: Int? = nil) {
+        self.chunks = chunks.map { .chunk($0) }
+        self.throwAfter = throwAfter
+    }
+
+    nonisolated public func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
         AsyncThrowingStream { continuation in
             // KEEP: nonisolated wrapper on an actor; Task body bridges chunks
             // into the continuation off the calling actor.
             let task = Task { [chunks, throwAfter] in
                 await self.recordRequest(request)
-                for (index, chunk) in chunks.enumerated() {
+                for (index, template) in chunks.enumerated() {
                     if Task.isCancelled {
                         continuation.finish()
                         return
@@ -58,7 +137,14 @@ public actor FakeTTSChunkSource: TTSChunkSource {
                         continuation.finish(throwing: TTSStreamerError.injected)
                         return
                     }
-                    continuation.yield(chunk)
+                    switch template {
+                    case .raw(let data):
+                        continuation.yield(
+                            TTSChunk.make(request: request, sequenceIndex: index, data: data)
+                        )
+                    case .chunk(let chunk):
+                        continuation.yield(chunk)
+                    }
                 }
                 continuation.finish()
             }
@@ -77,6 +163,7 @@ public actor FakeTTSChunkSource: TTSChunkSource {
 
 public enum TTSStreamerError: Error, Equatable {
     case injected
+    case emptyResponse
 }
 
 /// Forwarding actor — adds Log.event breadcrumbs around the underlying source
@@ -90,13 +177,14 @@ public actor TTSStreamer {
         self.source = source
     }
 
-    public nonisolated func stream(_ request: TTSStreamRequest) async -> AsyncThrowingStream<Data, Error> {
+    public nonisolated func stream(_ request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
         let upstream = await source.stream(request: request)
         return AsyncThrowingStream { continuation in
-            // KEEP: nonisolated wrapper on an actor; Task body forwards bytes
-            // and emits Log breadcrumbs off the calling actor.
+            // KEEP: nonisolated wrapper on an actor; Task body forwards
+            // ordered chunks and emits Log breadcrumbs off the calling actor.
             let task = Task {
                 var byteCount = 0
+                var yieldedChunk = false
                 do {
                     Log.event("tts.stream.start", level: .info, data: [
                         "voice": request.voice,
@@ -110,7 +198,17 @@ public actor TTSStreamer {
                             return
                         }
                         byteCount += chunk.count
+                        yieldedChunk = true
                         continuation.yield(chunk)
+                    }
+                    guard yieldedChunk else {
+                        Log.event("tts.stream.empty_response", level: .error, data: [
+                            "voice": request.voice,
+                            "model": request.model,
+                            "textLen": String(request.text.count),
+                        ])
+                        continuation.finish(throwing: TTSStreamerError.emptyResponse)
+                        return
                     }
                     Log.event("tts.stream.complete", level: .info, data: ["bytes": String(byteCount)])
                     continuation.finish()

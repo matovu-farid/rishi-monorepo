@@ -60,10 +60,14 @@ struct RootView: View {
 
                     deps.setUserId(uuidUserId)
                     let workerClient = deps.workerClient
-                    if let user = try? await workerClient.send(
-                        UserGetEndpoint()
-                    ) {
+                    do {
+                        let user = try await workerClient.send(
+                            UserGetEndpoint()
+                        )
                         currentUserBox.signIn(user: user)
+                    } catch {
+                        Log.error("root.current_user.bootstrap_failed", error: error)
+                        currentUserBox.state = .signedOut
                     }
                 } else {
                     currentUserBox.state = .signedOut

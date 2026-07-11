@@ -39,6 +39,9 @@ final class CurrentUserBox {
         Keychain.delete(.accessToken)
         Keychain.delete(.refreshToken)
         Keychain.delete(.userId)
+        Task {
+            try? await KeychainSessionStore().delete()
+        }
         self.state = .signedOut
     }
     

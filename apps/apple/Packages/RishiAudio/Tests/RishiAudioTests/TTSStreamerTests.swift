@@ -11,11 +11,18 @@ struct TTSStreamerTests {
         let source = FakeTTSChunkSource(chunks: chunks)
         let streamer = TTSStreamer(source: source)
         let request = TTSStreamRequest(text: "hi", voice: "alloy", speed: 1.0)
-        var received: [Data] = []
+        var received: [TTSChunk] = []
         for try await chunk in await streamer.stream(request) {
             received.append(chunk)
         }
-        #expect(received == chunks)
+        let requestKey = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
+        #expect(received.map(\.data) == chunks)
+        #expect(received.map(\.sequenceIndex) == [0, 1, 2])
+        #expect(received.map(\.id) == [
+            "\(requestKey)#00000000",
+            "\(requestKey)#00000001",
+            "\(requestKey)#00000002",
+        ])
     }
 
     @Test("Forwards source error")
@@ -25,7 +32,7 @@ struct TTSStreamerTests {
         let streamer = TTSStreamer(source: source)
         let request = TTSStreamRequest(text: "boom", voice: "alloy", speed: 1.0)
         var thrown: Error?
-        var received: [Data] = []
+        var received: [TTSChunk] = []
         do {
             for try await chunk in await streamer.stream(request) {
                 received.append(chunk)
@@ -39,7 +46,7 @@ struct TTSStreamerTests {
 
     @Test("Records request with full body shape")
     func recordsRequest() async throws {
-        let source = FakeTTSChunkSource(chunks: [])
+        let source = FakeTTSChunkSource(chunks: [Data([0xFF, 0xFB, 0x90, 0x00])])
         let streamer = TTSStreamer(source: source)
         let request = TTSStreamRequest(text: "alpha", voice: "nova", speed: 1.5, passageId: "p-1")
         for try await _ in await streamer.stream(request) {}
@@ -54,13 +61,17 @@ struct TTSStreamerTests {
         // If cancellation didn't propagate, the slow source would keep yielding
         // forever; the fact that we exit the test cleanly is the assertion.
         actor SlowSource: TTSChunkSource {
-            nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+            nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
                 AsyncThrowingStream { continuation in
                     let task = Task {
                         for i in 0..<100 {
                             if Task.isCancelled { continuation.finish(); return }
                             try? await Task.sleep(nanoseconds: 50_000_000)
-                            continuation.yield(Data([UInt8(i & 0xFF)]))
+                            continuation.yield(TTSChunk.make(
+                                request: request,
+                                sequenceIndex: i,
+                                data: Data([UInt8(i & 0xFF)])
+                            ))
                         }
                         continuation.finish()
                     }
@@ -75,5 +86,20 @@ struct TTSStreamerTests {
         _ = try await iter.next()
         // Drop the iterator (end of scope) — should cancel upstream Task.
         try await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    @Test("Empty upstream is surfaced as an error")
+    func emptyUpstreamThrows() async throws {
+        let source = FakeTTSChunkSource(chunks: [] as [Data])
+        let streamer = TTSStreamer(source: source)
+        let request = TTSStreamRequest(text: "x", voice: "alloy", speed: 1.0)
+        do {
+            for try await _ in await streamer.stream(request) {}
+            Issue.record("Expected emptyResponse to throw")
+        } catch TTSStreamerError.emptyResponse {
+            // expected
+        } catch {
+            Issue.record("Expected emptyResponse, got \(error)")
+        }
     }
 }

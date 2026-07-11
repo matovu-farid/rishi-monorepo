@@ -13,6 +13,7 @@ let package = Package(
         .package(path: "../RishiAuth"),
         .package(path: "../RishiUIKit"),
         .package(path: "../RishiLogging"),
+        .package(url: "https://github.com/mihai8804858/swift-chunked-audio-player", from: "1.0.0"),
         .package(path: "../RishiTesting"), // test-only consumer
     ],
     targets: [
@@ -24,6 +25,7 @@ let package = Package(
                 "RishiAuth",
                 "RishiUIKit",
                 "RishiLogging",
+                .product(name: "ChunkedAudioPlayer", package: "swift-chunked-audio-player"),
             ]
         ),
         .testTarget(

@@ -21,19 +21,15 @@ public struct VoiceAndSpeedPicker: View {
         initial: TTSSettings,
         userId: UserID,
         store: any TTSSettingsStore,
-        voiceChoices: [TTSVoiceChoice] = VoiceCatalog.all.map {
-            TTSVoiceChoice(id: $0, name: VoiceCatalog.displayName(for: $0))
-        },
-        modelChoices: [TTSVoiceChoice] = TTSModelCatalog.all.map {
-            TTSVoiceChoice(id: $0, name: TTSModelCatalog.displayName(for: $0))
-        },
+        catalog: TTSPickerCatalog = TTSPickerCatalogStore.shared.catalog,
         onDismiss: @escaping (TTSSettings) -> Void
     ) {
-        self._voice = State(initialValue: initial.voice)
-        self._model = State(initialValue: initial.model)
+        let normalized = catalog.normalized(initial)
+        self._voice = State(initialValue: normalized.voice)
+        self._model = State(initialValue: normalized.model)
         self._speed = State(initialValue: initial.speed)
-        self.voiceChoices = voiceChoices
-        self.modelChoices = modelChoices
+        self.voiceChoices = catalog.voiceChoices
+        self.modelChoices = catalog.modelChoices
         self.userId = userId
         self.store = store
         self.onDismiss = onDismiss
