@@ -30,13 +30,9 @@ struct ReadAloudControlsOverlay: View {
             GeometryReader { proxy in
                 let containerSize = proxy.size
 
-                ZStack(alignment: .topLeading) {
-                    dragBackdrop(in: containerSize)
-
-                    player
-                        .simultaneousGesture(dragGesture(in: containerSize))
-                        .position(resolvedLocation(in: containerSize))
-                }
+                player
+                    .simultaneousGesture(dragGesture(in: containerSize))
+                    .position(resolvedLocation(in: containerSize))
                 .frame(width: containerSize.width, height: containerSize.height)
                 .sensoryFeedback(.selection, trigger: dragHapticTick)
                 .onDisappear { location = nil }
@@ -85,6 +81,9 @@ struct ReadAloudControlsOverlay: View {
         .shadow(radius: RishiSpacing.s)
         .padding(.horizontal, RishiSpacing.m)
         .padding(.bottom, RishiSpacing.s)
+        .contentShape(
+            RoundedRectangle(cornerRadius: RishiRadius.pill, style: .continuous)
+        )
         .readSize { controlSize = $0 }
     }
 
@@ -94,12 +93,6 @@ struct ReadAloudControlsOverlay: View {
             x: containerSize.width / 2,
             y: clampedVerticalLocation(center.y, in: containerSize)
         )
-    }
-
-    private func dragBackdrop(in containerSize: CGSize) -> some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .gesture(dragGesture(in: containerSize))
     }
 
     private func dragGesture(in containerSize: CGSize) -> some Gesture {

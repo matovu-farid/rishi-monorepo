@@ -51,7 +51,8 @@ public actor CachingTTSChunkSource: TTSChunkSource {
             model: request.model,
             speed: request.speed
         )
-        return !(await store.contains(key: key))
+        let isCached = await store.contains(key: key)
+        return !isCached
     }
 
     // MARK: - Hit path: stream the cached file in 16 KiB chunks
