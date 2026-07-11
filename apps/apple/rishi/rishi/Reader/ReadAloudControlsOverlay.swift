@@ -18,6 +18,8 @@ struct ReadAloudControlsOverlay: View {
     @State private var location: CGPoint?
     @State private var controlSize: CGSize = .zero
     @State private var dragHapticTick = 0
+    @GestureState private var dragTranslationY: CGFloat = 0
+    @GestureState private var isDragging = false
 
     #if targetEnvironment(macCatalyst)
     
@@ -31,8 +33,17 @@ struct ReadAloudControlsOverlay: View {
                 let containerSize = proxy.size
 
                 player
+                    .transaction { transaction in
+                        if isDragging {
+                            transaction.animation = nil
+                        }
+                    }
                     .simultaneousGesture(dragGesture(in: containerSize))
-                    .position(resolvedLocation(in: containerSize))
+                    .position(
+                        x: containerSize.width / 2,
+                        y: committedLocation(in: containerSize).y
+                    )
+                    .offset(y: dragTranslationY)
                 .frame(width: containerSize.width, height: containerSize.height)
                 .sensoryFeedback(.selection, trigger: dragHapticTick)
                 .onDisappear { location = nil }
@@ -78,7 +89,7 @@ struct ReadAloudControlsOverlay: View {
         .frame(maxWidth: Self.macMaxWidth)
         #endif
         .modifier(GlassCardBackground(cornerRadius: RishiRadius.pill))
-        .shadow(radius: RishiSpacing.s)
+        .shadow(radius: isDragging ? 0 : RishiSpacing.s)
         .padding(.horizontal, RishiSpacing.m)
         .padding(.bottom, RishiSpacing.s)
         .contentShape(
@@ -88,25 +99,22 @@ struct ReadAloudControlsOverlay: View {
     }
 
     private func resolvedLocation(in containerSize: CGSize) -> CGPoint {
-        let center = location ?? defaultLocation(in: containerSize)
-        return CGPoint(
-            x: containerSize.width / 2,
-            y: clampedVerticalLocation(center.y, in: containerSize)
-        )
+        committedLocation(in: containerSize)
     }
 
     private func dragGesture(in containerSize: CGSize) -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                location = CGPoint(
-                    x: containerSize.width / 2,
-                    y: clampedVerticalLocation(value.location.y, in: containerSize)
-                )
+        DragGesture(coordinateSpace: .global)
+            .updating($dragTranslationY) { value, state, _ in
+                state = value.translation.height
+            }
+            .updating($isDragging) { _, state, _ in
+                state = true
             }
             .onEnded { value in
+                let base = committedLocation(in: containerSize)
                 let finalLocation = CGPoint(
                     x: containerSize.width / 2,
-                    y: clampedVerticalLocation(value.location.y, in: containerSize)
+                    y: clampedVerticalLocation(base.y + value.translation.height, in: containerSize)
                 )
                 let didMove = abs(value.translation.height) > 8
                 location = finalLocation
@@ -114,6 +122,10 @@ struct ReadAloudControlsOverlay: View {
                     dragHapticTick &+= 1
                 }
             }
+    }
+
+    private func committedLocation(in containerSize: CGSize) -> CGPoint {
+        location ?? defaultLocation(in: containerSize)
     }
 
     private func defaultLocation(in containerSize: CGSize) -> CGPoint {
