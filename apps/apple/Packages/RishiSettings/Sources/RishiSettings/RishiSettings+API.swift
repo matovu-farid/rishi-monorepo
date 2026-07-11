@@ -17,6 +17,10 @@
 //
 // SettingsScreen              — `UI/SettingsScreen.swift`. The Settings tab root screen.
 // AudioSection                — `UI/Audio/AudioSection.swift`. Voice + speed picker for TTS.
+// VoiceLanguageSection        — `UI/Voice/VoiceLanguageSection.swift`. Settings section for
+//                                the voice-session language preference.
+// VoiceLanguagePicker         — `UI/VoiceLanguagePicker.swift`. Reusable picker for the
+//                                voice-session language code.
 // BillingSection              — `UI/Billing/BillingSection.swift`. Plan status + Manage
 //                                Subscription + Restore Purchases.
 // LegalLinksSection           — `UI/LegalLinksSection.swift`. Privacy, Terms, EULA, Support links.
@@ -27,6 +31,8 @@
 //
 // IdentifiedURL               — `UI/LegalLinksSection.swift`. URL + Identifiable wrapper used
 //                                with `.sheet(item:)` in LegalLinksSection.
+// VoiceLanguageOption         — `VoiceLanguage/VoiceLanguageOption.swift`. User-facing
+//                                voice-language choices with ISO-639-1 codes.
 
 // MARK: - Telemetry
 //

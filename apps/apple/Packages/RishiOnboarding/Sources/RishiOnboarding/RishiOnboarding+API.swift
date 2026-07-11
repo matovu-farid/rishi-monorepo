@@ -5,10 +5,10 @@
 // public symbol — comments only. Update this file when you add or
 // remove a public type.
 //
-// RishiOnboarding owns the first-run flow: a small set of intro
-// screens followed by Sign in with Apple. It also persists the
-// "user has completed onboarding" bit so the app can skip the flow
-// on subsequent launches.
+// RishiOnboarding owns the first-run flow: a small set of intro screens,
+// sign-in, a mic primer, and a voice-language chooser.
+// It also persists the "user has completed onboarding" bit so the app
+// can skip the flow on subsequent launches.
 //
 // Last verified: 2026-06-13 (against commit HEAD after the public-
 // surface audit, which removed 8 unused exports).
@@ -16,7 +16,7 @@
 // MARK: - Views
 //
 // OnboardingFlowView          — `UI/OnboardingFlowView.swift`. The full first-run experience:
-//                                intro pages -> Sign in with Apple -> done.
+//                                intro pages -> Sign in with Apple -> mic -> voice language -> done.
 
 // MARK: - Coordinators / Flows
 //

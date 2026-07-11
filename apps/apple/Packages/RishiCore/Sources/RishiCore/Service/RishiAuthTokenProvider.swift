@@ -21,9 +21,16 @@ public struct RishiAuthTokenProvider: TokenProvider {
 
     public func token() async -> String? {
         do {
-            return try await keychain.load()?.token
+            if let session = try await keychain.load() {
+                return session.token
+            }
         } catch {
-            return nil
+            // Fall through to the legacy flat keychain entries below.
         }
+
+        // Legacy installs still persist the bearer token under the flat
+        // `accessToken` key. Keep reading it until every caller has migrated
+        // to the session blob.
+        return try? Keychain.load(.accessToken)
     }
 }

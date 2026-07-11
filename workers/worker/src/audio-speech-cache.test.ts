@@ -27,15 +27,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *     writeback, and returns X-TTS-Cache: hit.
  *   - Cache key is stable: same (text, voice, speed) yields same 64-char hex.
  *   - Cache key is sensitive to speed: 1.00 and 1.50 differ.
- *   - Cache key is sensitive to voice: alloy and nova differ.
+ *   - Cache key is sensitive to voice: alloy and cedar differ.
  *   - Cross-runner symmetry: a pinned canonical string produces a known hex
  *     that the companion iOS test in 22-02 must reproduce byte-for-byte.
+ *   - Model bump: miss path calls gpt-4o-mini-tts and meters that model slug.
  */
 
 // ─── Cross-runner symmetry constants ─────────────────────────────────────────
 // This exact canonical string and resulting hex MUST also appear verbatim in
 // apps/apple/Packages/RishiAudio/Tests/RishiAudioTests/TTSCacheKeyTests.swift.
-const PINNED_CANONICAL = "tts-1|alloy|1.00|hello world"
+const PINNED_CANONICAL = "gpt-4o-mini-tts|alloy|1.00|hello world"
 const PINNED_TEXT = "hello world"
 const PINNED_VOICE = "alloy"
 const PINNED_SPEED = 1.0
@@ -47,16 +48,28 @@ const { speechCalls, speechAudioBytes, meterMock } = vi.hoisted(() => ({
   meterMock: vi.fn(async () => undefined),
 }))
 
-vi.mock("ai", async () => {
-  const actual = await vi.importActual<typeof import("ai")>("ai")
+vi.mock("openai", () => {
+  class MockOpenAI {
+    audio = {
+      speech: {
+        create: vi.fn(async (args: Record<string, unknown>) => {
+          speechCalls.push(args)
+          return {
+            arrayBuffer: async () =>
+              speechAudioBytes.buffer.slice(
+                speechAudioBytes.byteOffset,
+                speechAudioBytes.byteOffset + speechAudioBytes.byteLength,
+              ),
+          }
+        }),
+      },
+    }
+
+    constructor(_config?: unknown) {}
+  }
+
   return {
-    ...actual,
-    experimental_generateSpeech: vi.fn(async (args: Record<string, unknown>) => {
-      speechCalls.push(args)
-      return {
-        audio: { uint8Array: speechAudioBytes },
-      }
-    }),
+    default: MockOpenAI,
   }
 })
 
@@ -80,6 +93,12 @@ vi.mock("./billing/sub-gate", () => ({
     _c: unknown,
     next: () => Promise<void>,
   ) => {
+    await next()
+  },
+}))
+
+vi.mock("./middleware", () => ({
+  requireAuth: async (_c: unknown, next: () => Promise<void>) => {
     await next()
   },
 }))
@@ -232,7 +251,7 @@ async function computeKey(
   voice: string,
   speed: number,
 ): Promise<string> {
-  const canonical = `tts-1|${voice}|${speed.toFixed(2)}|${text}`
+  const canonical = `gpt-4o-mini-tts|${voice}|${speed.toFixed(2)}|${text}`
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(canonical),
@@ -280,6 +299,26 @@ async function callSpeech(body: unknown) {
   return app.fetch(req, env, ctx)
 }
 
+function parseEventFrames(text: string) {
+  return text
+    .trim()
+    .split(/\n\n/)
+    .filter(Boolean)
+    .map((frameText) => {
+      const frame: { id?: string; event?: string; data?: string } = {}
+      for (const line of frameText.split("\n")) {
+        const separator = line.indexOf(": ")
+        if (separator === -1) continue
+        const key = line.slice(0, separator)
+        const value = line.slice(separator + 2)
+        if (key === "id" || key === "event" || key === "data") {
+          frame[key] = value
+        }
+      }
+      return frame
+    })
+}
+
 beforeEach(() => {
   speechCalls.length = 0
   waited = []
@@ -306,11 +345,22 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     expect(res.headers.get("X-TTS-Cache")).toBe("miss")
 
     expect(speechCalls.length).toBe(1)
+    expect(speechCalls[0]).toMatchObject({
+      model: "gpt-4o-mini-tts",
+    })
 
     // Flush waitUntil-deferred work (metering + R2 put).
     await Promise.all(waited)
 
     expect(meterMock).toHaveBeenCalledTimes(1)
+    const meterCall = meterMock.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { model?: string },
+    ]
+    expect(meterCall[2]).toMatchObject({
+      model: "gpt-4o-mini-tts",
+    })
 
     expect(ttsCachePutMock).toHaveBeenCalledTimes(1)
     const [putKey, putValue] = ttsCachePutMock.mock.calls[0] as [
@@ -369,7 +419,7 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
 
   it("different voice produces different cache key", async () => {
     const k1 = await computeKey("hello", "alloy", 1.0)
-    const k2 = await computeKey("hello", "nova", 1.0)
+    const k2 = await computeKey("hello", "cedar", 1.0)
     expect(k1).not.toBe(k2)
   })
 
@@ -393,5 +443,50 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     // The iOS Swift Testing companion in 22-02 will assert the SAME canonical
     // string produces the SAME hex via CryptoKit.SHA256.hash(data:
     // Data(canonical.utf8)).
+  })
+
+  it("event mode cache hit streams chunk and done frames with cache-key-derived ids", async () => {
+    const cachedBytes = new Uint8Array([9, 9, 9, 9])
+    ttsCacheGetMock.mockResolvedValue({
+      bytes: async () => cachedBytes,
+    })
+
+    const text = "hello world"
+    const res = await callSpeech({
+      text,
+      voice: "alloy",
+      speed: 1.0,
+      response_mode: "events",
+    })
+
+    expect(res.status).toBe(200)
+    expect((res.headers.get("Content-Type") ?? "").toLowerCase()).toContain(
+      "text/event-stream",
+    )
+    expect(res.headers.get("X-TTS-Cache")).toBe("hit")
+
+    const frames = parseEventFrames(await res.text())
+    expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
+
+    const requestId = await computeKey(text, "alloy", 1.0)
+    expect(frames[0].id).toBe(`${requestId}#00000000`)
+    expect(JSON.parse(frames[0].data!)).toMatchObject({
+      request_id: requestId,
+      chunk_id: `${requestId}#00000000`,
+      index: 0,
+      audio_b64: "CQkJCQ==",
+    })
+    expect(frames[1].id).toBe(`${requestId}#done`)
+    expect(JSON.parse(frames[1].data!)).toMatchObject({
+      request_id: requestId,
+      done: true,
+      cache: "hit",
+      chunk_count: 1,
+      byte_length: 4,
+    })
+
+    expect(speechCalls.length).toBe(0)
+    expect(meterMock).not.toHaveBeenCalled()
+    expect(ttsCachePutMock).not.toHaveBeenCalled()
   })
 })

@@ -149,6 +149,13 @@ struct SignedOutView: View {
                         auth.userId,
                         for: .userId
                     )
+                    try? await KeychainSessionStore().save(
+                        Session(
+                            token: auth.accessToken,
+                            userId: auth.userId,
+                            email: auth.user.email
+                        )
+                    )
                     currentUser = auth.user
                     
                     if let userId = UUID(uuidString: auth.userId){

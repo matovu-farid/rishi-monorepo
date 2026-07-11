@@ -1,7 +1,6 @@
 import Foundation
-import MetaCodable
 
-@Codable @CodedAt("type") public enum ClientEvent: Equatable, Hashable, Sendable {
+public enum ClientEvent: Codable, Equatable, Hashable, Sendable {
 	/// Send this event to update the session’s default configuration.
 	///
 	/// The client may send this event at any time to update any field, except for voice.
@@ -12,7 +11,6 @@ import MetaCodable
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter session: Realtime session configuration.
-	@CodedAs("session.update")
 	case updateSession(eventId: String?, session: Session)
 
 	/// Send this event to append audio bytes to the input audio buffer.
@@ -28,7 +26,6 @@ import MetaCodable
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter audio: Audio bytes.
-	@CodedAs("input_audio_buffer.append")
 	case appendInputAudioBuffer(eventId: String?, audio: AudioData)
 
 	/// Send this event to commit the user input audio buffer, which will create a new user message item in the conversation.
@@ -41,7 +38,6 @@ import MetaCodable
 	/// The server will respond with an `inputAudioBufferCommitted` event.
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
-	@CodedAs("input_audio_buffer.commit")
 	case commitInputAudioBuffer(eventId: String?)
 
 	/// Send this event to clear the audio bytes in the buffer.
@@ -49,7 +45,6 @@ import MetaCodable
 	/// The server will respond with an `inputAudioBufferCleared` event.
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
-	@CodedAs("input_audio_buffer.clear")
 	case clearInputAudioBuffer(eventId: String?)
 
 	/// Add a new Item to the Conversation's context, including messages, function calls, and function call responses.
@@ -61,7 +56,6 @@ import MetaCodable
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter previousItemId: The ID of the preceding item after which the new item will be inserted. If not set, the new item will be appended to the end of the conversation.
 	/// - Parameter item: A single item within a Realtime conversation.
-	@CodedAs("conversation.item.create")
 	case createConversationItem(eventId: String?, previousItemId: String?, item: Item)
 
 	/// Send this event when you want to retrieve the server's representation of a specific item in the conversation history.
@@ -72,7 +66,6 @@ import MetaCodable
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter itemId: The ID of the item to retrieve.
-	@CodedAs("conversation.item.retrieve")
 	case retrieveConversationItem(eventId: String?, itemId: String)
 
 	/// Send this event to truncate a previous assistant message’s audio.
@@ -89,7 +82,6 @@ import MetaCodable
 	/// - Parameter itemId: The ID of the assistant message item to truncate. Only assistant message items can be truncated.
 	/// - Parameter contentIndex: The index of the content part to truncate.
 	/// - Parameter audioEndMs: Inclusive duration up to which audio is truncated, in milliseconds.
-	@CodedAs("conversation.item.truncate")
 	case truncateConversationItem(eventId: String?, itemId: String?, contentIndex: Int, audioEndMs: Int)
 
 	/// Send this event when you want to remove any item from the conversation history.
@@ -98,7 +90,6 @@ import MetaCodable
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter itemId: The ID of the item to delete.
-	@CodedAs("conversation.item.delete")
 	case deleteConversationItem(eventId: String?, itemId: String?)
 
 	/// This event instructs the server to create a Response, which means triggering model inference.
@@ -115,7 +106,6 @@ import MetaCodable
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter response: Configuration for the response.
-	@CodedAs("response.create")
 	case createResponse(eventId: String?, response: Response.Config?)
 
 	/// Send this event to cancel an in-progress response.
@@ -125,7 +115,6 @@ import MetaCodable
 	///
 	/// - Parameter eventId: Optional client-generated ID used to identify this event.
 	/// - Parameter responseId: A specific response ID to cancel - if not provided, will cancel an in-progress response in the default conversation.
-	@CodedAs("response.cancel")
 	case cancelResponse(eventId: String?, responseId: String?)
 
 	/// WebRTC Only: Emit to cut off the current audio response.
@@ -133,8 +122,133 @@ import MetaCodable
 	/// This will trigger the server to stop generating audio and emit a `outputAudioBufferCleared` event.
 	///
 	/// This event should be preceded by a `cancelResponse` client event to stop the generation of the current response. [Learn more](https://platform.openai.com/docs/guides/realtime-conversations#client-and-server-events-for-audio-in-webrtc).
-	@CodedAs("output_audio_buffer.clear")
 	case outputAudioBufferClear(eventId: String?)
+}
+
+extension ClientEvent {
+	private enum CodingKeys: String, CodingKey {
+		case type
+		case eventId
+		case session
+		case audio
+		case previousItemId
+		case item
+		case itemId
+		case contentIndex
+		case audioEndMs
+		case response
+		case responseId
+	}
+
+	public func encode(to encoder: any Encoder) throws {
+		var container = encoder.container(keyedBy: CodingKeys.self)
+
+		switch self {
+			case let .updateSession(eventId, session):
+				try container.encode("session.update", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encode(session, forKey: .session)
+			case let .appendInputAudioBuffer(eventId, audio):
+				try container.encode("input_audio_buffer.append", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encode(audio, forKey: .audio)
+			case let .commitInputAudioBuffer(eventId):
+				try container.encode("input_audio_buffer.commit", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+			case let .clearInputAudioBuffer(eventId):
+				try container.encode("input_audio_buffer.clear", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+			case let .createConversationItem(eventId, previousItemId, item):
+				try container.encode("conversation.item.create", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encodeIfPresent(previousItemId, forKey: .previousItemId)
+				try container.encode(item, forKey: .item)
+			case let .retrieveConversationItem(eventId, itemId):
+				try container.encode("conversation.item.retrieve", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encode(itemId, forKey: .itemId)
+			case let .truncateConversationItem(eventId, itemId, contentIndex, audioEndMs):
+				try container.encode("conversation.item.truncate", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encodeIfPresent(itemId, forKey: .itemId)
+				try container.encode(contentIndex, forKey: .contentIndex)
+				try container.encode(audioEndMs, forKey: .audioEndMs)
+			case let .deleteConversationItem(eventId, itemId):
+				try container.encode("conversation.item.delete", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encodeIfPresent(itemId, forKey: .itemId)
+			case let .createResponse(eventId, response):
+				try container.encode("response.create", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encodeIfPresent(response, forKey: .response)
+			case let .cancelResponse(eventId, responseId):
+				try container.encode("response.cancel", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+				try container.encodeIfPresent(responseId, forKey: .responseId)
+			case let .outputAudioBufferClear(eventId):
+				try container.encode("output_audio_buffer.clear", forKey: .type)
+				try container.encodeIfPresent(eventId, forKey: .eventId)
+		}
+	}
+
+	public init(from decoder: any Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		let type = try container.decode(String.self, forKey: .type)
+
+		switch type {
+			case "session.update":
+				self = .updateSession(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					session: try container.decode(Session.self, forKey: .session)
+				)
+			case "input_audio_buffer.append":
+				self = .appendInputAudioBuffer(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					audio: try container.decode(AudioData.self, forKey: .audio)
+				)
+			case "input_audio_buffer.commit":
+				self = .commitInputAudioBuffer(eventId: try container.decodeIfPresent(String.self, forKey: .eventId))
+			case "input_audio_buffer.clear":
+				self = .clearInputAudioBuffer(eventId: try container.decodeIfPresent(String.self, forKey: .eventId))
+			case "conversation.item.create":
+				self = .createConversationItem(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					previousItemId: try container.decodeIfPresent(String.self, forKey: .previousItemId),
+					item: try container.decode(Item.self, forKey: .item)
+				)
+			case "conversation.item.retrieve":
+				self = .retrieveConversationItem(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					itemId: try container.decode(String.self, forKey: .itemId)
+				)
+			case "conversation.item.truncate":
+				self = .truncateConversationItem(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					itemId: try container.decodeIfPresent(String.self, forKey: .itemId),
+					contentIndex: try container.decode(Int.self, forKey: .contentIndex),
+					audioEndMs: try container.decode(Int.self, forKey: .audioEndMs)
+				)
+			case "conversation.item.delete":
+				self = .deleteConversationItem(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					itemId: try container.decodeIfPresent(String.self, forKey: .itemId)
+				)
+			case "response.create":
+				self = .createResponse(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					response: try container.decodeIfPresent(Response.Config.self, forKey: .response)
+				)
+			case "response.cancel":
+				self = .cancelResponse(
+					eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+					responseId: try container.decodeIfPresent(String.self, forKey: .responseId)
+				)
+			case "output_audio_buffer.clear":
+				self = .outputAudioBufferClear(eventId: try container.decodeIfPresent(String.self, forKey: .eventId))
+			default:
+				throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown client event type: \(type)")
+		}
+	}
 }
 
 public extension ClientEvent {

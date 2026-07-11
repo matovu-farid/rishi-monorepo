@@ -8,9 +8,9 @@ struct TTSCacheKeyTests {
     // ----------------------------------------------------------------------------
     // Cross-runner symmetry constant: this exact canonical string and resulting hex
     // MUST also appear verbatim in workers/worker/src/audio-speech-cache.test.ts.
-    // Canonical: "tts-1|alloy|1.00|hello world"
+    // Canonical: "gpt-4o-mini-tts|alloy|1.00|hello world"
     // ----------------------------------------------------------------------------
-    static let pinnedCanonical = "tts-1|alloy|1.00|hello world"
+    static let pinnedCanonical = "gpt-4o-mini-tts|alloy|1.00|hello world"
     static let pinnedText = "hello world"
     static let pinnedVoice = "alloy"
     static let pinnedSpeed = 1.0
@@ -43,6 +43,13 @@ struct TTSCacheKeyTests {
         #expect(a != b)
     }
 
+    @Test("different model produces different hex")
+    func modelSensitive() {
+        let a = TTSCacheKey.compute(text: "hello", voice: "alloy", model: "gpt-4o-mini-tts", speed: 1.0)
+        let b = TTSCacheKey.compute(text: "hello", voice: "alloy", model: "gpt-4o", speed: 1.0)
+        #expect(a != b)
+    }
+
     @Test("speed 1 and 1.0 produce identical hex (canonicalization)")
     func speedCanonicalization() {
         // RESEARCH.md Pitfall 3 — would break symmetry if we used String(speed)
@@ -55,12 +62,12 @@ struct TTSCacheKeyTests {
     func pinnedCanonicalSymmetry() {
         // The helper's canonical string for these inputs MUST be byte-identical with
         // the worker test's PINNED_CANONICAL constant.
-        let canonical = "tts-1|\(Self.pinnedVoice)|\(String(format: "%.2f", Self.pinnedSpeed))|\(Self.pinnedText)"
+        let canonical = "\(TTSModelCatalog.defaultModel)|\(Self.pinnedVoice)|\(String(format: "%.2f", Self.pinnedSpeed))|\(Self.pinnedText)"
         #expect(canonical == Self.pinnedCanonical)
 
         // The hex MUST be byte-identical with the worker test's hex computed via
         // crypto.subtle.digest("SHA-256", new TextEncoder().encode(PINNED_CANONICAL)).
-        let hex = TTSCacheKey.compute(text: Self.pinnedText, voice: Self.pinnedVoice, speed: Self.pinnedSpeed)
+        let hex = TTSCacheKey.compute(text: Self.pinnedText, voice: Self.pinnedVoice, model: TTSModelCatalog.defaultModel, speed: Self.pinnedSpeed)
         #expect(hex.count == 64)
 
         // Sanity: recompute via the raw CryptoKit primitive against the pinned canonical and

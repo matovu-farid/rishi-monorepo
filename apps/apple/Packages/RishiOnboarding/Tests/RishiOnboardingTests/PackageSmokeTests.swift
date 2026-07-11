@@ -17,10 +17,7 @@ struct PackageSmokeTests {
         let user = User(
             id: UUID(),
             email: "onb@example.com",
-            displayName: nil,
-            avatarURL: nil,
-            hasPro: false,
-            createdAt: Date()
+            name: nil
         )
         #expect(user.email == "onb@example.com")
     }

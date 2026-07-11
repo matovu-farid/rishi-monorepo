@@ -6,15 +6,15 @@ import AudioToolbox
 import AVFAudio
 
 /// Production replacement for Spike C's silent ChunkedMP3Decoder stub.
-/// Pipes streamed MP3 bytes into AudioFileStreamOpen for framing, then runs
+/// Pipes streamed MP3 chunks into AudioFileStreamOpen for framing, then runs
 /// AudioConverter to produce PCM Float32 buffers at the engine output format.
 ///
 /// Usage:
 /// ```swift
 /// let decoder = try MP3StreamDecoder(targetFormat: engine.outputFormat)
 /// Task { for await chunk in decoder.pcmStream() { /* schedule */ } }
-/// for try await mp3 in streamer.stream(request) {
-///     try await decoder.append(mp3, passageId: request.passageId)
+/// for try await mp3Chunk in streamer.stream(request) {
+///     try await decoder.append(mp3Chunk, passageId: request.passageId)
 /// }
 /// await decoder.finish()
 /// ```
@@ -83,6 +83,10 @@ public actor MP3StreamDecoder {
     public nonisolated func pcmStream() -> AsyncStream<PCMChunk> { stream }
 
     /// Push streamed MP3 bytes into the parser. Safe to call from any actor.
+    public func append(_ chunk: TTSChunk, passageId: String?) throws {
+        try append(chunk.data, passageId: passageId)
+    }
+
     public func append(_ data: Data, passageId: String?) throws {
         guard let streamID, !finished else { return }
         pendingPassageId = passageId

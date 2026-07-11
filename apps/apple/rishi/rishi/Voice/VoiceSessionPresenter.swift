@@ -27,6 +27,7 @@ final class VoiceSessionPresenter {
     private(set) var pendingInitialQuote: String?
 
     private(set) var currentBookContext: BookContextSnapshot?
+    private(set) var currentLanguage: String = "en"
 
     private let coordinator: AudioSessionCoordinator
     private let workerClient: WorkerClient
@@ -78,6 +79,7 @@ final class VoiceSessionPresenter {
 
     func start(
         bookId: BookID?,
+        language: String = "en",
         initialQuote: String? = nil,
         bookContext: BookContextSnapshot? = nil
     ) async {
@@ -90,6 +92,7 @@ final class VoiceSessionPresenter {
         currentBookId = bookId
         pendingInitialQuote = initialQuote
         currentBookContext = bookContext
+        currentLanguage = language
 
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
@@ -167,7 +170,7 @@ final class VoiceSessionPresenter {
         }
 
         await session.start(
-            language: "en",
+            language: language,
             bookId: bookId,
             currentPage: bookContext?.currentPage,
             pageText: bookContext?.pageText,
@@ -190,14 +193,16 @@ final class VoiceSessionPresenter {
         currentBookId = nil
         pendingInitialQuote = nil
         currentBookContext = nil
+        currentLanguage = "en"
     }
 
     func retry() async {
         let bookId = currentBookId
         let quote = pendingInitialQuote
         let context = currentBookContext
+        let language = currentLanguage
         clearFailure()
-        await start(bookId: bookId, initialQuote: quote, bookContext: context)
+        await start(bookId: bookId, language: language, initialQuote: quote, bookContext: context)
     }
     
 
@@ -211,6 +216,7 @@ final class VoiceSessionPresenter {
         currentBookId = nil
         pendingInitialQuote = nil
         currentBookContext = nil
+        currentLanguage = "en"
         state.reset()
     }
 

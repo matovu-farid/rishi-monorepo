@@ -20,7 +20,7 @@ struct OnboardingCoordinatorTests {
         await c.advance(); #expect(c.currentStage == .signIn)
         await c.advance(); #expect(c.currentStage == .sampleOrImport)
         await c.advance(); #expect(c.currentStage == .micPrimer)
-        await c.advance(); #expect(c.currentStage == .notificationsPrimer)
+        await c.advance(); #expect(c.currentStage == .voiceLanguagePrimer)
         await c.advance(); #expect(c.currentStage == .firstReaderHint)
         await c.advance(); #expect(c.currentStage == .completed)
 
@@ -34,18 +34,7 @@ struct OnboardingCoordinatorTests {
         let c = OnboardingCoordinator(state: state)
         c.setStageForTest(.sampleOrImport)
         await c.advance()
-        #expect(c.currentStage == .notificationsPrimer)
-    }
-
-    @Test("Notifications primer is skipped when state.primerShownNotifications is true")
-    func skipNotifsPrimerIfShown() async {
-        let state = InMemoryOnboardingState()
-        await state.setPrimerShownMic(false)
-        await state.setPrimerShownNotifications(true)
-        let c = OnboardingCoordinator(state: state)
-        c.setStageForTest(.micPrimer)
-        await c.advance()
-        #expect(c.currentStage == .firstReaderHint)
+        #expect(c.currentStage == .voiceLanguagePrimer)
     }
 
     @Test("back() moves to previous stage; clamped at welcome")
@@ -67,7 +56,7 @@ struct OnboardingCoordinatorTests {
         let c = OnboardingCoordinator(state: state)
         c.setStageForTest(.micPrimer)
         await c.skipCurrentStage()
-        #expect(c.currentStage == .notificationsPrimer)
+        #expect(c.currentStage == .voiceLanguagePrimer)
         #expect(await state.primerShownMic() == true)
     }
 

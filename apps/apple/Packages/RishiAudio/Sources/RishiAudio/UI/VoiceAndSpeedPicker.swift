@@ -9,7 +9,10 @@ import RishiCore
 public struct VoiceAndSpeedPicker: View {
 
     @State private var voice: String
+    @State private var model: String
     @State private var speed: Double
+    private let voiceChoices: [TTSVoiceChoice]
+    private let modelChoices: [TTSVoiceChoice]
     let userId: UserID
     let store: any TTSSettingsStore
     let onDismiss: (TTSSettings) -> Void
@@ -18,10 +21,15 @@ public struct VoiceAndSpeedPicker: View {
         initial: TTSSettings,
         userId: UserID,
         store: any TTSSettingsStore,
+        catalog: TTSPickerCatalog = TTSPickerCatalogStore.shared.catalog,
         onDismiss: @escaping (TTSSettings) -> Void
     ) {
-        self._voice = State(initialValue: initial.voice)
+        let normalized = catalog.normalized(initial)
+        self._voice = State(initialValue: normalized.voice)
+        self._model = State(initialValue: normalized.model)
         self._speed = State(initialValue: initial.speed)
+        self.voiceChoices = catalog.voiceChoices
+        self.modelChoices = catalog.modelChoices
         self.userId = userId
         self.store = store
         self.onDismiss = onDismiss
@@ -34,12 +42,24 @@ public struct VoiceAndSpeedPicker: View {
                 .foregroundStyle(RishiColor.textPrimary)
 
             Picker("Voice", selection: $voice) {
-                ForEach(VoiceCatalog.all, id: \.self) { id in
-                    Text(VoiceCatalog.displayName(for: id)).tag(id)
+                ForEach(voiceChoices) { choice in
+                    Text(choice.name).tag(choice.id)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             .accessibilityIdentifier("tts-voice-picker")
+
+            Text("Model")
+                .font(RishiTypography.titleM)
+                .foregroundStyle(RishiColor.textPrimary)
+
+            Picker("Model", selection: $model) {
+                ForEach(modelChoices) { choice in
+                    Text(choice.name).tag(choice.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("tts-model-picker")
 
             Text(speedLabel)
                 .font(RishiTypography.body)
@@ -52,7 +72,7 @@ public struct VoiceAndSpeedPicker: View {
             Spacer()
 
             Button {
-                let settings = TTSSettings(voice: voice, speed: speed)
+                let settings = TTSSettings(voice: voice, model: model, speed: speed)
                 let store = store
                 let userId = userId
                 // KEEP: store.save is an actor method; the `await` already hops
@@ -92,7 +112,7 @@ public struct VoiceAndSpeedPicker: View {
 
 #Preview("Alt voice") {
     VoiceAndSpeedPicker(
-        initial: TTSSettings(voice: "nova", speed: 1.5),
+        initial: TTSSettings(voice: "nova", model: "eleven_flash_v2_5", speed: 1.5),
         userId: UserID(),
         store: InMemoryTTSSettingsStore(),
         onDismiss: { _ in }

@@ -23,10 +23,10 @@ struct VoiceAndSpeedPickerTests {
         let store = InMemoryTTSSettingsStore()
         let userId = UUID()
         // Exercise the same code path the Done button triggers — the picker's
-        // Done closure constructs `TTSSettings(voice:speed:)`, saves via the
+        // Done closure constructs `TTSSettings(voice:model:speed:)`, saves via the
         // store, and forwards via onDismiss. We don't need to render the
         // SwiftUI tree for the contract test.
-        let picked = TTSSettings(voice: "nova", speed: 1.5)
+        let picked = TTSSettings(voice: "nova", model: "eleven_flash_v2_5", speed: 1.5)
         await store.save(picked, userId: userId)
         let loaded = await store.load(userId: userId)
         #expect(loaded == picked)
@@ -34,9 +34,9 @@ struct VoiceAndSpeedPickerTests {
 
     @Test("Picker clamps out-of-range speed at the model boundary")
     func speedClamping() {
-        let s = TTSSettings(voice: "echo", speed: 5.0)
+        let s = TTSSettings(voice: "echo", model: "eleven_v3", speed: 5.0)
         #expect(s.speed == 2.0)
-        let t = TTSSettings(voice: "echo", speed: 0.1)
+        let t = TTSSettings(voice: "echo", model: "eleven_v3", speed: 0.1)
         #expect(t.speed == 0.5)
     }
 }

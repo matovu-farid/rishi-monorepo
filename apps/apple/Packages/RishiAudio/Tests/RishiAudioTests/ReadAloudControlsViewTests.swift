@@ -64,9 +64,23 @@ struct ReadAloudControlsViewTests {
         #expect(TTSFailureAlert.message(for: state) == "Network down")
     }
 
-    @Test("VoiceCatalog.all is the 6 OpenAI voice ids")
+    @Test("VoiceCatalog.all is the reader voice preset list")
     func voiceCatalog() {
-        #expect(VoiceCatalog.all == ["alloy", "echo", "fable", "onyx", "nova", "shimmer"])
+        #expect(VoiceCatalog.all == [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "fable",
+            "nova",
+            "onyx",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar",
+        ])
     }
 
     @Test("VoiceCatalog.displayName capitalises the first letter")
@@ -74,6 +88,8 @@ struct ReadAloudControlsViewTests {
         #expect(VoiceCatalog.displayName(for: "alloy") == "Alloy")
         #expect(VoiceCatalog.displayName(for: "nova") == "Nova")
         #expect(VoiceCatalog.displayName(for: "shimmer") == "Shimmer")
+        #expect(VoiceCatalog.displayName(for: "marin") == "Marin")
+        #expect(VoiceCatalog.displayName(for: "cedar") == "Cedar")
     }
 
     @Test("VoiceCatalog.displayName tolerates empty input")

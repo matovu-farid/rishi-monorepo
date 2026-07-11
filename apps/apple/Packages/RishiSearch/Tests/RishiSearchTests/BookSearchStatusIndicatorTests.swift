@@ -54,11 +54,11 @@ struct BookSearchStatusIndicatorTests {
     // MARK: indicatorText
 
     @Test func indicatorTextShowsPercentWhileIndexing() {
-        #expect(BookSearchStatus.indexing(chunksDone: 3, chunksTotal: 10).indicatorText == "Indexing… 30%")
+        #expect(BookSearchStatus.indexing(chunksDone: 3, chunksTotal: 10).indicatorText == "Indexing 30%")
     }
 
     @Test func indicatorTextOmitsPercentWhenTotalIsZero() {
-        #expect(BookSearchStatus.indexing(chunksDone: 0, chunksTotal: 0).indicatorText == "Indexing…")
+        #expect(BookSearchStatus.indexing(chunksDone: 0, chunksTotal: 0).indicatorText == "Indexing 0%")
     }
 
     @Test func indicatorTextIsNilForHiddenStates() {

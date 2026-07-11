@@ -5,7 +5,7 @@ import RishiLogging
 /// for the side effect: in production wiring the source is `CachingTTSChunkSource`,
 /// so a miss synthesises + writes the MP3 to disk and a hit is a no-op. The
 /// prewarmer is intentionally dumb — it does not know about the cache, the decoder,
-/// or the audio engine. It just drains streams and discards the bytes.
+/// or the audio engine. It just drains ordered chunks and discards them.
 public actor TTSPrewarmer {
 
     private let source: any TTSChunkSource

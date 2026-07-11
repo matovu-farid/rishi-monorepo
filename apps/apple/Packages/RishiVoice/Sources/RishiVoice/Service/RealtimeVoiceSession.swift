@@ -63,6 +63,8 @@ public actor RealtimeVoiceSession {
     private var isEnding: Bool = false
     /// Current book snapshot used to seed the realtime session and reconnects.
     private var currentBookContext: BookContextSnapshot?
+    /// Current voice language used for prompt + transcription + reconnects.
+    private var currentLanguage: String?
 
     public init(
         micGate: any MicPermissionGate,
@@ -155,6 +157,7 @@ public actor RealtimeVoiceSession {
             )
         }
         currentBookContext = snapshot
+        currentLanguage = language
 
         // Plan 25-10 / RESEARCH OQ-4 — run the embedder prewarm in PARALLEL
         // with the key fetch so the first `bookContext` tool call doesn't
@@ -179,7 +182,11 @@ public actor RealtimeVoiceSession {
 
         await update(.connecting)
         do {
-            try await client.connect(ephemeralKey: key.secret, bookContext: snapshot)
+            try await client.connect(
+                ephemeralKey: key.secret,
+                bookContext: snapshot,
+                language: language
+            )
         } catch {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
@@ -224,6 +231,7 @@ public actor RealtimeVoiceSession {
         await update(.ended)
         Log.event("voice.session.ended", level: .info)
         currentBookContext = nil
+        currentLanguage = nil
     }
 
     // MARK: - Reconnect
@@ -258,6 +266,7 @@ public actor RealtimeVoiceSession {
             client: client,
             keyFetcher: keyFetcher,
             bookContext: currentBookContext,
+            language: currentLanguage,
             backoff: backoff,
             maxReconnects: maxReconnects,
             disconnectConfirmations: disconnectConfirmations,

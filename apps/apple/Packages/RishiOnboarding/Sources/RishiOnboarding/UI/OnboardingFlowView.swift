@@ -7,9 +7,9 @@ import RishiUIKit
 ///
 /// The signIn stage delegates to `onSignIn` — the actual sign-in surface is
 /// owned by the app layer (existing SIWA + Google buttons in RishiAuth). The
-/// sample / import / mic / notifications stages are wired to closures that
-/// 11-06 connects to SampleBookInstaller / ImportCoordinator / AVAudioApplication
-/// / UNUserNotificationCenter respectively.
+/// sample / import / mic / language stages are wired to closures that 11-06
+/// connects to SampleBookInstaller / ImportCoordinator /
+/// AVAudioApplication / AppReaderDefaults respectively.
 public struct OnboardingFlowView: View {
 
     @Bindable private var coordinator: OnboardingCoordinator
@@ -18,7 +18,7 @@ public struct OnboardingFlowView: View {
     public let onUseSample: () async -> Void
     public let onImport: () -> Void
     public let onRequestMic: () async -> Void
-    public let onRequestNotifications: () async -> Void
+    @Binding public var voiceLanguage: String
     public let onCompleted: () -> Void
 
     public init(
@@ -27,7 +27,7 @@ public struct OnboardingFlowView: View {
         onUseSample: @escaping () async -> Void,
         onImport: @escaping () -> Void,
         onRequestMic: @escaping () async -> Void,
-        onRequestNotifications: @escaping () async -> Void,
+        voiceLanguage: Binding<String>,
         onCompleted: @escaping () -> Void
     ) {
         self.coordinator = coordinator
@@ -35,7 +35,7 @@ public struct OnboardingFlowView: View {
         self.onUseSample = onUseSample
         self.onImport = onImport
         self.onRequestMic = onRequestMic
-        self.onRequestNotifications = onRequestNotifications
+        self._voiceLanguage = voiceLanguage
         self.onCompleted = onCompleted
     }
 
@@ -108,18 +108,13 @@ public struct OnboardingFlowView: View {
                     }
                 )
 
-            case .notificationsPrimer:
-                NotificationsPermissionPrimer(
-                    onAllow: {
-                        // KEEP: onRequestNotifications awaits UNUserNotificationCenter
-                        // permission (system sheet) and updates coordinator state.
-                        Task {
-                            await onRequestNotifications()
-                            await coordinator.advance()
-                        }
+            case .voiceLanguagePrimer:
+                VoiceLanguagePrimer(
+                    selection: $voiceLanguage,
+                    onContinue: {
+                        Task { await coordinator.advance() }
                     },
                     onSkip: {
-                        // KEEP: coordinator skip-stage only.
                         Task { await coordinator.skipCurrentStage() }
                     }
                 )

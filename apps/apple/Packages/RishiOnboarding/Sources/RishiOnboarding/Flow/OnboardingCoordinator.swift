@@ -3,12 +3,12 @@ import Observation
 import RishiLogging
 
 /// First-run flow state machine driving the sequence:
-/// welcome → signIn → sampleOrImport → micPrimer → notificationsPrimer →
+/// welcome → signIn → sampleOrImport → micPrimer → voiceLanguagePrimer →
 /// firstReaderHint → completed.
 ///
 /// Each stage's user-facing button is wired to a closure in 11-06. The
 /// coordinator only owns the stage transitions and the persisted flag updates
-/// (mic/notifications primer shown, hasCompletedOnboarding).
+/// (mic primer shown, hasCompletedOnboarding).
 ///
 /// `currentStage` is `public internal(set)` so the test target can pin the
 /// machine to an arbitrary stage via `setStageForTest(...)` without walking
@@ -22,7 +22,7 @@ public final class OnboardingCoordinator {
         case signIn
         case sampleOrImport
         case micPrimer
-        case notificationsPrimer
+        case voiceLanguagePrimer
         case firstReaderHint
         case completed
     }
@@ -35,10 +35,10 @@ public final class OnboardingCoordinator {
         self.state = state
     }
 
-    /// Move to the next stage. Honors `state.primerShownMic` /
-    /// `state.primerShownNotifications` to skip already-shown primers
-    /// (returning user). Reaching `.completed` persists
-    /// `hasCompletedOnboarding = true` so the flow never reappears on relaunch.
+    /// Move to the next stage. Honors `state.primerShownMic` to skip the
+    /// already-shown mic primer for returning users. Reaching `.completed`
+    /// persists `hasCompletedOnboarding = true` so the flow never reappears
+    /// on relaunch.
     public func advance() async {
         let next: Stage
         switch currentStage {
@@ -49,15 +49,14 @@ public final class OnboardingCoordinator {
         case .sampleOrImport:
             // If we've already shown the mic primer once, skip past it.
             if await state.primerShownMic() {
-                next = (await state.primerShownNotifications()) ? .firstReaderHint : .notificationsPrimer
+                next = .voiceLanguagePrimer
             } else {
                 next = .micPrimer
             }
         case .micPrimer:
             await state.setPrimerShownMic(true)
-            next = (await state.primerShownNotifications()) ? .firstReaderHint : .notificationsPrimer
-        case .notificationsPrimer:
-            await state.setPrimerShownNotifications(true)
+            next = .voiceLanguagePrimer
+        case .voiceLanguagePrimer:
             next = .firstReaderHint
         case .firstReaderHint:
             await state.setHasCompletedOnboarding(true)
@@ -77,8 +76,8 @@ public final class OnboardingCoordinator {
         case .signIn:               prev = .welcome
         case .sampleOrImport:       prev = .signIn
         case .micPrimer:            prev = .sampleOrImport
-        case .notificationsPrimer:  prev = .micPrimer
-        case .firstReaderHint:      prev = .notificationsPrimer
+        case .voiceLanguagePrimer:   prev = .micPrimer
+        case .firstReaderHint:      prev = .voiceLanguagePrimer
         case .completed:            prev = .firstReaderHint
         }
         currentStage = prev
@@ -90,9 +89,8 @@ public final class OnboardingCoordinator {
         switch currentStage {
         case .micPrimer:
             await state.setPrimerShownMic(true)
-            currentStage = .notificationsPrimer
-        case .notificationsPrimer:
-            await state.setPrimerShownNotifications(true)
+            currentStage = .voiceLanguagePrimer
+        case .voiceLanguagePrimer:
             currentStage = .firstReaderHint
         case .firstReaderHint:
             await state.setHasCompletedOnboarding(true)

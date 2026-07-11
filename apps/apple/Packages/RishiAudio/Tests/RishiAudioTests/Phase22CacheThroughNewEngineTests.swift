@@ -56,7 +56,7 @@ struct Phase22CacheThroughNewEngineTests {
     /// assertion 2 (no `.chunkSeen`).
     private struct FailingUpstream: TTSChunkSource {
         struct WasCalled: Error {}
-        func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
             AsyncThrowingStream { continuation in
                 continuation.finish(throwing: WasCalled())
             }
@@ -103,10 +103,11 @@ struct Phase22CacheThroughNewEngineTests {
         let request = TTSStreamRequest(
             text: "The quick brown fox.",
             voice: "alloy",
+            model: "eleven_v3",
             speed: 1.0,
             passageId: "p-orthogonality"
         )
-        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
         let seeded = Data((0..<8192).map { UInt8($0 % 256) })
         try seeded.write(to: tmp.appendingPathComponent("\(key).mp3"))
 
@@ -118,7 +119,7 @@ struct Phase22CacheThroughNewEngineTests {
             store: store
         )
 
-        // 4. Drain the cache-fed Data chunks into a PCMChunk AsyncStream.
+        // 4. Drain the cache-fed chunks into a PCMChunk AsyncStream.
         //    This step stands in for MP3StreamDecoder; the orthogonality
         //    proof is about the *flow* (cache → chunk → engine), not the
         //    specifics of MP3 decoding. The decoder is covered separately

@@ -4,10 +4,10 @@ import RishiCore
 import RishiUIKit
 import SwiftUI
 import os.signpost
+import ReadiumShared
 
 #if canImport(UIKit)
     import UIKit
-    import ReadiumShared
     import ReadiumNavigator
 #endif
 
@@ -61,6 +61,7 @@ public struct EPUBReaderScreen: View {
     private let readAloudTip = ReadAloudTip()
 
     private let readAloudParagraph: String?
+    private let readAloudLocator: Locator?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Environment(\.dismiss) private var dismiss
@@ -123,7 +124,8 @@ public struct EPUBReaderScreen: View {
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
-        readAloudParagraph: String? = nil
+        readAloudParagraph: String? = nil,
+        readAloudLocator: Locator? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
@@ -133,6 +135,7 @@ public struct EPUBReaderScreen: View {
         self.onReadAloud = onReadAloud
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
+        self.readAloudLocator = readAloudLocator
     }
     private var Reader: some View {
         EPUBReaderView(
@@ -345,6 +348,10 @@ public struct EPUBReaderScreen: View {
 
             .onChange(of: readAloudParagraph) { _, _ in
                 readAloudPresenter.apply(paragraph: readAloudParagraph)
+            }
+
+            .onChange(of: readAloudLocator) { _, _ in
+                readAloudPresenter.follow(locator: readAloudLocator)
             }
 
             .onReceive(

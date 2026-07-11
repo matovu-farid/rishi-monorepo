@@ -3,7 +3,7 @@ import Observation
 
 /// Playback status surfaced to SwiftUI. Drives the bottom-sheet controls
 /// (plan 08-06) and the lock-screen NowPlayingController (plan 08-05).
-public enum TTSStatus: String, Sendable, Equatable, CaseIterable {
+public enum TTSStatus: String, Sendable, Equatable, CaseIterable, Codable {
     case idle
     case loading
     case playing

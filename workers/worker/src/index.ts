@@ -1,15 +1,11 @@
 import axios from "axios";
+import OpenAI from "openai";
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { createOpenAI } from "@ai-sdk/openai";
-import {
-  experimental_generateSpeech as generateSpeech,
-  generateText,
-  embedMany,
-  APICallError,
-} from "ai";
+import { generateText, embedMany, APICallError } from "ai";
 import { z } from "zod";
 
 import * as Sentry from "@sentry/cloudflare";
@@ -86,6 +82,80 @@ function getOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
   _openai = createOpenAI({ apiKey });
   _openaiApiKey = apiKey;
   return _openai;
+}
+
+// Separate client for the direct Speech API path.
+let _speechOpenAI: OpenAI | null = null;
+let _speechOpenAIKey: string | null = null;
+function getSpeechOpenAI(apiKey: string): OpenAI {
+  if (_speechOpenAI && _speechOpenAIKey === apiKey) return _speechOpenAI;
+  _speechOpenAI = new OpenAI({ apiKey });
+  _speechOpenAIKey = apiKey;
+  return _speechOpenAI;
+}
+
+const ELEVENLABS_MODEL_ID = "eleven_v3";
+const ELEVENLABS_ALLOWED_MODEL_IDS = new Set([
+  "eleven_v3",
+  "eleven_flash_v2_5",
+  "eleven_flash_v2",
+  "eleven_multilingual_v2",
+]);
+const ELEVENLABS_DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+const ELEVENLABS_VOICE_IDS: Record<string, string> = {
+  alloy: "JBFqnCBsd6RMkjVDRZzb",
+  ash: "29vD33N1CtxCmqQRPOHJ",
+  ballad: "EXAVITQu4vr4xnSDxMaL",
+  coral: "ErXwobaYiN019PkySvjV",
+  echo: "MF3mGyEYCl7XYWbV9V6O",
+  fable: "TxGEqnHWrfWFTfGW9XjX",
+  nova: "VR6AewLTigWG4xSOukaG",
+  onyx: "pNInz6obpgDQGcFmaJgB",
+  sage: "yoZ06aMxZJJ28mfd3POQ",
+  shimmer: "pMsXgVXv3BLzUgSXRplE",
+  verse: "IKne3meq5aSn9XLyUdCD",
+  marin: ELEVENLABS_DEFAULT_VOICE_ID,
+  cedar: "N2lVS1w4EtoT3dr4eOWO",
+};
+
+const OPENAI_TTS_VOICE_PRESETS = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "fable",
+  "nova",
+  "onyx",
+  "sage",
+  "shimmer",
+  "verse",
+  "marin",
+  "cedar",
+];
+const OPENAI_TTS_DEFAULT_VOICE = "marin";
+const OPENAI_TTS_MODEL_ID = "gpt-4o-mini-tts";
+const OPENAI_TTS_MODEL_NAME = "GPT-4o mini TTS";
+
+function displayName(id: string): string {
+  return id
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function resolveElevenLabsVoiceId(voice: string | undefined): string {
+  if (!voice) return ELEVENLABS_DEFAULT_VOICE_ID;
+  return ELEVENLABS_VOICE_IDS[voice] ?? ELEVENLABS_DEFAULT_VOICE_ID;
+}
+
+function resolveElevenLabsModelId(model: string | undefined): string {
+  const normalized = model?.trim();
+  if (normalized && ELEVENLABS_ALLOWED_MODEL_IDS.has(normalized)) {
+    return normalized;
+  }
+  return ELEVENLABS_MODEL_ID;
 }
 
 /**
@@ -169,22 +239,23 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
 /**
  * Phase 22-01: TTS R2 cache key.
  *
- * Canonical string: "tts-1|" + voice + "|" + speed.toFixed(2) + "|" + text
+ * Canonical string: "gpt-4o-mini-tts|" + voice + "|" + speed.toFixed(2) + "|" + text
  * Hash: SHA-256 of the UTF-8 bytes, hex-encoded lowercase.
  *
- * The model literal "tts-1" lets a future bump (e.g. "tts-1-hd") invalidate
+ * The model literal "gpt-4o-mini-tts" lets a future bump invalidate
  * the cache namespace cleanly without manual purge. The iOS companion at
  * apps/apple/Packages/RishiAudio/Sources/RishiAudio/TTS/TTSCacheKey.swift
  * computes the SAME hex for the SAME (text, voice, speed) tuple — a paired
  * test in audio-speech-cache.test.ts and TTSCacheKeyTests.swift asserts this
- * symmetry against the pinned canonical string "tts-1|alloy|1.00|hello world".
+ * symmetry against the pinned canonical string
+ * "gpt-4o-mini-tts|alloy|1.00|hello world".
  */
 async function ttsCacheKey(
   text: string,
   voice: string,
   speed: number,
 ): Promise<string> {
-  const canonical = `tts-1|${voice}|${speed.toFixed(2)}|${text}`;
+  const canonical = `gpt-4o-mini-tts|${voice}|${speed.toFixed(2)}|${text}`;
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(canonical),
@@ -192,6 +263,147 @@ async function ttsCacheKey(
   return [...new Uint8Array(digest)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+async function elevenLabsTtsCacheKey(
+  text: string,
+  voice: string,
+  model: string,
+  speed: number,
+): Promise<string> {
+  // Keep this canonical string byte-aligned with iOS TTSCacheKey.compute().
+  const canonical = `elevenlabs-tts|${model}|${voice}|${speed.toFixed(2)}|${text}`;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+type TtsResponseMode = "raw" | "events";
+
+const TTS_EVENT_CHUNK_BYTES = 4096;
+
+function resolveTtsResponseMode(value: unknown): TtsResponseMode {
+  return value === "events" ? "events" : "raw";
+}
+
+function splitTtsBytes(bytes: Uint8Array, chunkSize = TTS_EVENT_CHUNK_BYTES) {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(bytes.slice(offset, offset + chunkSize));
+  }
+  return chunks;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function encodeSseFrame(fields: Array<[string, string]>): string {
+  return `${fields.map(([key, value]) => `${key}: ${value}`).join("\n")}\n\n`;
+}
+
+function ttsChunkId(requestKey: string, index: number): string {
+  return `${requestKey}#${index.toString().padStart(8, "0")}`;
+}
+
+function ttsDoneId(requestKey: string): string {
+  return `${requestKey}#done`;
+}
+
+function buildTtsRawResponse(
+  bytes: Uint8Array,
+  cacheStatus: "hit" | "miss",
+): Response {
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": "audio/mpeg",
+      "Content-Length": bytes.byteLength.toString(),
+      "X-TTS-Cache": cacheStatus,
+    },
+  });
+}
+
+function buildTtsEventResponse(
+  bytes: Uint8Array,
+  requestKey: string,
+  cacheStatus: "hit" | "miss",
+): Response {
+  const encoder = new TextEncoder();
+  const chunks = splitTtsBytes(bytes);
+
+  const stream = new ReadableStream({
+    start(controller) {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunkId = ttsChunkId(requestKey, index);
+        controller.enqueue(
+          encoder.encode(
+            encodeSseFrame([
+              ["id", chunkId],
+              ["event", "chunk"],
+              [
+                "data",
+                JSON.stringify({
+                  request_id: requestKey,
+                  chunk_id: chunkId,
+                  index,
+                  audio_b64: bytesToBase64(chunks[index]!),
+                }),
+              ],
+            ]),
+          ),
+        );
+      }
+
+      controller.enqueue(
+        encoder.encode(
+          encodeSseFrame([
+            ["id", ttsDoneId(requestKey)],
+            ["event", "done"],
+            [
+              "data",
+              JSON.stringify({
+                request_id: requestKey,
+                done: true,
+                cache: cacheStatus,
+                chunk_count: chunks.length,
+                byte_length: bytes.byteLength,
+              }),
+            ],
+          ]),
+        ),
+      );
+
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-TTS-Cache": cacheStatus,
+    },
+  });
+}
+
+function respondWithTtsBytes(
+  bytes: Uint8Array,
+  requestKey: string,
+  cacheStatus: "hit" | "miss",
+  mode: TtsResponseMode,
+): Response {
+  if (mode === "events") {
+    return buildTtsEventResponse(bytes, requestKey, cacheStatus);
+  }
+  return buildTtsRawResponse(bytes, cacheStatus);
 }
 
 export const app = new Hono<{
@@ -461,13 +673,25 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
     // The previous {input, voice} shape was an OpenAI passthrough that the iOS
     // client never matched, so every TTSStreamer.swift call short-circuited
-    // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
-    // call so the user-facing voice playback rate actually changes.
-    const { text, voice, speed } = await c.req.json<{
-      text?: string;
-      voice?: string;
-      speed?: number;
-    }>();
+    // to 400. Speed is forwarded into OpenAI's speech.create call so the
+    // user-facing voice playback rate actually changes.
+    const rawBody = await c.req
+      .json<{
+        text?: string;
+        voice?: string;
+        speed?: number;
+        response_mode?: string;
+      }>()
+      .catch(
+        (): {
+          text?: string;
+          voice?: string;
+          speed?: number;
+          response_mode?: string;
+        } => ({}),
+      );
+    const { text, voice, speed, response_mode } = rawBody;
+    const responseMode = resolveTtsResponseMode(response_mode);
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return c.json({ error: "Missing or empty text" }, 400);
@@ -477,10 +701,24 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       return c.json({ error: "text must be 4096 characters or fewer" }, 400);
     }
 
-    const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+    const allowedVoices = [
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "fable",
+      "nova",
+      "onyx",
+      "sage",
+      "shimmer",
+      "verse",
+      "marin",
+      "cedar",
+    ];
     const validVoice = allowedVoices.includes(voice as string)
       ? (voice as string)
-      : "alloy";
+      : "marin";
 
     // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
     // for missing / non-finite / out-of-range values so the AI SDK never sees
@@ -501,33 +739,28 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     const cached = await c.env.TTS_CACHE.get(key);
     if (cached !== null) {
       const bytes = await cached.bytes();
-      return new Response(bytes, {
-        headers: {
-          "Content-Type": "audio/mpeg",
-          "Content-Length": bytes.byteLength.toString(),
-          "X-TTS-Cache": "hit",
-        },
-      });
+      return respondWithTtsBytes(bytes, key, "hit", responseMode);
     }
 
-    const openai = getOpenAI(c.env.OPENAI_API_KEY);
+    const openai = getSpeechOpenAI(c.env.OPENAI_API_KEY);
 
-    const speech = await generateSpeech({
-      model: openai.speech("tts-1"),
-      text: text,
+    const speech = await openai.audio.speech.create({
+      model: "gpt-4o-mini-tts",
       voice: validVoice,
+      input: text,
       speed: validSpeed,
+      response_format: "mp3",
     });
 
     c.executionCtx.waitUntil(
       meterFromContext(c.env, c.get("userId"), {
         type: "tts",
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
         characters: text.length,
       }),
     );
 
-    const audioBytes = speech.audio.uint8Array;
+    const audioBytes = new Uint8Array(await speech.arrayBuffer());
 
     // Fire-and-forget writeback; put errors must not surface to the response.
     c.executionCtx.waitUntil(
@@ -536,13 +769,7 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       }).catch((e) => console.error("tts.cache.put.failed", e)),
     );
 
-    return new Response(audioBytes, {
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Length": audioBytes.byteLength.toString(),
-        "X-TTS-Cache": "miss",
-      },
-    });
+    return respondWithTtsBytes(audioBytes, key, "miss", responseMode);
   } catch (error) {
     if (APICallError.isInstance(error)) {
       console.error("OpenAI API error:", error.statusCode, error.message);
@@ -551,6 +778,139 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
         error.statusCode === 429 ? 429 : 502,
       );
     }
+    console.error(
+      "TTS error:",
+      error instanceof Error ? error.message : "unknown",
+    );
+    return c.json({ error: "TTS generation failed" }, 500);
+  }
+});
+
+app.get("/api/audio/speech/options", (_c) => {
+  return _c.json({
+    provider: "openai",
+    voices: OPENAI_TTS_VOICE_PRESETS.map((id) => ({
+      id,
+      name: displayName(id),
+    })),
+    models: [
+      {
+        id: OPENAI_TTS_MODEL_ID,
+        name: OPENAI_TTS_MODEL_NAME,
+      },
+    ],
+    default_voice_id: OPENAI_TTS_DEFAULT_VOICE,
+    default_model_id: OPENAI_TTS_MODEL_ID,
+  });
+});
+
+app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
+  try {
+    const rawBody = await c.req
+      .json<{
+        text?: string;
+        voice?: string;
+        model?: string;
+        speed?: number;
+        response_mode?: string;
+      }>()
+      .catch(
+        (): {
+          text?: string;
+          voice?: string;
+          model?: string;
+          speed?: number;
+          response_mode?: string;
+        } => ({}),
+      );
+    const { text, voice, model, speed, response_mode } = rawBody;
+    const responseMode = resolveTtsResponseMode(response_mode);
+
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      return c.json({ error: "Missing or empty text" }, 400);
+    }
+
+    if (text.length > 4096) {
+      return c.json({ error: "text must be 4096 characters or fewer" }, 400);
+    }
+
+    const validVoice = resolveElevenLabsVoiceId(voice);
+    const validModel = resolveElevenLabsModelId(
+      typeof model === "string" ? model : undefined,
+    );
+
+    const validSpeed =
+      typeof speed === "number" &&
+      Number.isFinite(speed) &&
+      speed >= 0.25 &&
+      speed <= 4.0
+        ? speed
+        : 1.0;
+
+    const key = await elevenLabsTtsCacheKey(
+      text,
+      validVoice,
+      validModel,
+      validSpeed,
+    );
+
+    const cached = await c.env.TTS_CACHE.get(key);
+    if (cached !== null) {
+      const bytes = await cached.bytes();
+      return respondWithTtsBytes(bytes, key, "hit", responseMode);
+    }
+
+    if (!c.env.ELEVEN_LABS_API_KEY) {
+      return c.json({ error: "TTS generation failed" }, 503);
+    }
+
+    const elevenLabsUrl = new URL(
+      `https://api.elevenlabs.io/v1/text-to-speech/${validVoice}`,
+    );
+    elevenLabsUrl.searchParams.set("output_format", "mp3_44100_128");
+
+    const speech = await fetch(elevenLabsUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "xi-api-key": c.env.ELEVEN_LABS_API_KEY,
+      },
+      body: JSON.stringify({
+        text,
+        model_id: validModel,
+        voice_settings: {
+          speed: validSpeed,
+        },
+      }),
+    });
+
+    if (!speech.ok) {
+      const body = await speech.text().catch(() => "");
+      console.error("ElevenLabs API error:", speech.status, body);
+      return c.json(
+        { error: "TTS generation failed" },
+        speech.status === 429 ? 429 : 502,
+      );
+    }
+
+    c.executionCtx.waitUntil(
+      meterFromContext(c.env, c.get("userId"), {
+        type: "tts",
+        model: validModel,
+        characters: text.length,
+      }),
+    );
+
+    const audioBytes = new Uint8Array(await speech.arrayBuffer());
+
+    c.executionCtx.waitUntil(
+      c.env.TTS_CACHE.put(key, audioBytes, {
+        httpMetadata: { contentType: "audio/mpeg" },
+      }).catch((e) => console.error("tts.cache.put.failed", e)),
+    );
+
+    return respondWithTtsBytes(audioBytes, key, "miss", responseMode);
+  } catch (error) {
     console.error(
       "TTS error:",
       error instanceof Error ? error.message : "unknown",

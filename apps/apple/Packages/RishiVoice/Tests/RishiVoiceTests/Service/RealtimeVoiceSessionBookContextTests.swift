@@ -27,6 +27,7 @@ struct RealtimeVoiceSessionBookContextTests {
         #expect(fakes.state.status == .live)
         #expect(fakes.responderFactoryBox.callCount() == 0)
         #expect(fakes.responderFactoryBox.lastBookId() == nil)
+        #expect(fakes.fetcher.lastLanguage() == "en")
     }
 
     @Test("start() with bookId=nil: embedderPrewarm NOT invoked")
@@ -100,6 +101,7 @@ struct RealtimeVoiceSessionBookContextTests {
         #expect(snapshot?.pageText == "page body")
         #expect(snapshot?.outline == outline)
         #expect(snapshot?.activeParagraphText == "paragraph body")
+        #expect(fakes.fetcher.lastLanguage() == "en")
         #expect(fakes.client.connectBookContexts.count == 1)
         #expect(fakes.client.connectBookContexts[0] == snapshot)
 
@@ -235,9 +237,11 @@ struct RealtimeVoiceSessionBookContextTests {
 // MARK: - Test doubles
 
 /// Shared surface for the two test fetcher variants so the `Fakes` struct can
-/// hold either one and tests can read `lastBookContext()` from both.
+/// hold either one and tests can read `lastBookContext()` / `lastLanguage()`
+/// from both.
 protocol BookContextCapturingFetcher: EphemeralKeyFetching {
     func lastBookContext() -> BookContextSnapshot?
+    func lastLanguage() -> String?
 }
 
 /// Captures the last `(language, bookContext)` pair handed to `fetch`.
@@ -275,6 +279,7 @@ final class DelayingKeyFetcher: BookContextCapturingFetcher, @unchecked Sendable
 
     private let delayMillis: Int
     private let lock = NSLock()
+    private var _lastLanguage: String?
     private var _lastBookContext: BookContextSnapshot?
 
     init(delayMillis: Int) {
@@ -282,9 +287,13 @@ final class DelayingKeyFetcher: BookContextCapturingFetcher, @unchecked Sendable
     }
 
     func lastBookContext() -> BookContextSnapshot? { lock.withLock { _lastBookContext } }
+    func lastLanguage() -> String? { lock.withLock { _lastLanguage } }
 
     func fetch(language: String?, bookContext: BookContextSnapshot?) async throws -> EphemeralKey {
-        lock.withLock { _lastBookContext = bookContext }
+        lock.withLock {
+            _lastLanguage = language
+            _lastBookContext = bookContext
+        }
         try await Task.sleep(nanoseconds: UInt64(delayMillis) * 1_000_000)
         return EphemeralKey(secret: "k", sessionId: "s")
     }

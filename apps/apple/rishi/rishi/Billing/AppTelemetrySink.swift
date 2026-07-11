@@ -1,24 +1,6 @@
-
-
-
-
-
-
-
-
-
-
-
-
 import Foundation
-import RishiSettings
 import RishiLogging
-
-
-
-
-
-
+import RishiSettings
 
 struct AppTelemetrySink: TelemetrySink {
 

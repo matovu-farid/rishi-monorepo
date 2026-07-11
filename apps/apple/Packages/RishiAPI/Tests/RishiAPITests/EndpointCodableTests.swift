@@ -167,6 +167,13 @@ struct EndpointCodableTests {
         #expect(json.contains("\"text\""))
         #expect(json.contains("\"voice\""))
         #expect(json.contains("\"speed\""))
+        #expect(json.contains("\"response_mode\""))
+    }
+
+    @Test func speechOptionsEndpointShape() throws {
+        let e = SpeechOptionsEndpoint()
+        #expect(e.path == "/api/audio/speech/options")
+        #expect(e.method == .GET)
     }
 
     @Test func transcribeEndpointShape() throws {

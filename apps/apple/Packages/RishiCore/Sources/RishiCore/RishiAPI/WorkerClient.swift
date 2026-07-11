@@ -105,6 +105,10 @@ public actor WorkerClient {
             )
         }
     }
+    /// Stream raw transport bytes from a worker endpoint.
+    ///
+    /// Domain-specific callers, such as the TTS client, are responsible for
+    /// turning those bytes into their own ordered chunk model.
     public nonisolated func stream<E: WorkerStreamingEndpoint>(
         _ endpoint: E
     ) async -> AsyncThrowingStream<Data, Error> {
@@ -126,89 +130,29 @@ public actor WorkerClient {
                         for: endpoint
                     )
                     
-                    let (bytes, response) =
-                    try await session.bytes(
-                        for: request
-                    )
-                    
-                    guard
-                        let http =
-                            response as? HTTPURLResponse
-                    else {
-                        
-                        throw RishiError.network(
-                            code: "",
-                            message: ""
-                        )
+                    let (bytes, response) = try await session.bytes(for: request)
+
+                    guard let http = response as? HTTPURLResponse else {
+                        throw RishiError.network(code: "invalid_response", message: "")
                     }
-                    
+
                     if http.statusCode == 401 {
-                        
                         try await refreshAccessToken()
-                        
-                        let retry =
-                        try await buildStreamingRequest(
-                            for: endpoint
-                        )
-                        
-                        let (retryBytes, _) =
-                        try await session.bytes(
-                            for: retry
-                        )
-                        
-                        var buffer = Data()
-                        
-                        for try await byte in retryBytes {
-                            
-                            buffer.append(byte)
-                            
-                            if buffer.count >= 4096 {
-                                
-                                continuation.yield(buffer)
-                                
-                                buffer.removeAll(
-                                    keepingCapacity: true
-                                )
-                            }
-                        }
-                        
-                        if !buffer.isEmpty {
-                            continuation.yield(buffer)
-                        }
-                        
+
+                        let retry = try await buildStreamingRequest(for: endpoint)
+                        let (retryBytes, retryResponse) = try await session.bytes(for: retry)
+                        try await Self.consumeStreamingBody(
+                            bytes: retryBytes,
+                            response: retryResponse
+                        ) { continuation.yield($0) }
                         continuation.finish()
-                        
                         return
                     }
-                    
-                    if !(200..<300).contains(http.statusCode) {
-                        
-                        throw RishiError.network(
-                            code: "http_\(http.statusCode)",
-                            message: ""
-                        )
-                    }
-                    
-                    var buffer = Data()
-                    
-                    for try await byte in bytes {
-                        
-                        buffer.append(byte)
-                        
-                        if buffer.count >= 4096 {
-                            
-                            continuation.yield(buffer)
-                            
-                            buffer.removeAll(
-                                keepingCapacity: true
-                            )
-                        }
-                    }
-                    
-                    if !buffer.isEmpty {
-                        continuation.yield(buffer)
-                    }
-                    
+
+                    try await Self.consumeStreamingBody(
+                        bytes: bytes,
+                        response: http
+                    ) { continuation.yield($0) }
                     continuation.finish()
                     
                 } catch {
@@ -222,6 +166,31 @@ public actor WorkerClient {
             continuation.onTermination = { _ in
                 task.cancel()
             }
+        }
+    }
+
+    private static func consumeStreamingBody(
+        bytes: URLSession.AsyncBytes,
+        response: URLResponse,
+        yield: @escaping (Data) -> Void
+    ) async throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw RishiError.network(code: "invalid_response", message: "")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw RishiError.network(code: "http_\(http.statusCode)", message: "")
+        }
+
+        var buffer = Data()
+        for try await byte in bytes {
+            buffer.append(byte)
+            if buffer.count >= 4096 {
+                yield(buffer)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty {
+            yield(buffer)
         }
     }
 
@@ -367,6 +336,19 @@ public actor WorkerClient {
             tokens.refreshToken,
             for: .refreshToken
         )
+
+        let sessionStore = KeychainSessionStore()
+        if let currentSession = try? await sessionStore.load() {
+            try await sessionStore.save(
+                Session(
+                    token: tokens.accessToken,
+                    userId: currentSession.userId,
+                    email: currentSession.email,
+                    issuedAt: Date(),
+                    expiresAt: currentSession.expiresAt
+                )
+            )
+        }
     }
 
     // MARK: - Request building
@@ -404,18 +386,17 @@ public actor WorkerClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
 
-        if let token = try accessToken() {
+        if let token = await tokenProvider.token() {
             request.setValue(
                 "Bearer \(token)",
                 forHTTPHeaderField: "Authorization"
             )
         }
-
-//        #if DEBUG
-//        if devBypassEnabled {
-//            request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
-//        }
-//        #endif
+        #if DEBUG
+        if devBypassEnabled {
+            request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
+        }
+        #endif
 
         // Any non-GET request declares JSON, even bodyless ones (e.g. sign-out),
         // otherwise Better Auth rejects the bodyless POST with 415.
@@ -438,7 +419,7 @@ public actor WorkerClient {
         request.httpShouldHandleCookies = false
 
 
-        if let token = try accessToken() {
+        if let token = await tokenProvider.token() {
             request.setValue(
                 "Bearer \(token)",
                 forHTTPHeaderField: "Authorization"
@@ -456,13 +437,10 @@ public actor WorkerClient {
         return request
     }
 }
-private func accessToken() throws -> String? {
-    try Keychain.load(.accessToken)
-}
 
 // MARK: - AnyEncodable shim
 
-/// Type-eraser so `JSONEncoder` can encode an `any Encodable & Sendable` value
+    /// Type-eraser so `JSONEncoder` can encode an `any Encodable & Sendable` value
 /// without forcing every endpoint body to a single concrete type.
 private struct AnyEncodable: Encodable {
     private let _encode: (Encoder) throws -> Void

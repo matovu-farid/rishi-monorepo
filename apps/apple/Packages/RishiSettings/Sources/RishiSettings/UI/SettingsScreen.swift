@@ -7,7 +7,7 @@ import RishiSync
 import RishiBilling
 
 /// SET-01 top-level Settings surface. `NavigationStack { Form { ... } }`
-/// composes the 7 sections each as their own struct so unit tests can
+/// composes the 9 sections each as their own struct so unit tests can
 /// render any subsection in isolation.
 ///
 /// All section dependencies are passed in via init — the screen does not
@@ -26,6 +26,7 @@ public struct SettingsScreen: View {
     /// 11-06; this section only renders + edits them.
     @Binding public var readerTheme: ReaderTheme
     @Binding public var readerFontFamily: ReaderFontFamily
+    @Binding public var voiceLanguage: VoiceLanguageOption
 
     /// Phase 31 plan 31-04 — Mac-only PDF view-mode preference. Bound to
     /// `AppReaderDefaults.pdfViewMode` by `SettingsSheet`. The rendered
@@ -69,6 +70,7 @@ public struct SettingsScreen: View {
         user: User,
         readerTheme: Binding<ReaderTheme>,
         readerFontFamily: Binding<ReaderFontFamily>,
+        voiceLanguage: Binding<VoiceLanguageOption>,
         pdfViewMode: Binding<PDFViewModeSetting>,
         audioUserId: UserID,
         audioInitial: TTSSettings,
@@ -87,6 +89,7 @@ public struct SettingsScreen: View {
         self.user = user
         self._readerTheme = readerTheme
         self._readerFontFamily = readerFontFamily
+        self._voiceLanguage = voiceLanguage
         self._pdfViewMode = pdfViewMode
         self.audioUserId = audioUserId
         self.audioInitial = audioInitial
@@ -134,6 +137,7 @@ public struct SettingsScreen: View {
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily
                 )
+                VoiceLanguageSection(selection: $voiceLanguage)
                 PDFViewModeSection(selection: $pdfViewMode)
                 FooterDetectionSection(store: footerDetectionStore)
                 AudioSection(
@@ -192,6 +196,7 @@ public struct SettingsScreen: View {
 private struct SettingsScreenPreviewHost: View {
     @State private var theme: ReaderTheme = .light
     @State private var font: ReaderFontFamily = .system
+    @State private var voiceLanguage: VoiceLanguageOption = .english
     @State private var pdfViewMode: PDFViewModeSetting = .automatic
 
     var body: some View {
@@ -204,6 +209,7 @@ private struct SettingsScreenPreviewHost: View {
             ),
             readerTheme: $theme,
             readerFontFamily: $font,
+            voiceLanguage: $voiceLanguage,
             pdfViewMode: $pdfViewMode,
             audioUserId: UUID(),
             audioInitial: .default,

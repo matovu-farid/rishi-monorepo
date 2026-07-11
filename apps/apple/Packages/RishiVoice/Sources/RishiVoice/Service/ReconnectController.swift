@@ -37,6 +37,7 @@ actor ReconnectController {
     private let client: any RealtimeClientAPI
     private let keyFetcher: any EphemeralKeyFetching
     private let bookContext: BookContextSnapshot?
+    private let language: String?
     private let backoff: @Sendable (Int) -> Duration
     private let maxReconnects: Int
     private let disconnectConfirmations: Int
@@ -50,6 +51,7 @@ actor ReconnectController {
         client: any RealtimeClientAPI,
         keyFetcher: any EphemeralKeyFetching,
         bookContext: BookContextSnapshot? = nil,
+        language: String? = nil,
         backoff: @escaping @Sendable (Int) -> Duration,
         maxReconnects: Int,
         disconnectConfirmations: Int,
@@ -59,6 +61,7 @@ actor ReconnectController {
         self.client = client
         self.keyFetcher = keyFetcher
         self.bookContext = bookContext
+        self.language = language
         self.backoff = backoff
         self.maxReconnects = maxReconnects
         self.disconnectConfirmations = disconnectConfirmations
@@ -124,12 +127,16 @@ actor ReconnectController {
             // fetch fails on reconnect, count it as a failed attempt.
             let newKey: EphemeralKey
             do {
-                newKey = try await keyFetcher.fetch(language: "en")
+                newKey = try await keyFetcher.fetch(language: language)
             } catch {
                 continue
             }
             do {
-                try await client.connect(ephemeralKey: newKey.secret, bookContext: bookContext)
+                try await client.connect(
+                    ephemeralKey: newKey.secret,
+                    bookContext: bookContext,
+                    language: language
+                )
                 await callbacks.onReconnected(attempt)
                 Log.event("voice.session.reconnected", level: .info, data: [
                     "attempt": String(attempt),

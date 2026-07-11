@@ -16,11 +16,9 @@ import RishiAuth
 import RishiBilling
 import RishiCore
 import RishiLibrary
+import RishiSettings
 #if canImport(AVFoundation)
 import AVFoundation
-#endif
-#if canImport(UserNotifications)
-import UserNotifications
 #endif
 
 
@@ -42,6 +40,9 @@ struct OnboardingHost: View {
             Keychain.delete(.accessToken)
             Keychain.delete(.refreshToken)
             Keychain.delete(.userId)
+            Task {
+                try? await KeychainSessionStore().delete()
+            }
         }
 #endif
         OnboardingFlowView(
@@ -71,12 +72,10 @@ struct OnboardingHost: View {
                 }
                 #endif
             },
-            onRequestNotifications: {
-                #if canImport(UserNotifications)
-                _ = try? await UNUserNotificationCenter.current()
-                    .requestAuthorization(options: [.alert, .badge, .sound])
-                #endif
-            },
+            voiceLanguage: Binding(
+                get: { services.readerDefaults.voiceLanguage.rawValue },
+                set: { services.readerDefaults.voiceLanguage = VoiceLanguageOption(rawValue: $0) ?? .english }
+            ),
             onCompleted: onCompleted
         )
     }

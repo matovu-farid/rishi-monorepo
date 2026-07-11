@@ -34,7 +34,7 @@ struct MacReaderPrefsMenuViewModelTests {
     
     @MainActor
     final class Spy {
-        var loaded = TTSSettings(voice: "nova", speed: 1.5)
+        var loaded = TTSSettings(voice: "nova", model: "eleven_flash_v2_5", speed: 1.5)
         var saved: [TTSSettings] = []
         var syncCount = 0
         var manageCount = 0
@@ -79,6 +79,7 @@ struct MacReaderPrefsMenuViewModelTests {
         #expect(vm.audioPrefs.isSeeded == false)
         await vm.seed()
         #expect(vm.audioPrefs.voice == "nova")
+        #expect(vm.audioPrefs.model == "eleven_flash_v2_5")
         #expect(vm.audioPrefs.speed == 1.5)
         #expect(vm.audioPrefs.isSeeded)
     }
@@ -100,11 +101,13 @@ struct MacReaderPrefsMenuViewModelTests {
         await vm.seed()
         spy.saved.removeAll()
         vm.audioPrefs.voice = "shimmer"
+        vm.audioPrefs.model = "eleven_multilingual_v2"
         vm.persistAudio()
         
         await drain()
         #expect(spy.saved.count == 1)
         #expect(spy.saved.first?.voice == "shimmer")
+        #expect(spy.saved.first?.model == "eleven_multilingual_v2")
     }
 
     @Test("voice/speed bindings update the holder and persist on change")
@@ -116,11 +119,14 @@ struct MacReaderPrefsMenuViewModelTests {
         let model = vm.makeModel()
         model.voice.wrappedValue = "echo"
         #expect(vm.audioPrefs.voice == "echo")
+        model.model.wrappedValue = "eleven_flash_v2"
+        #expect(vm.audioPrefs.model == "eleven_flash_v2")
         model.speed.wrappedValue = 2.0
         #expect(vm.audioPrefs.speed == 2.0)
         await drain()
         #expect(spy.saved.count == 2)
         #expect(spy.saved.last?.speed == 2.0)
+        #expect(spy.saved.last?.model == "eleven_flash_v2")
     }
 
     @Test("reader-default bindings pass through 1:1")

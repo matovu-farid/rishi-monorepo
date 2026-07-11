@@ -16,6 +16,7 @@ final class ReadAloudController {
     private let ttsState: TTSPlaybackState
     private let ttsSettingsStore: any TTSSettingsStore
     private let ttsPrewarmer: TTSPrewarmer
+    private let ttsPresence: TTSPresenceController
     private let userId: UserID
 
     private(set) var bridge: ReaderTTSBridge? = nil
@@ -32,6 +33,7 @@ final class ReadAloudController {
         ttsState: TTSPlaybackState,
         ttsSettingsStore: any TTSSettingsStore,
         ttsPrewarmer: TTSPrewarmer,
+        ttsPresence: TTSPresenceController,
         coordidator: AudioSessionCoordinator,
         userId: UserID
     ) {
@@ -39,6 +41,7 @@ final class ReadAloudController {
         self.ttsState = ttsState
         self.ttsSettingsStore = ttsSettingsStore
         self.ttsPrewarmer = ttsPrewarmer
+        self.ttsPresence = ttsPresence
         self.userId = userId
         self.coordinator = coordidator
     }
@@ -58,6 +61,8 @@ final class ReadAloudController {
             }.value
             await start(
                 paragraphs: extractedParagraphs,
+                bookID: vm.book.id.uuidString,
+                metadata: NowPlayingMetadata(title: vm.book.title, author: vm.book.author),
                 onPassageChange: { [weak self, weak vm] index in
                     vm?.currentReadAloudPassageIndex = index
                     self?.updateCurrentParagraph(for: index)
@@ -83,6 +88,8 @@ final class ReadAloudController {
         let initialParagraphs = await vm.paragraphsForReadAloud()
         await start(
             paragraphs: initialParagraphs,
+            bookID: vm.book.id.uuidString,
+            metadata: NowPlayingMetadata(title: vm.book.title, author: vm.book.author),
             onPassageChange: { [weak self, weak vm] index in
                 vm?.currentReadAloudPassageIndex = index
                 self?.updateCurrentParagraph(for: index)
@@ -107,6 +114,7 @@ final class ReadAloudController {
         if let bridge {
             await bridge.stop()
         }
+        await ttsPresence.endSession()
         bridge = nil
         showControls = false
         showPicker = false
@@ -116,6 +124,8 @@ final class ReadAloudController {
 
     func start(
         paragraphs: [String],
+        bookID: String,
+        metadata: NowPlayingMetadata,
         onPassageChange: @escaping (Int?) -> Void,
         onParagraphsExhausted: @escaping () async -> [String] = { [] },
         onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
@@ -143,6 +153,14 @@ final class ReadAloudController {
         self.paragraphs = paragraphs
         currentParagraph = nil
         pickerInitial = await ttsSettingsStore.load(userId: userId)
+        await ttsPresence.beginSession(
+            bookID: bookID,
+            title: metadata.title,
+            author: metadata.author,
+            voice: pickerInitial.voice,
+            model: pickerInitial.model,
+            speed: pickerInitial.speed
+        )
         showControls = true
         await newBridge.start(paragraphs: paragraphs)
     }

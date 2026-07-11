@@ -1,14 +1,13 @@
 import Foundation
 import Testing
+import RishiAPI
 @testable import RishiCore
 
 @Suite("RishiAPI package smoke")
 struct PackageSmokeTests {
 
-    @Test func apiVersionIsWorkerClientMarker() {
-        // Plan 02-04 bumped the marker when the `WorkerClient` actor + retry
-        // middleware shipped. Bump again when the public surface breaks.
-        #expect(RishiAPI.apiVersion == "0.3.0-worker-client")
+    @Test func coreApiVersionIsSet() {
+        #expect(RishiCore.apiVersion == "1.0.0")
     }
 
     @Test func httpMethodCoversCommonVerbs() {
