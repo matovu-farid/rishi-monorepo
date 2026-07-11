@@ -60,11 +60,15 @@ import RishiLogging
             // Tear down any in-flight session.
             await teardown()
             firstBufferScheduled = false
+            let shouldShowLoading = await streamer.shouldShowLoading(for: request)
 
             let observable = state
             await MainActor.run {
 
                 observable.error = nil
+                if shouldShowLoading {
+                    observable.update(status: .loading)
+                }
             }
             // Single-audio-owner invariant: let the coordinator stop us if another
             // owner (voice) takes the session. stop() is our full teardown and

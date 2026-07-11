@@ -59,6 +59,15 @@ public actor TTSAudioCacheStore {
         return url
     }
 
+    /// Returns `true` when a committed, non-empty `.mp3` entry exists for `key`.
+    /// This does not touch LRU metadata and does not evict empty files.
+    public func contains(key: String) -> Bool {
+        let url = finalURL(for: key)
+        guard fileManager.fileExists(atPath: url.path) else { return false }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return size > 0
+    }
+
     // MARK: - Write (tee path)
 
     /// Opens an INDEPENDENT `.partial` URL for the given key and returns it. Each

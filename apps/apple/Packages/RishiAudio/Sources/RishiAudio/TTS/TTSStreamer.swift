@@ -7,6 +7,14 @@ import RishiLogging
 /// spinning up URLProtocol.
 public protocol TTSChunkSource: Sendable {
     func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error>
+    func shouldShowLoading(for request: TTSStreamRequest) async -> Bool
+}
+
+public extension TTSChunkSource {
+    func shouldShowLoading(for request: TTSStreamRequest) async -> Bool {
+        _ = request
+        return true
+    }
 }
 
 /// Production adapter — wraps the existing WorkerClient + OpenAI-backed speech
@@ -175,6 +183,10 @@ public actor TTSStreamer {
 
     public init(source: any TTSChunkSource) {
         self.source = source
+    }
+
+    public func shouldShowLoading(for request: TTSStreamRequest) async -> Bool {
+        await source.shouldShowLoading(for: request)
     }
 
     public nonisolated func stream(_ request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {

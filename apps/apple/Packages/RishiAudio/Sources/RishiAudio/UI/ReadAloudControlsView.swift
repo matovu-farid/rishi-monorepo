@@ -47,16 +47,17 @@ public struct ReadAloudControlsView: View {
 
             transportCluster
 
-            Spacer(minLength: 0)
+            //
 
             Button(action: performButtonAction(onOpenPicker)) {
-                Image(systemName: "slider.horizontal.3")
+                Image(systemName: "gear")
                     .font(RishiTypography.titleM)
                     .foregroundStyle(RishiColor.accent)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
             }
             .accessibilityIdentifier("tts-open-picker")
             .accessibilityLabel("Voice and Speed")
+            Spacer(minLength: 0)
         }
         .padding(RishiSpacing.l)
         .sensoryFeedback(.impact(weight: .light), trigger: buttonHapticTick)
@@ -124,16 +125,34 @@ public struct ReadAloudControlsView: View {
         .disabled(state.status == .loading)
         .modifier(PrimaryGlassButtonStyle())
     }
+    
+    var currentIcon: String {
+        switch state.status {
+        case .playing, .stopped:
+            "pause.fill"
+        case .paused:
+            "play.fill"
+        case .loading:
+            "progress.indicator"
+        case .error:
+            "exclamationmark.triangle"
+        case .idle:
+            "play.fill"
+            
+        }
+    }
+    
 
     @ViewBuilder
     private var playPauseBody: some View {
+        
         if state.status == .loading {
             // Loading keeps the `tts-play` identifier (set above) and stays
             // disabled; only the visual swaps to a spinner. XCUITests rely on
             // this exact toggle.
             ProgressView()
         } else {
-            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+            Image(systemName: currentIcon)
                 .font(RishiTypography.titleL)
                 .foregroundStyle(RishiColor.accent)
         }
@@ -151,7 +170,7 @@ public struct ReadAloudControlsView: View {
             Image(systemName: systemName)
                 .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.textSecondary)
-                .frame(width: 44, height: 44)
+                .frame(width: 42, height: 42)
         }
         .accessibilityIdentifier(id)
         .accessibilityLabel(label)

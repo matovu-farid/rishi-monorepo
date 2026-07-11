@@ -41,10 +41,14 @@ import RishiLogging
         public func start(request: TTSStreamRequest) async {
             await stop()
 
+            let shouldShowLoading = await streamer.shouldShowLoading(for: request)
+
             await MainActor.run {
                 state.error = nil
                 state.currentPassageId = request.passageId
-                state.update(status: .loading)
+                if shouldShowLoading {
+                    state.update(status: .loading)
+                }
             }
 
             let stream = makeAudioStream(request: request)

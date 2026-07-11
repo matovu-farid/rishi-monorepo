@@ -56,7 +56,6 @@ final class ReaderTTSBridge {
 
     func start(paragraphs: [String]) async {
         await stop()
-        state.update(status: .loading)
         guard !paragraphs.isEmpty else { return }
         self.paragraphs = paragraphs
         self.currentIndex = 0
@@ -225,7 +224,6 @@ final class ReaderTTSBridge {
         return true
     }
 }
-
 
 
 

@@ -102,4 +102,32 @@ struct TTSStreamerTests {
             Issue.record("Expected emptyResponse, got \(error)")
         }
     }
+
+    @Test("Loading is suppressed for cache hits and shown for misses")
+    func loadingTracksCacheState() async throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("TTSStreamer-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let request = TTSStreamRequest(text: "cached", voice: "alloy", speed: 1.0)
+        let key = TTSCacheKey.compute(
+            text: request.text,
+            voice: request.voice,
+            model: request.model,
+            speed: request.speed
+        )
+
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data([0x01, 0x02, 0x03, 0x04]).write(to: tmp.appendingPathComponent("\(key).mp3"))
+
+        let hitStreamer = TTSStreamer(source: CachingTTSChunkSource(
+            upstream: FakeTTSChunkSource(chunks: [Data([0xFF])]),
+            store: store
+        ))
+        #expect(await hitStreamer.shouldShowLoading(for: request) == false)
+
+        let missRequest = TTSStreamRequest(text: "miss", voice: "alloy", speed: 1.0)
+        #expect(await hitStreamer.shouldShowLoading(for: missRequest) == true)
+    }
 }

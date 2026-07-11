@@ -44,6 +44,16 @@ public actor CachingTTSChunkSource: TTSChunkSource {
         }
     }
 
+    public func shouldShowLoading(for request: TTSStreamRequest) async -> Bool {
+        let key = TTSCacheKey.compute(
+            text: request.text,
+            voice: request.voice,
+            model: request.model,
+            speed: request.speed
+        )
+        return !(await store.contains(key: key))
+    }
+
     // MARK: - Hit path: stream the cached file in 16 KiB chunks
 
     private static func streamFile(
