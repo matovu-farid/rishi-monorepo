@@ -16,3 +16,13 @@ the main thread clean and coherent over long sessions.
 - Default to dispatching tasks to subagents instead of running the tools yourself.
 - Use parallel subagents when tasks are independent (one message, multiple Agent calls).
 - Reserve the main context for synthesis, decisions, and talking to the user.
+
+## Worker database access
+
+- In `workers/**`, use Drizzle for all database schema access and mutations in application and test code.
+- Do not hand-write raw SQL statements in worker application or test code. SQL is limited to generated migration artifacts managed by Drizzle.
+
+## Worker package commands
+
+- In `workers/worker`, always use Bun for dependency installation and project commands: `bun install`, `bun run <script>`, and `bunx <tool>`.
+- Do not use Yarn, npm, pnpm, or npx for worker installs or command execution.

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { devices } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
-import type { Env } from "../index";
+
 import { requireAuth } from "../index";
 
 // 1970->2001 epoch gap. Matches workers/worker/src/routes/changes.ts.

@@ -2,7 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
 import { subscription } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
-import type { Env } from "../index";
+
 
 const ALLOWED_STATUSES = new Set(["active", "trialing"]);
 

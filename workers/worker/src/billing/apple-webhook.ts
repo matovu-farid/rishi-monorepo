@@ -12,7 +12,7 @@ import { createDb } from "../db/drizzle";
 // NOTE: type-only import — runtime import would form an ESM cycle with
 // src/index.ts via the route mount (same constraint as 14-04). The webhook
 // has NO requireAuth — Apple posts unauthenticated; trust is the JWS chain.
-import type { Env } from "../index";
+
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 

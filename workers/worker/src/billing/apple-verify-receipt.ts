@@ -9,7 +9,7 @@ import { createDb } from "../db/drizzle";
 // `registerVerifyReceiptRoute` from this file, and a runtime cycle breaks
 // Vitest's ESM loader (`Cannot access '__vite_ssr_import_*__' before
 // initialization`). Caller passes `requireAuth` in via the route factory.
-import type { Env } from "../index";
+
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 

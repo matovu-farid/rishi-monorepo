@@ -33,6 +33,7 @@ import authRoutes from "./routes/auth";
 import { BOOK_CONTEXT_TOOL_SPEC, renderRealtimeInstructions, } from "@rishi/shared/voice-chat/build-realtime-agent";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "./middleware";
+import { incrementApiUsage } from "./usage/api-usage";
 import { userRoutes } from "./routes/user";
 export { requireAuth } from "./middleware";
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -79,27 +80,6 @@ function getSpeechOpenAI(apiKey) {
     _speechOpenAIKey = apiKey;
     return _speechOpenAI;
 }
-const OPENAI_TTS_VOICE_PRESETS = [
-    "alloy",
-    "ash",
-    "ballad",
-    "coral",
-    "echo",
-    "fable",
-    "nova",
-    "onyx",
-    "sage",
-    "shimmer",
-    "verse",
-    "marin",
-    "cedar",
-];
-const OPENAI_TTS_DEFAULT_VOICE = "marin";
-const OPENAI_TTS_MODEL_ID = "gpt-4o-mini-tts";
-const OPENAI_TTS_MODEL_NAME = "GPT-4o mini TTS";
-function displayName(id) {
-    return id.charAt(0).toUpperCase() + id.slice(1);
-}
 const ELEVENLABS_MODEL_ID = "eleven_v3";
 const ELEVENLABS_ALLOWED_MODEL_IDS = new Set([
     "eleven_v3",
@@ -123,6 +103,31 @@ const ELEVENLABS_VOICE_IDS = {
     marin: ELEVENLABS_DEFAULT_VOICE_ID,
     cedar: "N2lVS1w4EtoT3dr4eOWO",
 };
+const OPENAI_TTS_VOICE_PRESETS = [
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+];
+const OPENAI_TTS_DEFAULT_VOICE = "marin";
+const OPENAI_TTS_MODEL_ID = "gpt-4o-mini-tts";
+const OPENAI_TTS_MODEL_NAME = "GPT-4o mini TTS";
+function displayName(id) {
+    return id
+        .split(/[_-]/g)
+        .filter(Boolean)
+        .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+        .join(" ");
+}
 function resolveElevenLabsVoiceId(voice) {
     if (!voice)
         return ELEVENLABS_DEFAULT_VOICE_ID;
@@ -517,6 +522,7 @@ app.get("/health", (c) => {
     });
 });
 app.post("/api/audio/speech", requireAuth, async (c) => {
+    c.executionCtx.waitUntil(incrementApiUsage(c.env, c.get("userId"), "tts"));
     try {
         // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
         // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
@@ -618,6 +624,7 @@ app.get("/api/audio/speech/options", (_c) => {
     });
 });
 app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
+    c.executionCtx.waitUntil(incrementApiUsage(c.env, c.get("userId"), "tts"));
     try {
         const rawBody = await c.req
             .json()
@@ -689,7 +696,8 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
 // fields optional so callers without a book (e.g. quick voice without a
 // reader open) still work. Unparseable / empty bodies degrade to
 // `{ language: "en" }`.
-app.post("/api/realtime/client_secrets", requireAuth, requireActiveSubscription, async (c) => {
+app.post("/api/realtime/client_secrets", requireAuth, async (c) => {
+    c.executionCtx.waitUntil(incrementApiUsage(c.env, c.get("userId"), "voiceChat"));
     try {
         const rawBody = await c.req
             .json()

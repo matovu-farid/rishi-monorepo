@@ -12,7 +12,7 @@ import {
 import { DEFAULT_RATES } from "@rishi/shared/billing/default-rates";
 import { createDb } from "../db/drizzle";
 import { createStripeClient } from "./stripe";
-import type { Env } from "../index";
+
 
 /**
  * Report a usage event to the Stripe meter. Fire-and-forget; callers

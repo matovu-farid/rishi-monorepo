@@ -12,7 +12,7 @@ import {
 } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
 import { createAuth } from "../auth";
-import type { Env } from "../index";
+
 
 /**
  * Test-only auth routes mounted at /test/*.

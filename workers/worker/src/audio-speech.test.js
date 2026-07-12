@@ -225,6 +225,12 @@ async function callSpeech(body) {
     });
     return app.fetch(req, env, ctx);
 }
+async function callSpeechOptions() {
+    const req = new Request("https://api.fidexa.org/api/audio/speech/options", {
+        method: "GET",
+    });
+    return app.fetch(req, env, ctx);
+}
 function parseEventFrames(text) {
     return text
         .trim()
@@ -303,14 +309,14 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
         const requestId = await computeKey(text, "alloy", 1.0);
         const chunkFrame = frames[0];
         const doneFrame = frames[1];
-        expect(chunkFrame.id).toBe(`${requestId}:chunk:0000`);
+        expect(chunkFrame.id).toBe(`${requestId}#00000000`);
         expect(JSON.parse(chunkFrame.data)).toMatchObject({
             request_id: requestId,
-            chunk_id: `${requestId}:chunk:0000`,
+            chunk_id: `${requestId}#00000000`,
             index: 0,
             audio_b64: "AQIDBA==",
         });
-        expect(doneFrame.id).toBe(`${requestId}:done`);
+        expect(doneFrame.id).toBe(`${requestId}#done`);
         expect(JSON.parse(doneFrame.data)).toMatchObject({
             request_id: requestId,
             done: true,
@@ -319,5 +325,19 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
             byte_length: 4,
         });
         expect(speechCalls.length).toBe(1);
+    });
+});
+describe("GET /api/audio/speech/options", () => {
+    it("returns the worker-driven OpenAI voice/model catalog", async () => {
+        const res = await callSpeechOptions();
+        expect(res.status).toBe(200);
+        const body = (await res.json());
+        expect(body.provider).toBe("openai");
+        expect(body.default_voice_id).toBe("marin");
+        expect(body.default_model_id).toBe("gpt-4o-mini-tts");
+        expect(body.voices.map((choice) => choice.id)).toContain("alloy");
+        expect(body.models).toEqual([
+            { id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS" },
+        ]);
     });
 });

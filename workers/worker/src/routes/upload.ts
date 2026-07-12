@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { eq, and, count, sum } from "drizzle-orm";
-import type { Env } from "../index";
+
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
 import { signR2Url } from "../r2-presign";

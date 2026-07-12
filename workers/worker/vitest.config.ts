@@ -3,9 +3,16 @@ import path from "node:path";
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "@rishi/shared": path.resolve(__dirname, "../../packages/shared/src"),
-    },
+    alias: [
+      {
+        find: /^@rishi\/shared\/schema$/,
+        replacement: path.resolve(__dirname, "../../packages/shared/src/schema.ts"),
+      },
+      {
+        find: /^@rishi\/shared$/,
+        replacement: path.resolve(__dirname, "../../packages/shared/src"),
+      },
+    ],
   },
   test: {
     globals: true,

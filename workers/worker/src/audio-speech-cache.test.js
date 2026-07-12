@@ -381,14 +381,14 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
         const frames = parseEventFrames(await res.text());
         expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"]);
         const requestId = await computeKey(text, "alloy", 1.0);
-        expect(frames[0].id).toBe(`${requestId}:chunk:0000`);
+        expect(frames[0].id).toBe(`${requestId}#00000000`);
         expect(JSON.parse(frames[0].data)).toMatchObject({
             request_id: requestId,
-            chunk_id: `${requestId}:chunk:0000`,
+            chunk_id: `${requestId}#00000000`,
             index: 0,
             audio_b64: "CQkJCQ==",
         });
-        expect(frames[1].id).toBe(`${requestId}:done`);
+        expect(frames[1].id).toBe(`${requestId}#done`);
         expect(JSON.parse(frames[1].data)).toMatchObject({
             request_id: requestId,
             done: true,

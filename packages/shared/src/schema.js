@@ -43,6 +43,15 @@ export const appleUsersRelations = relations(appleUsers, ({ one }) => ({
 export const userRelations = relations(user, ({ many }) => ({
     appleAccounts: many(appleUsers),
 }));
+export const userApiUsage = sqliteTable("user_api_usage", {
+    userId: text("user_id")
+        .primaryKey()
+        .references(() => user.id, { onDelete: "cascade" }),
+    voiceChatRequests: integer("voice_chat_requests").notNull().default(0),
+    ttsRequests: integer("tts_requests").notNull().default(0),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+});
 // ─── Books table ───────────────────────────────────────────────────────────────
 // Matches mobile SQLite schema columns (snake_case) plus sync-specific columns.
 // filePath and coverPath exist in the schema definition for mobile use but are

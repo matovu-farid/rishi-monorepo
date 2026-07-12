@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { eq, gt, and, max, asc, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import type { Env } from "../index";
+
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import {

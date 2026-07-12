@@ -33,7 +33,7 @@ vi.mock("better-auth/adapters/drizzle", async () => {
 });
 
 import { createAuth, deriveHasPro, type HasProDeps } from "./auth";
-import type { Env } from "./index";
+
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 // Apple's iOS identity tokens are ES256 JWTs signed by Apple's authorization

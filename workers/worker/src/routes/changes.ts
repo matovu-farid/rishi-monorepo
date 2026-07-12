@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, asc, eq, gt } from "drizzle-orm";
-import type { Env } from "../index";
+
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books, highlights, bookmarks } from "@rishi/shared/schema";

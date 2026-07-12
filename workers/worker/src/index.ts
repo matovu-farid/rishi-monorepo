@@ -45,6 +45,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { requireAuth } from "./middleware";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "./jwt";
 import { findOrCreateUser } from "./findOrCreateUser";
+import { incrementApiUsage } from "./usage/api-usage";
 import { error } from "node:console";
 import { userRoutes } from "./routes/user";
 export { requireAuth } from "./middleware";
@@ -668,6 +669,9 @@ app.get("/health", (c) => {
 });
 
 app.post("/api/audio/speech", requireAuth, async (c) => {
+  c.executionCtx.waitUntil(
+    incrementApiUsage(c.env, c.get("userId"), "tts"),
+  );
   try {
     // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
     // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
@@ -805,6 +809,9 @@ app.get("/api/audio/speech/options", (_c) => {
 });
 
 app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
+  c.executionCtx.waitUntil(
+    incrementApiUsage(c.env, c.get("userId"), "tts"),
+  );
   try {
     const rawBody = await c.req
       .json<{
@@ -927,8 +934,10 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
 app.post(
   "/api/realtime/client_secrets",
   requireAuth,
-  requireActiveSubscription,
   async (c) => {
+    c.executionCtx.waitUntil(
+      incrementApiUsage(c.env, c.get("userId"), "voiceChat"),
+    );
     try {
       const rawBody = await c.req
         .json<Partial<BuildClientSecretsInput>>()

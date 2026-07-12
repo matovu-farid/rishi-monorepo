@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { conversations } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
-import type { Env } from "../index";
+
 import { requireAuth } from "../index";
 import { and, desc, eq, gt } from "drizzle-orm";
 

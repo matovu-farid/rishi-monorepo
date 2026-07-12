@@ -17,7 +17,7 @@ import {
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import type Stripe from "stripe";
-import type { Env } from "./index";
+
 import { mintAppleClientSecret } from "./auth-apple-secret";
 
 // ─── has_pro session projection (Phase 17-01) ───────────────────────────────

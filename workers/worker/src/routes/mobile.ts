@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { Redis } from "@upstash/redis/cloudflare";
 import { z } from "zod";
 import { createAuth } from "../auth";
-import type { Env } from "../index";
+
 
 /**
  * Mobile-app counterpart to `/desktop/*` (workers/worker/src/routes/desktop.ts).
