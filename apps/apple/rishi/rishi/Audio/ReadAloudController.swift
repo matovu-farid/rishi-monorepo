@@ -20,6 +20,8 @@ final class ReadAloudController {
     private(set) var bridge: ReaderTTSBridge? = nil
     private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
     private(set) var readiumState: PublicationSpeechSynthesizer.State = .stopped
+    private var readiumPublication: Publication?
+    private var readiumPrefetcher: ReadiumTTSPrefetchCoordinator?
     var showControls = false
     var showPicker = false
     var pickerInitial: TTSSettings = .default
@@ -78,6 +80,8 @@ final class ReadAloudController {
         }
 
         readiumSynthesizer = synthesizer
+        readiumPublication = publication
+        readiumPrefetcher = ReadiumTTSPrefetchCoordinator(prewarmer: ttsPrewarmer)
         readiumState = .stopped
         currentParagraph = nil
         currentLocator = nil
@@ -148,6 +152,7 @@ final class ReadAloudController {
         pickerInitial = settings
         await ttsSettingsStore.save(settings, userId: userId)
         readiumSynthesizer?.config.voiceIdentifier = settings.voice
+        await readiumPrefetcher?.stop()
         await ttsPresence.updatePlaybackSettings(
             voice: settings.voice,
             model: settings.model,
@@ -208,6 +213,9 @@ final class ReadAloudController {
     }
 
     private func stopCurrentPlayback() async {
+        await readiumPrefetcher?.stop()
+        readiumPrefetcher = nil
+        readiumPublication = nil
         if let bridge {
             await bridge.stop()
             self.bridge = nil
@@ -240,6 +248,13 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
             currentLocator = range ?? utterance.locator
             currentParagraph = utterance.text
             ttsState.update(status: .playing)
+            if let publication = readiumPublication {
+                readiumPrefetcher?.update(
+                    publication: publication,
+                    utterance: utterance,
+                    settings: pickerInitial
+                )
+            }
         }
     }
 

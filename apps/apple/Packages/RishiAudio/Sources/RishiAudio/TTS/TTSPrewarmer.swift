@@ -10,6 +10,8 @@ public actor TTSPrewarmer {
 
     private let source: any TTSChunkSource
     private var inFlight: [UUID: Task<Void, Never>] = [:]
+    private var inFlightRequests: [TTSStreamRequest] = []
+    private var requestsByID: [UUID: TTSStreamRequest] = [:]
 
     public init(source: any TTSChunkSource) {
         self.source = source
@@ -20,11 +22,15 @@ public actor TTSPrewarmer {
     /// entry on exit (success, error, or cancellation). Returns once all per-request
     /// Tasks are SPAWNED — does NOT await their completion. Repeated `warm` calls for
     /// the same `TTSStreamRequest` are allowed; the cache layer makes duplicate drains
-    /// cheap (hit fast-path or worker-side de-dup).
+    /// cheap (hit fast-path or in-flight de-dup).
     public func warm(requests: [TTSStreamRequest]) async {
         for req in requests {
+            guard await source.shouldShowLoading(for: req) else { continue }
+            guard !inFlightRequests.contains(where: { $0 == req }) else { continue }
             let id = UUID()
             let source = self.source
+            inFlightRequests.append(req)
+            requestsByID[id] = req
             let task = Task<Void, Never> { [weak self] in
                 defer {
                     Task { [weak self] in await self?.removeInFlight(id: id) }
@@ -54,6 +60,8 @@ public actor TTSPrewarmer {
             task.cancel()
         }
         inFlight.removeAll()
+        inFlightRequests.removeAll()
+        requestsByID.removeAll()
     }
 
     /// Test/internal visibility hook — number of Tasks still registered. Production
@@ -62,5 +70,8 @@ public actor TTSPrewarmer {
 
     private func removeInFlight(id: UUID) {
         inFlight.removeValue(forKey: id)
+        if let request = requestsByID.removeValue(forKey: id) {
+            inFlightRequests.removeAll { $0 == request }
+        }
     }
 }

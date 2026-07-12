@@ -51,6 +51,34 @@ struct TTSPrewarmerTests {
         #expect(texts == Set(["alpha", "bravo", "charlie"]))
     }
 
+    @Test("warm skips requests already present in the source cache")
+    func warm_skips_cached_requests() async throws {
+        let cached = makeRequest(text: "cached")
+        let missing = makeRequest(text: "missing")
+        let source = CacheAwareFakeChunkSource(cachedTexts: [cached.text])
+        let prewarmer = TTSPrewarmer(source: source)
+
+        await prewarmer.warm(requests: [cached, missing])
+        let settled = await waitForSettle(prewarmer, timeout: 1.0)
+
+        #expect(settled)
+        #expect(await source.requests().map(\.text) == [missing.text])
+    }
+
+    @Test("warm skips requests already being prefetched")
+    func warm_skips_inflight_duplicate_requests() async throws {
+        let source = BlockingFakeChunkSource()
+        let prewarmer = TTSPrewarmer(source: source)
+        let request = makeRequest(text: "already warming")
+
+        await prewarmer.warm(requests: [request])
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await prewarmer.warm(requests: [request])
+
+        #expect(await source.requests().count == 1)
+        await prewarmer.cancelAll()
+    }
+
     // MARK: - 2. cache-miss writes <key>.mp3 to disk
 
     @Test("cache miss writes mp3 to disk")
@@ -140,9 +168,16 @@ struct TTSPrewarmerTests {
 /// A `TTSChunkSource` whose `stream(request:)` yields ONE chunk then suspends on a
 /// 60-second sleep. Used to prove cooperative cancellation by `TTSPrewarmer.cancelAll()`.
 private actor BlockingFakeChunkSource: TTSChunkSource {
+    private var receivedRequests: [TTSStreamRequest] = []
+
+    func requests() -> [TTSStreamRequest] {
+        receivedRequests
+    }
+
     nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task { [weak self] in
+                await self?.record(request)
                 continuation.yield(TTSChunk.make(
                     request: request,
                     sequenceIndex: 0,
@@ -157,5 +192,45 @@ private actor BlockingFakeChunkSource: TTSChunkSource {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private func record(_ request: TTSStreamRequest) {
+        receivedRequests.append(request)
+    }
+}
+
+private actor CacheAwareFakeChunkSource: TTSChunkSource {
+    private let cachedTexts: Set<String>
+    private var receivedRequests: [TTSStreamRequest] = []
+
+    init(cachedTexts: Set<String>) {
+        self.cachedTexts = cachedTexts
+    }
+
+    func shouldShowLoading(for request: TTSStreamRequest) async -> Bool {
+        !cachedTexts.contains(request.text)
+    }
+
+    nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [weak self] in
+                await self?.record(request)
+                continuation.yield(TTSChunk.make(
+                    request: request,
+                    sequenceIndex: 0,
+                    data: Data([0x01])
+                ))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func requests() -> [TTSStreamRequest] {
+        receivedRequests
+    }
+
+    private func record(_ request: TTSStreamRequest) {
+        receivedRequests.append(request)
     }
 }
