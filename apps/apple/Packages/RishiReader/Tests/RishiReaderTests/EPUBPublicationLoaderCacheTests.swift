@@ -4,15 +4,15 @@ import ReadiumShared
 import RishiCore
 @testable import RishiReader
 
-/// Phase 21 Plan 21-04 — `EPUBPublicationLoader` cache integration suite.
+/// Phase 21 Plan 21-04 — `PublicationLoader` cache integration suite.
 ///
 /// Asserts the four loader-level invariants:
 ///   - first open populates the warm cache (didUnpackCount == 1)
 ///   - second open is a cache hit (didUnpackCount stays at 1)
 ///   - mtime drift rebuilds (didUnpackCount goes to 2)
 ///   - unpack failure falls back to the ZIP-asset path (open still succeeds)
-@Suite("EPUBPublicationLoader + EPUBUnpackedCache", .serialized)
-struct EPUBPublicationLoaderCacheTests {
+@Suite("PublicationLoader + EPUBUnpackedCache", .serialized)
+struct PublicationLoaderCacheTests {
 
     private func aliceURL() throws -> URL {
         try #require(Bundle.module.url(forResource: "alice", withExtension: "epub"))
@@ -50,7 +50,7 @@ struct EPUBPublicationLoaderCacheTests {
         defer { try? FileManager.default.removeItem(at: cacheRoot) }
 
         let cache = EPUBUnpackedCache(configuration: .init(rootDirectory: cacheRoot))
-        let loader = EPUBPublicationLoader(unpackedCache: cache)
+        let loader = PublicationLoader(unpackedCache: cache)
 
         _ = try await loader.open(fileURL: epub)
         let count = await cache.didUnpackCount
@@ -66,7 +66,7 @@ struct EPUBPublicationLoaderCacheTests {
         defer { try? FileManager.default.removeItem(at: cacheRoot) }
 
         let cache = EPUBUnpackedCache(configuration: .init(rootDirectory: cacheRoot))
-        let loader = EPUBPublicationLoader(unpackedCache: cache)
+        let loader = PublicationLoader(unpackedCache: cache)
 
         _ = try await loader.open(fileURL: epub)
         _ = try await loader.open(fileURL: epub)
@@ -84,7 +84,7 @@ struct EPUBPublicationLoaderCacheTests {
         defer { try? FileManager.default.removeItem(at: cacheRoot) }
 
         let cache = EPUBUnpackedCache(configuration: .init(rootDirectory: cacheRoot))
-        let loader = EPUBPublicationLoader(unpackedCache: cache)
+        let loader = PublicationLoader(unpackedCache: cache)
 
         _ = try await loader.open(fileURL: epub)
         // Drift the mtime well beyond the 1ms tolerance.
@@ -110,7 +110,7 @@ struct EPUBPublicationLoaderCacheTests {
         // ZIP-asset path and still return a valid Publication.
         let unwritable = URL(fileURLWithPath: "/dev/null/Plan-21-04-EPUBUnpacked", isDirectory: true)
         let cache = EPUBUnpackedCache(configuration: .init(rootDirectory: unwritable))
-        let loader = EPUBPublicationLoader(unpackedCache: cache)
+        let loader = PublicationLoader(unpackedCache: cache)
 
         let publication = try await loader.open(fileURL: epub)
         #expect(publication.metadata.title?.lowercased().contains("alice") == true)
@@ -126,12 +126,12 @@ struct EPUBPublicationLoaderCacheTests {
             .appendingPathComponent("Books", isDirectory: true)
             .appendingPathComponent(bookId.uuidString, isDirectory: true)
             .appendingPathComponent("alice.epub")
-        #expect(EPUBPublicationLoader.bookId(forFileURL: url) == bookId)
+        #expect(PublicationLoader.bookId(forFileURL: url) == bookId)
     }
 
     @Test("bookId is nil for a non-layout URL (e.g. bundled fixture)")
     func bookIdNilForBundleURL() throws {
         let url = try aliceURL()
-        #expect(EPUBPublicationLoader.bookId(forFileURL: url) == nil)
+        #expect(PublicationLoader.bookId(forFileURL: url) == nil)
     }
 }

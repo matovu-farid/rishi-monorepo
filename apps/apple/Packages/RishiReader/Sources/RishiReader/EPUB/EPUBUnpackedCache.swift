@@ -13,7 +13,7 @@ import RishiLogging
 /// `<systemCaches>/EPUBUnpacked/<bookId>/` with a `<bookId>.mtime`
 /// sidecar gating freshness (rebuilt if the source ZIP's mtime changes).
 ///
-/// `EPUBPublicationLoader` consults this cache first; on hit it opens
+/// `PublicationLoader` consults this cache first; on hit it opens
 /// a directory asset (no unpack); on miss it unpacks then opens; on
 /// unpack failure it falls back to the legacy ZIP-asset path so the
 /// reader never breaks on cache failures.
@@ -50,7 +50,7 @@ public actor EPUBUnpackedCache {
     private var inflight: [BookID: Task<URL?, Never>] = [:]
 
     /// Entry-point init kept stable for call sites outside this file
-    /// (`EPUBPublicationLoader`, prewarmer, tests). The filesystem/ZIP IO is
+    /// (`PublicationLoader`, prewarmer, tests). The filesystem/ZIP IO is
     /// injected via a defaulted ``EPUBUnpackedFileStore`` derived from the
     /// configuration, so existing `EPUBUnpackedCache(configuration:)` and
     /// `EPUBUnpackedCache()` call sites are unchanged.
@@ -68,7 +68,7 @@ public actor EPUBUnpackedCache {
     /// Returns the unpacked directory URL if a warm cache exists for this
     /// `bookId` AND the source ZIP's mtime matches the sidecar. Returns
     /// nil otherwise. Mirrors `CoverCache.cachedURLIfFresh` — a synchronous
-    /// stat-only path that callers (here: `EPUBPublicationLoader.open`)
+    /// stat-only path that callers (here: `PublicationLoader.open`)
     /// take before paying the actor hop for `unpackIfNeeded`.
     ///
     /// Safe to call from any isolation domain; the store uses only

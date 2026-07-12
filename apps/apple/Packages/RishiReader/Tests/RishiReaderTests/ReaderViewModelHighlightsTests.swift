@@ -5,7 +5,7 @@ import RishiCore
 import RishiTesting
 @testable import RishiReader
 
-/// Tests for the highlight surface on ``EPUBReaderViewModel`` (plan 06-05
+/// Tests for the highlight surface on ``ReaderViewModel`` (plan 06-05
 /// Task 2). Mirrors ``PDFReaderViewModelHighlightsTests`` — same
 /// create/update/delete/load contract, EPUB-specific locator wire format.
 ///
@@ -13,8 +13,8 @@ import RishiTesting
 /// cache (per-instance, ObjectIdentifier-keyed) needs deterministic
 /// ordering across tests because every VM mutation bumps an `@Observable`
 /// trigger property.
-@Suite("EPUBReaderViewModel + Highlights", .serialized)
-struct EPUBReaderViewModelHighlightsTests {
+@Suite("ReaderViewModel + Highlights", .serialized)
+struct ReaderViewModelHighlightsTests {
 
     // MARK: - Helpers
 
@@ -22,10 +22,10 @@ struct EPUBReaderViewModelHighlightsTests {
         try #require(Bundle.module.url(forResource: "alice", withExtension: "epub"))
     }
 
-    private func makeVM() throws -> EPUBReaderViewModel {
+    private func makeVM() throws -> ReaderViewModel {
         let url = try aliceURL()
         let book = Book(userId: UUID(), title: "Alice", formatType: .epub, fileURL: "Books/x/alice.epub")
-        return EPUBReaderViewModel(
+        return ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,

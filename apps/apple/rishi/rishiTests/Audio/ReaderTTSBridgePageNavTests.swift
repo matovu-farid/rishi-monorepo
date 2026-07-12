@@ -29,6 +29,18 @@ import RishiCore
 @MainActor
 struct ReaderTTSBridgePageNavTests {
 
+    @Test("start index begins playback at the requested passage")
+    func startIndexBeginsAtRequestedPassage() async {
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
+
+        await env.bridge.start(paragraphs: ["a", "b", "c", "d"], startIndex: 2)
+        await waitUntil(timeout: 5) { env.recorder.nonNilIndices.contains(2) }
+
+        #expect(env.engine.lastStartedPassageId == "2")
+
+        await env.bridge.stop()
+    }
+
     
     
     

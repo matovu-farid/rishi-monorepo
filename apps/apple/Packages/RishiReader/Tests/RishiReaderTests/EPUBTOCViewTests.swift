@@ -3,7 +3,7 @@ import Foundation
 import ReadiumShared
 @testable import RishiReader
 
-/// Logic tests for ``EPUBTOCView``. We don't spin up SwiftUI — the view is a
+/// Logic tests for ``ReaderTOCView``. We don't spin up SwiftUI — the view is a
 /// pure projection of `entries` + `onSelect`, so we cover the two behaviors
 /// that matter: tapping a row forwards the link, and alice.epub actually
 /// produces a non-empty TOC (manifest accessor).
@@ -13,8 +13,8 @@ import ReadiumShared
 /// `(Link) -> ()` risks data races"). We sidestep that by routing tap
 /// results through an `actor` collector — the closure becomes Sendable
 /// because the only thing it captures is the actor reference.
-@Suite("EPUBTOCView (logic)", .serialized)
-struct EPUBTOCViewTests {
+@Suite("ReaderTOCView (logic)", .serialized)
+struct ReaderTOCViewTests {
 
     /// Thread-safe collector for forwarded `Link` values. Lets the test
     /// closure stay Sendable while still letting us inspect what was passed.
@@ -28,7 +28,7 @@ struct EPUBTOCViewTests {
     func tapInvokesOnSelect() async {
         let recorder = SelectionRecorder()
         let link = ReadiumShared.Link(href: "chapter1.xhtml", title: "Chapter 1")
-        let view = EPUBTOCView(
+        let view = ReaderTOCView(
             entries: [link],
             onSelect: { tapped in
                 Task { await recorder.record(tapped) }
@@ -46,13 +46,13 @@ struct EPUBTOCViewTests {
     @Test("alice.epub TOC has at least one entry")
     func aliceTOCHasEntries() async throws {
         let url = try #require(Bundle.module.url(forResource: "alice", withExtension: "epub"))
-        let loader = EPUBPublicationLoader()
+        let loader = PublicationLoader()
         let publication = try await loader.open(fileURL: url)
         let entries = publication.manifest.tableOfContents
         #expect(entries.count > 0)
     }
 }
 
-private extension EPUBTOCView {
+private extension ReaderTOCView {
     func simulateSelection(for link: ReadiumShared.Link) { onSelect(link) }
 }

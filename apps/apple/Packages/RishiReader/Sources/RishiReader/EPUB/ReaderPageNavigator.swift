@@ -4,7 +4,7 @@ import ReadiumNavigator
 
 /// Drives forward / backward page turns on the Readium EPUB navigator.
 ///
-/// Extracted from ``EPUBReaderScreen`` (Plan 34-03, SRP): the tap handler used
+/// Extracted from ``ReaderScreen`` (Plan 34-03, SRP): the tap handler used
 /// to reach through `coordinatorRef.coordinator?.navigator` and `await`
 /// `goForward` / `goBackward` inline — engine-call orchestration living inside a
 /// SwiftUI `View`. That knowledge of Readium's navigator API now lives here, so
@@ -18,12 +18,12 @@ import ReadiumNavigator
 /// `@MainActor` because Readium's `EPUBNavigatorViewController` requires the
 /// main actor and `advancePage()` mutates `@Observable` VM state.
 @MainActor
-public struct EPUBPageNavigator {
+public struct ReaderPageNavigator {
 
-    private let viewModel: EPUBReaderViewModel
-    private let coordinatorRef: EPUBCoordinatorRef
+    private let viewModel: ReaderViewModel
+    private let coordinatorRef: ReaderCoordinatorRef
 
-    public init(viewModel: EPUBReaderViewModel, coordinatorRef: EPUBCoordinatorRef) {
+    public init(viewModel: ReaderViewModel, coordinatorRef: ReaderCoordinatorRef) {
         self.viewModel = viewModel
         self.coordinatorRef = coordinatorRef
     }

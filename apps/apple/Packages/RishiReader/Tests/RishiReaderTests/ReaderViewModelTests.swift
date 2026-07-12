@@ -5,8 +5,8 @@ import RishiCore
 import RishiTesting
 @testable import RishiReader
 
-@Suite("EPUBReaderViewModel", .serialized)
-struct EPUBReaderViewModelTests {
+@Suite("ReaderViewModel", .serialized)
+struct ReaderViewModelTests {
 
     private func aliceURL() throws -> URL {
         try #require(Bundle.module.url(forResource: "alice", withExtension: "epub"))
@@ -21,7 +21,7 @@ struct EPUBReaderViewModelTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let book = makeBook()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,
@@ -38,7 +38,7 @@ struct EPUBReaderViewModelTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let book = makeBook()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,
@@ -68,7 +68,7 @@ struct EPUBReaderViewModelTests {
         try await Task.sleep(for: .milliseconds(300))
 
         let last = try await store.position(for: book.id)
-        let storedWrapper = try #require(last.flatMap { try? EPUBPositionLocator.decode(jsonString: $0.locator) })
+        let storedWrapper = try #require(last.flatMap { try? ReaderPositionLocator.decode(jsonString: $0.locator) })
         let inner = try #require(storedWrapper.toReadiumLocator())
         let prog = inner.locations.totalProgression ?? 0
         // The LAST progression (≈ 0.5) should win — debounce coalesces.
@@ -80,7 +80,7 @@ struct EPUBReaderViewModelTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let book = makeBook()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,
@@ -109,7 +109,7 @@ struct EPUBReaderViewModelTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let book = makeBook()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,
@@ -144,7 +144,7 @@ struct EPUBReaderViewModelTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let book = makeBook()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,
@@ -175,7 +175,7 @@ struct EPUBReaderViewModelTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let book = makeBook()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,
@@ -229,7 +229,7 @@ struct EPUBReaderViewModelTests {
         )
         try await store.upsert(position)
 
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: url,

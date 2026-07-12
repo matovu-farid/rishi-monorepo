@@ -21,9 +21,9 @@ import Testing
 @Suite("ReaderToolbarItem")
 struct ReaderToolbarItemTests {
 
-    @Test("EPUBReaderScreen exposes the eight top-bar trailing identifiers")
+    @Test("ReaderScreen exposes the eight top-bar trailing identifiers")
     func epubIdentifiers() {
-        let ids = EPUBReaderScreen.toolbarAccessibilityIdentifiers
+        let ids = ReaderScreen.toolbarAccessibilityIdentifiers
         let expected: Set<String> = [
             "reader.toolbar.toc",
             "reader.toolbar.typography",
@@ -58,7 +58,7 @@ struct ReaderToolbarItemTests {
 
     @Test("Neither screen lists the retired reader.toolbar.close identifier")
     func closeIdentifierRetired() {
-        #expect(!EPUBReaderScreen.toolbarAccessibilityIdentifiers.contains("reader.toolbar.close"))
+        #expect(!ReaderScreen.toolbarAccessibilityIdentifiers.contains("reader.toolbar.close"))
         #expect(!PDFReaderScreen.toolbarAccessibilityIdentifiers.contains("reader.toolbar.close"))
     }
 }

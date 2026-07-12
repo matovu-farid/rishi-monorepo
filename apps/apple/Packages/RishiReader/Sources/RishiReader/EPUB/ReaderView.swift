@@ -6,9 +6,9 @@ import ReadiumNavigator
 import RishiUIKit
 import RishiLogging
 
-/// SwiftUI wrapper for `EPUBNavigatorViewController`. iOS / Mac Catalyst only.
+/// SwiftUI wrapper for Readium's EPUB/PDF visual navigators. iOS / Mac Catalyst only.
 ///
-/// The view is driven by `EPUBReaderViewModel.publication`. When the
+/// The view is driven by `ReaderViewModel.publication`. When the
 /// publication is `nil` (mid-load), we render an empty container view
 /// painted with the theme background — SwiftUI re-invokes
 /// `updateUIViewController` on the next observation tick so the navigator
@@ -29,9 +29,9 @@ import RishiLogging
 ///   - `coordinatorRef.coordinator` is published back to the screen so it
 ///     can call `applyHighlights(_:)` after `loadHighlights` and after each
 ///     create/delete.
-public struct EPUBReaderView: UIViewControllerRepresentable {
+public struct ReaderView: UIViewControllerRepresentable {
 
-    public let viewModel: EPUBReaderViewModel
+    public let viewModel: ReaderViewModel
     /// Called whenever the user makes (or clears) a text selection in
     /// the navigator. The screen uses this to anchor the floating
     /// ``EPUBHighlightContextMenu``.
@@ -54,13 +54,13 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
     /// Mutable reference holder so the screen can reach the
     /// coordinator after the SwiftUI representable has installed it.
     /// Mirrors the `pdfViewRef` pattern from Phase 5.
-    public let coordinatorRef: EPUBCoordinatorRef
+    public let coordinatorRef: ReaderCoordinatorRef
 
     public init(
-        viewModel: EPUBReaderViewModel,
+        viewModel: ReaderViewModel,
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
         onTap: @escaping (CGPoint) -> Void = { _ in },
-        coordinatorRef: EPUBCoordinatorRef = EPUBCoordinatorRef()
+        coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
         self.viewModel = viewModel
         self.onSelectionChange = onSelectionChange
@@ -68,8 +68,8 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
         self.coordinatorRef = coordinatorRef
     }
 
-    public func makeCoordinator() -> EPUBNavigatorCoordinator {
-        let c = EPUBNavigatorCoordinator(viewModel: viewModel)
+    public func makeCoordinator() -> ReaderNavigatorCoordinator {
+        let c = ReaderNavigatorCoordinator(viewModel: viewModel)
         c.onSelectionChange = onSelectionChange
         c.onTap = onTap
         coordinatorRef.coordinator = c
@@ -106,11 +106,11 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
     /// engine's pan recognizer is not blocked by recognition arbitration.
     private func installContainerTapRecognizer(
         on view: UIView,
-        coordinator: EPUBNavigatorCoordinator
+        coordinator: ReaderNavigatorCoordinator
     ) {
         let tap = UITapGestureRecognizer(
             target: coordinator,
-            action: #selector(EPUBNavigatorCoordinator.handleContainerTap(_:))
+            action: #selector(ReaderNavigatorCoordinator.handleContainerTap(_:))
         )
         tap.cancelsTouchesInView = false
         tap.delaysTouchesBegan = false
@@ -121,11 +121,11 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
         view.addGestureRecognizer(tap)
     }
 
-    private func attachNavigatorIfReady(into container: UIViewController, coordinator: EPUBNavigatorCoordinator) {
+    private func attachNavigatorIfReady(into container: UIViewController, coordinator: ReaderNavigatorCoordinator) {
         do {
             try coordinator.makeNavigatorIfNeeded()
         } catch {
-            Log.reader.error("Failed to construct EPUB navigator: \(error.localizedDescription, privacy: .public)")
+            Log.reader.error("Failed to construct Readium navigator: \(error.localizedDescription, privacy: .public)")
             return
         }
         guard let navigator = coordinator.navigator else { return }
@@ -172,14 +172,14 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
     }
 }
 
-/// Mutable reference holder for the lazy ``EPUBNavigatorCoordinator``.
+/// Mutable reference holder for the lazy ``ReaderNavigatorCoordinator``.
 /// Lives on the SwiftUI screen so it can call
 /// `coordinator?.applyHighlights(_:)` after `loadHighlights` and after
 /// every create / delete. The screen instantiates this as `@State` so
 /// SwiftUI keeps the same box across view rebuilds.
 @MainActor
-public final class EPUBCoordinatorRef {
-    public weak var coordinator: EPUBNavigatorCoordinator?
+public final class ReaderCoordinatorRef {
+    public weak var coordinator: ReaderNavigatorCoordinator?
     public init() {}
 }
 #endif

@@ -26,7 +26,7 @@ private enum EPUBMacCommandNotification {
 
 
 @MainActor
-public struct EPUBReaderScreen: View {
+public struct ReaderScreen: View {
 
   
 
@@ -43,7 +43,7 @@ public struct EPUBReaderScreen: View {
         "reader.toolbar.voice",
     ]
 
-    private let viewModel: EPUBReaderViewModel
+    private let viewModel: ReaderViewModel
 
     private let readerSettingsStore: (any ReaderSettingsStore)?
 
@@ -103,7 +103,7 @@ public struct EPUBReaderScreen: View {
         @State private var pendingSelection: SelectionContext?
         @State private var noteText: String = ""
 
-        @State private var coordinatorRef = EPUBCoordinatorRef()
+        @State private var coordinatorRef = ReaderCoordinatorRef()
 
         @State private var activeSheet: ReaderSheet?
 
@@ -117,7 +117,7 @@ public struct EPUBReaderScreen: View {
     #endif
 
     public init(
-        viewModel: EPUBReaderViewModel,
+        viewModel: ReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         bookmarkStore: (any BookmarkStore)? = nil,
@@ -138,7 +138,7 @@ public struct EPUBReaderScreen: View {
         self.readAloudLocator = readAloudLocator
     }
     private var Reader: some View {
-        EPUBReaderView(
+        ReaderView(
             viewModel: viewModel,
             onSelectionChange: { selection in
                 highlightInteractor.handleSelectionChange(selection)
@@ -347,7 +347,10 @@ public struct EPUBReaderScreen: View {
             .onChange(of: currentSpread) { _, _ in applyPreferences() }
 
             .onChange(of: readAloudParagraph) { _, _ in
-                readAloudPresenter.apply(paragraph: readAloudParagraph)
+                readAloudPresenter.apply(
+                    paragraph: readAloudParagraph,
+                    locator: readAloudLocator
+                )
             }
 
             .onChange(of: readAloudLocator) { _, _ in
@@ -629,7 +632,7 @@ public struct EPUBReaderScreen: View {
         private func sheetContent(for sheet: ReaderSheet) -> some View {
             switch sheet {
             case .toc:
-                EPUBTOCView(
+                ReaderTOCView(
                     entries: viewModel.publication?.manifest.tableOfContents
                         ?? [],
                     onSelect: { link in
@@ -741,15 +744,15 @@ public struct EPUBReaderScreen: View {
 
     #if canImport(UIKit)
 
-        private var pageNavigator: EPUBPageNavigator {
-            EPUBPageNavigator(
+        private var pageNavigator: ReaderPageNavigator {
+            ReaderPageNavigator(
                 viewModel: viewModel,
                 coordinatorRef: coordinatorRef
             )
         }
 
-        private var readAloudPresenter: EPUBReadAloudPresenter {
-            EPUBReadAloudPresenter(coordinatorRef: coordinatorRef)
+        private var readAloudPresenter: ReaderReadAloudPresenter {
+            ReaderReadAloudPresenter(coordinatorRef: coordinatorRef)
         }
 
         private var highlightInteractor: EPUBHighlightInteractor {
@@ -819,7 +822,7 @@ private actor EPUBPreviewPositionStore: PositionStore {
 private func makeEPUBPreviewViewModel(
     theme: ReaderTheme = .light,
     typography: ReaderTypography = .default
-) -> EPUBReaderViewModel {
+) -> ReaderViewModel {
     let url =
         Bundle.module.url(forResource: "alice", withExtension: "epub")
         ?? URL(fileURLWithPath: "/dev/null")
@@ -830,7 +833,7 @@ private func makeEPUBPreviewViewModel(
         formatType: .epub,
         fileURL: url.path
     )
-    let vm = EPUBReaderViewModel(
+    let vm = ReaderViewModel(
         book: book,
         userId: UUID(),
         documentURL: url,
@@ -842,19 +845,19 @@ private func makeEPUBPreviewViewModel(
 }
 
 #Preview("Light theme") {
-    EPUBReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .light))
+    ReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .light))
 }
 
 #Preview("Sepia theme") {
-    EPUBReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .sepia))
+    ReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .sepia))
 }
 
 #Preview("Dark theme") {
-    EPUBReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .dark))
+    ReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .dark))
 }
 
 #Preview("Serif large type") {
-    EPUBReaderScreen(
+    ReaderScreen(
         viewModel: makeEPUBPreviewViewModel(
             theme: .sepia,
             typography: ReaderTypography(

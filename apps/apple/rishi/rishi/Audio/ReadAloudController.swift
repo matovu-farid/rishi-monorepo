@@ -1,12 +1,10 @@
 import Foundation
 import Observation
+import ReadiumNavigator
+import ReadiumShared
 import RishiAudio
 import RishiCore
 import RishiReader
-
-#if canImport(PDFKit)
-    import PDFKit
-#endif
 
 @MainActor
 @Observable
@@ -20,12 +18,15 @@ final class ReadAloudController {
     private let userId: UserID
 
     private(set) var bridge: ReaderTTSBridge? = nil
+    private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
+    private(set) var readiumState: PublicationSpeechSynthesizer.State = .stopped
     var showControls = false
     var showPicker = false
     var pickerInitial: TTSSettings = .default
 
     private(set) var paragraphs: [String] = []
     private(set) var currentParagraph: String? = nil
+    private(set) var currentLocator: Locator? = nil
     private var coordinator: AudioSessionCoordinator
 
     init(
@@ -46,84 +47,117 @@ final class ReadAloudController {
         self.coordinator = coordidator
     }
 
-    func startPDF(vm: PDFReaderViewModel) async {
-        #if canImport(PDFKit)
-            guard let doc = vm.document else { return }
-            let pageIndex = vm.pageIndex
+    func startReader(vm: ReaderViewModel) async {
+        guard let publication = vm.publication else { return }
 
-            let extractedParagraphs = await Task.detached(
-                priority: .userInitiated
-            ) {
-                vm.paragraphsForReadAloud(
-                    document: doc,
-                    currentPageIndex: pageIndex
+        await stopCurrentPlayback()
+
+        let settings = await ttsSettingsStore.load(userId: userId)
+        pickerInitial = settings
+
+        guard let synthesizer = PublicationSpeechSynthesizer(
+            publication: publication,
+            config: .init(
+                defaultLanguage: publication.metadata.language,
+                voiceIdentifier: settings.voice
+            ),
+            engineFactory: { [ttsEngine, ttsState, ttsSettingsStore, userId] in
+                CustomTTSEngine(
+                    player: ttsEngine,
+                    state: ttsState,
+                    settingsStore: ttsSettingsStore,
+                    userId: userId
                 )
-            }.value
-            await start(
-                paragraphs: extractedParagraphs,
-                bookID: vm.book.id.uuidString,
-                metadata: NowPlayingMetadata(title: vm.book.title, author: vm.book.author),
-                onPassageChange: { [weak self, weak vm] index in
-                    vm?.currentReadAloudPassageIndex = index
-                    self?.updateCurrentParagraph(for: index)
-                },
-                onParagraphsExhausted: { [weak self, weak vm] in
+            },
+            tokenizerFactory: { language in
+                CustomTTSTokenizer.tokenize(defaultLanguage: language)
+            },
+            delegate: self
+        ) else {
+            return
+        }
 
-                    let next = await vm?.paragraphsForFollowingPage() ?? []
-                    self?.paragraphs = next
-                    return next
-                },
-                onParagraphsBeforeStart: { [weak self, weak vm] in
+        readiumSynthesizer = synthesizer
+        readiumState = .stopped
+        currentParagraph = nil
+        currentLocator = nil
+        paragraphs = []
+        showControls = true
 
-                    let prev = await vm?.paragraphsForPrecedingPage() ?? []
-                    self?.paragraphs = prev
-                    return prev
-                }
-            )
-        #endif
-    }
-
-    func startEPUB(vm: EPUBReaderViewModel) async {
-
-        let initialParagraphs = await vm.paragraphsForReadAloud()
-        await start(
-            paragraphs: initialParagraphs,
+        await ttsPresence.beginSession(
             bookID: vm.book.id.uuidString,
-            metadata: NowPlayingMetadata(title: vm.book.title, author: vm.book.author),
-            onPassageChange: { [weak self, weak vm] index in
-                vm?.currentReadAloudPassageIndex = index
-                self?.updateCurrentParagraph(for: index)
-            },
-            onParagraphsExhausted: { [weak self, weak vm] in
-
-                let next = await vm?.paragraphsForFollowingResource() ?? []
-
-                self?.paragraphs = next
-                return next
-            },
-            onParagraphsBeforeStart: { [weak self, weak vm] in
-
-                let prev = await vm?.paragraphsForPrecedingResource() ?? []
-                self?.paragraphs = prev
-                return prev
-            }
+            title: vm.book.title,
+            author: vm.book.author,
+            voice: settings.voice,
+            model: settings.model,
+            speed: settings.speed
         )
+
+        // Readium owns publication iteration. The custom tokenizer supplied
+        // above makes each utterance a paragraph instead of a sentence.
+        synthesizer.start(from: vm.latestLocator)
     }
 
     func stop() async {
-        if let bridge {
-            await bridge.stop()
-        }
+        await stopCurrentPlayback()
         await ttsPresence.endSession()
-        bridge = nil
         showControls = false
         showPicker = false
         paragraphs = []
         currentParagraph = nil
+        currentLocator = nil
+    }
+
+    func togglePlayback() async {
+        if let readiumSynthesizer {
+            readiumSynthesizer.pauseOrResume()
+        } else if let bridge {
+            if ttsState.status == .playing {
+                await bridge.pause()
+            } else {
+                await bridge.resume()
+            }
+        }
+    }
+
+    func previous() async {
+        if let readiumSynthesizer {
+            readiumSynthesizer.previous()
+        } else {
+            await bridge?.previous()
+        }
+    }
+
+    func next() async {
+        if let readiumSynthesizer {
+            readiumSynthesizer.next()
+        } else {
+            await bridge?.next()
+        }
+    }
+
+    func repeatCurrent() async {
+        if let readiumSynthesizer, let currentLocator {
+            readiumSynthesizer.start(from: currentLocator)
+        } else {
+            await bridge?.repeatCurrent()
+        }
+    }
+
+    func applySettings(_ settings: TTSSettings) async {
+        pickerInitial = settings
+        await ttsSettingsStore.save(settings, userId: userId)
+        readiumSynthesizer?.config.voiceIdentifier = settings.voice
+        await ttsPresence.updatePlaybackSettings(
+            voice: settings.voice,
+            model: settings.model,
+            speed: settings.speed
+        )
     }
 
     func start(
         paragraphs: [String],
+        startIndex: Int = 0,
         bookID: String,
         metadata: NowPlayingMetadata,
         onPassageChange: @escaping (Int?) -> Void,
@@ -162,7 +196,7 @@ final class ReadAloudController {
             speed: pickerInitial.speed
         )
         showControls = true
-        await newBridge.start(paragraphs: paragraphs)
+        await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
     }
 
     func updateCurrentParagraph(for index: Int?) {
@@ -171,5 +205,51 @@ final class ReadAloudController {
             return
         }
         currentParagraph = paragraphs[index]
+    }
+
+    private func stopCurrentPlayback() async {
+        if let bridge {
+            await bridge.stop()
+            self.bridge = nil
+        }
+        readiumSynthesizer?.stop()
+        readiumSynthesizer = nil
+        readiumState = .stopped
+        ttsState.update(status: .stopped)
+    }
+}
+
+extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
+    func publicationSpeechSynthesizer(
+        _ synthesizer: PublicationSpeechSynthesizer,
+        stateDidChange state: PublicationSpeechSynthesizer.State
+    ) {
+        guard readiumSynthesizer === synthesizer else { return }
+
+        readiumState = state
+        switch state {
+        case .stopped:
+            currentParagraph = nil
+            currentLocator = nil
+            ttsState.update(status: .stopped)
+        case let .paused(utterance):
+            currentLocator = utterance.locator
+            currentParagraph = utterance.text
+            ttsState.update(status: .paused)
+        case let .playing(utterance, range):
+            currentLocator = range ?? utterance.locator
+            currentParagraph = utterance.text
+            ttsState.update(status: .playing)
+        }
+    }
+
+    func publicationSpeechSynthesizer(
+        _ synthesizer: PublicationSpeechSynthesizer,
+        utterance: PublicationSpeechSynthesizer.Utterance,
+        didFailWithError error: PublicationSpeechSynthesizer.Error
+    ) {
+        guard readiumSynthesizer === synthesizer else { return }
+        ttsState.error = String(describing: error)
+        ttsState.update(status: .error)
     }
 }

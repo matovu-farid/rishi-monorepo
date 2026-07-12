@@ -25,7 +25,7 @@ import RishiTesting
 /// **Fix (this file is the guard):** a UIKit `UITapGestureRecognizer` is
 /// attached DIRECTLY to the engine view (`PDFView` for PDF,
 /// `UIViewController.view` for Readium) by `PDFReaderView` /
-/// `EPUBReaderView`, with two non-negotiable flags:
+/// `ReaderView`, with two non-negotiable flags:
 ///
 ///   1. `cancelsTouchesInView = false` — every touch is still delivered
 ///      to the engine view's own `touchesBegan / touchesMoved /
@@ -102,7 +102,7 @@ struct ReaderEngineTapGestureWiringTests {
 
     @Test("EPUB NavigatorCoordinator allows simultaneous recognition with engine pan")
     func epubCoordinatorAllowsSimultaneousRecognition() {
-        let coordinator = EPUBNavigatorCoordinator(viewModel: makeEPUBViewModel())
+        let coordinator = ReaderNavigatorCoordinator(viewModel: makeEPUBViewModel())
         let tap = UITapGestureRecognizer()
         let pan = UIPanGestureRecognizer()
         #expect(coordinator.gestureRecognizer(
@@ -115,7 +115,7 @@ struct ReaderEngineTapGestureWiringTests {
     @Test("EPUB onTap fires with the tap location on .ended")
     func epubOnTapFiresOnEndedState() {
         var received: CGPoint?
-        let coordinator = EPUBNavigatorCoordinator(viewModel: makeEPUBViewModel())
+        let coordinator = ReaderNavigatorCoordinator(viewModel: makeEPUBViewModel())
         coordinator.onTap = { received = $0 }
         let host = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
         let recognizer = StubTapRecognizer(
@@ -139,9 +139,9 @@ struct ReaderEngineTapGestureWiringTests {
         )
     }
 
-    private func makeEPUBViewModel() -> EPUBReaderViewModel {
+    private func makeEPUBViewModel() -> ReaderViewModel {
         let book = Book(userId: UUID(), title: "TapWiring", formatType: .epub, fileURL: "x")
-        return EPUBReaderViewModel(
+        return ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: URL(fileURLWithPath: "/dev/null"),

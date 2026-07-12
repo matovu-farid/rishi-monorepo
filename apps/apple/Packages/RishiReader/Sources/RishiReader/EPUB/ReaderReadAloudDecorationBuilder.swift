@@ -20,7 +20,7 @@ import RishiUIKit
 /// locator by searching the rendered resource DOM for the highlight string,
 /// which is sufficient to draw the decoration for a paragraph extracted from
 /// that same resource.
-public enum EPUBReadAloudDecorationBuilder {
+public enum ReaderReadAloudDecorationBuilder {
 
     /// Decoration group key for the active read-aloud passage. Distinct from
     /// ``EPUBDecorationApplier/groupName`` so user highlights and the TTS

@@ -5,7 +5,7 @@ import SwiftUI
 /// Phase 18 Plan 18-01 — F-P0-04 nav-bar visibility tracks chrome state.
 ///
 /// The unconditional `.toolbar(.hidden, for: .navigationBar)` modifier in
-/// EPUBReaderScreen / PDFReaderScreen used to hide the system back chevron
+/// ReaderScreen / PDFReaderScreen used to hide the system back chevron
 /// even when the in-app chrome was visible. Now both screens compute
 /// `Visibility` from `chrome.isVisible` via the tiny pure
 /// `navBarVisibility(forChromeVisible:)` function — easy to lock down in a

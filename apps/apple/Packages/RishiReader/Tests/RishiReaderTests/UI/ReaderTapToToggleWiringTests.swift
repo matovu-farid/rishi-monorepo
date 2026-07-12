@@ -10,7 +10,7 @@ import CoreGraphics
 /// `da9296ee1`, `40506f997`, `7f57607aa`) both reader screens initially
 /// attached the `SpatialTapGesture` directly to the
 /// `UIViewControllerRepresentable` that hosts the Readium WKWebView
-/// (`EPUBReaderView`) or the PDFKit `PDFView` (`PDFReaderView`). Those
+/// (`ReaderView`) or the PDFKit `PDFView` (`PDFReaderView`). Those
 /// engines own their own UIKit gesture stacks and greedily claim taps —
 /// so the SwiftUI `.gesture` closure never ran, the controller never
 /// received `toggle()`, and the chrome stayed hidden forever. Combined
@@ -55,7 +55,7 @@ struct ReaderTapToToggleWiringTests {
         }
     }
 
-    /// Re-implements the exact `switch` body both `EPUBReaderScreen` and
+    /// Re-implements the exact `switch` body both `ReaderScreen` and
     /// `PDFReaderScreen` use after the resolver decides. Centralized here
     /// so the test is asserting the same routing the production screens
     /// perform — any divergence in the switch (e.g. swapping

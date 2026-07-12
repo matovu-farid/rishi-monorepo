@@ -5,8 +5,8 @@
 // public symbol — comments only. Update this file when you add or
 // remove a public type.
 //
-// RishiReader is the EPUB + PDF reader. EPUB rendering is delegated
-// to Readium; PDF to PDFKit. The package owns the SwiftUI screens,
+// RishiReader is the unified reader. The active unified reader is backed
+// by Readium; the package also retains the legacy PDF surface. It owns the SwiftUI screens,
 // the view models, theme/typography settings, highlight overlays,
 // and the prewarm cache that hides cold-open latency.
 //
@@ -15,11 +15,11 @@
 
 // MARK: - Views (EPUB)
 //
-// EPUBReaderScreen            — `UI/EPUBReaderScreen.swift`. Full-screen EPUB reader (toolbar
-//                                + EPUBReaderView + sheets).
-// EPUBReaderView              — `EPUB/EPUBReaderView.swift`. UIViewControllerRepresentable
-//                                wrapping Readium's EPUBNavigator.
-// EPUBTOCView                 — `UI/EPUBTOCView.swift`. Table-of-contents sheet for EPUB.
+// ReaderScreen            — `UI/ReaderScreen.swift`. Full-screen unified reader (toolbar
+//                                + ReaderView + sheets).
+// ReaderView              — `EPUB/ReaderView.swift`. UIViewControllerRepresentable
+//                                wrapping the Readium navigator.
+// ReaderTOCView                 — `UI/ReaderTOCView.swift`. Table-of-contents sheet for EPUB.
 // EPUBThemePicker             — `UI/EPUBThemePicker.swift`. Theme picker (light/dark/sepia).
 // EPUBTypographyPicker        — `UI/EPUBTypographyPicker.swift`. Font/size/line-height picker.
 // EPUBProgressIndicator       — `UI/EPUBProgressIndicator.swift`. Progress bar at the bottom.
@@ -44,16 +44,16 @@
 
 // MARK: - View models
 //
-// EPUBReaderViewModel         — `EPUB/EPUBReaderViewModel.swift`. @unchecked Sendable. State
-//                                + actions for EPUBReaderScreen (position, highlights, sheet).
+// ReaderViewModel         — `EPUB/ReaderViewModel.swift`. @unchecked Sendable. Unified reader state
+//                                + actions for ReaderScreen (position, highlights, sheet).
 // PDFReaderViewModel          — `PDF/PDFReaderViewModel.swift`. @unchecked Sendable. State
 //                                + actions for PDFReaderScreen.
 
 // MARK: - Coordinators / Flows
 //
-// EPUBNavigatorCoordinator    — `EPUB/EPUBNavigatorCoordinator.swift`. NSObject. Glue between
-//                                EPUBReaderView and Readium delegates.
-// EPUBCoordinatorRef          — `EPUB/EPUBReaderView.swift`. Reference-cell that lets the
+// ReaderNavigatorCoordinator    — `EPUB/ReaderNavigatorCoordinator.swift`. NSObject. Glue between
+//                                ReaderView and Readium delegates.
+// ReaderCoordinatorRef          — `EPUB/ReaderView.swift`. Reference-cell that lets the
 //                                view model keep a weak handle on the coordinator across
 //                                SwiftUI updates.
 // ReaderChromeController      — `UI/ReaderChromeController.swift`. Auto-hides the reader
@@ -80,8 +80,8 @@
 //                                .next / .toggleChrome.
 // EPUBHighlightLocator        — `EPUB/EPUBHighlightLocator.swift`. JSON-encodable EPUB locator
 //                                used by HighlightStore rows.
-// EPUBPositionLocator         — `EPUB/EPUBPositionLocator.swift`. JSON-encodable EPUB position
-//                                used by PositionStore rows.
+// ReaderPositionLocator       — `Model/ReaderPositionLocator.swift`. JSON-encodable Readium
+//                                position used by both EPUB and PDF PositionStore rows.
 // PDFHighlightLocator         — `Model/PDFHighlightLocator.swift`. JSON-encodable PDF locator
 //                                used by HighlightStore rows.
 // EPUBSpreadMode              — `EPUB/EPUBPreferencesBridge.swift`. .single / .double.
@@ -108,14 +108,19 @@
 // PDFThumbnailCache           — `PDF/PDFThumbnailCache.swift`. Actor. Caches PDF page thumbnails.
 // EPUBUnpackedCache           — `EPUB/EPUBUnpackedCache.swift`. Actor. Unzipped-EPUB cache so
 //                                Readium can stream without re-unpacking each open.
-// EPUBPublicationLoader       — `EPUB/EPUBPublicationLoader.swift`. Opens an EPUB into a
+// PublicationLoader       — `EPUB/PublicationLoader.swift`. Opens an EPUB into a
 //                                Readium Publication.
-// EPUBPublicationLoading      — `EPUB/EPUBPublicationLoader.swift`. Protocol seam for tests.
-// EPUBPublicationLoaderError  — `EPUB/EPUBPublicationLoader.swift`. Loader error enum.
+// PublicationLoading      — `EPUB/PublicationLoader.swift`. Protocol seam for tests.
+// PublicationLoaderError  — `EPUB/PublicationLoader.swift`. Loader error enum.
 // BookPrewarmer               — `Prewarm/BookPrewarmer.swift`. Warms the caches above so the
 //                                next book open is instant.
 // PDFPageWarmCache            — `Prewarm/BookPrewarmer.swift`. Protocol the prewarmer fills.
 // EPUBWarmCache               — `Prewarm/BookPrewarmer.swift`. Protocol the prewarmer fills.
+
+// MARK: - Text to speech
+//
+// CustomTTSTokenizer          — `EPUB/CustomTTSTokenizer.swift`. Readium content tokenizer
+//                                that emits paragraph-sized utterances.
 
 // MARK: - Storage
 //

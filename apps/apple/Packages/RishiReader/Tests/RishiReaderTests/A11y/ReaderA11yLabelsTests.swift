@@ -73,7 +73,7 @@ struct ReaderA11yLabelsTests {
         // files were deleted in favor of native `.toolbar { ToolbarItemGroup }`
         // blocks living inside the reader screens themselves. Assertions
         // now run against the screen source files.
-        let screens = ["PDFReaderScreen.swift", "EPUBReaderScreen.swift"]
+        let screens = ["PDFReaderScreen.swift", "ReaderScreen.swift"]
         for url in try Self.readerSources() where screens.contains(url.lastPathComponent) {
             let s = try String(contentsOf: url, encoding: .utf8)
             // Every reader screen references the shared A11yLabel
@@ -133,7 +133,7 @@ struct ReaderA11yLabelsTests {
             #expect(pdf.contains(id), "PDFReaderScreen missing identifier \(id)")
         }
 
-        let epubURL = try Self.readerSources().first { $0.lastPathComponent == "EPUBReaderScreen.swift" }
+        let epubURL = try Self.readerSources().first { $0.lastPathComponent == "ReaderScreen.swift" }
         try #require(epubURL != nil)
         let epub = try String(contentsOf: epubURL!, encoding: .utf8)
         // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
@@ -150,7 +150,7 @@ struct ReaderA11yLabelsTests {
             "reader.toolbar.typography",
         ]
         for id in epubIds {
-            #expect(epub.contains(id), "EPUBReaderScreen missing identifier \(id)")
+            #expect(epub.contains(id), "ReaderScreen missing identifier \(id)")
         }
     }
 
@@ -169,7 +169,7 @@ struct ReaderA11yLabelsTests {
             // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
             // identifier sites (5 -> 7); Plan 37-05 added the search button
             // (7 -> 8).
-            "EPUBReaderScreen.swift": 8,
+            "ReaderScreen.swift": 8,
             // Phase 37 Plan 37-02 added the bookmark toggle + bookmarks-list
             // identifier sites (4 -> 6); Plan 37-04 added the search button
             // (6 -> 7).

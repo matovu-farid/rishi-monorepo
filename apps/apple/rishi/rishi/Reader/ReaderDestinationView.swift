@@ -22,31 +22,14 @@ struct ReaderDestinationView: View {
         let services = servicesEnv!
         let userId = user!.id
         switch route {
-        case .pdf(let bookId):
+        case .epub(let bookId),.pdf(let bookId):
             NavigationLazyBook(
                 bookId: bookId,
                 hint: hint,
                 bookStore: services.bookStore
             ) { book in
-                PDFReaderDestination(
-                    vm: PDFReaderViewModel.make(
-                        book: book,
-                        userId: userId,
-                        services: services
-                    ),
-                    services: services,
-                    userId: userId,
-                    onRequestPaywall: onRequestPaywall
-                )
-            }
-        case .epub(let bookId):
-            NavigationLazyBook(
-                bookId: bookId,
-                hint: hint,
-                bookStore: services.bookStore
-            ) { book in
-                EPUBReaderDestination(
-                    vm: EPUBReaderViewModel.make(
+                ReaderDestination(
+                    vm: ReaderViewModel.make(
                         book: book,
                         userId: userId,
                         services: services

@@ -32,8 +32,8 @@ struct EPUBReadAloudStartIndexTests {
     }
 
     @MainActor
-    private func loadedVM(url: URL) async throws -> EPUBReaderViewModel {
-        let vm = EPUBReaderViewModel(
+    private func loadedVM(url: URL) async throws -> ReaderViewModel {
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -58,7 +58,7 @@ struct EPUBReadAloudStartIndexTests {
     /// the property has real prose to slice (covers / nav docs / blank title
     /// pages have too few paragraphs to exercise the start-index math).
     @MainActor
-    private func firstContentLink(vm: EPUBReaderViewModel, publication: Publication) async throws -> ReadiumShared.Link {
+    private func firstContentLink(vm: ReaderViewModel, publication: Publication) async throws -> ReadiumShared.Link {
         for link in publication.readingOrder {
             let loc = try makeLocator(link: link, progression: 0)
             vm.didChangeLocation(loc)

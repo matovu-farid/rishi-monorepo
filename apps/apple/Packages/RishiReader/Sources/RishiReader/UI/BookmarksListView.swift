@@ -10,7 +10,7 @@ import RishiUIKit
 /// decoding the locator and jumping (PDF via `seek(toPage:)`, EPUB via Readium
 /// `go(to:)`).
 ///
-/// Mirrors ``EPUBTOCView``'s plain-header chrome rather than a `NavigationStack`
+/// Mirrors ``ReaderTOCView``'s plain-header chrome rather than a `NavigationStack`
 /// + toolbar "Done": on Mac Catalyst the sheet's NavigationStack bar leaks into
 /// the window chrome and its confirmationAction button does not reliably fire,
 /// so a plain header Button is used for a cross-platform-reliable dismiss. Each

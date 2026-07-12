@@ -42,7 +42,7 @@ struct ImportedBookLifecycleTests {
     }
 
     @MainActor
-    private func firstReadableParagraph(in vm: EPUBReaderViewModel) async throws -> String {
+    private func firstReadableParagraph(in vm: ReaderViewModel) async throws -> String {
         let publication = try #require(vm.publication)
         for link in publication.readingOrder {
             vm.didChangeLocation(try makeLocator(link: link))
@@ -66,14 +66,14 @@ struct ImportedBookLifecycleTests {
         let importedURL = storage.absoluteFileURL(for: book)
 
         #expect(FileManager.default.fileExists(atPath: importedURL.path))
-        #expect(EPUBPublicationLoader.bookId(forFileURL: importedURL) == book.id)
+        #expect(PublicationLoader.bookId(forFileURL: importedURL) == book.id)
 
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: book.userId,
             documentURL: importedURL,
             positionStore: InMemoryPositionStore(),
-            loader: EPUBPublicationLoader(unpackedCache: nil),
+            loader: PublicationLoader(unpackedCache: nil),
             debounceSeconds: 5.0
         )
         await vm.load()

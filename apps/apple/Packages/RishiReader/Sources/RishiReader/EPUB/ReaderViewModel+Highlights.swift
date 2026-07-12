@@ -3,7 +3,7 @@ import Observation
 import RishiCore
 import RishiLogging
 
-/// Highlight surface for ``EPUBReaderViewModel``.
+/// Highlight surface for ``ReaderViewModel``.
 ///
 /// Mirrors the shape of ``PDFReaderViewModel+Highlights`` (Phase 5
 /// plan 05-06) — same `loadHighlights / createHighlight / updateNote /
@@ -17,7 +17,7 @@ import RishiLogging
 /// selections need distinct CFI endpoints, that's a schema bump
 /// (`epub-v2`) with a decoder fallback that still accepts `epub-v1`.
 ///
-/// **Storage note.** `EPUBReaderViewModel` is `@Observable final class
+/// **Storage note.** `ReaderViewModel` is `@Observable final class
 /// @unchecked Sendable` (not `@MainActor`). These CRUD methods are
 /// `nonisolated async` — their array writes run on the generic executor
 /// AFTER `await store.…` resumes, so two concurrent calls would race on a
@@ -26,12 +26,12 @@ import RishiLogging
 /// ``PDFReaderViewModel+Highlights``). `@Observable` cannot track the
 /// external box, so every mutation bumps a tracked property (`theme`) via an
 /// identity assignment to force SwiftUI re-evaluation.
-extension EPUBReaderViewModel {
+extension ReaderViewModel {
 
     // MARK: - Cached state
 
     /// All loaded highlights for the current book — read by
-    /// ``EPUBReaderScreen`` and ``EPUBHighlightInteractor`` to drive the
+    /// ``ReaderScreen`` and ``EPUBHighlightInteractor`` to drive the
     /// in-page highlight overlay.
     public var loadedHighlights: [Highlight] {
         Self.cache.read(self)
@@ -43,21 +43,21 @@ extension EPUBReaderViewModel {
         private var storage: [ObjectIdentifier: [Highlight]] = [:]
         private let lock = NSLock()
 
-        func read(_ owner: EPUBReaderViewModel) -> [Highlight] {
+        func read(_ owner: ReaderViewModel) -> [Highlight] {
             lock.lock(); defer { lock.unlock() }
             return storage[ObjectIdentifier(owner)] ?? []
         }
-        func write(_ owner: EPUBReaderViewModel, _ value: [Highlight]) {
+        func write(_ owner: ReaderViewModel, _ value: [Highlight]) {
             lock.lock(); defer { lock.unlock() }
             storage[ObjectIdentifier(owner)] = value
         }
-        func mutate(_ owner: EPUBReaderViewModel, _ body: (inout [Highlight]) -> Void) {
+        func mutate(_ owner: ReaderViewModel, _ body: (inout [Highlight]) -> Void) {
             lock.lock(); defer { lock.unlock() }
             var value = storage[ObjectIdentifier(owner)] ?? []
             body(&value)
             storage[ObjectIdentifier(owner)] = value
         }
-        func clear(_ owner: EPUBReaderViewModel) {
+        func clear(_ owner: ReaderViewModel) {
             lock.lock(); defer { lock.unlock() }
             storage.removeValue(forKey: ObjectIdentifier(owner))
         }

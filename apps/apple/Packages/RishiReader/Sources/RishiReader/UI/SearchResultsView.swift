@@ -31,7 +31,7 @@ public struct SearchResultRow: Identifiable, Hashable, Sendable {
 /// search field is hand-placed inside the sheet — still a native control, just
 /// not the modifier form.
 ///
-/// Mirrors ``EPUBTOCView`` / ``BookmarksListView`` plain-header chrome instead
+/// Mirrors ``ReaderTOCView`` / ``BookmarksListView`` plain-header chrome instead
 /// of a `NavigationStack` + toolbar "Done": on Mac Catalyst the sheet's
 /// NavigationStack bar leaks into the window chrome and its confirmationAction
 /// does not reliably dismiss, so a plain header `Button` is used.

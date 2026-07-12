@@ -51,7 +51,7 @@ struct EPUBIntegrationSmokeTests {
 
         // ----- First open: load, mutate typography + theme, change page, flush
 
-        let vm1 = EPUBReaderViewModel(
+        let vm1 = ReaderViewModel(
             book: book,
             userId: userId,
             documentURL: url,
@@ -84,7 +84,7 @@ struct EPUBIntegrationSmokeTests {
         // ----- Second open: fresh VM, hydrate settings from store, confirm
         //       latestLocator is non-nil after load() and settings round-trip.
 
-        let vm2 = EPUBReaderViewModel(
+        let vm2 = ReaderViewModel(
             book: book,
             userId: userId,
             documentURL: url,
@@ -109,7 +109,7 @@ struct EPUBIntegrationSmokeTests {
         let userId = UUID()
         let book = Book(userId: userId, title: "Alice", formatType: .epub, fileURL: "x")
 
-        let vm1 = EPUBReaderViewModel(
+        let vm1 = ReaderViewModel(
             book: book,
             userId: userId,
             documentURL: url,
@@ -132,7 +132,7 @@ struct EPUBIntegrationSmokeTests {
         ))
         #expect(created.note == "first highlight")
 
-        let vm2 = EPUBReaderViewModel(
+        let vm2 = ReaderViewModel(
             book: book,
             userId: userId,
             documentURL: url,

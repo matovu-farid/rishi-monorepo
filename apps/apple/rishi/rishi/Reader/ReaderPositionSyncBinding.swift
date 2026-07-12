@@ -15,13 +15,13 @@ private let positionSyncSignposter = OSSignposter(
 
 
 @MainActor
-final class EPUBReaderPositionSyncBinding {
+final class ReaderPositionSyncBinding {
 
-    private let viewModel: EPUBReaderViewModel
+    private let viewModel: ReaderViewModel
     private let syncEngine: SyncEngine
     private var task: Task<Void, Never>?
 
-    init(viewModel: EPUBReaderViewModel, syncEngine: SyncEngine) {
+    init(viewModel: ReaderViewModel, syncEngine: SyncEngine) {
         self.viewModel = viewModel
         self.syncEngine = syncEngine
         start()
@@ -44,11 +44,11 @@ final class EPUBReaderPositionSyncBinding {
             
             var lastJSON: String? = nil
             while !Task.isCancelled {
-                let signpostName: StaticString = "epub.position.poll.tick"
+                let signpostName: StaticString = "reader.position.poll.tick"
                 let signpostState = positionSyncSignposter.beginInterval(signpostName)
                 let currentJSON: String? = await MainActor.run {
                     guard let loc = self.viewModel.latestLocator else { return nil as String? }
-                    return (try? EPUBPositionLocator(locator: loc).encodedJSONString())
+                    return (try? ReaderPositionLocator(locator: loc).encodedJSONString())
                 }
                 if currentJSON != lastJSON {
                     lastJSON = currentJSON

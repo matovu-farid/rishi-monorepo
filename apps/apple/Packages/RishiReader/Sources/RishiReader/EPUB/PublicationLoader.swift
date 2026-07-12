@@ -1,31 +1,31 @@
 import Foundation
 // `@preconcurrency` keeps the Readium 3.x non-Sendable types
-// (Publication, Asset) from breaking the `EPUBPublicationLoading`
+// (Publication, Asset) from breaking the `PublicationLoading`
 // protocol surface under Swift 6 strict-concurrency. The loader is
 // invoked exactly once per book open and the returned `Publication`
-// is consumed by a single awaiter; see EPUBReaderViewModel.load() for
+// is consumed by a single awaiter; see ReaderViewModel.load() for
 // the full transfer-region reasoning.
 @preconcurrency import ReadiumShared
 import ReadiumStreamer
 import RishiCore
 import RishiLogging
 
-/// Errors emitted by ``EPUBPublicationLoader``.
-public enum EPUBPublicationLoaderError: Error, Equatable {
+/// Errors emitted by ``PublicationLoader``.
+public enum PublicationLoaderError: Error, Equatable {
     case invalidFileURL(URL)
     case assetRetrievalFailed(String)
     case publicationOpenFailed(String)
 }
 
 /// Protocol seam for the EPUB publication loader. Production code uses
-/// ``EPUBPublicationLoader``; tests inject a probe to verify the open
+/// ``PublicationLoader``; tests inject a probe to verify the open
 /// body runs off the main thread (Phase 19 plan 19-09 — F-P0-08 EPUB
 /// slice).
 ///
-/// `Sendable` so callers (e.g. ``EPUBReaderViewModel``) can hold the
+/// `Sendable` so callers (e.g. ``ReaderViewModel``) can hold the
 /// loader across `Task.detached` boundaries without strict-concurrency
 /// warnings.
-public protocol EPUBPublicationLoading: Sendable {
+public protocol PublicationLoading: Sendable {
     func open(fileURL: URL) async throws -> Publication
 }
 
@@ -54,13 +54,13 @@ public protocol EPUBPublicationLoading: Sendable {
 /// and (2) returning the non-Sendable `Publication` from an actor-isolated
 /// method to a nonisolated caller. The pipeline is built fresh per call
 /// so non-Sendable Readium types stay as method-local references.
-public final class EPUBPublicationLoader: EPUBPublicationLoading, Sendable {
+public final class PublicationLoader: PublicationLoading, Sendable {
 
     private let unpackedCache: EPUBUnpackedCache?
 
     /// Designated initialiser. Default `unpackedCache` is a system-caches
     /// backed instance so existing zero-arg call sites (
-    /// `EPUBReaderViewModel.init`, all bundled-fixture tests) pick up the
+    /// `ReaderViewModel.init`, all bundled-fixture tests) pick up the
     /// warm-cache path automatically. Tests inject a temp-rooted cache via
     /// the parameter to scope on-disk state per test.
     ///
@@ -75,7 +75,7 @@ public final class EPUBPublicationLoader: EPUBPublicationLoading, Sendable {
     /// retrieve → open pipeline.
     ///
     /// Per Phase 19 plan 19-09 (F-P0-08 EPUB slice): this body runs
-    /// off-main when called from ``EPUBReaderViewModel/load()`` because
+    /// off-main when called from ``ReaderViewModel/load()`` because
     /// the view-model wraps the invocation in `Task.detached(priority:
     /// .userInitiated)`. The Readium `AssetRetriever.retrieve` and
     /// `PublicationOpener.open` calls are themselves `async` and
@@ -134,7 +134,7 @@ public final class EPUBPublicationLoader: EPUBPublicationLoading, Sendable {
 
         // ZIP-asset path — the legacy default and the safe fallback.
         guard let readiumFileURL = FileURL(url: fileURL) else {
-            throw EPUBPublicationLoaderError.invalidFileURL(fileURL)
+            throw PublicationLoaderError.invalidFileURL(fileURL)
         }
 
         let asset: Asset
@@ -142,14 +142,14 @@ public final class EPUBPublicationLoader: EPUBPublicationLoading, Sendable {
             asset = try await assetRetriever.retrieve(url: readiumFileURL).get()
         } catch {
             Log.reader.error("AssetRetriever failed for \(fileURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            throw EPUBPublicationLoaderError.assetRetrievalFailed(error.localizedDescription)
+            throw PublicationLoaderError.assetRetrievalFailed(error.localizedDescription)
         }
 
         do {
             return try await publicationOpener.open(asset: asset, allowUserInteraction: false).get()
         } catch {
             Log.reader.error("PublicationOpener failed for \(fileURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            throw EPUBPublicationLoaderError.publicationOpenFailed(error.localizedDescription)
+            throw PublicationLoaderError.publicationOpenFailed(error.localizedDescription)
         }
     }
 

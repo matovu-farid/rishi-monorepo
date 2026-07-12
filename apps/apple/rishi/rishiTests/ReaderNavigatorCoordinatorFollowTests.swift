@@ -7,7 +7,7 @@ import RishiReader
 
 @Suite("EPUB read-aloud page-boundary follow (Bug 4)", .serialized)
 @MainActor
-struct EPUBNavigatorCoordinatorFollowTests {
+struct ReaderNavigatorCoordinatorFollowTests {
 
     /// Minimal store: the VM only needs something that conforms; these tests
     /// never read or persist a position.
@@ -19,8 +19,8 @@ struct EPUBNavigatorCoordinatorFollowTests {
 
     private final class Recorder { var locators: [Locator] = [] }
 
-    private func makeViewModel() -> EPUBReaderViewModel {
-        EPUBReaderViewModel(
+    private func makeViewModel() -> ReaderViewModel {
+        ReaderViewModel(
             book: Book(
                 userId: UUID(),
                 title: "Alice",
@@ -43,46 +43,47 @@ struct EPUBNavigatorCoordinatorFollowTests {
         )
     }
 
-    @Test("While a session is following, a location change does NOT fire onUserNavigation (auto-follow must not stop playback)")
-    func followingSuppressesUserNavigation() throws {
+    @Test("A user page turn while read-aloud is following stops navigation-owned playback")
+    func userPageTurnDuringFollowingForwardsNavigation() throws {
         let viewModel = makeViewModel()
-        let coordinator = EPUBNavigatorCoordinator(viewModel: viewModel)
+        let coordinator = ReaderNavigatorCoordinator(viewModel: viewModel)
         let recorder = Recorder()
         viewModel.onUserNavigation = { recorder.locators.append($0) }
 
         coordinator.isFollowingReadAloud = true
-        // The page-crossing callback that USED to halt read-aloud.
-        coordinator.handleLocationChange(try makeLocator(progression: 0.66))
-
-        #expect(recorder.locators.isEmpty)
-    }
-
-    @Test("With no following session, a location change fires onUserNavigation once (a real user page-turn)")
-    func notFollowingForwardsUserNavigation() throws {
-        let viewModel = makeViewModel()
-        let coordinator = EPUBNavigatorCoordinator(viewModel: viewModel)
-        let recorder = Recorder()
-        viewModel.onUserNavigation = { recorder.locators.append($0) }
-
-        coordinator.isFollowingReadAloud = false
         coordinator.handleLocationChange(try makeLocator(progression: 0.66))
 
         #expect(recorder.locators.count == 1)
     }
 
-    @Test("Following suppresses EVERY crossing of a multi-page session, not just the first")
-    func followingSuppressesAcrossMultipleBoundaries() throws {
+    @Test("A registered Readium auto-follow location does not stop playback")
+    func registeredProgrammaticLocationIsSuppressed() throws {
         let viewModel = makeViewModel()
-        let coordinator = EPUBNavigatorCoordinator(viewModel: viewModel)
+        let coordinator = ReaderNavigatorCoordinator(viewModel: viewModel)
+        let recorder = Recorder()
+        viewModel.onUserNavigation = { recorder.locators.append($0) }
+
+        let locator = try makeLocator(progression: 0.66)
+        coordinator.registerProgrammaticNavigation()
+        coordinator.handleLocationChange(locator)
+
+        #expect(recorder.locators.isEmpty)
+    }
+
+    @Test("Only the matching auto-follow callback is suppressed")
+    func unrelatedLocationStillForwardsNavigation() throws {
+        let viewModel = makeViewModel()
+        let coordinator = ReaderNavigatorCoordinator(viewModel: viewModel)
         let recorder = Recorder()
         viewModel.onUserNavigation = { recorder.locators.append($0) }
 
         coordinator.isFollowingReadAloud = true
-        for progression in [0.25, 0.5, 0.75, 1.0] {
-            coordinator.handleLocationChange(try makeLocator(progression: progression))
-        }
+        let autoFollow = try makeLocator(progression: 0.5)
+        coordinator.registerProgrammaticNavigation()
+        coordinator.handleLocationChange(autoFollow)
+        coordinator.handleLocationChange(try makeLocator(progression: 0.75))
 
-        #expect(recorder.locators.isEmpty)
+        #expect(recorder.locators.count == 1)
     }
 }
 #endif

@@ -30,8 +30,8 @@ struct EPUBReadAloudChapterContinuationTests {
     }
 
     @MainActor
-    private func loadedVM(url: URL) async throws -> EPUBReaderViewModel {
-        let vm = EPUBReaderViewModel(
+    private func loadedVM(url: URL) async throws -> ReaderViewModel {
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -55,7 +55,7 @@ struct EPUBReadAloudChapterContinuationTests {
     /// Anchor the read-aloud cursor on `link` and return that resource's full
     /// paragraph list (progression 0 slices the whole resource).
     @MainActor
-    private func paragraphs(of link: ReadiumShared.Link, vm: EPUBReaderViewModel) async throws -> [String] {
+    private func paragraphs(of link: ReadiumShared.Link, vm: ReaderViewModel) async throws -> [String] {
         vm.didChangeLocation(try makeLocator(link: link, progression: 0))
         return await vm.paragraphsForReadAloud()
     }
@@ -63,7 +63,7 @@ struct EPUBReadAloudChapterContinuationTests {
     /// Reading-order indices whose resource chunks to at least one paragraph
     /// (skips covers / nav docs / blank section breaks).
     @MainActor
-    private func nonEmptyContentIndices(vm: EPUBReaderViewModel, publication: Publication) async throws -> [Int] {
+    private func nonEmptyContentIndices(vm: ReaderViewModel, publication: Publication) async throws -> [Int] {
         var indices: [Int] = []
         for (i, link) in publication.readingOrder.enumerated() {
             if !(try await paragraphs(of: link, vm: vm)).isEmpty {

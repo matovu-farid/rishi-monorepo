@@ -17,10 +17,10 @@ extension PDFReaderViewModel {
     }
 }
 
-extension EPUBReaderViewModel {
+extension ReaderViewModel {
     @MainActor
-    static func make(book: Book, userId: UserID, services: BootstrappedServices) -> EPUBReaderViewModel {
-        EPUBReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
+    static func make(book: Book, userId: UserID, services: BootstrappedServices) -> ReaderViewModel {
+        ReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
                             positionStore: services.positionStore)
     }
 }

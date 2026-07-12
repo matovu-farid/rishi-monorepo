@@ -7,6 +7,12 @@
 
 
 
+
+
+
+
+
+
 import SwiftUI
 import RishiAudio
 import RishiBilling
@@ -17,23 +23,22 @@ import RishiSearch
 import RishiSync
 import RishiUIKit
 import RishiSettings
-#if canImport(PDFKit)
-import PDFKit
-#endif
 
-struct PDFReaderDestination: View {
+struct ReaderDestination: View {
     let services: BootstrappedServices
     let userId: UserID
     let onRequestPaywall: (String) -> Void
 
-    @State private var vm: PDFReaderViewModel
+    @State private var vm: ReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
-    @State private var syncBinding: PDFReaderPositionSyncBinding? = nil
+    @State private var syncBinding: ReaderPositionSyncBinding? = nil
+    
+    
     
     @State private var voiceEntry: ReaderVoiceEntry
 
     init(
-        vm: PDFReaderViewModel,
+        vm: ReaderViewModel,
         services: BootstrappedServices,
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void
@@ -45,7 +50,6 @@ struct PDFReaderDestination: View {
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
             voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
-            //entitlementProvider: { await services.entitlementService.snapshot() },
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -53,7 +57,7 @@ struct PDFReaderDestination: View {
     
 
     var body: some View {
-        PDFReaderScreen(
+        ReaderScreen(
             viewModel: vm,
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
@@ -64,13 +68,7 @@ struct PDFReaderDestination: View {
             onReadAloud: {
                 
                 Task {
-                  //  let level = await services.entitlementService.snapshot()
-                    //var entitled = level == .subscribed
-              
-//                    guard entitled else {
-//                        onRequestPaywall("Read Aloud")
-//                        return
-//                    }
+  
                     if readAloud == nil {
                         readAloud = ReadAloudController(
                             ttsEngine: services.ttsEngine,
@@ -82,26 +80,25 @@ struct PDFReaderDestination: View {
                             userId: userId
                         )
                     }
-                    await readAloud?.startPDF(vm: vm)
+                    await readAloud?.startReader(vm: vm)
                 }
             } ,
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
-            
-            
-            
-            
-            
-            
-            
-            
-            pdfViewMode: services.readerDefaults.pdfViewMode
+            readAloudLocator: readAloud?.currentLocator
         )
         
         
         .ttsErrorAlert(state: services.ttsState)
         .task {
-            syncBinding = PDFReaderPositionSyncBinding(
+            
+            
+            
+            vm.onUserNavigation = { _ in
+                
+                Task { await readAloud?.stop() }
+            }
+            syncBinding = ReaderPositionSyncBinding(
                 viewModel: vm,
                 syncEngine: services.syncEngine
             )
@@ -156,13 +153,7 @@ struct PDFReaderDestination: View {
                     store: services.ttsSettingsStore,
                     onDismiss: { settings in
                         ra.pickerInitial = settings
-                        Task {
-                            await services.ttsPresenceController.updatePlaybackSettings(
-                                voice: settings.voice,
-                                model: settings.model,
-                                speed: settings.speed
-                            )
-                        }
+                        Task { await ra.applySettings(settings) }
                         ra.showPicker = false
                     }
                 )

@@ -6,7 +6,7 @@ import RishiUIKit
 /// Uses stock `ProgressView` per the Phase 18 native-UI rule; the book
 /// title is the only customisation. SwiftUI gates the spinner on Reduce
 /// Motion automatically — no manual handling required. Shared by
-/// `PDFReaderScreen` and `EPUBReaderScreen`.
+/// `PDFReaderScreen` and `ReaderScreen`.
 struct ReaderColdOpenOverlay: View {
     let bookTitle: String
     var body: some View {

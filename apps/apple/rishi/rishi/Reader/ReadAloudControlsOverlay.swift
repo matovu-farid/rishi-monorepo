@@ -1,15 +1,6 @@
-
-
-
-
-
-
-
-
-
-import SwiftUI
 import RishiAudio
 import RishiUIKit
+import SwiftUI
 
 struct ReadAloudControlsOverlay: View {
     let controller: ReadAloudController
@@ -23,9 +14,8 @@ struct ReadAloudControlsOverlay: View {
     @GestureState private var isDragging = false
 
     #if targetEnvironment(macCatalyst)
-    
-    
-    private static let macMaxWidth: CGFloat = 520
+
+        private static let macMaxWidth: CGFloat = 520
     #endif
 
     var body: some View {
@@ -45,12 +35,18 @@ struct ReadAloudControlsOverlay: View {
                         y: committedLocation(in: containerSize).y
                     )
                     .offset(y: dragTranslationY)
-                .frame(width: containerSize.width, height: containerSize.height)
-                .sensoryFeedback(.selection, trigger: dragHapticTick)
-                .onDisappear { location = nil }
+                    .frame(
+                        width: containerSize.width,
+                        height: containerSize.height
+                    )
+                    .sensoryFeedback(.selection, trigger: dragHapticTick)
+                    .onDisappear { location = nil }
             }
             .transition(.move(edge: .bottom).combined(with: .opacity))
-            .animation(.easeInOut(duration: 0.25), value: controller.showControls)
+            .animation(
+                .easeInOut(duration: 0.25),
+                value: controller.showControls
+            )
         }
     }
 
@@ -58,14 +54,7 @@ struct ReadAloudControlsOverlay: View {
         ReadAloudControlsView(
             state: ttsState,
             onPlayPause: {
-                guard let bridge = controller.bridge else { return }
-                Task {
-                    if ttsState.status == .playing {
-                        await bridge.pause()
-                    } else {
-                        await bridge.resume()
-                    }
-                }
+                Task { await controller.togglePlayback() }
             },
             onStop: {
                 Task { await controller.stop() }
@@ -75,20 +64,17 @@ struct ReadAloudControlsOverlay: View {
                 controller.showPicker = true
             },
             onPreviousParagraph: {
-                guard let bridge = controller.bridge else { return }
-                Task { await bridge.previous() }
+                Task { await controller.previous() }
             },
             onNextParagraph: {
-                guard let bridge = controller.bridge else { return }
-                Task { await bridge.next() }
+                Task { await controller.next() }
             },
             onRepeatParagraph: {
-                guard let bridge = controller.bridge else { return }
-                Task { await bridge.repeatCurrent() }
+                Task { await controller.repeatCurrent() }
             }
         )
         #if targetEnvironment(macCatalyst)
-        .frame(maxWidth: Self.macMaxWidth)
+            .frame(maxWidth: Self.macMaxWidth)
         #endif
         .modifier(GlassCardBackground(cornerRadius: RishiRadius.pill))
         .shadow(radius: isDragging ? 0 : RishiSpacing.s)
@@ -116,7 +102,10 @@ struct ReadAloudControlsOverlay: View {
                 let base = committedLocation(in: containerSize)
                 let finalLocation = CGPoint(
                     x: containerSize.width / 2,
-                    y: clampedVerticalLocation(base.y + value.translation.height, in: containerSize)
+                    y: clampedVerticalLocation(
+                        base.y + value.translation.height,
+                        in: containerSize
+                    )
                 )
                 let didMove = abs(value.translation.height) > 8
                 location = finalLocation
@@ -133,17 +122,27 @@ struct ReadAloudControlsOverlay: View {
     private func defaultLocation(in containerSize: CGSize) -> CGPoint {
         let container = containerSize
         let measuredSize = controlSize
-        let height = measuredSize.height > 0 ? measuredSize.height : fallbackControlHeight
+        let height =
+            measuredSize.height > 0
+            ? measuredSize.height : fallbackControlHeight
 
         return CGPoint(
             x: container.width / 2,
-            y: max(height / 2 + RishiSpacing.s, container.height - height / 2 - RishiSpacing.s)
+            y: max(
+                height / 2 + RishiSpacing.s,
+                container.height - height / 2 - RishiSpacing.s
+            )
         )
     }
 
-    private func clampedVerticalLocation(_ proposedY: CGFloat, in containerSize: CGSize) -> CGFloat {
+    private func clampedVerticalLocation(
+        _ proposedY: CGFloat,
+        in containerSize: CGSize
+    ) -> CGFloat {
         let measuredSize = controlSize
-        let height = measuredSize.height > 0 ? measuredSize.height : fallbackControlHeight
+        let height =
+            measuredSize.height > 0
+            ? measuredSize.height : fallbackControlHeight
         guard containerSize != .zero else { return proposedY }
 
         let minY = height / 2 + RishiSpacing.s
@@ -165,8 +164,9 @@ private struct ReadAloudControlsOverlaySizeKey: PreferenceKey {
     }
 }
 
-private extension View {
-    func readSize(onChange: @escaping (CGSize) -> Void) -> some View {
+extension View {
+    fileprivate func readSize(onChange: @escaping (CGSize) -> Void) -> some View
+    {
         background(
             GeometryReader { proxy in
                 Color.clear.preference(
@@ -175,6 +175,9 @@ private extension View {
                 )
             }
         )
-        .onPreferenceChange(ReadAloudControlsOverlaySizeKey.self, perform: onChange)
+        .onPreferenceChange(
+            ReadAloudControlsOverlaySizeKey.self,
+            perform: onChange
+        )
     }
 }

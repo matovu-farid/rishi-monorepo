@@ -2,7 +2,7 @@ import Foundation
 
 /// Pure business math for the Mac menu / keyboard font-step command.
 ///
-/// Extracted from ``EPUBReaderScreen`` (Plan 34-03, SRP): the screen used to
+/// Extracted from ``ReaderScreen`` (Plan 34-03, SRP): the screen used to
 /// inline `ReaderFontSize.clamped(current + delta * pointsPerStep)` inside an
 /// `.onReceive` handler. That math is a model-layer concern with a single,
 /// deterministic reason to change (the step size), so it lives here as a

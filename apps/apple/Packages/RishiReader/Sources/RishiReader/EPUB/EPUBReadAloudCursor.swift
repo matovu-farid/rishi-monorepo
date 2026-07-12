@@ -1,6 +1,6 @@
 import Foundation
 // `@preconcurrency` downgrades the Readium `Publication` non-Sendable
-// error to a warning, matching ``EPUBReaderViewModel`` which hands this
+// error to a warning, matching ``ReaderViewModel`` which hands this
 // cursor the same already-parsed publication value.
 @preconcurrency import ReadiumShared
 import RishiCore
@@ -8,7 +8,7 @@ import RishiCore
 /// Read-aloud resource/page parsing + chapter-continuation cursor for the
 /// EPUB reader.
 ///
-/// Extracted from ``EPUBReaderViewModel`` (plan 34-06): the VM is responsible
+/// Extracted from ``ReaderViewModel`` (plan 34-06): the VM is responsible
 /// for reading **position** (locator debounce/persist), while this collaborator
 /// owns the orthogonal read-aloud responsibility — reading the Readium resource
 /// the reader is on, chunking its HTML via `ParagraphChunker`, and walking the
@@ -23,7 +23,7 @@ import RishiCore
 /// `navigateTo` locator the VM applies explicitly. The position mutation is now
 /// a visible contract between the two types rather than a buried coupling.
 ///
-/// `@unchecked Sendable` mirrors ``EPUBReaderViewModel`` — the Readium
+/// `@unchecked Sendable` mirrors ``ReaderViewModel`` — the Readium
 /// `Publication` it holds is not Sendable, but it is only mutated through the
 /// nonisolated Readium APIs after the parse handoff.
 final class EPUBReadAloudCursor: @unchecked Sendable {

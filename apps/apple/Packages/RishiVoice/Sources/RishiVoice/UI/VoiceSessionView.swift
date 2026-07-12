@@ -19,7 +19,7 @@ public struct VoiceSessionView: View {
     /// `nonisolated` because a pure-data `String` constant needs no MainActor
     /// isolation and the test suite (default isolation `nonisolated`) reads it
     /// without an `await`. Mirrors the precedent set by
-    /// `EPUBReaderScreen.toolbarAccessibilityIdentifiers` in RishiReader.
+    /// `ReaderScreen.toolbarAccessibilityIdentifiers` in RishiReader.
     nonisolated public static let openTextChatAccessibilityIdentifier = "voice.openTextChat"
 
     @Bindable private var state: VoiceSessionState

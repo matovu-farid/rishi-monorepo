@@ -6,12 +6,12 @@ import ReadiumNavigator
 import RishiCore
 import RishiLogging
 
-/// Constructs and owns the `EPUBNavigatorViewController` for a single
-/// open EPUB. The coordinator is the bridge between Readium's
-/// delegate callbacks and our `EPUBReaderViewModel`.
+/// Constructs and owns the Readium visual navigator for a single
+/// publication. The coordinator is the bridge between Readium's
+/// delegate callbacks and our `ReaderViewModel`.
 ///
 /// Lifecycle:
-///   1. `EPUBReaderView.makeUIViewController` creates the coordinator,
+///   1. `ReaderView.makeUIViewController` creates the coordinator,
 ///      which lazily constructs the navigator from the VM's
 ///      `publication` + `latestLocator`.
 ///   2. The coordinator hands the navigator back to UIKit.
@@ -27,33 +27,17 @@ import RishiLogging
 /// **Sendability:** `@MainActor` matches Readium's `EPUBNavigatorDelegate`
 /// protocol declaration, so delegate methods don't need `nonisolated`.
 @MainActor
-public final class EPUBNavigatorCoordinator: NSObject {
+public final class ReaderNavigatorCoordinator: NSObject {
 
-    public let viewModel: EPUBReaderViewModel
-    public private(set) var navigator: EPUBNavigatorViewController?
+    public let viewModel: ReaderViewModel
+    public private(set) var navigator: (UIViewController & VisualNavigator)?
 
-    /// True while a read-aloud session is actively following the spoken
-    /// paragraph. Set by ``EPUBReaderScreen`` from the active-passage binding.
-    /// The view-follow (``navigateToReadAloudParagraph(_:)``) owns navigation
-    /// for the whole session, so EVERY locator change while this is true is
-    /// auto-follow — not a user page-turn — and must NOT fire `onUserNavigation`
-    /// (which would stop the audio the view is following).
-    ///
-    /// Why session-scoped, not per-navigation: the read-aloud target locator is
-    /// text-anchored with NO progression, and within one resource a programmatic
-    /// page turn and a user swipe carry the same href, so the two are
-    /// indistinguishable from a single `locationDidChange`. An animated
-    /// `go(to:)` also delivers its `locationDidChange` ~300ms AFTER it returns,
-    /// so any flag reset tied to the call races the callback (the original bug:
-    /// the late callback was read as a user page-turn and fired
-    /// `onUserNavigation -> stopReadAloud`, halting read-aloud at every page
-    /// boundary). Gating on "is a session following" sidesteps both problems.
-    /// The cost is that a manual page-turn during read-aloud no longer stops it
-    /// (use the Stop control) — the auto-follow would immediately yank the view
-    /// back to the spoken paragraph anyway. Set and read on the MainActor, so
-    /// no synchronization is needed.
+    /// True while a read-aloud session has an active spoken paragraph. It keeps
+    /// the active decoration and follow logic in sync with the session. User
+    /// navigation is detected separately from this state.
     public var isFollowingReadAloud = false
     private var readAloudFollowTask: Task<Void, Never>?
+    private var programmaticNavigationCallbacks = 0
 
     /// Forwarded to the screen so it can present the highlight context
     /// menu. The closure is also called with `nil` when the user clears
@@ -68,7 +52,7 @@ public final class EPUBNavigatorCoordinator: NSObject {
     public var onSelectionChange: (Selection?) -> Void = { _ in }
 
     /// Phase 21 — fired by the container-level `UITapGestureRecognizer`
-    /// installed in ``EPUBReaderView``. The screen uses it to drive the
+    /// installed in ``ReaderView``. The screen uses it to drive the
     /// tap-region resolver (left edge -> previous, center -> chrome
     /// toggle, right edge -> next). `point` is in the container view's
     /// coordinate space.
@@ -76,23 +60,23 @@ public final class EPUBNavigatorCoordinator: NSObject {
 
     /// Fired when a hardware right-arrow key (or the on-screen right edge
     /// chevron) requests a forward page turn. The screen routes this to
-    /// `EPUBPageNavigator.goNext()`. Registered as a Readium key observer in
+    /// `ReaderPageNavigator.goNext()`. Registered as a Readium key observer in
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageForward: () -> Void = {}
 
     /// Fired when a hardware left-arrow key (or the on-screen left edge
     /// chevron) requests a backward page turn. The screen routes this to
-    /// `EPUBPageNavigator.goPrev()`. Registered as a Readium key observer in
+    /// `ReaderPageNavigator.goPrev()`. Registered as a Readium key observer in
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageBackward: () -> Void = {}
 
-    public init(viewModel: EPUBReaderViewModel) {
+    public init(viewModel: ReaderViewModel) {
         self.viewModel = viewModel
         super.init()
     }
 
     /// Selector wired by
-    /// ``EPUBReaderView/installContainerTapRecognizer(on:coordinator:)``.
+    /// ``ReaderView/installContainerTapRecognizer(on:coordinator:)``.
     /// Forwards the tap location to ``onTap`` only when the recognizer
     /// reports `.ended`.
     @objc public func handleContainerTap(_ recognizer: UITapGestureRecognizer) {
@@ -115,7 +99,10 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// `"rishi-highlights"` group. Safe to call before the navigator is
     /// built — no-ops in that case (the screen re-applies after load).
     public func applyHighlights(_ highlights: [Highlight]) {
-        guard let nav = navigator else { return }
+        // Readium decorations are currently an EPUB HTML feature. The
+        // navigator itself is format-neutral, but the shared highlight
+        // renderer must not be asked to decorate a PDF navigator.
+        guard let nav = navigator as? EPUBNavigatorViewController else { return }
         EPUBDecorationApplier.apply(highlights: highlights, to: nav)
     }
 
@@ -123,15 +110,18 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// single decoration in the `"rishi-tts"` group. The locator is anchored
     /// to the current resource (`latestLocator`); no-ops until the navigator
     /// and a locator both exist.
-    public func highlightReadAloudParagraph(_ paragraph: String) {
-        guard let nav = navigator,
-              let locator = viewModel.latestLocator else { return }
-        let decoration = EPUBReadAloudDecorationBuilder.decoration(
+    public func highlightReadAloudParagraph(
+        _ paragraph: String,
+        at locator: Locator? = nil
+    ) {
+        guard let nav = navigator as? EPUBNavigatorViewController,
+              let locator = locator ?? viewModel.latestLocator else { return }
+        let decoration = ReaderReadAloudDecorationBuilder.decoration(
             forParagraph: paragraph,
             href: locator.href,
             mediaType: locator.mediaType
         )
-        nav.apply(decorations: [decoration], in: EPUBReadAloudDecorationBuilder.groupName)
+        nav.apply(decorations: [decoration], in: ReaderReadAloudDecorationBuilder.groupName)
     }
 
     /// Clears the active read-aloud passage decoration (called when TTS
@@ -139,28 +129,44 @@ public final class EPUBNavigatorCoordinator: NSObject {
     public func clearReadAloudHighlight() {
         readAloudFollowTask?.cancel()
         readAloudFollowTask = nil
-        navigator?.apply(decorations: [], in: EPUBReadAloudDecorationBuilder.groupName)
+        programmaticNavigationCallbacks = 0
+        (navigator as? any DecorableNavigator)?.apply(
+            decorations: [],
+            in: ReaderReadAloudDecorationBuilder.groupName
+        )
+    }
+
+    /// Registers the next location callback generated by a Readium
+    /// auto-follow. The visible-location callback does not preserve the
+    /// text-highlight locator used for the jump, so this is intentionally a
+    /// one-shot callback token rather than locator equality matching.
+    public func registerProgrammaticNavigation() {
+        programmaticNavigationCallbacks = 1
     }
 
     /// Follows the active read-aloud paragraph: navigates the viewport to the
     /// paragraph's locator so the page turns when the spoken paragraph has
     /// scrolled onto a later page. Uses the SAME text-anchored locator as the
-    /// highlight (`EPUBReadAloudDecorationBuilder.locator`), so a locator on the
+    /// highlight (`ReaderReadAloudDecorationBuilder.locator`), so a locator on the
     /// current page is a no-op and one on the next page turns it. No-ops until
     /// the navigator and a base locator both exist.
     @discardableResult
     public func navigateToReadAloudParagraph(_ paragraph: String) async -> Bool {
         guard let nav = navigator,
               let base = viewModel.latestLocator else { return false }
-        let locator = EPUBReadAloudDecorationBuilder.locator(
+        let locator = ReaderReadAloudDecorationBuilder.locator(
             forParagraph: paragraph,
             href: base.href,
             mediaType: base.mediaType
         )
-        // The locator change this produces is suppressed via `isFollowingReadAloud`
-        // (a read-aloud session owns navigation for its whole duration), so no
-        // per-call marker is needed here.
-        return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+        registerProgrammaticNavigation()
+        let didNavigate = await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+        if !didNavigate {
+            // A failed Readium jump cannot produce the callback represented by
+            // this token. Do not let it suppress the next real user page turn.
+            programmaticNavigationCallbacks = 0
+        }
+        return didNavigate
     }
 
     /// Follows a live read-aloud locator without touching the visible
@@ -168,9 +174,24 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// viewport can keep up with a paragraph that spans a page boundary.
     public func followReadAloudLocator(_ locator: Locator) {
         guard isFollowingReadAloud, readAloudFollowTask == nil else { return }
+        // PDF TTS emits one TextContentElement per page. The first utterance
+        // commonly starts on the page that is already visible; calling PDF
+        // `go(to:)` for that page produces no location callback, which would
+        // leave a stale programmatic token and swallow the next user turn.
+        if let publication = viewModel.publication,
+           publication.manifest.conforms(to: .pdf),
+           let currentPage = viewModel.latestLocator?.locations.page,
+           let targetPage = locator.locations.page,
+           currentPage == targetPage {
+            return
+        }
         readAloudFollowTask = Task { [weak self] in
             guard let self else { return }
-            _ = await self.go(to: locator)
+            self.registerProgrammaticNavigation()
+            let didNavigate = await self.go(to: locator)
+            if !didNavigate {
+                self.programmaticNavigationCallbacks = 0
+            }
             await MainActor.run { [weak self] in
                 self?.readAloudFollowTask = nil
             }
@@ -187,16 +208,18 @@ public final class EPUBNavigatorCoordinator: NSObject {
         spread: EPUBSpreadMode
     ) {
         guard let nav = navigator else { return }
-        EPUBPreferencesBridge.apply(
-            typography: typography,
-            theme: theme,
-            spread: spread,
-            to: nav
-        )
+        if let epub = nav as? EPUBNavigatorViewController {
+            EPUBPreferencesBridge.apply(
+                typography: typography,
+                theme: theme,
+                spread: spread,
+                to: epub
+            )
+        }
     }
 
     /// Navigates to the destination encoded by the supplied TOC `Link`.
-    /// Used by ``EPUBTOCView``'s onSelect callback. No-ops if the
+    /// Used by ``ReaderTOCView``'s onSelect callback. No-ops if the
     /// navigator hasn't been built yet.
     @discardableResult
     public func go(to link: ReadiumShared.Link) async -> Bool {
@@ -217,7 +240,7 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// Imperatively clears the live selection (used after a highlight
     /// is saved so the menu doesn't stay anchored to old text).
     public func clearSelection() {
-        navigator?.clearSelection()
+        (navigator as? any SelectableNavigator)?.clearSelection()
     }
 
     /// Builds the navigator if not already built. Safe to call multiple
@@ -228,14 +251,25 @@ public final class EPUBNavigatorCoordinator: NSObject {
     public func makeNavigatorIfNeeded() throws {
         if navigator != nil { return }
         guard let publication = viewModel.publication else {
-            Log.reader.debug("EPUBNavigatorCoordinator: publication not yet loaded; deferring navigator build")
+            Log.reader.debug("ReaderNavigatorCoordinator: publication not yet loaded; deferring navigator build")
             return
         }
-        let nav = try EPUBNavigatorViewController(
-            publication: publication,
-            initialLocation: viewModel.latestLocator
-        )
-        nav.delegate = self
+        let nav: UIViewController & VisualNavigator
+        if publication.manifest.conforms(to: .pdf) {
+            let pdf = try PDFNavigatorViewController(
+                publication: publication,
+                initialLocation: viewModel.latestLocator
+            )
+            pdf.delegate = self
+            nav = pdf
+        } else {
+            let epub = try EPUBNavigatorViewController(
+                publication: publication,
+                initialLocation: viewModel.latestLocator
+            )
+            epub.delegate = self
+            nav = epub
+        }
         // Hardware arrow keys (primarily Mac; iPad hardware keyboards get it
         // for free) drive page turns through the same seam as the on-screen
         // edge chevrons. The returned tokens are discarded — the observers
@@ -250,18 +284,24 @@ public final class EPUBNavigatorCoordinator: NSObject {
     }
 }
 
-extension EPUBNavigatorCoordinator: EPUBNavigatorDelegate {
+extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
 
     public func navigator(_ navigator: any Navigator, locationDidChange locator: Locator) {
         handleLocationChange(locator)
     }
 
-    /// Forwards a navigator location change to the view model, tagging it as
-    /// programmatic auto-follow while a read-aloud session is active so the VM
-    /// does not treat it as a user page-turn. Separated from the delegate method
-    /// (which requires a live `Navigator`) so it is unit-testable without one.
+    /// Forwards a navigator location change to the view model. Only callbacks
+    /// matching a registered auto-follow locator are marked programmatic; an
+    /// unmatched callback is a user page turn and reaches `onUserNavigation`.
     public func handleLocationChange(_ locator: Locator) {
-        viewModel.didChangeLocation(locator, isProgrammatic: isFollowingReadAloud)
+        let isProgrammatic = programmaticNavigationCallbacks > 0
+        if isProgrammatic {
+            programmaticNavigationCallbacks -= 1
+        }
+        viewModel.didChangeLocation(
+            locator,
+            isProgrammatic: isProgrammatic
+        )
     }
 
     public func navigator(_ navigator: any Navigator, presentExternalURL url: URL) {
@@ -286,7 +326,15 @@ extension EPUBNavigatorCoordinator: EPUBNavigatorDelegate {
     }
 }
 
-extension EPUBNavigatorCoordinator: UIGestureRecognizerDelegate {
+@MainActor
+extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
+    public nonisolated func navigator(
+        _ navigator: PDFNavigatorViewController,
+        setupPDFView view: PDFDocumentView
+    ) {}
+}
+
+extension ReaderNavigatorCoordinator: UIGestureRecognizerDelegate {
 
     /// Allow the container-level `UITapGestureRecognizer` to coexist
     /// with Readium's internal pan / tap / long-press recognizers.

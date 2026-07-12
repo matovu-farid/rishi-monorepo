@@ -25,7 +25,7 @@ import RishiLogging
 public enum EPUBDecorationApplier {
 
     /// Decoration group key. Stays in sync with the call from
-    /// ``EPUBNavigatorCoordinator/applyHighlights(_:)``.
+    /// ``ReaderNavigatorCoordinator/applyHighlights(_:)``.
     public static let groupName: DecorationGroup = "rishi-highlights"
 
     /// Applies every highlight as a Readium decoration. Skips rows

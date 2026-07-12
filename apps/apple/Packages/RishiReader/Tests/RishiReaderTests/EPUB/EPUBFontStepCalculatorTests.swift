@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import RishiReader
 
-/// Behavior tests for the font-step math extracted from ``EPUBReaderScreen``
+/// Behavior tests for the font-step math extracted from ``ReaderScreen``
 /// (Plan 34-03, SRP). Pure logic — no Readium / UIKit dependency, so it runs
 /// on every host.
 @Suite("EPUB font-step calculator")

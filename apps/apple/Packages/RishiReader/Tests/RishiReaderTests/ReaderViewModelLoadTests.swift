@@ -16,13 +16,13 @@ import RishiTesting
 ///      observable from main — i.e. we only offload the BODY, not the
 ///      handoff back to the view model.
 ///
-/// Implementation hook: `EPUBReaderViewModel` accepts an
-/// `any EPUBPublicationLoading` loader; the production
-/// `EPUBPublicationLoader` conforms, and tests inject a probe that
+/// Implementation hook: `ReaderViewModel` accepts an
+/// `any PublicationLoading` loader; the production
+/// `PublicationLoader` conforms, and tests inject a probe that
 /// records `Thread.isMainThread` at the moment the loader body is
 /// entered.
-@Suite("EPUBReaderViewModel.load isolation", .serialized)
-struct EPUBReaderViewModelLoadTests {
+@Suite("ReaderViewModel.load isolation", .serialized)
+struct ReaderViewModelLoadTests {
 
     // MARK: - Probe loader
 
@@ -34,12 +34,12 @@ struct EPUBReaderViewModelLoadTests {
     /// `wasInvokedOnMain` accessors so `open(fileURL:)` (an `async`
     /// method) never invokes `NSLock.lock()` directly — Swift 6 marks
     /// those as unavailable from asynchronous contexts.
-    final class ProbeLoader: EPUBPublicationLoading, @unchecked Sendable {
-        private let inner: EPUBPublicationLoader
+    final class ProbeLoader: PublicationLoading, @unchecked Sendable {
+        private let inner: PublicationLoader
         private let lock = NSLock()
         private var _wasInvokedOnMain: Bool?
 
-        init(inner: EPUBPublicationLoader = EPUBPublicationLoader()) {
+        init(inner: PublicationLoader = PublicationLoader()) {
             self.inner = inner
         }
 
@@ -88,7 +88,7 @@ struct EPUBReaderViewModelLoadTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let probe = ProbeLoader()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -109,7 +109,7 @@ struct EPUBReaderViewModelLoadTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let probe = ProbeLoader()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -143,7 +143,7 @@ struct EPUBReaderViewModelLoadTests {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
         let probe = ProbeLoader()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,

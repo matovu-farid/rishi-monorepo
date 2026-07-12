@@ -10,8 +10,8 @@ import RishiTesting
 ///   1. VM publishes `publication` + `title` after `load()`.
 ///   2. On UIKit hosts, the coordinator can build the navigator from the
 ///      VM without throwing.
-@Suite("EPUBReaderView smoke", .serialized)
-struct EPUBReaderViewSmokeTests {
+@Suite("ReaderView smoke", .serialized)
+struct ReaderViewSmokeTests {
 
     private func aliceURL() throws -> URL {
         try #require(Bundle.module.url(forResource: "alice", withExtension: "epub"))
@@ -24,7 +24,7 @@ struct EPUBReaderViewSmokeTests {
     @Test("VM contract — publication is reachable after load")
     func vmPublicationReachable() async throws {
         let url = try aliceURL()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -41,7 +41,7 @@ struct EPUBReaderViewSmokeTests {
     @MainActor
     func coordinatorBuildsNavigator() async throws {
         let url = try aliceURL()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -49,7 +49,7 @@ struct EPUBReaderViewSmokeTests {
             debounceSeconds: 0.05
         )
         await vm.load()
-        let coordinator = EPUBNavigatorCoordinator(viewModel: vm)
+        let coordinator = ReaderNavigatorCoordinator(viewModel: vm)
         try coordinator.makeNavigatorIfNeeded()
         #expect(coordinator.navigator != nil)
     }
@@ -58,7 +58,7 @@ struct EPUBReaderViewSmokeTests {
     @MainActor
     func coordinatorDefersWhenPublicationMissing() async throws {
         let url = try aliceURL()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -66,7 +66,7 @@ struct EPUBReaderViewSmokeTests {
             debounceSeconds: 0.05
         )
         // No load() — publication is nil.
-        let coordinator = EPUBNavigatorCoordinator(viewModel: vm)
+        let coordinator = ReaderNavigatorCoordinator(viewModel: vm)
         try coordinator.makeNavigatorIfNeeded()
         #expect(coordinator.navigator == nil)
     }

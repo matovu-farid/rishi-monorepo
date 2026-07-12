@@ -4,7 +4,7 @@ import RishiCore
 import ReadiumShared
 import ReadiumNavigator
 
-/// Owns the selection -> highlight CRUD choreography for ``EPUBReaderScreen``.
+/// Owns the selection -> highlight CRUD choreography for ``ReaderScreen``.
 ///
 /// Extracted from the screen (Plan 34-03, SRP): the view used to inline four
 /// `Task { @MainActor in ... }` blocks (`handleSelectionChange`,
@@ -24,8 +24,8 @@ import ReadiumNavigator
 @MainActor
 struct EPUBHighlightInteractor {
 
-    private let viewModel: EPUBReaderViewModel
-    private let coordinatorRef: EPUBCoordinatorRef
+    private let viewModel: ReaderViewModel
+    private let coordinatorRef: ReaderCoordinatorRef
     private let highlightStore: (any HighlightStore)?
 
     private let pendingSelection: Binding<SelectionContext?>
@@ -33,8 +33,8 @@ struct EPUBHighlightInteractor {
     private let activeSheet: Binding<ReaderSheet?>
 
     init(
-        viewModel: EPUBReaderViewModel,
-        coordinatorRef: EPUBCoordinatorRef,
+        viewModel: ReaderViewModel,
+        coordinatorRef: ReaderCoordinatorRef,
         highlightStore: (any HighlightStore)?,
         pendingSelection: Binding<SelectionContext?>,
         noteText: Binding<String>,

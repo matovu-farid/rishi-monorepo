@@ -54,11 +54,11 @@ final class ReaderTTSBridge {
     
    
 
-    func start(paragraphs: [String]) async {
+    func start(paragraphs: [String], startIndex: Int = 0) async {
         await stop()
         guard !paragraphs.isEmpty else { return }
         self.paragraphs = paragraphs
-        self.currentIndex = 0
+        self.currentIndex = min(max(startIndex, 0), paragraphs.count - 1)
         await tracker.attach(state: state)
         startConsumingPassages()
         startAdvanceWatcher()
@@ -224,7 +224,6 @@ final class ReaderTTSBridge {
         return true
     }
 }
-
 
 
 

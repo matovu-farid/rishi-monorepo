@@ -4,8 +4,8 @@ import Foundation
 import ReadiumShared
 @testable import RishiReader
 
-@Suite("EPUBReadAloudDecorationBuilder")
-struct EPUBReadAloudDecorationBuilderTests {
+@Suite("ReaderReadAloudDecorationBuilder")
+struct ReaderReadAloudDecorationBuilderTests {
 
     private let href = AnyURL(string: "chapter1.xhtml")!
     private let mediaType = MediaType.xhtml
@@ -13,7 +13,7 @@ struct EPUBReadAloudDecorationBuilderTests {
     @Test("Locator carries the paragraph as text.highlight on the resource href")
     func locatorHighlightsParagraph() {
         let paragraph = "Alice was beginning to get very tired."
-        let locator = EPUBReadAloudDecorationBuilder.locator(
+        let locator = ReaderReadAloudDecorationBuilder.locator(
             forParagraph: paragraph,
             href: href,
             mediaType: mediaType
@@ -24,14 +24,14 @@ struct EPUBReadAloudDecorationBuilderTests {
 
     @Test("Decoration reuses a stable id in the rishi-tts group")
     func decorationUsesStableID() {
-        let decoration = EPUBReadAloudDecorationBuilder.decoration(
+        let decoration = ReaderReadAloudDecorationBuilder.decoration(
             forParagraph: "Down the rabbit hole.",
             href: href,
             mediaType: mediaType
         )
-        #expect(decoration.id == EPUBReadAloudDecorationBuilder.decorationID)
+        #expect(decoration.id == ReaderReadAloudDecorationBuilder.decorationID)
         #expect(decoration.locator.text.highlight == "Down the rabbit hole.")
-        #expect(EPUBReadAloudDecorationBuilder.groupName == "rishi-tts")
+        #expect(ReaderReadAloudDecorationBuilder.groupName == "rishi-tts")
     }
 }
 #endif

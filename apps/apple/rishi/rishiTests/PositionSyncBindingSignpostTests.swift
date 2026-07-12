@@ -13,7 +13,7 @@
 import Testing
 import Foundation
 
-@Suite("PositionSyncBinding signpost instrumentation")
+@Suite("ReaderPositionSyncBinding signpost instrumentation")
 struct PositionSyncBindingSignpostTests {
 
     
@@ -29,61 +29,26 @@ struct PositionSyncBindingSignpostTests {
 
     
 
-    @Test("EPUB binding imports os.signpost + declares positionSyncSignposter")
-    func test_epubBindingDeclaresSignposter() throws {
-        let source = try Self.bindingSource("EPUBReaderPositionSyncBinding.swift")
+    @Test("Reader binding imports os.signpost + declares positionSyncSignposter")
+    func test_readerBindingDeclaresSignposter() throws {
+        let source = try Self.bindingSource("ReaderPositionSyncBinding.swift")
         #expect(source.contains("import os.signpost"))
         #expect(source.contains("OSSignposter("))
         #expect(source.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(source.contains("category: \"position-sync\""))
     }
 
-    @Test("EPUB binding wraps poll body with begin/endInterval for epub.position.poll.tick")
-    func test_epubBindingEmitsSignpost() throws {
-        let source = try Self.bindingSource("EPUBReaderPositionSyncBinding.swift")
-        #expect(source.contains("epub.position.poll.tick"))
+    @Test("Reader binding wraps poll body with begin/endInterval")
+    func test_readerBindingEmitsSignpost() throws {
+        let source = try Self.bindingSource("ReaderPositionSyncBinding.swift")
+        #expect(source.contains("reader.position.poll.tick"))
         #expect(source.contains("beginInterval"))
         #expect(source.contains("endInterval"))
     }
 
-    
-
-    @Test("PDF binding imports os.signpost + declares positionSyncSignposter")
-    func test_pdfBindingDeclaresSignposter() throws {
-        let source = try Self.bindingSource("PDFReaderPositionSyncBinding.swift")
-        #expect(source.contains("import os.signpost"))
-        #expect(source.contains("OSSignposter("))
-        #expect(source.contains("subsystem: \"org.fidexa.rishi\""))
-        #expect(source.contains("category: \"position-sync\""))
-    }
-
-    @Test("PDF binding wraps poll body with begin/endInterval for pdf.position.poll.tick")
-    func test_pdfBindingEmitsSignpost() throws {
-        let source = try Self.bindingSource("PDFReaderPositionSyncBinding.swift")
-        #expect(source.contains("pdf.position.poll.tick"))
-        #expect(source.contains("beginInterval"))
-        #expect(source.contains("endInterval"))
-    }
-
-    
-
-    @Test("Both binding files carry the v1.1 backlog comment pointing at the ADR")
-    func test_filesContainBacklogPointer() throws {
-        let epubSource = try Self.bindingSource("EPUBReaderPositionSyncBinding.swift")
-        let pdfSource = try Self.bindingSource("PDFReaderPositionSyncBinding.swift")
-        #expect(epubSource.contains("v1.1 backlog"))
-        #expect(epubSource.contains("SWIFT-CONCURRENCY-RULES.md"))
-        #expect(pdfSource.contains("v1.1 backlog"))
-        #expect(pdfSource.contains("SWIFT-CONCURRENCY-RULES.md"))
-    }
-
-    
-
-    @Test("Both binding files preserve the 250ms poll cadence (v1 behavior)")
+    @Test("Reader binding preserves the 250ms poll cadence")
     func test_pollCadencePreserved() throws {
-        let epubSource = try Self.bindingSource("EPUBReaderPositionSyncBinding.swift")
-        let pdfSource = try Self.bindingSource("PDFReaderPositionSyncBinding.swift")
-        #expect(epubSource.contains("250_000_000"))
-        #expect(pdfSource.contains("250_000_000"))
+        let source = try Self.bindingSource("ReaderPositionSyncBinding.swift")
+        #expect(source.contains("250_000_000"))
     }
 }

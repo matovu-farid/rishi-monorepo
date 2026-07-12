@@ -27,6 +27,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     public private(set) var document: PDFDocument?
     public private(set) var totalPages: Int = 0
     public private(set) var pageIndex: Int = 0
+    public private(set) var readAloudStartParagraphIndex: Int = 0
     public private(set) var outline: [PDFOutlineNode] = []
     public var activeSheet: ReaderSheet?
     
@@ -83,6 +84,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     private let debounceSeconds: Double
     private let documentLoader: @Sendable (URL) async -> PDFDocument?
     private var pendingPositionTask: Task<Void, Never>?
+    private var currentReadAloudParagraphText: String?
 
     public init(
         book: Book,
@@ -138,6 +140,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         self.document = doc
         self.totalPages = doc.pageCount
         self.outline = PDFOutlineExtractor.extract(from: doc)
+        resetReadAloudParagraph()
 
         // Under RISHI_UITEST always open at page 1 (skip position restore) so
         // read-aloud page-boundary UITests start deterministically with a real
@@ -150,9 +153,27 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         #endif
         if !uitestFreshStart,
            let last = try? await positionStore.position(for: book.id),
-           let restored = PDFPositionEncoder.decode(last.locator),
-           restored >= 0, restored < totalPages {
-            self.pageIndex = restored
+           let restored = PDFPositionEncoder.decodePosition(last.locator),
+           restored.pageIndex >= 0, restored.pageIndex < totalPages {
+            self.pageIndex = restored.pageIndex
+
+            guard let paragraphIndex = restored.paragraphIndex,
+                  let paragraphHash = restored.paragraphHash else {
+                self.loadingState = .loaded
+                return
+            }
+
+            let paragraphs = readAloudCursor.paragraphs(atPage: restored.pageIndex)
+            guard paragraphIndex >= 0,
+                  paragraphIndex < paragraphs.count,
+                  PDFPositionEncoder.paragraphHash(paragraphs[paragraphIndex]) == paragraphHash else {
+                resetReadAloudParagraph()
+                self.loadingState = .loaded
+                return
+            }
+
+            self.readAloudStartParagraphIndex = paragraphIndex
+            self.currentReadAloudParagraphText = paragraphs[paragraphIndex]
         }
         self.loadingState = .loaded
     }
@@ -163,6 +184,8 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     public func didChangePage(toIndex newIndex: Int) {
         guard newIndex != pageIndex, newIndex >= 0, newIndex < totalPages else { return }
         pageIndex = newIndex
+        readAloudStartParagraphIndex = 0
+        resetReadAloudParagraph()
         schedulePositionWrite(pageIndex: newIndex)
     }
 
@@ -170,7 +193,25 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     public func seek(toPage newIndex: Int) {
         guard let doc = document, newIndex >= 0, newIndex < doc.pageCount else { return }
         pageIndex = newIndex
+        resetReadAloudParagraph()
         schedulePositionWrite(pageIndex: newIndex)
+    }
+
+    /// Called by the read-aloud controller whenever the active passage changes.
+    /// The paragraph index is page-local; invalid indexes are ignored so a
+    /// stale callback cannot persist a locator that cannot be resumed.
+    public func didChangeReadAloudPassage(to paragraphIndex: Int, text: String) {
+        let paragraphs = readAloudCursor.paragraphs(atPage: pageIndex)
+        guard paragraphIndex >= 0, paragraphIndex < paragraphs.count else { return }
+
+        let canonicalText = paragraphs[paragraphIndex]
+        readAloudStartParagraphIndex = paragraphIndex
+        currentReadAloudParagraphText = canonicalText
+        schedulePositionWrite(
+            pageIndex: pageIndex,
+            paragraphIndex: paragraphIndex,
+            paragraphText: canonicalText
+        )
     }
 
     // MARK: - Read-aloud continuation
@@ -180,7 +221,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// boundary instead of halting at the last paragraph of the current page.
     ///
     /// Mirrors the EPUB reader's chapter-boundary continuation
-    /// (``EPUBReaderViewModel/paragraphsForFollowingResource()``): it advances
+    /// (``ReaderViewModel/paragraphsForFollowingResource()``): it advances
     /// past any intervening pages that produce zero paragraphs (blank pages,
     /// image-only separators) and moves the live ``pageIndex`` onto the new
     /// page via ``seek(toPage:)`` so the visible page — and the inline
@@ -231,9 +272,15 @@ public final class PDFReaderViewModel: @unchecked Sendable {
 
     /// Flushes any pending debounced write immediately. Call on view dismiss.
     public func flush() async {
-        pendingPositionTask?.cancel()
+        let pendingTask = pendingPositionTask
         pendingPositionTask = nil
-        await writePosition(pageIndex: pageIndex)
+        pendingTask?.cancel()
+        await pendingTask?.value
+        await writePosition(
+            pageIndex: pageIndex,
+            paragraphIndex: currentReadAloudParagraphText == nil ? nil : readAloudStartParagraphIndex,
+            paragraphText: currentReadAloudParagraphText
+        )
     }
 
     // MARK: - Voice context
@@ -274,7 +321,11 @@ public final class PDFReaderViewModel: @unchecked Sendable {
 
     // MARK: - Debounce
 
-    private func schedulePositionWrite(pageIndex: Int) {
+    private func schedulePositionWrite(
+        pageIndex: Int,
+        paragraphIndex: Int? = nil,
+        paragraphText: String? = nil
+    ) {
         pendingPositionTask?.cancel()
         let seconds = debounceSeconds
         // KEEP: VM is @Observable (not @MainActor) per the class doc-comment;
@@ -283,15 +334,33 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         pendingPositionTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             if Task.isCancelled { return }
-            await self?.writePosition(pageIndex: pageIndex)
+            await self?.writePosition(
+                pageIndex: pageIndex,
+                paragraphIndex: paragraphIndex,
+                paragraphText: paragraphText
+            )
         }
     }
 
-    private func writePosition(pageIndex: Int) async {
+    private func writePosition(
+        pageIndex: Int,
+        paragraphIndex: Int? = nil,
+        paragraphText: String? = nil
+    ) async {
         let percent = totalPages > 0 ? Double(pageIndex) / Double(totalPages) : 0
+        let locator: String
+        if let paragraphIndex, let paragraphText {
+            locator = PDFPositionEncoder.encode(
+                page: pageIndex,
+                paragraph: paragraphIndex,
+                text: paragraphText
+            )
+        } else {
+            locator = PDFPositionEncoder.encode(page: pageIndex)
+        }
         let position = Position(
             bookId: book.id,
-            locator: PDFPositionEncoder.encode(page: pageIndex),
+            locator: locator,
             percentComplete: percent,
             updatedAt: Date()
         )
@@ -300,5 +369,10 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         } catch {
             Log.reader.error("Failed to persist PDF position page=\(pageIndex, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func resetReadAloudParagraph() {
+        readAloudStartParagraphIndex = 0
+        currentReadAloudParagraphText = nil
     }
 }

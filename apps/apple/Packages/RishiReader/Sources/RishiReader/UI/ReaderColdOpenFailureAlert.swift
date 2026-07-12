@@ -6,7 +6,7 @@ import SwiftUI
 /// ("OK") — as well as any other dismissal route (tap-outside, hardware Esc on
 /// Mac Catalyst) — invokes `onDismiss`, which the reader screens wire to
 /// `@Environment(\.dismiss)` so confirming the alert pops the reader back to
-/// the library. Shared by `PDFReaderScreen` and `EPUBReaderScreen`.
+/// the library. Shared by `PDFReaderScreen` and `ReaderScreen`.
 extension View {
     /// Presents a native failure alert whenever `reason` is non-nil.
     ///

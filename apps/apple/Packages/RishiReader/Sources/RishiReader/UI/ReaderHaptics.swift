@@ -6,8 +6,8 @@ import Foundation
 /// migrated off the imperative UIKit feedback-generator API onto the
 /// native SwiftUI `.sensoryFeedback(_:trigger:)` view modifier. The
 /// trigger surface lives on the reader viewmodels
-/// (``EPUBReaderViewModel.currentPageIndex``,
-/// ``EPUBReaderViewModel.lastBoundaryHitTick``,
+/// (``ReaderViewModel.currentPageIndex``,
+/// ``ReaderViewModel.lastBoundaryHitTick``,
 /// ``PDFReaderViewModel.currentPageIndex``,
 /// ``PDFReaderViewModel.lastBoundaryHitTick``) — the screens attach
 /// `.sensoryFeedback(.impact(weight: .light), trigger:)` and

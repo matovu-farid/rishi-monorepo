@@ -7,7 +7,7 @@ import RishiTesting
 
 // MARK: - Phase 21 Plan 21-03 — cold-open loading indicator
 //
-// Pins the four lifecycle transitions of `EPUBReaderViewModel.loadingState`:
+// Pins the four lifecycle transitions of `ReaderViewModel.loadingState`:
 //
 //   1. A freshly-constructed VM starts in `.idle`.
 //   2. After `load()` returns and the publication is bound, state is
@@ -16,13 +16,13 @@ import RishiTesting
 //   4. During the in-flight detached parse, state is `.loading`.
 //
 // Success cases reuse the bundled `alice.epub` fixture through the real
-// `EPUBPublicationLoader`. The failure-path tests inject a stub loader
+// `PublicationLoader`. The failure-path tests inject a stub loader
 // that throws — Readium `Publication` is not constructible in tests, so
 // only the throw path is faked. The "during parse" probe wraps the real
 // loader and inserts a small sleep so the test can sample mid-flight.
 
-@Suite("EPUBReaderViewModel.loadingState lifecycle", .serialized)
-struct EPUBReaderViewModelLoadingStateTests {
+@Suite("ReaderViewModel.loadingState lifecycle", .serialized)
+struct ReaderViewModelLoadingStateTests {
 
     // MARK: - Helpers
 
@@ -37,9 +37,9 @@ struct EPUBReaderViewModelLoadingStateTests {
     // MARK: - Stub loaders
 
     /// Always throws — exercises the .failed branch.
-    private final class ThrowingLoader: EPUBPublicationLoading, @unchecked Sendable {
-        let error: EPUBPublicationLoaderError
-        init(error: EPUBPublicationLoaderError = .publicationOpenFailed("stub failure")) {
+    private final class ThrowingLoader: PublicationLoading, @unchecked Sendable {
+        let error: PublicationLoaderError
+        init(error: PublicationLoaderError = .publicationOpenFailed("stub failure")) {
             self.error = error
         }
         func open(fileURL: URL) async throws -> Publication {
@@ -49,11 +49,11 @@ struct EPUBReaderViewModelLoadingStateTests {
 
     /// Sleeps before forwarding to the real loader — gives the test a
     /// window to sample `.loading` mid-flight.
-    private final class SlowLoader: EPUBPublicationLoading, @unchecked Sendable {
-        let inner: EPUBPublicationLoader
+    private final class SlowLoader: PublicationLoading, @unchecked Sendable {
+        let inner: PublicationLoader
         let delay: Duration
         init(delay: Duration = .milliseconds(100)) {
-            self.inner = EPUBPublicationLoader()
+            self.inner = PublicationLoader()
             self.delay = delay
         }
         func open(fileURL: URL) async throws -> Publication {
@@ -68,12 +68,12 @@ struct EPUBReaderViewModelLoadingStateTests {
     func test_startsIdle() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
             positionStore: store,
-            loader: EPUBPublicationLoader(),
+            loader: PublicationLoader(),
             debounceSeconds: 0.05
         )
 
@@ -84,12 +84,12 @@ struct EPUBReaderViewModelLoadingStateTests {
     func test_transitionsToLoadedOnSuccess() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
             positionStore: store,
-            loader: EPUBPublicationLoader(),
+            loader: PublicationLoader(),
             debounceSeconds: 0.05
         )
 
@@ -102,7 +102,7 @@ struct EPUBReaderViewModelLoadingStateTests {
     func test_transitionsToFailedOnLoaderThrow() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,
@@ -126,7 +126,7 @@ struct EPUBReaderViewModelLoadingStateTests {
     func test_exposesLoadingDuringDetachedParse() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: makeBook(),
             userId: UUID(),
             documentURL: url,

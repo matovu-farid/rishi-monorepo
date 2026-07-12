@@ -18,7 +18,7 @@ import RishiTesting
 ///      `vm.advancePage()` increments it by exactly 1.
 ///   2. `PDFReaderViewModel` exposes `lastBoundaryHitTick: Int`. Calling
 ///      `vm.hitBoundary()` increments it by exactly 1.
-///   3. `EPUBReaderViewModel` mirrors the same two fields and mutators.
+///   3. `ReaderViewModel` mirrors the same two fields and mutators.
 ///   4. `ReaderHaptics` is either deleted OR reduced to a Sendable
 ///      value-types-only namespace with zero UIKit dependency. Modelled
 ///      as a compile-only construction site: a regression that
@@ -72,7 +72,7 @@ struct ReaderHapticsSensoryFeedbackTests {
         #expect(vm.lastBoundaryHitTick == before + 1)
     }
 
-    @Test("EPUBReaderViewModel.advancePage increments currentPageIndex by 1")
+    @Test("ReaderViewModel.advancePage increments currentPageIndex by 1")
     @MainActor
     func epubAdvancePage_incrementsCurrentPageIndex() {
         let book = Book(
@@ -81,7 +81,7 @@ struct ReaderHapticsSensoryFeedbackTests {
             formatType: .epub,
             fileURL: "x"
         )
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: URL(fileURLWithPath: "/dev/null"),
@@ -94,7 +94,7 @@ struct ReaderHapticsSensoryFeedbackTests {
         #expect(vm.currentPageIndex == before + 1)
     }
 
-    @Test("EPUBReaderViewModel.hitBoundary increments lastBoundaryHitTick by 1")
+    @Test("ReaderViewModel.hitBoundary increments lastBoundaryHitTick by 1")
     @MainActor
     func epubHitBoundary_incrementsBoundaryTick() {
         let book = Book(
@@ -103,7 +103,7 @@ struct ReaderHapticsSensoryFeedbackTests {
             formatType: .epub,
             fileURL: "x"
         )
-        let vm = EPUBReaderViewModel(
+        let vm = ReaderViewModel(
             book: book,
             userId: UUID(),
             documentURL: URL(fileURLWithPath: "/dev/null"),

@@ -7,7 +7,7 @@ import RishiTesting
 
 /// Direct unit tests for ``EPUBReadAloudCursor`` — the read-aloud
 /// resource/page parsing + chapter-continuation cursor extracted from
-/// ``EPUBReaderViewModel`` (plan 34-06).
+/// ``ReaderViewModel`` (plan 34-06).
 ///
 /// These assert the cursor's NEW explicit contract: forward/backward chapter
 /// walks return a `navigateTo` locator INTENT (the VM applies it to
@@ -23,7 +23,7 @@ struct EPUBReadAloudCursorTests {
     }
 
     private func loadedPublication(url: URL) async throws -> Publication {
-        try await EPUBPublicationLoader().open(fileURL: url)
+        try await PublicationLoader().open(fileURL: url)
     }
 
     private func makeLocator(link: ReadiumShared.Link, progression: Double) throws -> Locator {

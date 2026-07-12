@@ -19,7 +19,7 @@ import RishiLogging
 ///   - debounced position write (1s default) on locator change
 ///   - `flush()` drains the debounce on view dismiss
 @Observable
-public final class EPUBReaderViewModel: @unchecked Sendable {
+public final class ReaderViewModel: @unchecked Sendable {
 
     public let book: Book
     internal let userId: UserID
@@ -41,7 +41,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     public var typography: ReaderTypography = .default
 
     /// Phase 21 Plan 21-03 — observable cold-open loading state.
-    /// `EPUBReaderScreen` overlays a native SwiftUI `ProgressView`
+    /// `ReaderScreen` overlays a native SwiftUI `ProgressView`
     /// while this is `.loading`, surfaces an error view on `.failed`,
     /// and renders the page content normally on `.loaded`. Starts
     /// `.idle` until ``load()`` runs.
@@ -87,7 +87,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     public var onUserNavigation: ((Locator) -> Void)?
 
     private let positionStore: any PositionStore
-    private let loader: any EPUBPublicationLoading
+    private let loader: any PublicationLoading
     private let debounceSeconds: Double
     private var pendingPositionTask: Task<Void, Never>?
 
@@ -103,7 +103,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         userId: UserID,
         documentURL: URL,
         positionStore: any PositionStore,
-        loader: any EPUBPublicationLoading = EPUBPublicationLoader(),
+        loader: any PublicationLoading = PublicationLoader(),
         debounceSeconds: Double = 1.0
     ) {
         self.book = book
@@ -135,7 +135,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     /// We do NOT (and cannot) construct it off-main. Per RESEARCH
     /// §F-P0-08 the navigator `init` itself is cheap; the multi-second
     /// work is the publication parse handled here. The navigator is
-    /// constructed in `EPUBReaderScreen` from this `publication` value
+    /// constructed in `ReaderScreen` from this `publication` value
     /// after `load()` completes, on main, where Readium expects it.
     public func load() async {
         // Phase 21 Plan 21-03 — flip to .loading BEFORE the detached
@@ -167,9 +167,9 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
             let result: (Publication, Locator?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
                 let publication = try await loader.open(fileURL: documentURL)
                 let restored: Locator?
-                if let last = try? await positionStoreRef.position(for: bookId),
-                   let wrapper = try? EPUBPositionLocator.decode(jsonString: last.locator) {
-                    restored = wrapper.toReadiumLocator()
+                if let last = try? await positionStoreRef.position(for: bookId) {
+                    restored = (try? ReaderPositionLocator.decode(jsonString: last.locator))?.toReadiumLocator()
+                        ?? (try? EPUBPositionLocator.decode(jsonString: last.locator))?.toReadiumLocator()
                 } else {
                     restored = nil
                 }
@@ -178,7 +178,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
             pub = result.0
             restoredLocator = result.1
         } catch {
-            Log.reader.error("EPUBReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            Log.reader.error("ReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             self.loadingState = .failed(reason: error.localizedDescription)
             return
         }
@@ -337,7 +337,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     }
 
     private func writePosition(for locator: Locator) async {
-        let wrapper = EPUBPositionLocator(locator: locator)
+        let wrapper = ReaderPositionLocator(locator: locator)
         let encoded: String
         do {
             encoded = try wrapper.encodedJSONString()

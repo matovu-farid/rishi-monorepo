@@ -11,7 +11,7 @@ import ReadiumNavigator
 /// The coordinator is the EPUB analogue of ``PDFSelectionCoordinator``:
 /// pure-Swift, stateless, callable from any actor. The screen reads
 /// `navigator.currentSelection` when the selection delegate fires
-/// (Readium 3.9 is pull-based — see ``EPUBNavigatorCoordinator``).
+/// (Readium 3.9 is pull-based — see ``ReaderNavigatorCoordinator``).
 ///
 /// **Discrimination contract:** a selection whose `text.highlight` is
 /// missing, empty, or whitespace-only is rejected (returns `nil`). The

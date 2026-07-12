@@ -80,9 +80,9 @@ struct OSSignpostInstrumentationTests {
 
     
 
-    @Test("EPUBReaderScreen carries OSSignposter and emits reader.epub.open interval")
+    @Test("ReaderScreen carries OSSignposter and emits reader.epub.open interval")
     func test_epubReaderOpenSignpost() throws {
-        let src = try Self.read("Packages/RishiReader/Sources/RishiReader/UI/EPUBReaderScreen.swift")
+        let src = try Self.read("Packages/RishiReader/Sources/RishiReader/UI/ReaderScreen.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("category: \"reader\""))
@@ -139,7 +139,7 @@ struct OSSignpostInstrumentationTests {
              "cold-launch.bootstrap"),
             ("Packages/RishiLibrary/Sources/RishiLibrary/Views/LibraryRootView.swift",
              "library.first-paint"),
-            ("Packages/RishiReader/Sources/RishiReader/UI/EPUBReaderScreen.swift",
+            ("Packages/RishiReader/Sources/RishiReader/UI/ReaderScreen.swift",
              "reader.epub.open"),
             ("Packages/RishiReader/Sources/RishiReader/UI/PDFReaderScreen.swift",
              "reader.pdf.open"),
