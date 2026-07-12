@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Foundation
 import UIKit
+import PDFKit
 import ReadiumShared
 import ReadiumNavigator
 import RishiCore
@@ -70,6 +71,12 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageBackward: () -> Void = {}
 
+    /// PDF decoration sink — attached in ``setupPDFView`` and used by
+    /// ``applyHighlights(_:)`` when the active navigator is PDF.
+    private let pdfDecorable = PDFDecorableNavigator()
+    private var pdfViewportFitTask: Task<Void, Never>?
+    private var hasFittedPDFViewport = false
+
     public init(viewModel: ReaderViewModel) {
         self.viewModel = viewModel
         super.init()
@@ -98,12 +105,50 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// Re-applies the supplied highlights as Readium decorations in the
     /// `"rishi-highlights"` group. Safe to call before the navigator is
     /// built — no-ops in that case (the screen re-applies after load).
+    ///
+    /// EPUB uses the navigator's built-in ``DecorableNavigator``; PDF uses
+    /// ``pdfDecorable`` (attached in ``setupPDFView``). Both share
+    /// ``ReaderHighlightDecorationBuilder``.
     public func applyHighlights(_ highlights: [Highlight]) {
-        // Readium decorations are currently an EPUB HTML feature. The
-        // navigator itself is format-neutral, but the shared highlight
-        // renderer must not be asked to decorate a PDF navigator.
-        guard let nav = navigator as? EPUBNavigatorViewController else { return }
-        EPUBDecorationApplier.apply(highlights: highlights, to: nav)
+        let decorations = ReaderHighlightDecorationBuilder.make(from: highlights)
+        let group = ReaderHighlightDecorationBuilder.groupName
+        if let epub = navigator as? EPUBNavigatorViewController {
+            epub.apply(decorations: decorations, in: group)
+        } else if navigator is PDFNavigatorViewController {
+            pdfDecorable.apply(decorations: decorations, in: group)
+        }
+    }
+
+    /// Live PDFKit selection used to enrich Readium locators with line
+    /// rects before persisting an ``EPUBHighlightLocator``. `nil` when the
+    /// active navigator is not PDF or nothing is selected.
+    ///
+    /// Prefer the live ``PDFNavigatorViewController``'s `pdfView` selection
+    /// (authoritative under Readium); fall back to the attached decorable
+    /// overlay's `pdfView` when needed.
+    public var pdfKitSelectionForHighlightEnrichment: PDFSelection? {
+        guard let pdfNav = navigator as? PDFNavigatorViewController else { return nil }
+        return pdfNav.pdfView?.currentSelection ?? pdfDecorable.pdfView?.currentSelection
+    }
+
+    /// Converts a Readium selection into a persistable locator, attaching
+    /// PDF line rects when the active navigator is PDF.
+    public func highlightLocator(from selection: Selection) -> EPUBHighlightLocator? {
+        var locator = selection.locator
+        if let pdfSelection = pdfKitSelectionForHighlightEnrichment {
+            locator = PDFSelectionLocatorEnricher.enriching(locator, with: pdfSelection)
+        } else if let pdfNav = navigator as? PDFNavigatorViewController,
+                  let pdfView = pdfNav.pdfView,
+                  let page = pdfView.currentPage,
+                  let frame = selection.frame {
+            // PDFNavigatorViewController builds the Readium Selection from
+            // the PDFView frame. PDFKit may clear currentSelection before
+            // our menu callback runs, but this frame is still sufficient to
+            // persist a paintable page-space rectangle.
+            let pageRect = pdfView.convert(frame.insetBy(dx: 8, dy: 8), to: page)
+            locator = PDFSelectionLocatorEnricher.enriching(locator, with: [pageRect])
+        }
+        return EPUBSelectionCoordinator.makeLocator(fromLocator: locator)
     }
 
     /// Marks `paragraph` as the active read-aloud passage by replacing the
@@ -114,14 +159,43 @@ public final class ReaderNavigatorCoordinator: NSObject {
         _ paragraph: String,
         at locator: Locator? = nil
     ) {
-        guard let nav = navigator as? EPUBNavigatorViewController,
-              let locator = locator ?? viewModel.latestLocator else { return }
-        let decoration = ReaderReadAloudDecorationBuilder.decoration(
-            forParagraph: paragraph,
-            href: locator.href,
-            mediaType: locator.mediaType
+        guard let locator = locator ?? viewModel.latestLocator else { return }
+        let group = ReaderReadAloudDecorationBuilder.groupName
+
+        if let nav = navigator as? EPUBNavigatorViewController {
+            let decoration = ReaderReadAloudDecorationBuilder.decoration(
+                forParagraph: paragraph,
+                href: locator.href,
+                mediaType: locator.mediaType
+            )
+            nav.apply(decorations: [decoration], in: group)
+            return
+        }
+
+        guard navigator is PDFNavigatorViewController,
+              let pdfView = (navigator as? PDFNavigatorViewController)?.pdfView,
+              let document = pdfView.document,
+              let pageNumber = locator.locations.page,
+              pageNumber > 0,
+              let page = document.page(at: pageNumber - 1),
+              let selection = PDFReadAloudHighlighter.selection(
+                  in: page,
+                  paragraph: paragraph
+              ) else {
+            // A scanned PDF or a paragraph with no extractable geometry
+            // cannot be painted; remove any stale active passage instead.
+            pdfDecorable.apply(decorations: [], in: group)
+            return
+        }
+
+        let locatorWithGeometry = PDFSelectionLocatorEnricher.enriching(
+            locator,
+            with: selection
         )
-        nav.apply(decorations: [decoration], in: ReaderReadAloudDecorationBuilder.groupName)
+        pdfDecorable.apply(
+            decorations: [ReaderReadAloudDecorationBuilder.decoration(for: locatorWithGeometry)],
+            in: group
+        )
     }
 
     /// Clears the active read-aloud passage decoration (called when TTS
@@ -130,10 +204,12 @@ public final class ReaderNavigatorCoordinator: NSObject {
         readAloudFollowTask?.cancel()
         readAloudFollowTask = nil
         programmaticNavigationCallbacks = 0
-        (navigator as? any DecorableNavigator)?.apply(
-            decorations: [],
-            in: ReaderReadAloudDecorationBuilder.groupName
-        )
+        let group = ReaderReadAloudDecorationBuilder.groupName
+        if let decorable = navigator as? any DecorableNavigator {
+            decorable.apply(decorations: [], in: group)
+        } else if navigator is PDFNavigatorViewController {
+            pdfDecorable.apply(decorations: [], in: group)
+        }
     }
 
     /// Registers the next location callback generated by a Readium
@@ -282,11 +358,61 @@ public final class ReaderNavigatorCoordinator: NSObject {
         })
         self.navigator = nav
     }
+
+    /// Recomputes the initial PDF fit after the Readium child view has been
+    /// installed and laid out. Readium performs its first fit while creating
+    /// the PDFView, which can happen before the SwiftUI container has its
+    /// final bounds and leave the first page visibly zoomed in.
+    private func schedulePDFViewportFit() {
+        guard navigator is PDFNavigatorViewController, !hasFittedPDFViewport else { return }
+        pdfViewportFitTask?.cancel()
+        pdfViewportFitTask = Task { [weak self] in
+            for _ in 0..<20 {
+                guard !Task.isCancelled, let self else { return }
+                if self.fitPDFViewportIfReady() { return }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
+
+    @discardableResult
+    private func fitPDFViewportIfReady() -> Bool {
+        guard !hasFittedPDFViewport,
+              let pdfNavigator = navigator as? PDFNavigatorViewController,
+              let pdfView = pdfNavigator.pdfView,
+              pdfView.document != nil,
+              pdfView.currentPage != nil,
+              !pdfNavigator.settings.scroll,
+              pdfNavigator.view.bounds.width > 1,
+              pdfNavigator.view.bounds.height > 1 else {
+            return false
+        }
+
+        pdfNavigator.view.layoutIfNeeded()
+        pdfView.layoutIfNeeded()
+        // Readium's fit helper is package-internal. The public PDFKit
+        // equivalent is the scale that fits the current page in the live
+        // viewport, which is the correct initial behavior for the unified
+        // reader's paginated PDF presentation.
+        let fitScale = pdfView.scaleFactorForSizeToFit
+        guard fitScale.isFinite, fitScale > 0 else { return false }
+
+        pdfView.minScaleFactor = fitScale
+        pdfView.scaleFactor = fitScale
+        hasFittedPDFViewport = true
+        return true
+    }
 }
 
 extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
 
     public func navigator(_ navigator: any Navigator, locationDidChange locator: Locator) {
+        // Readium sets `pdfView.document` after `setupPDFView` (in `go`).
+        // Highlights applied during setup are stashed; paint them now.
+        if navigator is PDFNavigatorViewController {
+            pdfDecorable.reapplyIfNeeded()
+            schedulePDFViewportFit()
+        }
         handleLocationChange(locator)
     }
 
@@ -331,7 +457,19 @@ extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
     public nonisolated func navigator(
         _ navigator: PDFNavigatorViewController,
         setupPDFView view: PDFDocumentView
-    ) {}
+    ) {
+        // Readium invokes setup on the main thread after the PDF view is
+        // created; assumeIsolated matches other PDF callbacks in this package.
+        MainActor.assumeIsolated {
+            hasFittedPDFViewport = false
+            pdfDecorable.attach(pdfView: view)
+            applyHighlights(viewModel.loadedHighlights)
+            // Document is often still nil here; locationDidChange / a later
+            // apply with document present will flush via reapplyIfNeeded.
+            pdfDecorable.reapplyIfNeeded()
+            schedulePDFViewportFit()
+        }
+    }
 }
 
 extension ReaderNavigatorCoordinator: UIGestureRecognizerDelegate {

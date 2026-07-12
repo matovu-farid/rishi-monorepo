@@ -50,9 +50,17 @@ struct EPUBHighlightInteractor {
 
     /// Stashes the locator for a fresh selection (showing the floating context
     /// menu) or clears the pending selection when the user deselects.
+    ///
+    /// Uses ``ReaderNavigatorCoordinator/highlightLocator(from:)`` so PDF
+    /// selections get line rects attached before persistence.
     func handleSelectionChange(_ selection: Selection?) {
-        guard let selection,
-              let locator = EPUBSelectionCoordinator.makeLocator(from: selection) else {
+        guard let selection else {
+            pendingSelection.wrappedValue = nil
+            return
+        }
+        let locator = coordinatorRef.coordinator?.highlightLocator(from: selection)
+            ?? EPUBSelectionCoordinator.makeLocator(from: selection)
+        guard let locator else {
             pendingSelection.wrappedValue = nil
             return
         }

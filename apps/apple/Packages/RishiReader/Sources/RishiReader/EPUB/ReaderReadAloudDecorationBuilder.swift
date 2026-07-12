@@ -25,7 +25,7 @@ public enum ReaderReadAloudDecorationBuilder {
     /// Decoration group key for the active read-aloud passage. Distinct from
     /// ``EPUBDecorationApplier/groupName`` so user highlights and the TTS
     /// highlight are diffed independently.
-    public static let groupName: DecorationGroup = "rishi-tts"
+    public static let groupName = "rishi-tts"
 
     /// Stable decoration id — there is only ever one active passage, so reusing
     /// the id makes each `apply` REPLACE rather than accumulate.
@@ -52,9 +52,15 @@ public enum ReaderReadAloudDecorationBuilder {
         href: AnyURL,
         mediaType: MediaType
     ) -> Decoration {
+        decoration(for: locator(forParagraph: paragraph, href: href, mediaType: mediaType))
+    }
+
+    /// Builds the active-passage decoration from a locator that may carry
+    /// format-specific geometry, such as PDF page rectangles.
+    public static func decoration(for locator: Locator) -> Decoration {
         Decoration(
             id: decorationID,
-            locator: locator(forParagraph: paragraph, href: href, mediaType: mediaType),
+            locator: locator,
             style: .highlight(tint: UIColor(RishiColor.accent), isActive: true)
         )
     }

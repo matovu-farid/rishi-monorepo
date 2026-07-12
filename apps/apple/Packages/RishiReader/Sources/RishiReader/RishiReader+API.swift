@@ -99,8 +99,18 @@
 // EPUBSelectionCoordinator    — `EPUB/EPUBSelectionCoordinator.swift`. Same role on the EPUB side.
 // EPUBPreferencesBridge       — `EPUB/EPUBPreferencesBridge.swift`. Translates RishiReader
 //                                preferences into Readium's EPUBPreferences.
-// EPUBDecorationApplier       — `EPUB/EPUBDecorationApplier.swift`. Applies highlight
-//                                decorations to a Readium navigator.
+// EPUBDecorationApplier       — `EPUB/EPUBDecorationApplier.swift`. Thin EPUB wrapper around
+//                                ReaderHighlightDecorationBuilder.
+// ReaderHighlightDecorationBuilder — `Model/ReaderHighlightDecorationBuilder.swift`. Shared
+//                                Highlight → [Decoration] mapping for EPUB + PDF.
+// PDFDecorableNavigator       — `PDF/PDFDecorableNavigator.swift`. DecorableNavigator that
+//                                paints Readium decorations via PDFDecorationOverlayView.
+// PDFDecorationOverlayView    — `PDF/PDFDecorationOverlayView.swift`. UIView overlay that
+//                                converts page-space rects and fills highlight tints.
+// PDFDecorationAnnotator      — `PDF/PDFDecorationAnnotator.swift`. Pure planner from
+//                                Decoration → PDF annotation specs (page, bounds, tint tags).
+// PDFSelectionLocatorEnricher — `PDF/PDFSelectionLocatorEnricher.swift`. Attaches PDFKit
+//                                line rects onto a Readium Locator for unified PDF highlights.
 // EPUBSpreadResolver          — `EPUB/EPUBSpreadModifier.swift`. Picks single vs. double spread.
 
 // MARK: - Caches and loaders
