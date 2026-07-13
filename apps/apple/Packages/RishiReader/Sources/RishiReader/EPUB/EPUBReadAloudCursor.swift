@@ -53,6 +53,25 @@ final class EPUBReadAloudCursor: @unchecked Sendable {
         self.publication = publication
     }
 
+    /// Extracts the paragraphs visible at a supplied page without reading or
+    /// mutating any cursor state. The caller owns the publication and locator
+    /// snapshot; this helper only performs the resource read and chunking.
+    static func paragraphsAtCurrentPage(
+        publication: Publication,
+        locator: Locator
+    ) async -> [String] {
+        guard let resource = publication.get(locator.href) else { return [] }
+        let result = await resource.read().asString(encoding: .utf8)
+        guard case .success(let html) = result else { return [] }
+        let all = ParagraphChunker.chunk(html)
+        let start = ParagraphChunker.startIndex(
+            forProgression: locator.locations.progression,
+            count: all.count
+        )
+        guard start < all.count else { return [] }
+        return Array(all[start...])
+    }
+
     /// Paragraphs for read-aloud starting at the CURRENT page rather than the
     /// resource start. Reads the resource the locator points to, chunks it via
     /// `ParagraphChunker.chunk(_:)`, and drops the paragraphs that precede the
@@ -61,19 +80,15 @@ final class EPUBReadAloudCursor: @unchecked Sendable {
     /// resource (the page-1 bug). Returns `[]` on failure. Does not request a
     /// navigation (the reader is already on this page).
     func paragraphsAtCurrentPage(locator: Locator) async -> Result {
-        guard let resource = publication.get(locator.href) else { return .empty }
         // Anchor the read-aloud chapter cursor on the resource we are about to
         // narrate so ``paragraphsFollowing`` can advance from here.
         readAloudResourceHref = locator.href.removingFragment()
-        let result = await resource.read().asString(encoding: .utf8)
-        guard case .success(let html) = result else { return .empty }
-        let all = ParagraphChunker.chunk(html)
-        let start = ParagraphChunker.startIndex(
-            forProgression: locator.locations.progression,
-            count: all.count
+        let paragraphs = await Self.paragraphsAtCurrentPage(
+            publication: publication,
+            locator: locator
         )
-        guard start < all.count else { return .empty }
-        return Result(paragraphs: Array(all[start...]), navigateTo: nil)
+        guard !paragraphs.isEmpty else { return .empty }
+        return Result(paragraphs: paragraphs, navigateTo: nil)
     }
 
     /// Paragraphs for the NEXT reading-order resource (chapter) after the one

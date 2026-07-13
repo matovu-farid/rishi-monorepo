@@ -86,6 +86,11 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// (TTS) audio when the reader leaves the page being narrated.
     public var onUserNavigation: ((Locator) -> Void)?
 
+    /// Fired only for USER-initiated locator changes so the app layer can
+    /// prefetch the first paragraph on the newly visible page without
+    /// coupling that optimization to playback lifecycle.
+    public var onUserNavigationForTTSPagePrefetch: ((Locator) -> Void)?
+
     private let positionStore: any PositionStore
     private let loader: any PublicationLoading
     private let debounceSeconds: Double
@@ -209,14 +214,15 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// `isProgrammatic` distinguishes a USER page-turn (default `false`)
     /// from the read-aloud auto-follow navigation the coordinator drives
     /// via `nav.go(to:)`. Position-write behavior is identical for both
-    /// cases; only ``onUserNavigation`` is suppressed for programmatic
-    /// changes so the auto-follow does not feed back and kill the audio
-    /// it is following.
+    /// cases; only the user-navigation callbacks are suppressed for
+    /// programmatic changes so the auto-follow does not feed back into
+    /// playback lifecycle or page-entry prefetch.
     public func didChangeLocation(_ locator: Locator, isProgrammatic: Bool = false) {
         latestLocator = locator
         schedulePositionWrite(for: locator)
         if !isProgrammatic {
             onUserNavigation?(locator)
+            onUserNavigationForTTSPagePrefetch?(locator)
         }
     }
 
@@ -261,6 +267,24 @@ public final class ReaderViewModel: @unchecked Sendable {
     }
 
     // MARK: - Read-aloud
+
+    /// Returns the first paragraph visible at the current page for best-effort
+    /// page-entry TTS prefetch. The publication and locator are captured
+    /// synchronously on the main actor before the detached extraction begins,
+    /// so the background task never reads mutable view-model state.
+    @MainActor
+    public func firstParagraphForPageEntryPrefetch(at locator: Locator) async -> String? {
+        guard let publication else { return nil }
+        let publicationSnapshot = publication
+        let locatorSnapshot = locator
+
+        return await Task.detached(priority: .userInitiated) {
+            await EPUBReadAloudCursor.paragraphsAtCurrentPage(
+                publication: publicationSnapshot,
+                locator: locatorSnapshot
+            ).first
+        }.value
+    }
 
     /// Paragraphs for read-aloud, starting at the CURRENT page rather than the
     /// resource start. Reads the resource the current locator points to, chunks

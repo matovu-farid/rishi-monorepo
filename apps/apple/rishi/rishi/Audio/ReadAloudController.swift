@@ -22,6 +22,8 @@ final class ReadAloudController {
     private(set) var readiumState: PublicationSpeechSynthesizer.State = .stopped
     private var readiumPublication: Publication?
     private var readiumPrefetcher: ReadiumTTSPrefetchCoordinator?
+    private var hasStartedReadAloudSession = false
+    private var isPageEntryPrefetchEligible = false
     var showControls = false
     var showPicker = false
     var pickerInitial: TTSSettings = .default
@@ -52,6 +54,10 @@ final class ReadAloudController {
     func startReader(vm: ReaderViewModel) async {
         guard let publication = vm.publication else { return }
 
+        // Invalidate page-entry prefetch immediately while the new playback
+        // session is being installed. The await below must not leave the old
+        // stopped session eligible during this transition.
+        isPageEntryPrefetchEligible = false
         await stopCurrentPlayback()
 
         let settings = await ttsSettingsStore.load(userId: userId)
@@ -80,6 +86,7 @@ final class ReadAloudController {
         }
 
         readiumSynthesizer = synthesizer
+        hasStartedReadAloudSession = true
         readiumPublication = publication
         readiumPrefetcher = ReadiumTTSPrefetchCoordinator(prewarmer: ttsPrewarmer)
         readiumState = .stopped
@@ -103,6 +110,7 @@ final class ReadAloudController {
     }
 
     func stop() async {
+        isPageEntryPrefetchEligible = true
         await stopCurrentPlayback()
         await ttsPresence.endSession()
         showControls = false
@@ -114,11 +122,14 @@ final class ReadAloudController {
 
     func togglePlayback() async {
         if let readiumSynthesizer {
+            isPageEntryPrefetchEligible = ttsState.status == .playing
             readiumSynthesizer.pauseOrResume()
         } else if let bridge {
             if ttsState.status == .playing {
+                isPageEntryPrefetchEligible = true
                 await bridge.pause()
             } else {
+                isPageEntryPrefetchEligible = false
                 await bridge.resume()
             }
         }
@@ -171,8 +182,19 @@ final class ReadAloudController {
     ) async {
         guard !paragraphs.isEmpty else { return }
 
+        isPageEntryPrefetchEligible = false
         if let existing = bridge {
             await existing.stop()
+        }
+
+        let wrappedOnParagraphsExhausted: () async -> [String] = { [weak self] in
+            let nextParagraphs = await onParagraphsExhausted()
+            if nextParagraphs.isEmpty {
+                self?.isPageEntryPrefetchEligible = true
+            } else {
+                self?.isPageEntryPrefetchEligible = false
+            }
+            return nextParagraphs
         }
 
         let tracker = TTSPassageTracker()
@@ -185,10 +207,11 @@ final class ReadAloudController {
             userId: userId,
             coordinator: coordinator,
             onPassageChange: onPassageChange,
-            onParagraphsExhausted: onParagraphsExhausted,
+            onParagraphsExhausted: wrappedOnParagraphsExhausted,
             onParagraphsBeforeStart: onParagraphsBeforeStart
         )
         bridge = newBridge
+        hasStartedReadAloudSession = true
         self.paragraphs = paragraphs
         currentParagraph = nil
         pickerInitial = await ttsSettingsStore.load(userId: userId)
@@ -202,6 +225,30 @@ final class ReadAloudController {
         )
         showControls = true
         await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
+    }
+
+    var canPrefetchPageEntry: Bool {
+        hasStartedReadAloudSession && isPageEntryPrefetchEligible
+    }
+
+    func prefetchFirstParagraph(_ paragraph: String?) async {
+        guard canPrefetchPageEntry,
+              let paragraph,
+              !paragraph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+
+        let settings = await ttsSettingsStore.load(userId: userId)
+        guard canPrefetchPageEntry else { return }
+
+        await ttsPrewarmer.warm(requests: [
+            TTSStreamRequest(
+                text: paragraph,
+                voice: settings.voice,
+                model: settings.model,
+                speed: settings.speed,
+                passageId: nil
+            )
+        ])
     }
 
     func updateCurrentParagraph(for index: Int?) {
@@ -237,14 +284,17 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         readiumState = state
         switch state {
         case .stopped:
+            isPageEntryPrefetchEligible = true
             currentParagraph = nil
             currentLocator = nil
             ttsState.update(status: .stopped)
         case let .paused(utterance):
+            isPageEntryPrefetchEligible = true
             currentLocator = utterance.locator
             currentParagraph = utterance.text
             ttsState.update(status: .paused)
         case let .playing(utterance, range):
+            isPageEntryPrefetchEligible = false
             currentLocator = range ?? utterance.locator
             currentParagraph = utterance.text
             ttsState.update(status: .playing)

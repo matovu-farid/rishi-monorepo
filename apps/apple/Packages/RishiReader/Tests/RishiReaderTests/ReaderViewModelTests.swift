@@ -170,6 +170,113 @@ struct ReaderViewModelTests {
         #expect(received.value.isEmpty)
     }
 
+    @Test("didChangeLocation default fires the TTS page prefetch callback")
+    func userNavigationFiresOnUserNavigationForTTSPagePrefetch() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let locator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.61, totalProgression: 0.61)
+        )
+
+        let received = LockedBox<[Locator]>([])
+        vm.onUserNavigationForTTSPagePrefetch = { loc in
+            received.mutate { $0.append(loc) }
+        }
+
+        vm.didChangeLocation(locator)
+
+        let captured = received.value
+        #expect(captured.count == 1)
+        let got = try #require(captured.first)
+        #expect(String(describing: got.href) == String(describing: locator.href))
+        #expect(got.locations.progression == locator.locations.progression)
+    }
+
+    @Test("didChangeLocation programmatic does NOT fire the TTS page prefetch callback")
+    func programmaticNavigationDoesNotFireOnUserNavigationForTTSPagePrefetch() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let locator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.72, totalProgression: 0.72)
+        )
+
+        let received = LockedBox<[Locator]>([])
+        vm.onUserNavigationForTTSPagePrefetch = { loc in
+            received.mutate { $0.append(loc) }
+        }
+
+        vm.didChangeLocation(locator, isProgrammatic: true)
+
+        #expect(received.value.isEmpty)
+    }
+
+    @Test("firstParagraphForPageEntryPrefetch extracts the supplied page paragraph")
+    func firstParagraphForPageEntryPrefetchUsesSuppliedLocator() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        var extracted: String?
+        var expected: String?
+        for link in publication.readingOrder {
+            let href = try #require(RelativeURL(path: link.href))
+            let locator = Locator(
+                href: href,
+                mediaType: link.mediaType ?? .xhtml,
+                locations: Locator.Locations(progression: 0, totalProgression: 0)
+            )
+            vm.didChangeLocation(locator)
+
+            if let paragraph = await vm.firstParagraphForPageEntryPrefetch(at: locator) {
+                extracted = paragraph
+                expected = await vm.paragraphsForReadAloud().first
+                break
+            }
+        }
+
+        #expect(extracted != nil)
+        #expect(extracted == expected)
+    }
+
     @Test("didChangeLocation default (no flag) fires onUserNavigation AND writes position")
     func defaultCallBehavesAsUserAndPersists() async throws {
         let url = try aliceURL()

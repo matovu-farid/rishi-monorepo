@@ -98,6 +98,14 @@ struct ReaderDestination: View {
                 
                 Task { await readAloud?.stop() }
             }
+            vm.onUserNavigationForTTSPagePrefetch = { [weak vm] locator in
+                guard let readAloud, readAloud.canPrefetchPageEntry else { return }
+                Task { @MainActor [weak vm, weak readAloud] in
+                    guard let vm else { return }
+                    guard let paragraph = await vm.firstParagraphForPageEntryPrefetch(at: locator) else { return }
+                    await readAloud?.prefetchFirstParagraph(paragraph)
+                }
+            }
             syncBinding = ReaderPositionSyncBinding(
                 viewModel: vm,
                 syncEngine: services.syncEngine
