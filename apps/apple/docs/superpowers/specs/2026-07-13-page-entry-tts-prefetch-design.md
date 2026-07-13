@@ -18,10 +18,10 @@ On a user-visible page navigation:
    session and whether the playback state at navigation time is `.paused` or
    `.stopped`.
 2. If not eligible, return without reading page text or issuing a TTS request.
-3. Extract the first playable paragraph for the new page:
-   - EPUB uses `ReaderViewModel.paragraphsForReadAloud()` and its first result.
-   - PDF uses the current page's layout-aware paragraph extraction and its
-     first result.
+3. Extract the first playable paragraph for the new page using the unified
+   Readium `ReaderViewModel.paragraphsForReadAloud()` path. The current app
+   routes both EPUB and PDF reader destinations through this model, so the
+   format-specific Readium content reader remains the source of truth.
 4. Load the active TTS settings and submit one request to the shared
    `TTSPrewarmer`.
 5. Let the existing prewarmer/cache layers skip final cache hits and coalesce
@@ -39,11 +39,11 @@ not call playback methods. The reader destinations provide the page-specific
 paragraph extraction and invoke that operation from their existing user
 navigation seams.
 
-The EPUB view model already has a user-only navigation callback and a current
-page paragraph slice. The PDF view model gains the equivalent page-navigation
-seam and a small current-page paragraph accessor. PDF page changes caused by
-active narration are harmless because the paused/stopped eligibility check
-fails while narration is active.
+The unified reader view model already has a user-only navigation callback and
+a current-page paragraph slice for both EPUB and PDF routes. Add a separate
+prefetch callback so the existing playback-stop callback remains independent.
+Programmatic navigation used by active narration is already excluded by the
+model's `isProgrammatic` distinction.
 
 ## Cache and cancellation behavior
 
@@ -61,10 +61,8 @@ coalescing prevent redundant upstream synthesis.
 
 - Verify the session/state gate does not warm before Read Aloud is started or
   while playback is active.
-- Verify an eligible EPUB navigation warms exactly the first paragraph from
-  the new page and ignores later paragraphs.
-- Verify an eligible PDF navigation warms exactly the first extracted
-  paragraph from the new page.
+- Verify eligible EPUB and PDF navigations warm exactly the first paragraph
+  returned by the unified reader model and ignore later paragraphs.
 - Verify cache hits are skipped and matching in-flight requests remain
   coalesced through the existing prewarmer/cache tests.
 - Run the affected reader/audio tests and the full relevant package suites.
