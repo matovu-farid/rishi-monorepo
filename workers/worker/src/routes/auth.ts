@@ -1,8 +1,6 @@
 import { Hono } from "hono";
 import { Effect } from "effect";
-import { eq } from "drizzle-orm";
 
-import { user } from "@rishi/shared";
 import {
   verifyRefreshToken,
   signAccessToken,
@@ -106,7 +104,7 @@ authRoutes.post("/refresh", async (c) => {
 
       const existingUser = yield* Effect.tryPromise(() =>
         db.query.user.findFirst({
-          where: eq(user.id, payload.userId),
+          where: { id: payload.userId },
         }),
       );
 

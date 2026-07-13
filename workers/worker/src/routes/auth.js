@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { Effect } from "effect";
-import { eq } from "drizzle-orm";
-import { user } from "@rishi/shared";
 import { verifyRefreshToken, signAccessToken, signRefreshToken, verifyAccessToken, } from "../jwt";
 import { findOrCreateUser } from "../findOrCreateUser";
 import { createDb } from "../db/drizzle";
@@ -60,7 +58,7 @@ authRoutes.post("/refresh", async (c) => {
     const result = await Effect.runPromiseExit(Effect.gen(function* () {
         const payload = yield* verifyRefreshToken(c.env, refreshToken);
         const existingUser = yield* Effect.tryPromise(() => db.query.user.findFirst({
-            where: eq(user.id, payload.userId),
+            where: { id: payload.userId },
         }));
         if (!existingUser) {
             return yield* Effect.fail(new Error("User not found"));

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { appleUsers, user } from "@rishi/shared";
 export const findOrCreateUser = (db, identity) => Effect.gen(function* () {
     const existing = yield* Effect.tryPromise(() => db.query.appleUsers.findFirst({
-        where: eq(appleUsers.appleUserId, identity.sub),
+        where: { appleUserId: identity.sub },
         with: {
             user: true,
         },

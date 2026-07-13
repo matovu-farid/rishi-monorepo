@@ -19,7 +19,7 @@
       "drizzle-orm/*": ["./node_modules/drizzle-orm/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "drizzle.config.ts", "../../packages/shared/src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "drizzle.config.ts", "../../packages/shared/src/**/*.ts", "src/db/schema.ts"],
   "exclude": [
     "node_modules",
     "../../packages/shared/src/tts/**",

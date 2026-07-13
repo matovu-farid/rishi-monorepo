@@ -1,20 +1,3 @@
-CREATE TABLE `account` (
-	`id` text PRIMARY KEY NOT NULL,
-	`account_id` text NOT NULL,
-	`provider_id` text NOT NULL,
-	`user_id` text NOT NULL,
-	`access_token` text,
-	`refresh_token` text,
-	`id_token` text,
-	`access_token_expires_at` integer,
-	`refresh_token_expires_at` integer,
-	`scope` text,
-	`password` text,
-	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL,
-	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE cascade
-);
---> statement-breakpoint
 CREATE TABLE `apple_notifications_log` (
 	`notification_uuid` text PRIMARY KEY NOT NULL,
 	`notification_type` text NOT NULL,
@@ -47,11 +30,13 @@ CREATE INDEX `apple_subscriptions_original_txn` ON `apple_subscriptions` (`apple
 CREATE TABLE `apple_users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`apple_user_id` text NOT NULL,
+	`user_id` text,
 	`email` text,
 	`email_verified` integer NOT NULL,
 	`private_email` integer NOT NULL,
 	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL
+	`updated_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `apple_users_apple_user_id_unique` ON `apple_users` (`apple_user_id`);--> statement-breakpoint
@@ -97,7 +82,8 @@ CREATE TABLE `bookmarks` (
 	`updated_at` integer NOT NULL,
 	`sync_version` integer DEFAULT 0,
 	`is_dirty` integer DEFAULT true,
-	`is_deleted` integer DEFAULT false
+	`is_deleted` integer DEFAULT false,
+	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
 CREATE TABLE `books` (
@@ -124,7 +110,8 @@ CREATE TABLE `books` (
 	`extraction_status` text,
 	`extracted_pages` integer DEFAULT 0,
 	`total_pages` integer,
-	`extraction_error` text
+	`extraction_error` text,
+	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
 CREATE TABLE `conversations` (
@@ -169,7 +156,8 @@ CREATE TABLE `highlights` (
 	`updated_at` integer NOT NULL,
 	`sync_version` integer DEFAULT 0,
 	`is_dirty` integer DEFAULT true,
-	`is_deleted` integer DEFAULT false
+	`is_deleted` integer DEFAULT false,
+	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
 CREATE TABLE `messages` (
@@ -243,7 +231,7 @@ CREATE TABLE `sync_meta` (
 CREATE TABLE `user` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
-	`email` text NOT NULL,
+	`email` text,
 	`email_verified` integer NOT NULL,
 	`image` text,
 	`created_at` integer NOT NULL,
@@ -251,7 +239,15 @@ CREATE TABLE `user` (
 	`stripe_customer_id` text
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `user_email_unique` ON `user` (`email`);--> statement-breakpoint
+CREATE TABLE `user_api_usage` (
+	`user_id` text PRIMARY KEY NOT NULL,
+	`voice_chat_requests` integer DEFAULT 0 NOT NULL,
+	`tts_requests` integer DEFAULT 0 NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
 CREATE TABLE `verification` (
 	`id` text PRIMARY KEY NOT NULL,
 	`identifier` text NOT NULL,

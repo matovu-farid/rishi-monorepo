@@ -7,7 +7,6 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import { relations } from "drizzle-orm";
 
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
@@ -50,19 +49,6 @@ export const appleUsers = sqliteTable("apple_users", {
     .$onUpdateFn(() => new Date())
     .notNull(),
 });
-
-
-
-export const appleUsersRelations = relations(appleUsers, ({ one }) => ({
-  user: one(user, {
-    fields: [appleUsers.userId],
-    references: [user.id],
-  }),
-}));
-
-export const userRelations = relations(user, ({ many }) => ({
-  appleAccounts: many(appleUsers),
-}));
 
 export const userApiUsage = sqliteTable("user_api_usage", {
   userId: text("user_id")
@@ -307,28 +293,6 @@ export const session = sqliteTable("session", {
   userId: text("user_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
-});
-
-export const account = sqliteTable("account", {
-  id: text("id").primaryKey(),
-  accountId: text("account_id").notNull(),
-  providerId: text("provider_id").notNull(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  accessToken: text("access_token"),
-  refreshToken: text("refresh_token"),
-  idToken: text("id_token"),
-  accessTokenExpiresAt: integer("access_token_expires_at", {
-    mode: "timestamp",
-  }),
-  refreshTokenExpiresAt: integer("refresh_token_expires_at", {
-    mode: "timestamp",
-  }),
-  scope: text("scope"),
-  password: text("password"),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
 
 export const verification = sqliteTable("verification", {

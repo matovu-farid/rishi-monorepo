@@ -14,7 +14,7 @@ userRoutes.get("/", requireAuth, async (c) => {
     const db = createDb(c.env.DB);
 
     const retrieveduser = await db.query.user.findFirst({
-      where: eq(user.id, userId),
+      where: { id: userId },
     });
     if (!retrieveduser) {
       return c.json({
