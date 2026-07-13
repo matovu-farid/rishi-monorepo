@@ -104,9 +104,15 @@ final class ReadAloudController {
             speed: settings.speed
         )
 
+        // Readium's locationDidChange callback can lag behind the visible
+        // page during an animated EPUB turn. Query the navigator-backed live
+        // locator immediately before starting so playback cannot rewind to
+        // the last callback's page.
+        let startLocator = await vm.currentVisibleLocatorForReadAloud()
+
         // Readium owns publication iteration. The custom tokenizer supplied
         // above makes each utterance a paragraph instead of a sentence.
-        synthesizer.start(from: vm.latestLocator)
+        synthesizer.start(from: startLocator)
     }
 
     func stop() async {

@@ -91,6 +91,13 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// coupling that optimization to playback lifecycle.
     public var onUserNavigationForTTSPagePrefetch: ((Locator) -> Void)?
 
+    /// Supplies the navigator's live visible locator when a caller needs to
+    /// start read-aloud immediately after a page turn. Readium may deliver
+    /// `locationDidChange` asynchronously while a page animation is still
+    /// settling, so `latestLocator` is not always current at button-tap time.
+    @MainActor
+    public var currentVisibleLocatorProvider: (@MainActor () async -> Locator?)?
+
     private let positionStore: any PositionStore
     private let loader: any PublicationLoading
     private let debounceSeconds: Double
@@ -267,6 +274,13 @@ public final class ReaderViewModel: @unchecked Sendable {
     }
 
     // MARK: - Read-aloud
+
+    /// Returns the navigator's current visible locator, falling back to the
+    /// last location callback when the navigator is not yet available.
+    @MainActor
+    public func currentVisibleLocatorForReadAloud() async -> Locator? {
+        await currentVisibleLocatorProvider?() ?? latestLocator
+    }
 
     /// Returns the first paragraph visible at the current page for best-effort
     /// page-entry TTS prefetch. The publication and locator are captured

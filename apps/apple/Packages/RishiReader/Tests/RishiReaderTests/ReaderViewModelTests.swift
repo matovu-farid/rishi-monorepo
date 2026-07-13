@@ -240,6 +240,43 @@ struct ReaderViewModelTests {
         #expect(received.value.isEmpty)
     }
 
+    @Test("live visible locator takes precedence over the last location callback for read aloud")
+    @MainActor
+    func currentVisibleLocatorForReadAloudUsesLiveProvider() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let oldLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.1, totalProgression: 0.1)
+        )
+        let liveLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.8, totalProgression: 0.8)
+        )
+
+        vm.didChangeLocation(oldLocator)
+        vm.currentVisibleLocatorProvider = { liveLocator }
+
+        let resolved = await vm.currentVisibleLocatorForReadAloud()
+
+        #expect(resolved?.locations.progression == liveLocator.locations.progression)
+    }
+
     @Test("firstParagraphForPageEntryPrefetch extracts the supplied page paragraph")
     func firstParagraphForPageEntryPrefetchUsesSuppliedLocator() async throws {
         let url = try aliceURL()

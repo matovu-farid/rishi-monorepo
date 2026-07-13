@@ -80,6 +80,9 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public init(viewModel: ReaderViewModel) {
         self.viewModel = viewModel
         super.init()
+        viewModel.currentVisibleLocatorProvider = { [weak self] in
+            await self?.navigator?.firstVisibleElementLocator()
+        }
     }
 
     /// Selector wired by
