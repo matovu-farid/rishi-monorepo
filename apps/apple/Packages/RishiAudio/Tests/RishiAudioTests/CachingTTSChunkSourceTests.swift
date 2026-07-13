@@ -66,6 +66,33 @@ struct CachingTTSChunkSourceTests {
         #expect(upstreamCalls.isEmpty, "upstream MUST NOT be invoked on hit")
     }
 
+    @Test("concurrent cache hits replay the complete sequence to both consumers")
+    func concurrentCacheHitsReplayCompleteSequence() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let request = makeRequest(text: "concurrent cache hit")
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)
+        let seeded = Data(repeating: 0xA1, count: TTSChunk.streamChunkByteCount * 3 + 7)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try seeded.write(to: tmp.appendingPathComponent("\(key).mp3"))
+
+        let upstream = FakeTTSChunkSource(chunks: [Data([0xFF])])
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store)
+        let firstStream = cache.stream(request: request)
+        let secondStream = cache.stream(request: request)
+
+        let firstConsumer = Task { try await consumeChunks(firstStream) }
+        let secondConsumer = Task { try await consumeChunks(secondStream) }
+        let first = try await firstConsumer.value
+        let second = try await secondConsumer.value
+
+        #expect(first.map(\.data).reduce(Data(), +) == seeded)
+        #expect(second == first, "both concurrent cache-hit consumers must receive the same complete sequence")
+        #expect(await upstream.requests().isEmpty, "cache hits must never invoke upstream")
+    }
+
     // MARK: - 2. Miss tees to disk; caller bytes == upstream bytes; file exists
 
     @Test("miss tees to disk and final file exists with full bytes")
@@ -119,7 +146,44 @@ struct CachingTTSChunkSourceTests {
         #expect(first == second, "cache hit must preserve chunk ordering and ids")
     }
 
-    // MARK: - 4. LRU eviction at cap
+    // MARK: - 4. Concurrent identical misses share one upstream stream
+
+    @Test("concurrent identical cache misses coalesce upstream")
+    func concurrentIdenticalMissesCoalesceUpstream() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let request = makeRequest(text: "concurrent miss")
+        let upstreamChunks = [
+            Data([0x01, 0x02]),
+            Data([0x03, 0x04, 0x05]),
+            Data([0x06]),
+        ]
+        let upstream = BlockingAfterFirstChunkSource(chunks: upstreamChunks)
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store)
+
+        let firstConsumer = Task {
+            try await consumeChunks(cache.stream(request: request))
+        }
+        await upstream.waitForFirstChunk()
+
+        let secondStream = cache.stream(request: request)
+        let secondConsumer = Task {
+            try await consumeChunks(secondStream)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await upstream.release()
+
+        let first = try await firstConsumer.value
+        let second = try await secondConsumer.value
+
+        #expect(await upstream.requestCount() == 1, "identical overlapping misses must invoke upstream once")
+        #expect(first.map(\.data) == upstreamChunks)
+        #expect(second == first, "both consumers must receive the complete identical chunk sequence")
+    }
+
+    // MARK: - 5. LRU eviction at cap
 
     @Test("LRU evicts oldest by modification date when total exceeds cap")
     func lruEviction() async throws {
@@ -151,7 +215,48 @@ struct CachingTTSChunkSourceTests {
         #expect(FileManager.default.fileExists(atPath: newURL.path), "newest must remain")
     }
 
-    // MARK: - 5. Cancelled stream unwinds without hanging
+    // MARK: - 6. A replacement request does not join a cancelled producer
+
+    @Test("replacement request waits for cancelled producer to unwind")
+    func replacementRequestDoesNotJoinCancelledProducer() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let request = makeRequest(text: "cancel then retry")
+        let upstream = CancellationWindowSource(chunks: [
+            Data([0x01, 0x02]),
+            Data([0x03, 0x04]),
+        ])
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store)
+
+        let firstConsumer = Task {
+            try await consumeChunks(cache.stream(request: request))
+        }
+        await upstream.waitForFirstChunk()
+        firstConsumer.cancel()
+        _ = await firstConsumer.result
+        await upstream.waitForCancellationObserved()
+
+        let secondStream = cache.stream(request: request)
+        let secondConsumer = Task {
+            try await consumeChunks(secondStream)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await upstream.releaseCancellation()
+
+        let secondResult = await secondConsumer.result
+        guard case .success(let received) = secondResult else {
+            #expect(Bool(false), "replacement request must not inherit the cancelled stream")
+            return
+        }
+
+        #expect(received.map(\.data) == [Data([0x01, 0x02]), Data([0x03, 0x04])])
+        #expect(await upstream.requestCount() == 2, "replacement should start after the cancelled producer unwinds")
+        #expect(await upstream.maxConcurrentRequests() == 1, "replacement requests must not overlap upstream producers")
+    }
+
+    // MARK: - 7. Cancelled stream unwinds without hanging
 
     @Test("cancelled stream unwinds without hanging")
     func cancelLeavesNoFinal() async throws {
@@ -208,6 +313,7 @@ struct CachingTTSChunkSourceTests {
         let consumer = Task {
             for try await _ in cache.stream(request: request) {
                 _ = await counter.increment()
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
                 return
             }
         }
@@ -222,9 +328,14 @@ struct CachingTTSChunkSourceTests {
         try await Task.sleep(nanoseconds: 100_000_000)
         let calls = await upstream.count()
         #expect(calls == 1, "cancelled stream should still only have started one upstream request")
+        let finalURL = tmp.appendingPathComponent("\(TTSCacheKey.compute(text: request.text, voice: request.voice, model: request.model, speed: request.speed)).mp3")
+        #expect(!FileManager.default.fileExists(atPath: finalURL.path), "cancelled stream must not promote a partial file")
+        let files = try FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil)
+        #expect(files.filter { $0.lastPathComponent.hasSuffix(".mp3.partial") }.isEmpty,
+                "cancelled stream must discard its partial file")
     }
 
-    // MARK: - 6. Pre-existing .partial is invisible to read
+    // MARK: - 8. Pre-existing .partial is invisible to read
 
     @Test("pre-existing .partial file is treated as a miss")
     func partialInvisibleToRead() async throws {
@@ -250,7 +361,7 @@ struct CachingTTSChunkSourceTests {
         #expect(calls == 1, "pre-existing .partial MUST be invisible to read — upstream must be invoked")
     }
 
-    // MARK: - 7. Concurrent same-key writers must not clobber each other
+    // MARK: - 9. Concurrent same-key writers must not clobber each other
 
     /// Regression for the read-aloud mid-paragraph halt: when the engine plays a
     /// passage while the prewarmer re-warms the SAME passage (same cache key),
@@ -288,7 +399,7 @@ struct CachingTTSChunkSourceTests {
                 "committed bytes must be writer A's, undamaged by the concurrent writer")
     }
 
-    // MARK: - 8. Empty upstream must not poison the cache (read-aloud halt)
+    // MARK: - 10. Empty upstream must not poison the cache (read-aloud halt)
     //
     // Field repro (user log): the current paragraph plays from cache, the NEXT
     // paragraph is NOT cached so it forces an upstream (network) call, and that
@@ -354,5 +465,209 @@ struct CachingTTSChunkSourceTests {
             played == Data([0x01, 0x02, 0x03, 0x04]),
             "after evicting the 0-byte entry, playback must re-synthesise real audio"
         )
+    }
+}
+
+private actor BlockingAfterFirstChunkSource: TTSChunkSource {
+    private let chunks: [Data]
+    private var receivedRequestCount = 0
+    private var firstChunkWasYielded = false
+    private var released = false
+    private var firstChunkWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(chunks: [Data]) {
+        self.chunks = chunks
+    }
+
+    nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [chunks] in
+                await self.recordRequest()
+                for (index, data) in chunks.enumerated() {
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+                    continuation.yield(TTSChunk.make(
+                        request: request,
+                        sequenceIndex: index,
+                        data: data
+                    ))
+                    if index == 0 {
+                        await self.markFirstChunkWasYielded()
+                        await self.waitForRelease()
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func waitForFirstChunk() async {
+        if firstChunkWasYielded { return }
+        await withCheckedContinuation { continuation in
+            firstChunkWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func requestCount() -> Int {
+        receivedRequestCount
+    }
+
+    private func recordRequest() {
+        receivedRequestCount += 1
+    }
+
+    private func markFirstChunkWasYielded() {
+        firstChunkWasYielded = true
+        let waiters = firstChunkWaiters
+        firstChunkWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func waitForRelease() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+}
+
+private actor CancellationWindowSource: TTSChunkSource {
+    private let chunks: [Data]
+    private var totalRequests = 0
+    private var activeRequests = 0
+    private var maximumConcurrentRequests = 0
+    private var firstChunkWasYielded = false
+    private var cancellationWasObserved = false
+    private var firstChunkWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationReleaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationReleased = false
+
+    init(chunks: [Data]) {
+        self.chunks = chunks
+    }
+
+    nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [chunks] in
+                let requestNumber = await self.startRequest()
+                continuation.yield(TTSChunk.make(
+                    request: request,
+                    sequenceIndex: 0,
+                    data: chunks[0]
+                ))
+                await self.markFirstChunkWasYielded()
+
+                if requestNumber == 1 {
+                    do {
+                        try await Task.sleep(nanoseconds: 60_000_000_000)
+                    } catch {
+                        await self.markCancellationWasObserved()
+                        await self.waitForCancellationRelease()
+                        continuation.finish(throwing: error)
+                        return
+                    }
+                }
+
+                for (index, data) in chunks.dropFirst().enumerated() {
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+                    continuation.yield(TTSChunk.make(
+                        request: request,
+                        sequenceIndex: index + 1,
+                        data: data
+                    ))
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task { await self.stopRequest() }
+            }
+        }
+    }
+
+    func waitForFirstChunk() async {
+        if firstChunkWasYielded { return }
+        await withCheckedContinuation { continuation in
+            firstChunkWaiters.append(continuation)
+        }
+    }
+
+    func waitForCancellationObserved() async {
+        if cancellationWasObserved { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    func releaseCancellation() {
+        cancellationReleased = true
+        let waiters = cancellationReleaseWaiters
+        cancellationReleaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func requestCount() -> Int {
+        totalRequests
+    }
+
+    func maxConcurrentRequests() -> Int {
+        maximumConcurrentRequests
+    }
+
+    private func startRequest() -> Int {
+        totalRequests += 1
+        activeRequests += 1
+        maximumConcurrentRequests = max(maximumConcurrentRequests, activeRequests)
+        return totalRequests
+    }
+
+    private func stopRequest() {
+        activeRequests -= 1
+    }
+
+    private func markFirstChunkWasYielded() {
+        firstChunkWasYielded = true
+        let waiters = firstChunkWaiters
+        firstChunkWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func markCancellationWasObserved() {
+        cancellationWasObserved = true
+        let waiters = cancellationWaiters
+        cancellationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func waitForCancellationRelease() async {
+        if cancellationReleased { return }
+        await withCheckedContinuation { continuation in
+            cancellationReleaseWaiters.append(continuation)
+        }
     }
 }
