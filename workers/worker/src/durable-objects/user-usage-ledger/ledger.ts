@@ -165,11 +165,61 @@ export class UserUsageLedger extends DurableObject<Env> {
    * Throws `InsufficientAllowanceError` if remaining trial credit (after
    * subtracting other outstanding pending reservations) is below the cost.
    */
+  /**
+   * Reserves narration allowance for one TTS generation. Signature is
+   * unchanged from plan 2 (downstream callers already assume it), but
+   * `estimateCredits`'s MEANING is now unit-dependent on which allowance
+   * is active — see "Design decisions" #3:
+   *
+   *   - No active paid period: behaves exactly as plan 2 shipped it —
+   *     `estimateCredits` is ignored; trial TTS always costs exactly
+   *     `TRIAL_TTS_COST_CREDITS` (1 credit) regardless of text length.
+   *   - An active paid period: `estimateCredits` is reinterpreted as an
+   *     estimated SECONDS count for narration, deducted from
+   *     `narrationSecondsTotal - narrationSecondsUsed` (minus other
+   *     pending reservations) in the DO-local paid mirror.
+   *
+   * Throws `InsufficientAllowanceError` in both cases if the applicable
+   * pool cannot cover the cost — for the paid path this also covers "the
+   * active paid period has 0 remaining narration seconds", since any
+   * positive `estimateSeconds` exceeds a 0 remaining balance.
+   */
   async reserveTts(estimateCredits: number): Promise<{ reservationId: string }> {
-    void estimateCredits; // unused in the trial-only path; see doc comment above
+    const userId = this.requireUserId();
+    const activePeriod = await this.getActiveAllowancePeriod();
+
+    if (activePeriod) {
+      const estimateSeconds = estimateCredits;
+      const remainingSeconds = await this.remainingPaidNarrationSeconds(activePeriod);
+      if (remainingSeconds < estimateSeconds) {
+        this.ctx.waitUntil(
+          this.appendAuditLog(userId, "tts_reservation_rejected", {
+            reason: "plan_narration_allowance_exhausted",
+          }),
+        );
+        throw new InsufficientAllowanceError("Narration allowance is exhausted for the current billing period");
+      }
+
+      const reservationId = crypto.randomUUID();
+      const createdAt = Date.now();
+      await this.db.insert(reservations).values({
+        id: reservationId,
+        userId,
+        kind: "tts",
+        amount: estimateSeconds,
+        status: "pending",
+        createdAt,
+        settledAt: null,
+      });
+
+      this.ctx.waitUntil(
+        this.mirrorReserveToD1({ id: reservationId, userId, amount: estimateSeconds, createdAt }),
+      );
+
+      return { reservationId };
+    }
 
     await this.grantTrialIfAbsent();
-    const userId = this.requireUserId();
     const remaining = await this.remainingTrialCredits();
     if (remaining < TRIAL_TTS_COST_CREDITS) {
       this.ctx.waitUntil(
@@ -210,6 +260,13 @@ export class UserUsageLedger extends DurableObject<Env> {
    * is a no-op and does not double-charge. Throws `ReservationStateError`
    * if the reservation was already released (invalid transition).
    */
+  /**
+   * Commits a pending TTS reservation. Which pool it deducts from is
+   * re-derived at settlement time via `getActiveAllowancePeriod()` — see
+   * "Design decisions" #3 for why this is safe in practice and what the
+   * sharp edge is. Idempotent and error-throwing behavior is otherwise
+   * unchanged from plan 2.
+   */
   async commitTtsReservation(reservationId: string): Promise<void> {
     const reservation = await this.findReservation(reservationId);
     if (!reservation) throw new ReservationNotFoundError(reservationId);
@@ -220,11 +277,33 @@ export class UserUsageLedger extends DurableObject<Env> {
 
     const userId = this.requireUserId();
     const settledAt = Date.now();
+    const activePeriod = await this.getActiveAllowancePeriod(settledAt);
 
     await this.db
       .update(reservations)
       .set({ status: "committed", settledAt })
       .where(eq(reservations.id, reservationId));
+
+    if (activePeriod) {
+      await this.db
+        .update(currentAllowancePeriod)
+        .set({
+          narrationSecondsUsed: sql`${currentAllowancePeriod.narrationSecondsUsed} + ${reservation.amount}`,
+          updatedAt: settledAt,
+        })
+        .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+
+      this.ctx.waitUntil(
+        this.mirrorPaidNarrationCommitToD1(
+          activePeriod.periodId,
+          userId,
+          reservation.amount,
+          reservationId,
+          settledAt,
+        ),
+      );
+      return;
+    }
 
     await this.db
       .update(trialLedger)
@@ -996,6 +1075,42 @@ export class UserUsageLedger extends DurableObject<Env> {
       });
     } catch (err) {
       console.error("UserUsageLedger.mirrorCommitToD1 failed", { reservationId, err });
+    }
+  }
+
+  /**
+   * Settles a paid-narration reservation's seconds into D1's
+   * `allowancePeriod.narrationSecondsUsed`, mirroring plan 2's
+   * `mirrorCommitToD1` pattern exactly: best-effort, called only from
+   * `ctx.waitUntil(...)` after the local decision is already durable,
+   * never re-thrown.
+   */
+  private async mirrorPaidNarrationCommitToD1(
+    periodId: string,
+    userId: string,
+    secondsUsed: number,
+    reservationId: string,
+    settledAt: number,
+  ): Promise<void> {
+    try {
+      const db = createDb(this.env.DB);
+      await db
+        .update(usageReservation)
+        .set({ status: "committed", settledAt: new Date(settledAt) })
+        .where(eq(usageReservation.id, reservationId));
+      await db
+        .update(allowancePeriod)
+        .set({ narrationSecondsUsed: sql`${allowancePeriod.narrationSecondsUsed} + ${secondsUsed}` })
+        .where(eq(allowancePeriod.id, periodId));
+      await db.insert(usageAuditLog).values({
+        id: crypto.randomUUID(),
+        userId,
+        eventType: "narration_reservation_committed_paid",
+        details: JSON.stringify({ reservationId, periodId, secondsUsed }),
+        createdAt: new Date(settledAt),
+      });
+    } catch (err) {
+      console.error("UserUsageLedger.mirrorPaidNarrationCommitToD1 failed", { reservationId, err });
     }
   }
 
