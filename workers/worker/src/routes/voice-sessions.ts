@@ -132,3 +132,42 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
     );
   }
 });
+
+// ---------- POST /:id/register-call (bind the OpenAI call ID to this session) ----------
+
+const RegisterCallBodySchema = z.object({
+  callId: z.string().min(1),
+  nonce: z.string().min(1),
+});
+
+/**
+ * Registers the OpenAI `call_id` the vendored Swift Realtime connector
+ * captured from the `Location` header of its WebRTC call creation. Per the
+ * no-card-credit-trial design doc's "Voice flow" step 7: "If the app fails
+ * to register the OpenAI call ID promptly, it must close the just-opened
+ * voice connection and show a retryable error." Every non-2xx response below
+ * is exactly that signal — the iOS client must close its just-opened OpenAI
+ * WebRTC connection on any of them and, per that same step, offer retry.
+ */
+voiceSessionsRoutes.post("/:id/register-call", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const rishiSessionId = c.req.param("id");
+
+  const rawBody = await c.req.json().catch(() => null);
+  const parsedBody = RegisterCallBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return c.json(
+      { error: "callId and nonce are required non-empty strings", code: "INVALID_REGISTER_CALL_BODY" },
+      400,
+    );
+  }
+
+  const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
+  try {
+    await stub.registerCallId(rishiSessionId, parsedBody.data.callId, parsedBody.data.nonce);
+  } catch (err) {
+    return voiceSessionErrorResponse(c, err);
+  }
+
+  return c.json({ ok: true });
+});
