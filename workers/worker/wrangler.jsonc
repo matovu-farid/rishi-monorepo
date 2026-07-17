@@ -45,6 +45,35 @@
 			"preview_id": "49a43a76aac747ad8472856f33e1eeda"
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "USER_USAGE_LEDGER",
+				"class_name": "UserUsageLedger"
+			}
+		]
+	},
+	// SQLite-backed DO storage — required so ctx.storage is the synchronous,
+	// atomic SQLite backend (not the legacy KV backend). Never rename this
+	// tag or reuse it for a different class; add a new tag for future
+	// Durable Object classes instead.
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["UserUsageLedger"]
+		}
+	],
+	// Lets the bundler embed the drizzle-kit-generated DO migration SQL
+	// (imported as text by drizzle/ledger-do-migrations/migrations.js) into
+	// the deployed Worker, since Durable Objects have no filesystem access
+	// at runtime.
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/*.sql"],
+			"fallthrough": true
+		}
+	],
 	"vars": {
 		"PUBLIC_API_URL": "https://api.fidexa.org",
 		"PUBLIC_WEB_URL": "https://rishi.fidexa.org",

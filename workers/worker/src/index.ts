@@ -49,6 +49,7 @@ import { incrementApiUsage } from "./usage/api-usage";
 import { error } from "node:console";
 import { userRoutes } from "./routes/user";
 export { requireAuth } from "./middleware";
+export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
 const ALLOWED_REALTIME_LANGUAGES = [
