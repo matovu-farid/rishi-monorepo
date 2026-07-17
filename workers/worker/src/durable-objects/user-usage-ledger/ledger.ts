@@ -11,7 +11,7 @@ import {
   ReservationStateError,
 } from "./errors";
 import { reservations, trialLedger, TRIAL_LEDGER_ROW_ID } from "./schema";
-import type { VoiceSessionRow } from "./schema";
+import type { VoiceSessionRow, VoiceSessionStatus } from "./schema";
 import { TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
 import type { EntitlementSnapshot } from "./types";
 import { VoiceSessionError } from "../voice-session/errors";
@@ -533,6 +533,43 @@ export class UserUsageLedger extends DurableObject<Env> {
    */
   async hangUpCall(callId: string): Promise<void> {
     await callOpenAiHangup(this.env.OPENAI_API_KEY, callId);
+  }
+
+  /**
+   * Plain internal data snapshot of a voice session's current status and
+   * allowance — not a wire message itself. Used internally by this class
+   * (nothing in this plan calls it yet) and, once plan 4
+   * (2026-07-17-voice-control-websocket.md) lands, by that plan's `fetch()`
+   * to build the initial `{ type: "snapshot", ... }` message it sends
+   * right after accepting the control WebSocket, and by the Worker route
+   * that plan adds as a pre-upgrade RPC check. Returns `null` if no
+   * session with this id has ever existed on this ledger.
+   */
+  async getSessionSnapshot(rishiSessionId: string): Promise<{
+    rishiSessionId: string;
+    status: VoiceSessionStatus;
+    remainingCredits?: number;
+    remainingIntervals?: number;
+    terminalReason?: VoiceSessionTerminalReason;
+  } | null> {
+    const row = await findVoiceSessionById(this.db, rishiSessionId);
+    if (!row) return null;
+
+    if (row.status === "terminal") {
+      return {
+        rishiSessionId,
+        status: "terminal",
+        terminalReason: row.terminalReason ?? undefined,
+      };
+    }
+
+    const remainingCredits = await this.remainingTrialCredits();
+    return {
+      rishiSessionId,
+      status: row.status,
+      remainingCredits,
+      remainingIntervals: row.capIntervals - row.consumedIntervals,
+    };
   }
 
   // ── Internal helpers — DO-local storage reads (part of the atomic path) ──
