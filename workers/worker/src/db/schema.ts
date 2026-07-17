@@ -499,7 +499,7 @@ export const allowancePeriod = sqliteTable(
       .notNull()
       .default(0),
     transitionReason: text("transition_reason", {
-      enum: ["initial", "upgraded", "renewed", "crossgrade"],
+      enum: ["initial", "upgraded", "renewed", "crossgrade", "downgraded"],
     }),
     priorPeriodId: text("prior_period_id").references(
       (): AnySQLiteColumn => allowancePeriod.id,
