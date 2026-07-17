@@ -726,6 +726,15 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
   c.executionCtx.waitUntil(
     incrementApiUsage(c.env, c.get("userId"), "tts"),
   );
+
+  const userId = c.get("userId");
+  const ledger = c.env.USER_USAGE_LEDGER.getByName(userId);
+  // Set only once reserveTts() succeeds, and cleared as soon as the
+  // reservation is settled (committed or released) on any success path.
+  // The catch block below releases it only if it is still set, so a
+  // reservation is never released twice and never released after commit.
+  let pendingReservationId: string | undefined;
+
   try {
     // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
     // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
@@ -792,12 +801,39 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     // Phase 22-01: R2-backed content-addressed cache gate.
     // Hits skip both the OpenAI call AND metering; misses preserve all existing
     // behavior verbatim and fire-and-forget a writeback via waitUntil.
+    //
+    // Ledger note: per the pricing design's "Narration flow" step 2-3, the
+    // cache is checked *before* any allowance is reserved, so a cache hit
+    // never calls the ledger at all.
     const key = await ttsCacheKey(text, validVoice, validSpeed);
 
     const cached = await c.env.TTS_CACHE.get(key);
     if (cached !== null) {
       const bytes = await cached.bytes();
       return respondWithTtsBytes(bytes, key, "hit", responseMode);
+    }
+
+    // Cache miss: reserve allowance before calling the provider. The
+    // reservation must exist before the OpenAI request begins so a failed
+    // or slow provider call always has something to release.
+    let reservationId: string;
+    try {
+      const reservation = await ledger.reserveTts(
+        estimateNarrationSeconds(text),
+      );
+      reservationId = reservation.reservationId;
+      pendingReservationId = reservationId;
+    } catch (reserveErr) {
+      if (InsufficientAllowanceError.isInstance(reserveErr)) {
+        return c.json(
+          {
+            error: "Trial credits are exhausted",
+            code: "INSUFFICIENT_ALLOWANCE",
+          },
+          402,
+        );
+      }
+      throw reserveErr;
     }
 
     const openai = getSpeechOpenAI(c.env.OPENAI_API_KEY);
@@ -827,8 +863,46 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       }).catch((e) => console.error("tts.cache.put.failed", e)),
     );
 
-    return respondWithTtsBytes(audioBytes, key, "miss", responseMode);
+    // Settle the reservation via waitUntil so commit latency never blocks
+    // audio delivery (design: "must not wait for... cost reconciliation...
+    // before streaming audio"). This commits the reservation's originally
+    // estimated amount, not a measured generated duration — see this
+    // plan's "Exports for downstream plans" for the flagged
+    // precise-duration-parsing gap.
+    c.executionCtx.waitUntil(
+      ledger.commitTtsReservation(reservationId).catch((commitErr) =>
+        console.error("tts.reservation.commit.failed", {
+          reservationId,
+          commitErr,
+        }),
+      ),
+    );
+    pendingReservationId = undefined;
+
+    // Best-effort, budget-limited: never let a slow ledger read hold up the
+    // response (see bestEffortEntitlementHeader).
+    const entitlementHeader = await bestEffortEntitlementHeader(ledger);
+
+    return respondWithTtsBytes(
+      audioBytes,
+      key,
+      "miss",
+      responseMode,
+      entitlementHeader,
+    );
   } catch (error) {
+    // Release before responding, not fire-and-forget: a fast client retry
+    // must not be blocked by a stale pending reservation.
+    if (pendingReservationId) {
+      const reservationId = pendingReservationId;
+      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
+        console.error("tts.reservation.release.failed", {
+          reservationId,
+          releaseErr,
+        }),
+      );
+    }
+
     if (APICallError.isInstance(error)) {
       console.error("OpenAI API error:", error.statusCode, error.message);
       return c.json(
