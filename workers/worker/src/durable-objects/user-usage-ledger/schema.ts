@@ -32,7 +32,9 @@ export const reservations = sqliteTable("reservations", {
 // paid-session kind without a schema migration.
 export const voiceSession = sqliteTable("voice_session", {
   rishiSessionId: text("rishi_session_id").primaryKey(),
-  planKind: text("plan_kind").notNull().default("trial"),
+  planKind: text("plan_kind", { enum: ["trial", "reader", "voice"] })
+    .notNull()
+    .default("trial"),
   status: text("status", {
     enum: ["pending_registration", "active", "terminal"],
   }).notNull(),
@@ -45,7 +47,12 @@ export const voiceSession = sqliteTable("voice_session", {
   callId: text("call_id"),
   callRegisteredAt: integer("call_registered_at"), // epoch ms, null until registered
   terminalReason: text("terminal_reason", {
-    enum: ["voice_session_time_cap", "trial_credits_exhausted", "registration_timeout"],
+    enum: [
+      "voice_session_time_cap",
+      "trial_credits_exhausted",
+      "registration_timeout",
+      "plan_voice_allowance_exhausted",
+    ],
   }),
   terminalAt: integer("terminal_at"), // epoch ms
   hangupStatus: text("hangup_status", {

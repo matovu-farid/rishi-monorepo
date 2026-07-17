@@ -40,6 +40,17 @@ import type { ControlMessage, VoiceSessionTerminalReason } from "../voice-sessio
 const CREDITS_PER_INTERVAL = 2;
 const CAP_INTERVALS_TRIAL = 40; // 20 minutes at the 30s cadence
 const INTERVAL_MS = 30_000;
+// Per-session Voice Chat caps by plan, at the same 30s cadence as the
+// trial (`CAP_INTERVALS_TRIAL`). Reader: 10 minutes. Voice: 20 minutes —
+// same total as the trial cap, kept as its own named constant so the two
+// can be tuned independently later.
+const CAP_INTERVALS_READER = 20;
+const CAP_INTERVALS_VOICE = 40;
+
+// Seconds deducted from a paid period's voiceChatSecondsUsed per alarm
+// tick — equal to INTERVAL_MS in seconds. Also the minimum remaining
+// paid-Voice-Chat balance required to start a new session.
+const PAID_VOICE_CHAT_SECONDS_PER_INTERVAL = INTERVAL_MS / 1000;
 const ClientControlMessageSchema = z.object({ type: z.literal("client_ack") });
 /** How long a session may sit `pending_registration` before it's reconciled as abandoned. Documented per the spec's "short grace period" requirement. */
 const REGISTRATION_GRACE_MS = 10_000;
@@ -469,6 +480,16 @@ export class UserUsageLedger extends DurableObject<Env> {
    * see the existing `/api/realtime/client_secrets` route in
    * `workers/worker/src/index.ts` for the pattern to reuse there.
    */
+  /**
+   * Verifies at least one interval's worth of the applicable allowance is
+   * available (trial credits, or paid Voice Chat seconds if a paid period
+   * is active), mints a Rishi session ID and single-use registration
+   * nonce, and records the plan-specific session cap: 40 trial intervals
+   * (20 minutes), 20 Reader intervals (10 minutes), or 40 Voice intervals
+   * (20 minutes). Rejects if a session is already active for this user.
+   * Return shape is unchanged from plan 3 — `capIntervals` now simply
+   * varies by which plan applied.
+   */
   async createVoiceSession(): Promise<{
     rishiSessionId: string;
     nonce: string;
@@ -482,15 +503,40 @@ export class UserUsageLedger extends DurableObject<Env> {
       );
     }
 
-    const remainingCredits = await this.remainingTrialCredits();
-    if (remainingCredits < CREDITS_PER_INTERVAL) {
-      throw new VoiceSessionError(
-        "insufficient_credits",
-        `only ${remainingCredits} trial credits remain; need at least ${CREDITS_PER_INTERVAL}`,
+    const userId = this.requireUserId();
+    const activePeriod = await this.getActiveAllowancePeriod();
+
+    let planKind: "trial" | "reader" | "voice";
+    let capIntervals: number;
+    let creditsPerInterval: number;
+
+    if (activePeriod) {
+      const remainingVoiceChatSeconds = Math.max(
+        0,
+        activePeriod.voiceChatSecondsTotal - activePeriod.voiceChatSecondsUsed,
       );
+      if (remainingVoiceChatSeconds < PAID_VOICE_CHAT_SECONDS_PER_INTERVAL) {
+        throw new VoiceSessionError(
+          "insufficient_paid_allowance",
+          `only ${remainingVoiceChatSeconds}s of paid Voice Chat allowance remain; need at least ${PAID_VOICE_CHAT_SECONDS_PER_INTERVAL}s`,
+        );
+      }
+      planKind = activePeriod.plan;
+      capIntervals = activePeriod.plan === "reader" ? CAP_INTERVALS_READER : CAP_INTERVALS_VOICE;
+      creditsPerInterval = PAID_VOICE_CHAT_SECONDS_PER_INTERVAL;
+    } else {
+      const remainingCredits = await this.remainingTrialCredits();
+      if (remainingCredits < CREDITS_PER_INTERVAL) {
+        throw new VoiceSessionError(
+          "insufficient_credits",
+          `only ${remainingCredits} trial credits remain; need at least ${CREDITS_PER_INTERVAL}`,
+        );
+      }
+      planKind = "trial";
+      capIntervals = CAP_INTERVALS_TRIAL;
+      creditsPerInterval = CREDITS_PER_INTERVAL;
     }
 
-    const userId = this.requireUserId();
     const rishiSessionId = crypto.randomUUID();
     const now = Date.now();
     const minted = await mintRegistrationNonce(
@@ -502,11 +548,11 @@ export class UserUsageLedger extends DurableObject<Env> {
 
     await insertVoiceSession(this.db, {
       rishiSessionId,
-      planKind: "trial",
+      planKind,
       status: "pending_registration",
-      capIntervals: CAP_INTERVALS_TRIAL,
+      capIntervals,
       consumedIntervals: 0,
-      creditsPerInterval: CREDITS_PER_INTERVAL,
+      creditsPerInterval,
       nonceIssuedAt: minted.issuedAtMs,
       nonceSignature: minted.signatureB64Url,
       nonceUsed: false,
@@ -521,9 +567,9 @@ export class UserUsageLedger extends DurableObject<Env> {
     });
 
     await this.ctx.storage.setAlarm(now + REGISTRATION_GRACE_MS);
-    await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId });
+    await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId, planKind });
 
-    return { rishiSessionId, nonce: minted.nonce, capIntervals: CAP_INTERVALS_TRIAL };
+    return { rishiSessionId, nonce: minted.nonce, capIntervals };
   }
 
   /**
@@ -639,34 +685,71 @@ export class UserUsageLedger extends DurableObject<Env> {
    * that sequence atomic, so no `ctx.storage.transactionSync` wrapper is
    * needed here.
    */
+  /**
+   * `row.planKind` was fixed at session creation (`createVoiceSession`)
+   * and is trusted for the session's entire lifetime — this method does
+   * NOT re-check whether a paid period is still "active" on every tick.
+   * See "Design decisions" #4 for why: re-deriving live plan status
+   * mid-session would let an account's subscription-state change silently
+   * switch which pool an in-progress call drains, which the spec does not
+   * ask for and which would be confusing to a user mid-call.
+   */
   private async tickActiveSession(row: VoiceSessionRow, userId: string, now: number): Promise<void> {
-    const remainingCredits = await this.remainingTrialCredits();
-    if (remainingCredits < CREDITS_PER_INTERVAL) {
-      await this.terminateSession(row, "trial_credits_exhausted", userId, now);
-      return;
+    let remainingAllowanceAfterTick: number;
+
+    if (row.planKind === "trial") {
+      const remainingCredits = await this.remainingTrialCredits();
+      if (remainingCredits < CREDITS_PER_INTERVAL) {
+        await this.terminateSession(row, "trial_credits_exhausted", userId, now);
+        return;
+      }
+      await this.db
+        .update(trialLedger)
+        .set({ usedCredits: sql`${trialLedger.usedCredits} + ${CREDITS_PER_INTERVAL}` })
+        .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
+      remainingAllowanceAfterTick = remainingCredits - CREDITS_PER_INTERVAL;
+
+      await this.appendAuditLog(userId, "voice_session.interval_charged", {
+        rishiSessionId: row.rishiSessionId,
+        planKind: "trial",
+        remainingCredits: remainingAllowanceAfterTick,
+      });
+    } else {
+      const period = await this.getCurrentAllowancePeriodRow();
+      const remainingSeconds = period
+        ? Math.max(0, period.voiceChatSecondsTotal - period.voiceChatSecondsUsed)
+        : 0;
+      if (!period || remainingSeconds < PAID_VOICE_CHAT_SECONDS_PER_INTERVAL) {
+        await this.terminateSession(row, "plan_voice_allowance_exhausted", userId, now);
+        return;
+      }
+      await this.db
+        .update(currentAllowancePeriod)
+        .set({
+          voiceChatSecondsUsed: sql`${currentAllowancePeriod.voiceChatSecondsUsed} + ${PAID_VOICE_CHAT_SECONDS_PER_INTERVAL}`,
+          updatedAt: now,
+        })
+        .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+      remainingAllowanceAfterTick = remainingSeconds - PAID_VOICE_CHAT_SECONDS_PER_INTERVAL;
+
+      this.ctx.waitUntil(this.mirrorPaidVoiceTickToD1(period.periodId, userId, now));
+
+      await this.appendAuditLog(userId, "voice_session.interval_charged", {
+        rishiSessionId: row.rishiSessionId,
+        planKind: row.planKind,
+        remainingVoiceChatSeconds: remainingAllowanceAfterTick,
+      });
     }
 
-    await this.db
-      .update(trialLedger)
-      .set({ usedCredits: sql`${trialLedger.usedCredits} + ${CREDITS_PER_INTERVAL}` })
-      .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
     await incrementConsumedIntervals(this.db, row.rishiSessionId, now);
 
-    const spentRemainingCredits = remainingCredits - CREDITS_PER_INTERVAL;
     const consumedIntervals = row.consumedIntervals + 1;
     const remainingIntervals = row.capIntervals - consumedIntervals;
 
-    await this.appendAuditLog(userId, "voice_session.interval_charged", {
-      rishiSessionId: row.rishiSessionId,
-      consumedIntervals,
-      remainingCredits: spentRemainingCredits,
-    });
-
-    // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
     this.broadcastToActiveSockets({
       type: "allowance_remaining",
       rishiSessionId: row.rishiSessionId,
-      remainingCredits: spentRemainingCredits,
+      remainingCredits: remainingAllowanceAfterTick,
       remainingIntervals,
     });
 
@@ -777,6 +860,12 @@ export class UserUsageLedger extends DurableObject<Env> {
    * that plan adds as a pre-upgrade RPC check. Returns `null` if no
    * session with this id has ever existed on this ledger.
    */
+  /**
+   * Return shape is unchanged from plan 3 — `remainingCredits` reuses the
+   * same field for either trial credits or paid Voice Chat seconds
+   * remaining, matching the dual-unit tradeoff documented on
+   * `createVoiceSession`/`tickActiveSession` (see "Design decisions" #4).
+   */
   async getSessionSnapshot(rishiSessionId: string): Promise<{
     rishiSessionId: string;
     status: VoiceSessionStatus;
@@ -795,7 +884,16 @@ export class UserUsageLedger extends DurableObject<Env> {
       };
     }
 
-    const remainingCredits = await this.remainingTrialCredits();
+    let remainingCredits: number;
+    if (row.planKind === "trial") {
+      remainingCredits = await this.remainingTrialCredits();
+    } else {
+      const period = await this.getCurrentAllowancePeriodRow();
+      remainingCredits = period
+        ? Math.max(0, period.voiceChatSecondsTotal - period.voiceChatSecondsUsed)
+        : 0;
+    }
+
     return {
       rishiSessionId,
       status: row.status,
@@ -1111,6 +1209,37 @@ export class UserUsageLedger extends DurableObject<Env> {
       });
     } catch (err) {
       console.error("UserUsageLedger.mirrorPaidNarrationCommitToD1 failed", { reservationId, err });
+    }
+  }
+
+  /**
+   * Settles one paid Voice Chat interval's seconds into D1's
+   * `allowancePeriod.voiceChatSecondsUsed`, mirroring the exact same
+   * best-effort, never-rethrown pattern as every other `mirror*ToD1`
+   * helper in this class.
+   */
+  private async mirrorPaidVoiceTickToD1(
+    periodId: string,
+    userId: string,
+    now: number,
+  ): Promise<void> {
+    try {
+      const db = createDb(this.env.DB);
+      await db
+        .update(allowancePeriod)
+        .set({
+          voiceChatSecondsUsed: sql`${allowancePeriod.voiceChatSecondsUsed} + ${PAID_VOICE_CHAT_SECONDS_PER_INTERVAL}`,
+        })
+        .where(eq(allowancePeriod.id, periodId));
+      await db.insert(usageAuditLog).values({
+        id: crypto.randomUUID(),
+        userId,
+        eventType: "voice_session.paid_interval_charged",
+        details: JSON.stringify({ periodId, seconds: PAID_VOICE_CHAT_SECONDS_PER_INTERVAL }),
+        createdAt: new Date(now),
+      });
+    } catch (err) {
+      console.error("UserUsageLedger.mirrorPaidVoiceTickToD1 failed", { periodId, err });
     }
   }
 

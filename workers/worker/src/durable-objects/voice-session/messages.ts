@@ -3,7 +3,8 @@ import type { VoiceSessionStatus } from "../user-usage-ledger/schema";
 export type VoiceSessionTerminalReason =
   | "voice_session_time_cap"
   | "trial_credits_exhausted"
-  | "registration_timeout";
+  | "registration_timeout"
+  | "plan_voice_allowance_exhausted";
 
 /** Sent as a follow-up `session_ended` reason if OpenAI hangup never succeeds after bounded retries. */
 export type HangupFailureReason = "provider_hangup_failed";

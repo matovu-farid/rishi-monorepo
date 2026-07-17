@@ -1,6 +1,7 @@
 export type VoiceSessionErrorCode =
   | "session_already_active"
   | "insufficient_credits"
+  | "insufficient_paid_allowance"
   | "no_active_session"
   | "session_id_mismatch"
   | "nonce_mismatch"
