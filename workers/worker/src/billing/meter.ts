@@ -4,7 +4,7 @@ import {
   METER_EVENT_NAME,
   usdToMicroDollars,
 } from "@rishi/shared/billing/stripe-config";
-import { user } from "@rishi/shared/schema";
+import { user } from "../db/schema";
 import {
   computeOpenAiCostUsd,
   type OpenAiUsage,

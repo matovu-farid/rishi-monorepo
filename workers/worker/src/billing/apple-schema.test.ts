@@ -18,7 +18,7 @@ import {
   appleNotificationsLog,
   subscription,
   user,
-} from "@rishi/shared/schema";
+} from "../db/schema";
 
 describe("apple_subscriptions schema", () => {
   const cfg = getTableConfig(appleSubscriptions);

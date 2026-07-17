@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
-import { subscription } from "@rishi/shared/schema";
+import { subscription } from "../db/schema";
 import { createDb } from "../db/drizzle";
 
 

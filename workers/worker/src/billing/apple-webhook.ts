@@ -7,7 +7,7 @@ import {
   appleSubscriptions,
   appleNotificationsLog,
   devices as devicesTable,
-} from "@rishi/shared/schema";
+} from "../db/schema";
 import { createDb } from "../db/drizzle";
 // NOTE: type-only import — runtime import would form an ESM cycle with
 // src/index.ts via the route mount (same constraint as 14-04). The webhook

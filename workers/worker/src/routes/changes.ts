@@ -3,7 +3,7 @@ import { and, asc, eq, gt } from "drizzle-orm";
 
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
-import { books, highlights, bookmarks } from "@rishi/shared/schema";
+import { books, highlights, bookmarks } from "../db/schema";
 
 /**
  * GET /api/sync/changes?since=<ISO8601>

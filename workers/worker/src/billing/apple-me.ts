@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
-import { appleSubscriptions, subscription } from "@rishi/shared/schema";
+import { appleSubscriptions, subscription } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import type { EntitlementSnapshot } from "../durable-objects/user-usage-ledger/types";
 // Type-only import to avoid a runtime ESM cycle with ../index — same shape as

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { userApiUsage } from "@rishi/shared/schema";
+import { userApiUsage } from "../db/schema";
 import { createDb } from "../db/drizzle";
 
 export type ApiUsageMetric = "voiceChat" | "tts";

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { devices } from "@rishi/shared/schema";
+import { devices } from "../db/schema";
 import { createDb } from "../db/drizzle";
 
 import { requireAuth } from "../index";

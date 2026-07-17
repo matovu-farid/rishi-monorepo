@@ -2,7 +2,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
 import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
-import { appleSubscriptions } from "@rishi/shared/schema";
+import { appleSubscriptions } from "../db/schema";
 import { createDb } from "../db/drizzle";
 // NOTE: `CloudflareBindings` and `requireAuth` live in `../index.ts`. We
 // CANNOT `import { requireAuth } from "../index"` here — index.ts imports

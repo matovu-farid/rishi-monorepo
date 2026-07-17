@@ -13,7 +13,7 @@ import {
   user as userTable,
   appleSubscriptions,
   subscription,
-} from "@rishi/shared/schema";
+} from "./db/schema";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import type Stripe from "stripe";

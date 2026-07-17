@@ -9,7 +9,7 @@ export interface EnsureCustomerAndPortalDeps {
   ip: string | null;
   getUserRow: (
     userId: string,
-  ) => Promise<{ stripeCustomerId: string | null; email: string } | null>;
+  ) => Promise<{ stripeCustomerId: string | null; email: string | null } | null>;
   updateUserStripeCustomerId: (stripeCustomerId: string) => Promise<void>;
   ensureCreditAndSubscription: (
     stripe: Stripe,
@@ -36,7 +36,7 @@ export async function ensureCustomerAndPortal(
   let customerId = row.stripeCustomerId;
   if (!customerId) {
     const customer = await deps.stripe.customers.create({
-      email: row.email,
+      email: row.email ?? undefined,
       metadata: { userId: deps.userId },
     });
     customerId = customer.id;

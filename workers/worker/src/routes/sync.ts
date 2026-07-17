@@ -10,7 +10,7 @@ import {
   conversations,
   messages,
   bookmarks,
-} from "@rishi/shared/schema";
+} from "../db/schema";
 import type { PullResponse } from "@rishi/shared/sync-types";
 
 // ─── Date wire convention ──────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { conversations, messages } from "@rishi/shared/schema";
+import { conversations, messages } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { requireAuth } from "../index";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { signAccessToken } from "../jwt";
 import { createDb } from "../db/drizzle";
 import { createTestD1 } from "../test-utils/d1";
-import { user, userApiUsage } from "@rishi/shared/schema";
+import { user, userApiUsage } from "../db/schema";
 
 const { openaiResponse, elevenLabsBytes } = vi.hoisted(() => ({
   openaiResponse: {

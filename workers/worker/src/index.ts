@@ -37,7 +37,7 @@ import {
   mintRealtimeClientSecret,
   type BuildClientSecretsInput,
 } from "./realtime/client-secrets";
-import { user, user as userTable } from "@rishi/shared/schema";
+import { user, user as userTable } from "./db/schema";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import authRoutes from "./routes/auth";
 import { eq } from "drizzle-orm";
