@@ -117,7 +117,36 @@ export class UserUsageLedger extends DurableObject<Env> {
     this.ctx.waitUntil(this.mirrorGrantToD1(userId, grantedAt));
   }
 
+  /**
+   * Precedence (see "Design decisions" #2 for why no separate boolean flag
+   * is needed):
+   *   1. A `currentAllowancePeriod` mirror row exists and is unexpired →
+   *      `reader_active`/`voice_active`, keyed off its own `plan` field.
+   *   2. A row exists but has expired (no fresher sync has landed since
+   *      it lapsed) → `subscription_expired`.
+   *   3. No row has ever existed for this account → fall back to the
+   *      trial logic exactly as plan 2 implemented it.
+   */
   async getEntitlementSnapshot(): Promise<EntitlementSnapshot> {
+    const period = await this.getCurrentAllowancePeriodRow();
+    if (period) {
+      const now = Date.now();
+      if (period.periodEnd > now) {
+        const remainingNarrationSeconds = await this.remainingPaidNarrationSeconds(period);
+        const remainingVoiceChatSeconds = Math.max(
+          0,
+          period.voiceChatSecondsTotal - period.voiceChatSecondsUsed,
+        );
+        return {
+          state: period.plan === "reader" ? "reader_active" : "voice_active",
+          periodEnd: period.periodEnd,
+          remainingNarrationSeconds,
+          remainingVoiceChatSeconds,
+        };
+      }
+      return { state: "subscription_expired" };
+    }
+
     await this.grantTrialIfAbsent();
     const remaining = await this.remainingTrialCredits();
     if (remaining <= 0) return { state: "trial_exhausted" };
