@@ -11,21 +11,39 @@ import {
   ReservationStateError,
 } from "./errors";
 import { reservations, trialLedger, TRIAL_LEDGER_ROW_ID } from "./schema";
+import type { VoiceSessionRow } from "./schema";
 import { TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
 import type { EntitlementSnapshot } from "./types";
 import { VoiceSessionError } from "../voice-session/errors";
 import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
 import {
   findLiveVoiceSession,
+  findRowNeedingAlarm,
+  findVoiceSessionById,
+  incrementConsumedIntervals,
   insertVoiceSession,
   markNonceUsedAndRegisterCall,
+  markTerminal,
+  setHangupStatus,
 } from "../voice-session/sql";
+import { callOpenAiHangup } from "../voice-session/openai-hangup";
+import type { VoiceSessionTerminalReason } from "../voice-session/messages";
 
 const CREDITS_PER_INTERVAL = 2;
 const CAP_INTERVALS_TRIAL = 40; // 20 minutes at the 30s cadence
 const INTERVAL_MS = 30_000;
 /** How long a session may sit `pending_registration` before it's reconciled as abandoned. Documented per the spec's "short grace period" requirement. */
 const REGISTRATION_GRACE_MS = 10_000;
+/**
+ * Bounded OpenAI-hangup retry backoff. Attempt 1 happens immediately when a
+ * session goes terminal (inside `terminateSession`); if it fails, the alarm
+ * retries at these offsets (5 total attempts including the first). After
+ * the 5th failure the session's `hangupStatus` becomes `failed_permanently`
+ * and a `provider_hangup_failed` notification is broadcast; the durable
+ * `terminalReason` is never overwritten by a hangup failure.
+ */
+const HANGUP_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
+const MAX_HANGUP_ATTEMPTS = HANGUP_BACKOFF_MS.length + 1;
 
 /**
  * One `UserUsageLedger` Durable Object per authenticated Rishi user,
@@ -337,6 +355,184 @@ export class UserUsageLedger extends DurableObject<Env> {
       remainingCredits,
       remainingIntervals: row.capIntervals - row.consumedIntervals,
     });
+  }
+
+  /**
+   * The single alarm for this DO drives three unrelated transitions,
+   * disambiguated by the row's own `status`/`hangupStatus`:
+   *  - `pending_registration` past its grace period → abandoned-session reconciliation.
+   *  - `active` → the next 30-second credit/interval tick.
+   *  - `terminal` with `hangupStatus` not yet resolved → bounded hangup retry.
+   */
+  async alarm(): Promise<void> {
+    const row = await findRowNeedingAlarm(this.db);
+    if (!row) return;
+
+    const userId = this.requireUserId();
+    const now = Date.now();
+
+    if (row.status === "pending_registration") {
+      if (now - row.createdAt < REGISTRATION_GRACE_MS) {
+        await this.ctx.storage.setAlarm(row.createdAt + REGISTRATION_GRACE_MS);
+        return;
+      }
+      await markTerminal(this.db, row.rishiSessionId, "registration_timeout", now);
+      await this.appendAuditLog(userId, "voice_session.abandoned", { rishiSessionId: row.rishiSessionId });
+      // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
+      this.broadcastToActiveSockets({
+        type: "session_ended",
+        rishiSessionId: row.rishiSessionId,
+        reason: "registration_timeout",
+      });
+      // No callId was ever registered, so there is nothing to hang up on OpenAI's side.
+      return;
+    }
+
+    if (row.status === "active") {
+      await this.tickActiveSession(row, userId, now);
+      return;
+    }
+
+    // status === "terminal" and hangup hasn't resolved yet: bounded retry.
+    if (row.callId) {
+      await this.attemptHangup(row.rishiSessionId, row.callId, userId, row.hangupAttempts);
+    }
+  }
+
+  /**
+   * Checks and deducts `CREDITS_PER_INTERVAL` trial credits for one 30s
+   * interval. Only ever `await`s calls against `this.db` with nothing else
+   * awaited in between — per plan 2's "Concurrency model" section, this DO's
+   * synchronous SQLite storage plus the runtime's input gates already make
+   * that sequence atomic, so no `ctx.storage.transactionSync` wrapper is
+   * needed here.
+   */
+  private async tickActiveSession(row: VoiceSessionRow, userId: string, now: number): Promise<void> {
+    const remainingCredits = await this.remainingTrialCredits();
+    if (remainingCredits < CREDITS_PER_INTERVAL) {
+      await this.terminateSession(row, "trial_credits_exhausted", userId, now);
+      return;
+    }
+
+    await this.db
+      .update(trialLedger)
+      .set({ usedCredits: sql`${trialLedger.usedCredits} + ${CREDITS_PER_INTERVAL}` })
+      .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
+    await incrementConsumedIntervals(this.db, row.rishiSessionId, now);
+
+    const spentRemainingCredits = remainingCredits - CREDITS_PER_INTERVAL;
+    const consumedIntervals = row.consumedIntervals + 1;
+    const remainingIntervals = row.capIntervals - consumedIntervals;
+
+    await this.appendAuditLog(userId, "voice_session.interval_charged", {
+      rishiSessionId: row.rishiSessionId,
+      consumedIntervals,
+      remainingCredits: spentRemainingCredits,
+    });
+
+    // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
+    this.broadcastToActiveSockets({
+      type: "allowance_remaining",
+      rishiSessionId: row.rishiSessionId,
+      remainingCredits: spentRemainingCredits,
+      remainingIntervals,
+    });
+
+    if (remainingIntervals === 1) {
+      this.broadcastToActiveSockets({ type: "session_ending", rishiSessionId: row.rishiSessionId });
+    }
+
+    if (remainingIntervals <= 0) {
+      await this.terminateSession(row, "voice_session_time_cap", userId, Date.now());
+      return;
+    }
+
+    await this.ctx.storage.setAlarm(now + INTERVAL_MS);
+  }
+
+  private async terminateSession(
+    row: VoiceSessionRow,
+    reason: VoiceSessionTerminalReason,
+    userId: string,
+    now: number,
+  ): Promise<void> {
+    await markTerminal(this.db, row.rishiSessionId, reason, now);
+    await this.appendAuditLog(userId, "voice_session.terminal", { rishiSessionId: row.rishiSessionId, reason });
+    // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
+    this.broadcastToActiveSockets({ type: "session_ended", rishiSessionId: row.rishiSessionId, reason });
+
+    if (!row.callId) {
+      // Terminated before a call was ever registered (shouldn't happen for
+      // "active" sessions, but stay defensive) — nothing to hang up.
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now);
+      return;
+    }
+
+    await setHangupStatus(this.db, row.rishiSessionId, "pending", 0, now);
+    await this.attemptHangup(row.rishiSessionId, row.callId, userId, 0);
+  }
+
+  /**
+   * Runs one hangup attempt and either marks the session's hangup resolved
+   * (`succeeded` or `failed_permanently`) or schedules the next bounded
+   * retry via the alarm. `attemptsSoFar` is the count of *previous*
+   * attempts (0 on the first call from `terminateSession`).
+   */
+  private async attemptHangup(
+    rishiSessionId: string,
+    callId: string,
+    userId: string,
+    attemptsSoFar: number,
+  ): Promise<void> {
+    const attempt = attemptsSoFar + 1;
+    try {
+      await this.hangUpCall(callId);
+      await setHangupStatus(this.db, rishiSessionId, "succeeded", attempt, Date.now());
+      await this.appendAuditLog(userId, "voice_session.hangup_succeeded", { rishiSessionId, callId, attempt });
+      return;
+    } catch (err) {
+      await this.appendAuditLog(userId, "voice_session.hangup_attempt_failed", {
+        rishiSessionId,
+        callId,
+        attempt,
+        error: (err as Error).message,
+      });
+
+      if (attempt >= MAX_HANGUP_ATTEMPTS) {
+        await setHangupStatus(this.db, rishiSessionId, "failed_permanently", attempt, Date.now());
+        console.error(
+          JSON.stringify({
+            event: "voice_session.hangup_failed_permanently",
+            rishiSessionId,
+            callId,
+            userId,
+            attempts: attempt,
+          }),
+        );
+        // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
+        this.broadcastToActiveSockets({
+          type: "session_ended",
+          rishiSessionId,
+          reason: "provider_hangup_failed",
+        });
+        return;
+      }
+
+      await setHangupStatus(this.db, rishiSessionId, "pending", attempt, Date.now());
+      const nextDelay = HANGUP_BACKOFF_MS[attempt - 1];
+      await this.ctx.storage.setAlarm(Date.now() + nextDelay);
+    }
+  }
+
+  /**
+   * Makes the actual OpenAI hangup HTTP call using the same
+   * `OPENAI_API_KEY` binding as `/api/realtime/client_secrets`
+   * (`workers/worker/src/index.ts:~958`). Resolves on success; throws
+   * `VoiceSessionError("hangup_failed", ...)` on failure — callers (only
+   * `attemptHangup` above) handle bounded retry.
+   */
+  async hangUpCall(callId: string): Promise<void> {
+    await callOpenAiHangup(this.env.OPENAI_API_KEY, callId);
   }
 
   // ── Internal helpers — DO-local storage reads (part of the atomic path) ──
