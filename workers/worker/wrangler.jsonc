@@ -86,6 +86,8 @@
 		// ENABLE_TEST_AUTH + TEST_AUTH_SECRET are intentionally NOT defined here.
 		// Set them ONLY in dev/staging via `wrangler secret put` to keep prod
 		// hard-gated by absence.
+		// ENABLE_OPS_ADMIN + OPS_ADMIN_SECRET (src/routes/ops-flags.ts) follow the
+		// exact same rule: set ONLY in dev/staging via `wrangler secret put`.
 	},
 	"routes": [
 		{

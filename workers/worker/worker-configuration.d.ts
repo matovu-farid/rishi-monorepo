@@ -22,6 +22,8 @@ interface __BaseEnv_Env {
 	STRIPE_WEBHOOK_SECRET: string;
 	ENABLE_TEST_AUTH: string;
 	TEST_AUTH_SECRET: string;
+	ENABLE_OPS_ADMIN: string;
+	OPS_ADMIN_SECRET: string;
 	JWT_PRIVATE_KEY: string;
 	REFRESH_TOKEN_SECRET: string;
 	ACCESS_TOKEN_SECRET: string;

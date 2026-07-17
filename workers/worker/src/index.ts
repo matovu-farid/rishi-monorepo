@@ -18,6 +18,7 @@ import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
 import { changesRoutes } from "./routes/changes";
 import { testAuthRoutes } from "./routes/test-auth";
+import { opsFlagsRoutes } from "./routes/ops-flags";
 import { ensureCreditAndSubscription } from "./billing/backfill";
 import { meterFromContext } from "./billing/meter";
 import { createPortalSession } from "./billing/portal";
@@ -453,6 +454,11 @@ app.route("/api/chat", chatRoutes);
 // All endpoints under /test/* return 404 unless three checks pass — see
 // src/routes/test-auth.ts. Production keeps both env vars unset.
 app.route("/test", testAuthRoutes);
+// ─── Ops-admin routes (hard-gated by ENABLE_OPS_ADMIN + OPS_ADMIN_SECRET) ────
+// All endpoints under /ops/flags return 404 unless the same three-check
+// gate as test-auth passes, but with its own dedicated secrets — see
+// src/routes/ops-flags.ts. Production keeps both env vars unset.
+app.route("/ops/flags", opsFlagsRoutes);
 
 // Gate-only probe used by scripts/billing-e2e-clock.ts. Same gate stack as
 // the AI endpoints (requireAuth + requireActiveSubscription) but with no
