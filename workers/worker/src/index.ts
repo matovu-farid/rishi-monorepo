@@ -28,6 +28,7 @@ import { ensureCustomerAndPortal } from "./billing/start";
 import { registerVerifyReceiptRoute } from "./billing/apple-verify-receipt";
 import { registerAppleWebhookRoute } from "./billing/apple-webhook";
 import { registerBillingMeRoute } from "./billing/apple-me";
+import { registerEntitlementSyncRoute } from "./billing/entitlement-sync";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
@@ -562,6 +563,18 @@ registerAppleWebhookRoute(app);
 // {premium:boolean, premiumUntil: ISO8601 string | null} with a 30s
 // private Cache-Control header to dampen the iOS reconciler hot path.
 registerBillingMeRoute(app, requireAuth);
+
+// POST /api/billing/entitlement-sync — the authoritative-entitlement-model
+// route (2026-07-17 pricing/trial-launch design doc). iOS calls this at
+// launch, foreground, purchase completion, restore, and every StoreKit
+// `Transaction.updates` event, posting the current signed transaction JWS.
+// Verifies the JWS locally (verifyAppleJWS -- no Apple network call),
+// cross-checks the derived appAccountToken against the authenticated user,
+// rejects cross-account reuse, idempotently upserts apple_subscriptions,
+// starts the user's first paid allowance period if none exists yet, and
+// returns the resulting EntitlementSnapshot (read from the UserUsageLedger
+// Durable Object).
+registerEntitlementSyncRoute(app, requireAuth);
 
 // Customer Portal — mints a Stripe-hosted URL where the user manages
 // payment methods, views invoices, and cancels their subscription.
