@@ -940,6 +940,13 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
   c.executionCtx.waitUntil(
     incrementApiUsage(c.env, c.get("userId"), "tts"),
   );
+
+  const userId = c.get("userId");
+  const ledger = c.env.USER_USAGE_LEDGER.getByName(userId);
+  // Same lifecycle contract as the OpenAI route above: set only once
+  // reserveTts() succeeds, cleared as soon as the reservation is settled.
+  let pendingReservationId: string | undefined;
+
   try {
     const rawBody = await c.req
       .json<{
@@ -999,6 +1006,27 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       return c.json({ error: "TTS generation failed" }, 503);
     }
 
+    // Cache miss: reserve allowance before calling the provider.
+    let reservationId: string;
+    try {
+      const reservation = await ledger.reserveTts(
+        estimateNarrationSeconds(text),
+      );
+      reservationId = reservation.reservationId;
+      pendingReservationId = reservationId;
+    } catch (reserveErr) {
+      if (InsufficientAllowanceError.isInstance(reserveErr)) {
+        return c.json(
+          {
+            error: "Trial credits are exhausted",
+            code: "INSUFFICIENT_ALLOWANCE",
+          },
+          402,
+        );
+      }
+      throw reserveErr;
+    }
+
     const elevenLabsUrl = new URL(
       `https://api.elevenlabs.io/v1/text-to-speech/${validVoice}`,
     );
@@ -1022,6 +1050,17 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
     if (!speech.ok) {
       const body = await speech.text().catch(() => "");
       console.error("ElevenLabs API error:", speech.status, body);
+      // A non-ok fetch response is a returned failure, not a thrown
+      // exception, so the shared catch block below never sees it — release
+      // explicitly here, before responding, same contract as the catch
+      // block: don't block a fast client retry on a stale reservation.
+      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
+        console.error("tts.reservation.release.failed", {
+          reservationId,
+          releaseErr,
+        }),
+      );
+      pendingReservationId = undefined;
       return c.json(
         { error: "TTS generation failed" },
         speech.status === 429 ? 429 : 502,
@@ -1044,8 +1083,38 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       }).catch((e) => console.error("tts.cache.put.failed", e)),
     );
 
-    return respondWithTtsBytes(audioBytes, key, "miss", responseMode);
+    // Settle via waitUntil — see the identical comment in the OpenAI route
+    // (Task 3) for why this never blocks the response, and for the
+    // estimated-vs-measured-duration gap this defers.
+    c.executionCtx.waitUntil(
+      ledger.commitTtsReservation(reservationId).catch((commitErr) =>
+        console.error("tts.reservation.commit.failed", {
+          reservationId,
+          commitErr,
+        }),
+      ),
+    );
+    pendingReservationId = undefined;
+
+    const entitlementHeader = await bestEffortEntitlementHeader(ledger);
+
+    return respondWithTtsBytes(
+      audioBytes,
+      key,
+      "miss",
+      responseMode,
+      entitlementHeader,
+    );
   } catch (error) {
+    if (pendingReservationId) {
+      const reservationId = pendingReservationId;
+      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
+        console.error("tts.reservation.release.failed", {
+          reservationId,
+          releaseErr,
+        }),
+      );
+    }
     console.error(
       "TTS error:",
       error instanceof Error ? error.message : "unknown",
