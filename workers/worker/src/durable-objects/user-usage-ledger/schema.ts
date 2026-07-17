@@ -62,3 +62,36 @@ export type VoiceSessionRow = typeof voiceSession.$inferSelect;
 export type NewVoiceSessionRow = typeof voiceSession.$inferInsert;
 export type VoiceSessionStatus = VoiceSessionRow["status"];
 export type HangupStatus = VoiceSessionRow["hangupStatus"];
+
+// Mirrors the user's single CURRENT paid allowance period (Reader or
+// Voice). This is the DO-local enforcement authority for paid narration/
+// Voice Chat usage — the same role `trialLedger` plays for trial credits.
+// D1's `allowancePeriod` table (plan 1, workers/worker/src/db/schema.ts) is
+// the durable reporting/history mirror, kept in sync by whichever caller
+// invokes `UserUsageLedger.syncAllowancePeriod()` (the not-yet-written
+// StoreKit-entitlement-sync plan) — this table never writes back to D1
+// itself. There is exactly one row, fixed id `CURRENT_ALLOWANCE_PERIOD_ROW_ID`,
+// upserted in place and never deleted: its mere existence plus a
+// `periodEnd` comparison against "now" is enough to distinguish "never had
+// a paid period" (no row) from "had one, now lapsed" (row exists, expired)
+// from "currently active" (row exists, unexpired) — see the plan's "Design
+// decisions" section for why no separate boolean flag column is needed.
+export const CURRENT_ALLOWANCE_PERIOD_ROW_ID = "current";
+
+export const currentAllowancePeriod = sqliteTable("current_allowance_period", {
+  id: text("id").primaryKey(),
+  // Matches the D1 `allowancePeriod.id` row this mirror was synced from,
+  // so paid-usage settlement can target the right D1 row via `ctx.waitUntil`.
+  periodId: text("period_id").notNull(),
+  plan: text("plan", { enum: ["reader", "voice"] }).notNull(),
+  periodStart: integer("period_start").notNull(), // epoch ms
+  periodEnd: integer("period_end").notNull(), // epoch ms
+  narrationSecondsTotal: integer("narration_seconds_total").notNull(),
+  narrationSecondsUsed: integer("narration_seconds_used").notNull().default(0),
+  voiceChatSecondsTotal: integer("voice_chat_seconds_total").notNull(),
+  voiceChatSecondsUsed: integer("voice_chat_seconds_used").notNull().default(0),
+  updatedAt: integer("updated_at").notNull(), // epoch ms
+});
+
+export type CurrentAllowancePeriodRow = typeof currentAllowancePeriod.$inferSelect;
+export type NewCurrentAllowancePeriodRow = typeof currentAllowancePeriod.$inferInsert;

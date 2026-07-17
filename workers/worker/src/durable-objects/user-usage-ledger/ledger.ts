@@ -1,17 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../../drizzle/ledger-do-migrations/migrations";
-import { trialGrant, usageReservation, usageAuditLog } from "../../db/schema";
+import { trialGrant, usageReservation, usageAuditLog, allowancePeriod } from "../../db/schema";
 import { createDb } from "../../db/drizzle";
 import {
   InsufficientAllowanceError,
   ReservationNotFoundError,
   ReservationStateError,
 } from "./errors";
-import { reservations, trialLedger, TRIAL_LEDGER_ROW_ID } from "./schema";
+import {
+  reservations,
+  trialLedger,
+  TRIAL_LEDGER_ROW_ID,
+  currentAllowancePeriod,
+  CURRENT_ALLOWANCE_PERIOD_ROW_ID,
+  type CurrentAllowancePeriodRow,
+} from "./schema";
 import type { VoiceSessionRow, VoiceSessionStatus } from "./schema";
 import { TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
 import type { EntitlementSnapshot } from "./types";
@@ -225,6 +232,121 @@ export class UserUsageLedger extends DurableObject<Env> {
     this.ctx.waitUntil(
       this.mirrorReleaseToD1(reservationId, userId, reservation.amount, settledAt),
     );
+  }
+
+  /**
+   * Upserts the DO-local mirror of this user's single CURRENT paid
+   * allowance period. Called by the (not yet written) StoreKit-
+   * entitlement-sync plan after it verifies an Apple transaction and
+   * writes/updates the corresponding D1 `allowancePeriod` row — this
+   * method never writes to D1 itself; see "Design decisions" #1.
+   *
+   * Resyncing the SAME period id (e.g. a repeated foreground sync) never
+   * resets `narrationSecondsUsed`/`voiceChatSecondsUsed` — only a
+   * genuinely new period id (upgrade/renewal/crossgrade, or this
+   * account's first-ever paid period) starts usage back at zero.
+   */
+  async syncAllowancePeriod(period: {
+    id: string;
+    plan: "reader" | "voice";
+    periodStart: number;
+    periodEnd: number;
+    narrationSecondsTotal: number;
+    voiceChatSecondsTotal: number;
+  }): Promise<void> {
+    const userId = this.requireUserId();
+    const now = Date.now();
+    const existing = await this.getCurrentAllowancePeriodRow();
+
+    if (existing && existing.periodId === period.id) {
+      await this.db
+        .update(currentAllowancePeriod)
+        .set({
+          plan: period.plan,
+          periodStart: period.periodStart,
+          periodEnd: period.periodEnd,
+          narrationSecondsTotal: period.narrationSecondsTotal,
+          voiceChatSecondsTotal: period.voiceChatSecondsTotal,
+          updatedAt: now,
+        })
+        .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+    } else {
+      await this.db
+        .insert(currentAllowancePeriod)
+        .values({
+          id: CURRENT_ALLOWANCE_PERIOD_ROW_ID,
+          periodId: period.id,
+          plan: period.plan,
+          periodStart: period.periodStart,
+          periodEnd: period.periodEnd,
+          narrationSecondsTotal: period.narrationSecondsTotal,
+          narrationSecondsUsed: 0,
+          voiceChatSecondsTotal: period.voiceChatSecondsTotal,
+          voiceChatSecondsUsed: 0,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: currentAllowancePeriod.id,
+          set: {
+            periodId: period.id,
+            plan: period.plan,
+            periodStart: period.periodStart,
+            periodEnd: period.periodEnd,
+            narrationSecondsTotal: period.narrationSecondsTotal,
+            narrationSecondsUsed: 0,
+            voiceChatSecondsTotal: period.voiceChatSecondsTotal,
+            voiceChatSecondsUsed: 0,
+            updatedAt: now,
+          },
+        });
+    }
+
+    this.ctx.waitUntil(
+      this.appendAuditLog(userId, "allowance_period.synced", {
+        periodId: period.id,
+        plan: period.plan,
+        periodEnd: period.periodEnd,
+        isNewPeriod: !existing || existing.periodId !== period.id,
+      }),
+    );
+  }
+
+  // ── Paid-allowance read helpers (Part A/B/C/D all use these) ───────────
+
+  private async getCurrentAllowancePeriodRow(): Promise<CurrentAllowancePeriodRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(currentAllowancePeriod)
+      .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+    return row ?? null;
+  }
+
+  /** Returns the current period row only if it exists AND has not expired. */
+  private async getActiveAllowancePeriod(
+    now: number = Date.now(),
+  ): Promise<CurrentAllowancePeriodRow | null> {
+    const row = await this.getCurrentAllowancePeriodRow();
+    if (!row) return null;
+    return row.periodEnd > now ? row : null;
+  }
+
+  /**
+   * Remaining paid narration seconds, minus the sum of currently-pending
+   * `"tts"`-kind reservation amounts — the same double-spend protection
+   * `remainingTrialCredits()` (plan 2) applies to trial credits, applied
+   * here to the paid pool. See "Design decisions" #3 for why a pending
+   * reservation's amount is trusted to already be in seconds without a
+   * separate unit marker.
+   */
+  private async remainingPaidNarrationSeconds(
+    period: CurrentAllowancePeriodRow,
+  ): Promise<number> {
+    const pending = await this.db
+      .select({ amount: reservations.amount })
+      .from(reservations)
+      .where(and(eq(reservations.status, "pending"), eq(reservations.kind, "tts")));
+    const pendingTotal = pending.reduce((sum, row) => sum + row.amount, 0);
+    return Math.max(0, period.narrationSecondsTotal - period.narrationSecondsUsed - pendingTotal);
   }
 
   /**
