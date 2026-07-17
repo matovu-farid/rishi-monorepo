@@ -6,6 +6,7 @@ import {
   primaryKey,
   index,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
 export const user = sqliteTable("user", {
@@ -374,6 +375,7 @@ export const appleSubscriptions = sqliteTable(
     autoRenew: integer("auto_renew", { mode: "boolean" })
       .notNull()
       .default(true),
+    appAccountToken: text("app_account_token"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -455,3 +457,112 @@ export const devices = sqliteTable(
 
 export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
+
+// ─── Usage ledger (trial credits + paid allowance periods) ──────────────────
+// Durable, D1-backed records behind the UserUsageLedger Durable Object. The DO
+// is the authoritative in-memory coordinator for a live decision (see the
+// 2026-07-17 pricing/trial-launch design doc); these tables are what it
+// persists through so reporting, audits, and DO rehydration survive a DO
+// eviction. One row per user for the non-expiring trial grant; one row per
+// monthly allowance period per user for paid plans; append-only reservation
+// and audit rows for every accounting decision.
+
+export const trialGrant = sqliteTable("trial_grant", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  initialCredits: integer("initial_credits").notNull().default(100),
+  usedCredits: integer("used_credits").notNull().default(0),
+  grantedAt: integer("granted_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+// One row per monthly allowance period per user, for Reader/Voice paid plans.
+// `priorPeriodId` self-references this table to chain periods across
+// upgrades/renewals/crossgrades for audit (see design doc "Subscription
+// transitions"). `transitionReason` records why THIS period started.
+export const allowancePeriod = sqliteTable(
+  "allowance_period",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    plan: text("plan", { enum: ["reader", "voice"] }).notNull(),
+    periodStart: integer("period_start", { mode: "timestamp_ms" }).notNull(),
+    periodEnd: integer("period_end", { mode: "timestamp_ms" }).notNull(),
+    narrationSecondsTotal: integer("narration_seconds_total").notNull(),
+    narrationSecondsUsed: integer("narration_seconds_used")
+      .notNull()
+      .default(0),
+    voiceChatSecondsTotal: integer("voice_chat_seconds_total").notNull(),
+    voiceChatSecondsUsed: integer("voice_chat_seconds_used")
+      .notNull()
+      .default(0),
+    transitionReason: text("transition_reason", {
+      enum: ["initial", "upgraded", "renewed", "crossgrade"],
+    }),
+    priorPeriodId: text("prior_period_id").references(
+      (): AnySQLiteColumn => allowancePeriod.id,
+    ),
+    sourceTransactionId: text("source_transaction_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => ({
+    byUser: index("allowance_period_user_id").on(t.userId),
+  }),
+);
+
+// Pending/committed/released reservations for a single TTS generation or a
+// single 30-second voice interval. `amount` is credits for `kind: "tts"`
+// trial rows and seconds for paid narration/voice rows — the ledger DO knows
+// which unit applies based on the user's current plan at reservation time.
+export const usageReservation = sqliteTable(
+  "usage_reservation",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["tts", "voice_interval"] }).notNull(),
+    amount: integer("amount").notNull(),
+    status: text("status", {
+      enum: ["pending", "committed", "released"],
+    }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    settledAt: integer("settled_at", { mode: "timestamp_ms" }),
+    metadata: text("metadata"),
+  },
+  (t) => ({
+    byUser: index("usage_reservation_user_id").on(t.userId),
+  }),
+);
+
+// Append-only audit trail for entitlement/usage decisions (grants, session
+// starts/ends, hangup outcomes, reconciliation runs). `userId` is nullable
+// for system-level events with no single owning user. `details` is
+// JSON-serialized text (SQLite has no native JSON column type, matching the
+// `raw_payload` convention already used by `apple_notifications_log`).
+export const usageAuditLog = sqliteTable(
+  "usage_audit_log",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").references(() => user.id, {
+      onDelete: "cascade",
+    }),
+    eventType: text("event_type").notNull(),
+    details: text("details"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => ({
+    byUser: index("usage_audit_log_user_id").on(t.userId),
+  }),
+);
+
+export type TrialGrant = typeof trialGrant.$inferSelect;
+export type NewTrialGrant = typeof trialGrant.$inferInsert;
+export type AllowancePeriod = typeof allowancePeriod.$inferSelect;
+export type NewAllowancePeriod = typeof allowancePeriod.$inferInsert;
+export type UsageReservation = typeof usageReservation.$inferSelect;
+export type NewUsageReservation = typeof usageReservation.$inferInsert;
+export type UsageAuditLog = typeof usageAuditLog.$inferSelect;
+export type NewUsageAuditLog = typeof usageAuditLog.$inferInsert;
