@@ -2,6 +2,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
 import { appleSubscriptions, subscription } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
+import type { EntitlementSnapshot } from "../durable-objects/user-usage-ledger/types";
 // Type-only import to avoid a runtime ESM cycle with ../index — same shape as
 // the 14-04 verify-receipt and 14-05 webhook factories. `requireAuth` is
 // passed in by the caller (src/index.ts) rather than imported here.
@@ -24,10 +25,20 @@ import { createDb } from "../db/drizzle";
  *
  * 14-08 will confirm the iOS decoder matches; this file ships the contract.
  */
-export interface BillingMeResponse {
+/**
+ * Superset response: the original binary `premium`/`premiumUntil` fields
+ * are kept, DEPRECATED-BUT-PRESENT, alongside the full `EntitlementSnapshot`
+ * spread flat into the same object (`{ ...snapshot, premium, premiumUntil }`,
+ * see the plan's "Design decisions" #6). `premium`/`premiumUntil` are kept
+ * because the current iOS app's `EntitlementReconciler` still parses this
+ * exact shape; remove them in a later cleanup pass once the iOS
+ * entitlement-client plan (a separate plan in this series) ships and no
+ * production client depends on the old shape anymore.
+ */
+export type BillingMeResponse = {
   premium: boolean;
   premiumUntil: string | null;
-}
+} & EntitlementSnapshot;
 
 // ─── DI surface ────────────────────────────────────────────────────────────
 
@@ -54,6 +65,10 @@ export interface BillingMeDeps {
       status: string;
     } | null>;
   };
+  /** Wraps `env.USER_USAGE_LEDGER.getByName(userId).getEntitlementSnapshot()`. */
+  ledger: {
+    getEntitlementSnapshot(userId: string): Promise<EntitlementSnapshot>;
+  };
 }
 
 export interface BillingMeInput {
@@ -78,20 +93,23 @@ export async function handleBillingMe(
   input: BillingMeInput,
 ): Promise<BillingMeResponse> {
   const apple = await input.deps.db.findAppleActive(input.userId);
+  let premium = false;
+  let premiumUntil: string | null = null;
+
   if (apple) {
-    return {
-      premium: true,
-      premiumUntil: apple.currentPeriodEnd.toISOString(),
-    };
+    premium = true;
+    premiumUntil = apple.currentPeriodEnd.toISOString();
+  } else {
+    const stripe = await input.deps.db.findStripeActive(input.userId);
+    if (stripe) {
+      premium = true;
+      premiumUntil = new Date(stripe.periodEnd * 1000).toISOString();
+    }
   }
-  const stripe = await input.deps.db.findStripeActive(input.userId);
-  if (stripe) {
-    return {
-      premium: true,
-      premiumUntil: new Date(stripe.periodEnd * 1000).toISOString(),
-    };
-  }
-  return { premium: false, premiumUntil: null };
+
+  const snapshot = await input.deps.ledger.getEntitlementSnapshot(input.userId);
+
+  return { premium, premiumUntil, ...snapshot };
 }
 
 // ─── Hono route mount (production wiring) ─────────────────────────────────
@@ -158,6 +176,12 @@ export function registerBillingMeRoute(
             periodEnd: Math.floor(row.periodEnd.getTime() / 1000),
             status: row.status ?? "active",
           };
+        },
+      },
+      ledger: {
+        getEntitlementSnapshot: async (uid) => {
+          const stub = c.env.USER_USAGE_LEDGER.getByName(uid);
+          return stub.getEntitlementSnapshot();
         },
       },
     };
