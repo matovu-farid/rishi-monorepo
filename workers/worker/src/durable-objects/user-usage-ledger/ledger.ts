@@ -13,6 +13,18 @@ import {
 import { reservations, trialLedger, TRIAL_LEDGER_ROW_ID } from "./schema";
 import { TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
 import type { EntitlementSnapshot } from "./types";
+import { VoiceSessionError } from "../voice-session/errors";
+import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
+import {
+  findLiveVoiceSession,
+  insertVoiceSession,
+} from "../voice-session/sql";
+
+const CREDITS_PER_INTERVAL = 2;
+const CAP_INTERVALS_TRIAL = 40; // 20 minutes at the 30s cadence
+const INTERVAL_MS = 30_000;
+/** How long a session may sit `pending_registration` before it's reconciled as abandoned. Documented per the spec's "short grace period" requirement. */
+const REGISTRATION_GRACE_MS = 10_000;
 
 /**
  * One `UserUsageLedger` Durable Object per authenticated Rishi user,
@@ -192,6 +204,75 @@ export class UserUsageLedger extends DurableObject<Env> {
     this.ctx.waitUntil(
       this.mirrorReleaseToD1(reservationId, userId, reservation.amount, settledAt),
     );
+  }
+
+  /**
+   * Verifies at least one interval's worth of trial credits is available,
+   * mints a Rishi session ID and single-use registration nonce, and records
+   * the trial session cap (40 intervals / 20 minutes). Rejects if a session
+   * is already active for this user.
+   *
+   * Returns session bookkeeping ONLY. The calling route (plan 4's
+   * `2026-07-17-voice-control-websocket.md`, not yet written) is
+   * responsible for also minting and returning the OpenAI client secret —
+   * see the existing `/api/realtime/client_secrets` route in
+   * `workers/worker/src/index.ts` for the pattern to reuse there.
+   */
+  async createVoiceSession(): Promise<{
+    rishiSessionId: string;
+    nonce: string;
+    capIntervals: number;
+  }> {
+    const live = await findLiveVoiceSession(this.db);
+    if (live) {
+      throw new VoiceSessionError(
+        "session_already_active",
+        "a voice session is already active for this user",
+      );
+    }
+
+    const remainingCredits = await this.remainingTrialCredits();
+    if (remainingCredits < CREDITS_PER_INTERVAL) {
+      throw new VoiceSessionError(
+        "insufficient_credits",
+        `only ${remainingCredits} trial credits remain; need at least ${CREDITS_PER_INTERVAL}`,
+      );
+    }
+
+    const userId = this.requireUserId();
+    const rishiSessionId = crypto.randomUUID();
+    const now = Date.now();
+    const minted = await mintRegistrationNonce(
+      rishiSessionId,
+      userId,
+      this.env.VOICE_SESSION_NONCE_SECRET,
+      now,
+    );
+
+    await insertVoiceSession(this.db, {
+      rishiSessionId,
+      planKind: "trial",
+      status: "pending_registration",
+      capIntervals: CAP_INTERVALS_TRIAL,
+      consumedIntervals: 0,
+      creditsPerInterval: CREDITS_PER_INTERVAL,
+      nonceIssuedAt: minted.issuedAtMs,
+      nonceSignature: minted.signatureB64Url,
+      nonceUsed: false,
+      callId: null,
+      callRegisteredAt: null,
+      terminalReason: null,
+      terminalAt: null,
+      hangupStatus: "not_started",
+      hangupAttempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await this.ctx.storage.setAlarm(now + REGISTRATION_GRACE_MS);
+    await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId });
+
+    return { rishiSessionId, nonce: minted.nonce, capIntervals: CAP_INTERVALS_TRIAL };
   }
 
   // ── Internal helpers — DO-local storage reads (part of the atomic path) ──
