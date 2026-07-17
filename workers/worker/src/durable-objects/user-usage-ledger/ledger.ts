@@ -18,6 +18,7 @@ import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session
 import {
   findLiveVoiceSession,
   insertVoiceSession,
+  markNonceUsedAndRegisterCall,
 } from "../voice-session/sql";
 
 const CREDITS_PER_INTERVAL = 2;
@@ -273,6 +274,69 @@ export class UserUsageLedger extends DurableObject<Env> {
     await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId });
 
     return { rishiSessionId, nonce: minted.nonce, capIntervals: CAP_INTERVALS_TRIAL };
+  }
+
+  /**
+   * Accepts a call ID once only when it belongs to the active session and
+   * the nonce matches. Single-use: a replayed nonce or a second
+   * registration attempt against the same session throws.
+   */
+  async registerCallId(rishiSessionId: string, callId: string, nonce: string): Promise<void> {
+    const userId = this.requireUserId();
+    const row = await findLiveVoiceSession(this.db);
+
+    if (!row) {
+      throw new VoiceSessionError(
+        "no_active_session",
+        "no active voice session to register a call against",
+      );
+    }
+    if (row.rishiSessionId !== rishiSessionId) {
+      throw new VoiceSessionError(
+        "session_id_mismatch",
+        "rishiSessionId does not match the active session",
+      );
+    }
+    if (row.status !== "pending_registration") {
+      throw new VoiceSessionError(
+        "call_already_registered",
+        "this session has already completed call-ID registration",
+      );
+    }
+    if (row.nonceUsed) {
+      throw new VoiceSessionError("nonce_replayed", "this registration nonce has already been used");
+    }
+
+    const valid = await verifyRegistrationNonce(
+      nonce,
+      rishiSessionId,
+      userId,
+      this.env.VOICE_SESSION_NONCE_SECRET,
+      { issuedAtMs: row.nonceIssuedAt, signatureB64Url: row.nonceSignature },
+    );
+    if (!valid) {
+      throw new VoiceSessionError("nonce_mismatch", "registration nonce did not verify");
+    }
+
+    const now = Date.now();
+    await markNonceUsedAndRegisterCall(this.db, rishiSessionId, callId, now);
+    // The first 30-second charge is scheduled from the moment registration
+    // succeeds, not from session creation — an app that takes a few seconds
+    // to complete WebRTC negotiation doesn't lose part of its first interval.
+    await this.ctx.storage.setAlarm(now + INTERVAL_MS);
+    await this.appendAuditLog(userId, "voice_session.call_registered", { rishiSessionId, callId });
+
+    const remainingCredits = await this.remainingTrialCredits();
+    // `broadcastToActiveSockets` does not exist yet — plan 4
+    // (2026-07-17-voice-control-websocket.md) adds it to this same class,
+    // alongside `fetch()`/`webSocketMessage`/`webSocketClose`/
+    // `webSocketError`. See this plan's "Prerequisite" section.
+    this.broadcastToActiveSockets({
+      type: "allowance_remaining",
+      rishiSessionId,
+      remainingCredits,
+      remainingIntervals: row.capIntervals - row.consumedIntervals,
+    });
   }
 
   // ── Internal helpers — DO-local storage reads (part of the atomic path) ──
