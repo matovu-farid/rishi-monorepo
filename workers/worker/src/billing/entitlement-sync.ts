@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, gt, ne } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
 import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
 import { allowancePeriod, appleSubscriptions, usageAuditLog } from "../db/schema";
@@ -11,6 +11,10 @@ import {
   type ApplePlan,
 } from "./apple-product-plans";
 import type { EntitlementSnapshot } from "../durable-objects/user-usage-ledger/types";
+import {
+  classifyTransition,
+  type CurrentPeriodInfo,
+} from "./subscription-transitions";
 // NOTE: no runtime import of `../index` here -- same ESM-cycle constraint
 // as apple-verify-receipt.ts / apple-webhook.ts / apple-me.ts. `requireAuth`
 // is passed in by the route factory below.
@@ -138,45 +142,40 @@ function addOneCalendarMonth(date: Date): Date {
 // ─── applyAppleTransaction ─────────────────────────────────────────────────
 
 /**
- * Idempotently persist a verified Apple transaction and, for a user's
- * FIRST-EVER active subscription only, start their initial allowance
- * period.
+ * Idempotently persist a verified Apple transaction and apply the full
+ * upgrade/downgrade/renewal/crossgrade transition matrix (2026-07-17
+ * pricing/trial-launch design doc, "Subscription transitions") against the
+ * user's most recent allowance-period D1 row. Supersedes the
+ * `storekit-entitlement-sync` plan's "first-ever-period-only"
+ * implementation -- see that plan's "Exports for downstream plans" >
+ * "applyAppleTransaction" for the exact behavior this replaces.
  *
- * SCOPE NOTE for the "subscription-transitions" follow-up plan: this
- * function currently only handles the case where NO active allowance
- * period exists yet for the user -- it starts one and stops.
- * Upgrade/downgrade/renewal/crossgrade transitions across MULTIPLE
- * allowance periods (design doc's "Subscription transitions" table) are
- * explicitly out of scope here. The follow-up plan should MODIFY THIS
- * FUNCTION IN PLACE -- replace the single `if (!existingActivePeriod)`
- * branch below with the full transition matrix -- rather than adding a
- * second code path elsewhere. That plan will also need to EXTEND the
- * `syncAllowancePeriod` call's argument shape: the assumed signature this
- * plan uses has no `transitionReason` / `priorPeriodId` /
- * `sourceTransactionId` fields, even though `allowancePeriod` (the schema
- * table) has all three -- those only matter once transitions exist.
+ * Classification is delegated to `classifyTransition` (./subscription-
+ * transitions.ts) so the tier/product comparison is a pure, dependency-free
+ * decision table kept out of this already-large function -- see this
+ * plan's "Design decisions" #1.
  *
- * ASSUMPTION (reconcile when the UserUsageLedger Durable Object plan
- * lands): `env.USER_USAGE_LEDGER.getByName(userId).syncAllowancePeriod(...)`
- * is responsible for PERSISTING the `allowance_period` row to D1 itself --
- * the design doc describes the DO as the sole coordinator that writes
- * through Drizzle. This function does NOT insert into `allowancePeriod`
- * directly; it only SELECTs from it (read-only) to decide whether an
- * active period already exists, then hands the computed period shape to
- * the Durable Object. If that assumption is wrong, add one
- * `db.insert(allowancePeriod)...` call where the comment below marks it.
+ * D1-PERSISTENCE FIX (this plan's "Design decisions" intro, and #7): the
+ * prior version of this function never inserted into `allowancePeriod`
+ * itself, under an assumption (flagged explicitly in that plan) that
+ * `UserUsageLedger.syncAllowancePeriod()` would persist the D1 row. Plan 5
+ * (`billing-me-entitlement-snapshot`) has since landed and its own docs
+ * confirm the opposite: `syncAllowancePeriod()` ONLY maintains the Durable
+ * Object's local mirror and never writes to D1. This rewrite closes that
+ * gap for every branch, including the first-ever-period case -- every
+ * period this function creates is now backed by a real `allowancePeriod`
+ * D1 row, which this function's own FUTURE calls depend on to read
+ * `currentPeriod` correctly.
  *
- * PRODUCTION GOTCHA: the "does an active period already exist" read and
- * the `syncAllowancePeriod` call below are two separate steps, not one
- * transaction -- two concurrent entitlement-sync requests for the same
- * brand-new subscriber (e.g. a launch call racing a StoreKit
- * transaction-update call) could both see "no active period" and both
- * call `syncAllowancePeriod` with a different candidate period id. Durable
- * Objects execute one request at a time per instance, so the DO's own
- * `syncAllowancePeriod` implementation is the right place to make this
- * fully race-safe (e.g. by treating a second call within the same
- * timeframe as a no-op) -- this plan's D1 read is a cheap first-pass
- * optimization, not the sole correctness mechanism.
+ * PRODUCTION GOTCHA (unchanged from the prior version): the D1 read of the
+ * user's most recent period and the subsequent D1 write / DO sync below are
+ * still not one transaction -- two concurrent entitlement-sync calls for
+ * the same brand-new event (e.g. a launch call racing a StoreKit
+ * transaction-update call) could both observe the same `currentPeriod` and
+ * both attempt to open a new one. As before, the Durable Object's
+ * single-request-at-a-time execution model is the real backstop; this D1
+ * read is a cheap first-pass optimization, not the sole correctness
+ * mechanism.
  */
 export async function applyAppleTransaction(
   env: Env,
@@ -185,12 +184,10 @@ export async function applyAppleTransaction(
 ): Promise<void> {
   const db = createDb(env.DB);
   const now = new Date();
-  const isActive = tx.expiresDate > now.getTime();
+  const nowMs = now.getTime();
+  const isActive = tx.expiresDate > nowMs;
 
-  // 1. Idempotent upsert into apple_subscriptions, keyed by the PK
-  // apple_transaction_id -- safe to call on every entitlement-sync (launch,
-  // foreground, purchase, restore, transaction-updates) with the same
-  // transaction.
+  // 1. Idempotent upsert into apple_subscriptions -- UNCHANGED from plan 6.
   await db
     .insert(appleSubscriptions)
     .values({
@@ -214,25 +211,85 @@ export async function applyAppleTransaction(
     })
     .run();
 
-  // 2. First-ever-active-subscription allowance period (see scope note
-  // above). Guarding on "no active period exists" makes this safe to call
-  // on every sync -- an already-active period is left untouched.
+  // 2. Full upgrade/downgrade/renewal/crossgrade transition matrix (design
+  // doc's "Subscription transitions" table). Replaces plan 6's
+  // "first-ever-period-only" `if (!existingActivePeriod)` branch.
   if (isActive) {
-    const existingActivePeriod = await db
-      .select({ id: allowancePeriod.id })
+    // Read the user's single most recent allowance-period D1 row,
+    // regardless of whether it is still active -- see "Design decisions"
+    // #2. Ordering by createdAt (not periodEnd) always finds the period
+    // most recently opened, which is the correct "current" one even after
+    // an early truncation below can move an older row's periodEnd earlier
+    // than it originally was -- see "Design decisions" #6.
+    const mostRecentPeriod = await db
+      .select()
       .from(allowancePeriod)
-      .where(and(eq(allowancePeriod.userId, userId), gt(allowancePeriod.periodEnd, now)))
-      .orderBy(desc(allowancePeriod.periodEnd))
+      .where(eq(allowancePeriod.userId, userId))
+      .orderBy(desc(allowancePeriod.createdAt))
       .get();
 
-    if (!existingActivePeriod) {
+    let currentPeriod: CurrentPeriodInfo | null = null;
+    if (mostRecentPeriod) {
+      let productId: string | null = null;
+      if (mostRecentPeriod.sourceTransactionId) {
+        const sourceSub = await db
+          .select({ productId: appleSubscriptions.productId })
+          .from(appleSubscriptions)
+          .where(
+            eq(appleSubscriptions.appleTransactionId, mostRecentPeriod.sourceTransactionId),
+          )
+          .get();
+        productId = sourceSub?.productId ?? null;
+      }
+      currentPeriod = {
+        id: mostRecentPeriod.id,
+        plan: mostRecentPeriod.plan,
+        productId,
+        periodEnd: mostRecentPeriod.periodEnd.getTime(),
+      };
+    }
+
+    const classification = classifyTransition({
+      currentPeriod,
+      newPlan: tx.plan,
+      newProductId: tx.productId,
+      newExpiresDate: tx.expiresDate,
+      now: nowMs,
+    });
+
+    const allowances = PLAN_ALLOWANCES[tx.plan];
+
+    const openFreshPeriod = async (
+      transitionReason: "initial" | "renewed" | "upgraded" | "downgraded" | "crossgrade",
+      priorPeriodId: string | null,
+    ): Promise<string> => {
       const periodId = crypto.randomUUID();
       const periodStart = new Date(tx.purchaseDate);
       const periodEnd = addOneCalendarMonth(periodStart);
-      const allowances = PLAN_ALLOWANCES[tx.plan];
 
-      // NOT inserted into `allowancePeriod` here -- see the ASSUMPTION note
-      // above the function.
+      await db
+        .insert(allowancePeriod)
+        .values({
+          id: periodId,
+          userId,
+          plan: tx.plan,
+          periodStart,
+          periodEnd,
+          narrationSecondsTotal: allowances.narrationSecondsTotal,
+          narrationSecondsUsed: 0,
+          voiceChatSecondsTotal: allowances.voiceChatSecondsTotal,
+          voiceChatSecondsUsed: 0,
+          transitionReason,
+          priorPeriodId,
+          sourceTransactionId: tx.transactionId,
+          createdAt: now,
+        })
+        .run();
+
+      // Plan 5's DO mirror holds exactly one "current" row -- syncing here
+      // always REPLACES whatever period it previously mirrored, so no
+      // separate "close" call is needed on the DO side (see "Design
+      // decisions" #7).
       await env.USER_USAGE_LEDGER.getByName(userId).syncAllowancePeriod({
         id: periodId,
         plan: tx.plan,
@@ -241,12 +298,92 @@ export async function applyAppleTransaction(
         narrationSecondsTotal: allowances.narrationSecondsTotal,
         voiceChatSecondsTotal: allowances.voiceChatSecondsTotal,
       });
+
+      return periodId;
+    };
+
+    // Truncates a still-active period's periodEnd to "now" for an
+    // IMMEDIATE transition (upgrade, or a same-product renewal signaled
+    // while the old period hadn't reached its boundary yet). Never call
+    // this for a period that has already lapsed naturally -- see "Design
+    // decisions" #4 -- that would incorrectly push its periodEnd LATER.
+    const closePeriodNow = async (periodId: string): Promise<void> => {
+      await db
+        .update(allowancePeriod)
+        .set({ periodEnd: now })
+        .where(eq(allowancePeriod.id, periodId))
+        .run();
+    };
+
+    let newPeriodId: string | null = null;
+    let priorPeriodIdForAudit: string | null = null;
+
+    switch (classification.kind) {
+      case "first_period":
+        newPeriodId = await openFreshPeriod("initial", null);
+        break;
+
+      case "no_change":
+        break;
+
+      case "renewed":
+        priorPeriodIdForAudit = classification.priorPeriodId;
+        if (currentPeriod && currentPeriod.periodEnd > nowMs) {
+          await closePeriodNow(classification.priorPeriodId);
+        }
+        newPeriodId = await openFreshPeriod("renewed", classification.priorPeriodId);
+        break;
+
+      case "upgraded":
+        priorPeriodIdForAudit = classification.priorPeriodId;
+        if (currentPeriod && currentPeriod.periodEnd > nowMs) {
+          await closePeriodNow(classification.priorPeriodId);
+        }
+        newPeriodId = await openFreshPeriod("upgraded", classification.priorPeriodId);
+        break;
+
+      case "downgraded_applied":
+        priorPeriodIdForAudit = classification.priorPeriodId;
+        newPeriodId = await openFreshPeriod("downgraded", classification.priorPeriodId);
+        break;
+
+      case "crossgrade_applied":
+        priorPeriodIdForAudit = classification.priorPeriodId;
+        newPeriodId = await openFreshPeriod("crossgrade", classification.priorPeriodId);
+        break;
+
+      case "downgraded_deferred":
+      case "crossgrade_deferred":
+        // Design doc's "Subscription transitions" table: keep serving the
+        // current (higher-tier, or different-duration) period untouched
+        // until a later sync reports the new product as active. No D1
+        // write, no syncAllowancePeriod call.
+        priorPeriodIdForAudit = classification.priorPeriodId;
+        break;
     }
+
+    await db
+      .insert(usageAuditLog)
+      .values({
+        id: crypto.randomUUID(),
+        userId,
+        eventType: "allowance_period.transition",
+        details: JSON.stringify({
+          classification: classification.kind,
+          priorPeriodId: priorPeriodIdForAudit,
+          newPeriodId,
+          transactionId: tx.transactionId,
+          productId: tx.productId,
+          plan: tx.plan,
+        }),
+        createdAt: now,
+      })
+      .run();
   }
 
-  // 3. Append-only audit row for every applied transaction (not just the
-  // first) -- matches usageAuditLog's "audit trail for entitlement/usage
-  // decisions" purpose (workers/worker/src/db/schema.ts).
+  // 3. Append-only per-transaction audit row -- UNCHANGED from plan 6.
+  // Written for every applied transaction (active or expired), independent
+  // of the transition-specific row above (which only fires when isActive).
   await db
     .insert(usageAuditLog)
     .values({
