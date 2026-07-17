@@ -566,3 +566,19 @@ export type UsageReservation = typeof usageReservation.$inferSelect;
 export type NewUsageReservation = typeof usageReservation.$inferInsert;
 export type UsageAuditLog = typeof usageAuditLog.$inferSelect;
 export type NewUsageAuditLog = typeof usageAuditLog.$inferInsert;
+
+// ─── Ops flags (server-owned feature flags / kill switches) ────────────────
+// Backs workers/worker/src/ops/feature-flags.ts. One row per flag key. See
+// that module for the known flag keys, the per-flag default-when-missing
+// behavior, and the 30s in-memory cache that sits in front of this table so
+// most requests never touch D1 for a flag check.
+export const opsFlag = sqliteTable("ops_flag", {
+  key: text("key").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+export type OpsFlag = typeof opsFlag.$inferSelect;
+export type NewOpsFlag = typeof opsFlag.$inferInsert;
