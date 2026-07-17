@@ -24,3 +24,41 @@ export const reservations = sqliteTable("reservations", {
   createdAt: integer("created_at").notNull(), // epoch ms
   settledAt: integer("settled_at"), // epoch ms, null while pending
 });
+
+// Voice-chat session lifecycle — one row per Rishi voice session (not per
+// interval). Added by 2026-07-17-user-usage-ledger-voice-session.md, which
+// extends this same Durable Object. `planKind` defaults to "trial" and is
+// otherwise unused by this plan so a later plan can add a "reader"/"voice"
+// paid-session kind without a schema migration.
+export const voiceSession = sqliteTable("voice_session", {
+  rishiSessionId: text("rishi_session_id").primaryKey(),
+  planKind: text("plan_kind").notNull().default("trial"),
+  status: text("status", {
+    enum: ["pending_registration", "active", "terminal"],
+  }).notNull(),
+  capIntervals: integer("cap_intervals").notNull(),
+  consumedIntervals: integer("consumed_intervals").notNull().default(0),
+  creditsPerInterval: integer("credits_per_interval").notNull(),
+  nonceIssuedAt: integer("nonce_issued_at").notNull(), // epoch ms
+  nonceSignature: text("nonce_signature").notNull(),
+  nonceUsed: integer("nonce_used", { mode: "boolean" }).notNull().default(false),
+  callId: text("call_id"),
+  callRegisteredAt: integer("call_registered_at"), // epoch ms, null until registered
+  terminalReason: text("terminal_reason", {
+    enum: ["voice_session_time_cap", "trial_credits_exhausted", "registration_timeout"],
+  }),
+  terminalAt: integer("terminal_at"), // epoch ms
+  hangupStatus: text("hangup_status", {
+    enum: ["not_started", "pending", "succeeded", "failed_permanently"],
+  })
+    .notNull()
+    .default("not_started"),
+  hangupAttempts: integer("hangup_attempts").notNull().default(0),
+  createdAt: integer("created_at").notNull(), // epoch ms
+  updatedAt: integer("updated_at").notNull(), // epoch ms
+});
+
+export type VoiceSessionRow = typeof voiceSession.$inferSelect;
+export type NewVoiceSessionRow = typeof voiceSession.$inferInsert;
+export type VoiceSessionStatus = VoiceSessionRow["status"];
+export type HangupStatus = VoiceSessionRow["hangupStatus"];
