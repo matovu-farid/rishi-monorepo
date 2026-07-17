@@ -13,6 +13,7 @@ import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
+import { voiceSessionsRoutes } from "./routes/voice-sessions";
 import { devicesRoutes } from "./routes/devices";
 import { chatRoutes } from "./routes/chat";
 import { conversationsRoutes } from "./routes/conversations";
@@ -504,6 +505,7 @@ app.route("/auth", authRoutes);
 app.route("/api/sync/messages", messagesRoutes);
 app.route("/desktop", desktopRoutes);
 app.route("/mobile", mobileRoutes);
+app.route("/api/voice-sessions", voiceSessionsRoutes);
 // Quick-VPX VPX-02 — APNs device registration for silent-push sync wake.
 app.route("/api/devices", devicesRoutes);
 // Quick task 260612-f7p — streaming chat for iOS RishiChat (v1 no RAG).
