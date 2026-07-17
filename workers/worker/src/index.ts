@@ -50,6 +50,8 @@ import { findOrCreateUser } from "./findOrCreateUser";
 import { incrementApiUsage } from "./usage/api-usage";
 import { error } from "node:console";
 import { userRoutes } from "./routes/user";
+import { estimateNarrationSeconds } from "./tts/reservation-estimate";
+import { InsufficientAllowanceError } from "./durable-objects/user-usage-ledger/errors";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 
@@ -325,20 +327,24 @@ function ttsDoneId(requestKey: string): string {
 function buildTtsRawResponse(
   bytes: Uint8Array,
   cacheStatus: "hit" | "miss",
+  entitlementHeader?: string,
 ): Response {
-  return new Response(bytes, {
-    headers: {
-      "Content-Type": "audio/mpeg",
-      "Content-Length": bytes.byteLength.toString(),
-      "X-TTS-Cache": cacheStatus,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "audio/mpeg",
+    "Content-Length": bytes.byteLength.toString(),
+    "X-TTS-Cache": cacheStatus,
+  };
+  if (entitlementHeader) {
+    headers["X-Entitlement-Remaining"] = entitlementHeader;
+  }
+  return new Response(bytes, { headers });
 }
 
 function buildTtsEventResponse(
   bytes: Uint8Array,
   requestKey: string,
   cacheStatus: "hit" | "miss",
+  entitlementHeader?: string,
 ): Response {
   const encoder = new TextEncoder();
   const chunks = splitTtsBytes(bytes);
@@ -389,13 +395,15 @@ function buildTtsEventResponse(
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-      "X-TTS-Cache": cacheStatus,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    "X-TTS-Cache": cacheStatus,
+  };
+  if (entitlementHeader) {
+    headers["X-Entitlement-Remaining"] = entitlementHeader;
+  }
+  return new Response(stream, { headers });
 }
 
 function respondWithTtsBytes(
@@ -403,11 +411,41 @@ function respondWithTtsBytes(
   requestKey: string,
   cacheStatus: "hit" | "miss",
   mode: TtsResponseMode,
+  entitlementHeader?: string,
 ): Response {
   if (mode === "events") {
-    return buildTtsEventResponse(bytes, requestKey, cacheStatus);
+    return buildTtsEventResponse(bytes, requestKey, cacheStatus, entitlementHeader);
   }
-  return buildTtsRawResponse(bytes, cacheStatus);
+  return buildTtsRawResponse(bytes, cacheStatus, entitlementHeader);
+}
+
+// Budget for the best-effort entitlement-snapshot read attached to a
+// successful (cache-miss) TTS response as `X-Entitlement-Remaining`. This
+// lets the client optimistically update its remaining-allowance UI without
+// a separate round trip (design: "The response returns the last known
+// entitlement snapshot"). It is intentionally informational only: never
+// let a slow ledger read add latency to audio delivery, so this races the
+// snapshot read against a fixed timeout and omits the header entirely
+// (rather than blocking) if the read doesn't win that race or throws.
+const ENTITLEMENT_HEADER_BUDGET_MS = 250;
+
+async function bestEffortEntitlementHeader(
+  ledger: { getEntitlementSnapshot(): Promise<unknown> },
+  budgetMs = ENTITLEMENT_HEADER_BUDGET_MS,
+): Promise<string | undefined> {
+  try {
+    const timeout = new Promise<undefined>((resolve) => {
+      setTimeout(() => resolve(undefined), budgetMs);
+    });
+    const snapshot = await Promise.race([
+      ledger.getEntitlementSnapshot(),
+      timeout,
+    ]);
+    return snapshot === undefined ? undefined : JSON.stringify(snapshot);
+  } catch (err) {
+    console.error("tts.entitlement.header.failed", err);
+    return undefined;
+  }
 }
 
 export const app = new Hono<{
