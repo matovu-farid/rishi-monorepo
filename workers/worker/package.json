@@ -5,7 +5,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
     "generate-types": "wrangler types",
-    "type-check": "bun generate-types && tsc"
+    "type-check": "bun generate-types && tsc",
+    "db:generate:ledger": "drizzle-kit generate --config=drizzle-do.config.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.64",
