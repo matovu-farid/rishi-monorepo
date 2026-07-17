@@ -1,4 +1,3 @@
-import axios from "axios";
 import OpenAI from "openai";
 
 import { Hono } from "hono";
@@ -6,7 +5,6 @@ import { cors } from "hono/cors";
 
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, embedMany, APICallError } from "ai";
-import { z } from "zod";
 
 import * as Sentry from "@sentry/cloudflare";
 import { syncRoutes } from "./routes/sync";
@@ -32,13 +30,15 @@ import { registerEntitlementSyncRoute } from "./billing/entitlement-sync";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
+import {
+  buildRealtimeClientSecretsBody,
+  coerceLanguage,
+  mintRealtimeClientSecret,
+  type BuildClientSecretsInput,
+} from "./realtime/client-secrets";
 import { user, user as userTable } from "@rishi/shared/schema";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import authRoutes from "./routes/auth";
-import {
-  BOOK_CONTEXT_TOOL_SPEC,
-  renderRealtimeInstructions,
-} from "@rishi/shared/voice-chat/build-realtime-agent";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { AppleBucket, createTestNotification } from "./apple-connect/functions";
@@ -54,29 +54,7 @@ import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { InsufficientAllowanceError } from "./durable-objects/user-usage-ledger/errors";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
-
-// Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
-const ALLOWED_REALTIME_LANGUAGES = [
-  "en",
-  "es",
-  "fr",
-  "de",
-  "it",
-  "pt",
-  "ja",
-  "ko",
-  "zh",
-  "ar",
-  "hi",
-  "ru",
-] as const;
-
-function coerceLanguage(raw: string | undefined): string {
-  if (!raw) return "en";
-  return (ALLOWED_REALTIME_LANGUAGES as readonly string[]).includes(raw)
-    ? raw
-    : "en";
-}
+export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
 
 // Lazily memoize the AI SDK provider so we don't re-allocate it (and any
 // internal state it caches) on every request. The Cloudflare Workers env
@@ -162,84 +140,6 @@ function resolveElevenLabsModelId(model: string | undefined): string {
     return normalized;
   }
   return ELEVENLABS_MODEL_ID;
-}
-
-/**
- * Phase 25-06: the worker now bakes a book-aware system prompt + the
- * `bookContext` tool spec into the OpenAI realtime session, so the model can
- * actually invoke the iOS-side Responder. iOS (Plan 25-08) ships the matching
- * POST body atomically. The legacy `(language: string)` signature is gone —
- * callers pass an `BuildClientSecretsInput` object, all book-context fields
- * optional.
- *
- * Notes
- * - When `outline` / `pageText` / `activeParagraphText` are absent,
- *   `renderRealtimeInstructions` still produces a coherent generic prompt
- *   (no "undefined"/"null" leakage) — see packages/shared tests for that
- *   string-rendering contract.
- * - OpenAI requires `session.audio.input.transcription.model` whenever the
- *   `transcription` object is present — omitting it produces a 400
- *   `missing_required_parameter` and breaks voice chat activation. (Regression
- *   pinned by buildRealtimeClientSecretsBody tests.)
- */
-export interface BuildClientSecretsInput {
-  language: string;
-  bookId?: string;
-  currentPage?: number;
-  pageText?: string;
-  outline?: {
-    title: string;
-    author?: string;
-    chapters: string[];
-  };
-  activeParagraphText?: string;
-}
-
-export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
-  // renderOutlineSection reads `outline.author` with a truthy check, so the
-  // shared `BookOutline.author: string | null` and our wire-side
-  // `author?: string` are behaviourally equivalent. Normalize undefined → null
-  // for the type-level handshake.
-  const outline = input.outline
-    ? {
-        title: input.outline.title,
-        author: input.outline.author ?? null,
-        chapters: input.outline.chapters,
-      }
-    : undefined;
-  const instructions = renderRealtimeInstructions({
-    pageText: input.pageText ?? "",
-    language: input.language,
-    outline,
-    activeParagraphText: input.activeParagraphText,
-  });
-  return {
-    expires_after: {
-      anchor: "created_at",
-      seconds: 600,
-    },
-    session: {
-      type: "realtime",
-      model: "gpt-realtime",
-      instructions,
-      tools: [
-        {
-          type: "function",
-          name: BOOK_CONTEXT_TOOL_SPEC.name,
-          description: BOOK_CONTEXT_TOOL_SPEC.description,
-          parameters: BOOK_CONTEXT_TOOL_SPEC.parameters,
-        },
-      ],
-      audio: {
-        input: {
-          transcription: {
-            model: "gpt-4o-mini-transcribe",
-            language: input.language,
-          },
-        },
-      },
-    },
-  } as const;
 }
 
 /**
@@ -1140,44 +1040,22 @@ app.post(
         .json<Partial<BuildClientSecretsInput>>()
         .catch((): Partial<BuildClientSecretsInput> => ({}));
       const language = coerceLanguage(rawBody.language);
-      const response = await axios.post(
-        "https://api.openai.com/v1/realtime/client_secrets",
-        buildRealtimeClientSecretsBody({
-          language,
-          bookId: rawBody.bookId,
-          currentPage: rawBody.currentPage,
-          pageText: rawBody.pageText,
-          outline: rawBody.outline,
-          activeParagraphText: rawBody.activeParagraphText,
-        }),
-        {
-          headers: {
-            Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30_000,
-        },
-      );
-      // OpenAI's POST /v1/realtime/client_secrets returns a richer payload than
-      // we used to consume: `value` is the JWT ephemeral key, `expires_at` is
-      // the JWT TTL, and `id` is the realtime session id. iOS
-      // RishiAPI/Endpoints/RealtimeAPI.swift:31-39 decodes the response as
-      // `{client_secret: String, session_id: String}` — both flat strings.
-      //
-      // Project the OpenAI shape into the iOS contract. If OpenAI ever omits
-      // `id` (defensive — it's present in production today), synthesise a
-      // `local_<uuid>` so the iOS decoder still gets a non-empty string and
-      // logs can distinguish synthesised ids from real OpenAI session ids.
-      // Phase 17-05 (Gap 8 of the 2026-06-12 wire-contract audit).
-      const responseSchema = z.object({
-        value: z.string(),
-        expires_at: z.number(),
-        id: z.string().optional(),
+      const minted = await mintRealtimeClientSecret(c.env.OPENAI_API_KEY, {
+        language,
+        bookId: rawBody.bookId,
+        currentPage: rawBody.currentPage,
+        pageText: rawBody.pageText,
+        outline: rawBody.outline,
+        activeParagraphText: rawBody.activeParagraphText,
       });
-      const parsedResponse = responseSchema.parse(response.data);
+      // iOS RishiAPI/Endpoints/RealtimeAPI.swift:31-39 decodes the response as
+      // `{client_secret: String, session_id: String}` — both flat strings.
+      // Phase 17-05 (Gap 8 of the 2026-06-12 wire-contract audit) — the
+      // `local_<uuid>` fallback for a missing OpenAI `id` now lives inside
+      // `mintRealtimeClientSecret` (workers/worker/src/realtime/client-secrets.ts).
       return c.json({
-        client_secret: parsedResponse.value,
-        session_id: parsedResponse.id ?? `local_${crypto.randomUUID()}`,
+        client_secret: minted.clientSecret,
+        session_id: minted.sessionId,
       });
     } catch (error) {
       const axiosErr = error as {
