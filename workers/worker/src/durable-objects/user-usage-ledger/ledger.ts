@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { eq, sql } from "drizzle-orm";
+import { z } from "zod";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../../drizzle/ledger-do-migrations/migrations";
@@ -27,11 +28,12 @@ import {
   setHangupStatus,
 } from "../voice-session/sql";
 import { callOpenAiHangup } from "../voice-session/openai-hangup";
-import type { VoiceSessionTerminalReason } from "../voice-session/messages";
+import type { ControlMessage, VoiceSessionTerminalReason } from "../voice-session/messages";
 
 const CREDITS_PER_INTERVAL = 2;
 const CAP_INTERVALS_TRIAL = 40; // 20 minutes at the 30s cadence
 const INTERVAL_MS = 30_000;
+const ClientControlMessageSchema = z.object({ type: z.literal("client_ack") });
 /** How long a session may sit `pending_registration` before it's reconciled as abandoned. Documented per the spec's "short grace period" requirement. */
 const REGISTRATION_GRACE_MS = 10_000;
 /**
@@ -572,6 +574,152 @@ export class UserUsageLedger extends DurableObject<Env> {
     };
   }
 
+  // ---------- WS upgrade ----------
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected websocket", { status: 426 });
+    }
+
+    const rishiSessionId = sessionIdFromControlPath(request.url);
+    if (!rishiSessionId) {
+      return new Response("Missing voice session id", { status: 400 });
+    }
+
+    // Defense in depth: the Worker route (workers/worker/src/routes/voice-sessions.ts)
+    // already checked this via an RPC call to getSessionSnapshot before
+    // forwarding, but the session could have ended in the interim (e.g.
+    // this ledger's own alarm fired between that read and this request).
+    const snapshot = await this.getSessionSnapshot(rishiSessionId);
+    if (!snapshot) {
+      return new Response("No matching voice session", { status: 404 });
+    }
+
+    const { 0: client, 1: server } = new WebSocketPair();
+    // Hibernation API: the tag is the durable link between a socket and its
+    // session, recoverable via `ctx.getTags(ws)` after a hibernation cycle
+    // resets this object's in-memory state. There is no separate
+    // `attachControlSocket` method — accept and the initial snapshot send
+    // both happen inline here.
+    this.ctx.acceptWebSocket(server, [rishiSessionId]);
+
+    const snapshotMessage: ControlMessage =
+      snapshot.status === "terminal"
+        ? {
+            type: "snapshot",
+            rishiSessionId,
+            status: "terminal",
+            reason: snapshot.terminalReason,
+          }
+        : {
+            type: "snapshot",
+            rishiSessionId,
+            status: snapshot.status,
+            remainingCredits: snapshot.remainingCredits,
+            remainingIntervals: snapshot.remainingIntervals,
+          };
+    this.sendControlMessage(server, snapshotMessage);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // ---------- Hibernation handlers ----------
+  async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      this.sendControlError(ws, "Control message was not valid JSON.");
+      return;
+    }
+    const parsed = ClientControlMessageSchema.safeParse(json);
+    if (!parsed.success) {
+      this.sendControlError(ws, "Unrecognized control message.");
+      return;
+    }
+    // client_ack carries no enforcement weight — see the type's doc comment
+    // in voice-session/messages.ts. Logged for audit only.
+    console.log(
+      JSON.stringify({ event: "voice_control.client_ack", rishiSessionId: this.rishiSessionIdFor(ws) }),
+    );
+  }
+
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    // workers/worker's compatibility_date (2025-11-17) predates the
+    // `web_socket_auto_reply_to_close` default (workerd compat dates
+    // 2026-04-07+), so this handler must still reciprocate the close frame
+    // itself, or the client observes a 1006 instead of a clean close.
+    // `ws.close()` is documented as a safe no-op if the socket is already
+    // CLOSING/CLOSED, so this call is correct under either compat regime.
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Already closed — nothing to reciprocate.
+    }
+    console.log(
+      JSON.stringify({
+        event: "voice_control.socket_closed",
+        rishiSessionId: this.rishiSessionIdFor(ws),
+        code,
+        wasClean,
+      }),
+    );
+  }
+
+  async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    console.log(
+      JSON.stringify({
+        event: "voice_control.socket_error",
+        rishiSessionId: this.rishiSessionIdFor(ws),
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+
+  // ---------- Seam plan 3's alarm() already calls ----------
+  /**
+   * Sends `message` to every currently attached control socket for this
+   * ledger. Plan 3's (2026-07-17-user-usage-ledger-voice-session.md) own
+   * `registerCallId` and `alarm()` already call this every 30 seconds
+   * (`allowance_remaining`, then `session_ending` on the final interval)
+   * and once more at a terminal boundary (`session_ended`). The product
+   * spec guarantees one active voice session per account, so every socket
+   * `ctx.getWebSockets()` returns belongs to the same session — no
+   * per-socket session filtering is needed here.
+   */
+  private broadcastToActiveSockets(message: ControlMessage): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      this.sendControlMessage(ws, message);
+    }
+  }
+
+  // ---------- Helpers ----------
+  private sendControlMessage(ws: WebSocket, message: ControlMessage): void {
+    try {
+      ws.send(JSON.stringify(message));
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          event: "voice_control.send_failed",
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
+  private sendControlError(ws: WebSocket, message: string): void {
+    this.sendControlMessage(ws, {
+      type: "session_error",
+      rishiSessionId: this.rishiSessionIdFor(ws) ?? "",
+      code: "bad_client_message",
+      message,
+    });
+  }
+
+  private rishiSessionIdFor(ws: WebSocket): string | undefined {
+    return this.ctx.getTags(ws)[0];
+  }
+
   // ── Internal helpers — DO-local storage reads (part of the atomic path) ──
 
   private requireUserId(): string {
@@ -742,4 +890,17 @@ export class UserUsageLedger extends DurableObject<Env> {
       console.error("UserUsageLedger.appendAuditLog failed", { userId, eventType, err });
     }
   }
+}
+
+/**
+ * Extracts the `:id` path segment from a request URL shaped
+ * `.../api/voice-sessions/<id>/control`. Robust to any route-prefix
+ * differences between the Worker and what this DO sees, since it looks for
+ * the literal `control` segment rather than assuming a fixed prefix depth.
+ */
+function sessionIdFromControlPath(url: string): string | null {
+  const segments = new URL(url).pathname.split("/").filter(Boolean);
+  const controlIndex = segments.indexOf("control");
+  if (controlIndex <= 0) return null;
+  return decodeURIComponent(segments[controlIndex - 1]!);
 }
