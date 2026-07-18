@@ -16,7 +16,7 @@ import StoreKit
 /// users with an entitlement see the tappable button (failure-mode plan,
 /// PITFALLS Pitfall 3). Phase-13 Wave-3 wiring (plan 13-05) switches the
 /// Resolver to the live reconciler.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 public struct ManageSubscriptionRow: View {
 
 
@@ -35,14 +35,15 @@ public struct ManageSubscriptionRow: View {
                     Label("Manage Subscriptions", systemImage: "creditcard")
                 }
             
-        
+        #if os(iOS) || targetEnvironment(macCatalyst)
         // Triggers the native system sheet to edit, cancel, or switch plans
         .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
+        #endif
     }
 }
 
 #Preview("Granted") {
-    Form { if #available(iOS 18.4, *) {
+    Form { if #available(iOS 18.4, macOS 15.4, *) {
         ManageSubscriptionRow()
     } else {
         // Fallback on earlier versions
@@ -51,7 +52,7 @@ public struct ManageSubscriptionRow: View {
 }
 
 #Preview("Not granted (failure-mode)") {
-    Form { if #available(iOS 18.4, *) {
+    Form { if #available(iOS 18.4, macOS 15.4, *) {
         ManageSubscriptionRow()
     } else {
         // Fallback on earlier versions

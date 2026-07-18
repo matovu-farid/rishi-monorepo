@@ -69,6 +69,8 @@ struct ReaderVoiceEntryLanguageTests {
             lock.withLock { status }
         }
 
+        var providerCallId: String? { nil }
+
         func errorStream() -> AsyncStream<RealtimeClientError> {
             AsyncStream { continuation in continuation.finish() }
         }

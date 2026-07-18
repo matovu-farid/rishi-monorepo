@@ -4,6 +4,13 @@
 export const TRIAL_INITIAL_CREDITS = 100;
 export const TRIAL_TTS_COST_CREDITS = 1;
 
+// How long a `"tts"` reservation may sit `status: "pending"` before the
+// ledger's alarm-driven reconciliation treats it as abandoned (the
+// request that should have committed or released it crashed, or the
+// client disconnected mid-stream) and returns its held allowance to the
+// pool. See `UserUsageLedger.reconcileStaleReservations()`.
+export const RESERVATION_STALE_TIMEOUT_MS = 5 * 60_000;
+
 // Matches the "Authoritative entitlement model" states in
 // docs/superpowers/specs/2026-07-17-rishi-pricing-trial-launch-prerequisites-design.md.
 // `periodEnd` is epoch milliseconds (DO-local storage's native unit for

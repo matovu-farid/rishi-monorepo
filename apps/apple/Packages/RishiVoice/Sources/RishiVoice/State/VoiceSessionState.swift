@@ -12,6 +12,22 @@ public final class VoiceSessionState {
     public var partialAssistantTranscript: String = ""
     public var lastError: String?
 
+    /// Remaining trial credits from the control WebSocket's
+    /// `allowance_remaining` / non-terminal `snapshot` messages
+    /// (`ControlMessage.remainingTrialCredits`). `nil` before the first
+    /// message arrives.
+    public var remainingTrialCredits: Int?
+    /// Remaining paid-plan Voice Chat seconds from the same messages
+    /// (`ControlMessage.remainingVoiceChatSeconds`). `nil` before the first
+    /// message arrives.
+    public var remainingVoiceChatSeconds: Int?
+    /// Remaining session intervals from the same messages.
+    public var remainingIntervals: Int?
+    /// Set once the control WebSocket sends `session_ending` (final
+    /// 30-second interval warning). Cleared by `reset()`. The app layer
+    /// (e.g. `VoiceSessionView`) reads this to show a warning banner.
+    public var isFinalInterval: Bool = false
+
     public init() {}
 
     public func apply(status: VoiceSessionStatus) {
@@ -39,10 +55,33 @@ public final class VoiceSessionState {
         self.lastError = message
     }
 
+    /// Applies a control-WebSocket allowance update — either an
+    /// `allowance_remaining` message (fields always present) or the
+    /// non-terminal branch of a `snapshot` message (fields optional per
+    /// `ControlMessage.snapshot`'s decoding; pass through as given).
+    public func applyAllowance(
+        remainingTrialCredits: Int?,
+        remainingVoiceChatSeconds: Int?,
+        remainingIntervals: Int?
+    ) {
+        if let remainingTrialCredits { self.remainingTrialCredits = remainingTrialCredits }
+        if let remainingVoiceChatSeconds { self.remainingVoiceChatSeconds = remainingVoiceChatSeconds }
+        if let remainingIntervals { self.remainingIntervals = remainingIntervals }
+    }
+
+    /// Applies a control-WebSocket `session_ending` warning.
+    public func applySessionEndingWarning() {
+        isFinalInterval = true
+    }
+
     public func reset() {
         self.status = .idle
         self.partialUserTranscript = ""
         self.partialAssistantTranscript = ""
         self.lastError = nil
+        self.remainingTrialCredits = nil
+        self.remainingVoiceChatSeconds = nil
+        self.remainingIntervals = nil
+        self.isFinalInterval = false
     }
 }

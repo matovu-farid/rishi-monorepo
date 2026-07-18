@@ -36,7 +36,9 @@ public struct VoiceStatusBadge: View {
         case .idle:                return "Idle"
         case .requestingMic:       return "Requesting mic"
         case .fetchingKey:         return "Connecting…"
+        case .creatingSession:     return "Starting…"
         case .connecting:          return "Connecting…"
+        case .registeringCall:     return "Confirming…"
         case .live:                return "Live"
         case .reconnecting(let a): return "Reconnecting (\(a)/3)"
         case .ending:              return "Ending"
@@ -49,7 +51,7 @@ public struct VoiceStatusBadge: View {
         switch status {
         case .live:
             return RishiColor.accent
-        case .reconnecting, .connecting, .fetchingKey, .requestingMic:
+        case .reconnecting, .connecting, .fetchingKey, .creatingSession, .registeringCall, .requestingMic:
             return RishiColor.textSecondary
         case .failed:
             return RishiColor.danger

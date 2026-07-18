@@ -1,18 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import SwiftUI
 import RishiAudio
 import RishiBilling
@@ -32,9 +17,8 @@ struct ReaderDestination: View {
     @State private var vm: ReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
     @State private var syncBinding: ReaderPositionSyncBinding? = nil
-    
-    
-    
+    @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
+
     @State private var voiceEntry: ReaderVoiceEntry
 
     init(
@@ -50,11 +34,10 @@ struct ReaderDestination: View {
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
             voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
+            entitlementSnapshotStore: services.entitlementSnapshotStore,
             onRequestPaywall: onRequestPaywall
         ))
     }
-
-    
 
     var body: some View {
         ReaderScreen(
@@ -62,13 +45,16 @@ struct ReaderDestination: View {
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
             bookmarkStore: services.bookmarkStore,
-            
-            
+
+
             bookmarkMarkDirty: { [services] id in await services.syncEngine.markBookmarkDirty(id) },
             onReadAloud: {
-                
+                if let reason = services.entitlementSnapshotStore.snapshot.blockReason(for: .narration) {
+                    pendingNarrationUpgradePrompt = reason
+                    return
+                }
+
                 Task {
-  
                     if readAloud == nil {
                         readAloud = ReadAloudController(
                             ttsEngine: services.ttsEngine,
@@ -87,15 +73,15 @@ struct ReaderDestination: View {
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator
         )
-        
-        
+
+
         .ttsErrorAlert(state: services.ttsState)
         .task {
-            
-            
-            
+
+
+
             vm.onUserNavigation = { _ in
-                
+
                 Task { await readAloud?.stop() }
             }
             vm.onUserNavigationForTTSPagePrefetch = { [weak vm] locator in
@@ -110,10 +96,10 @@ struct ReaderDestination: View {
                 viewModel: vm,
                 syncEngine: services.syncEngine
             )
-            
-            
-            
-            
+
+
+
+
             if await services.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
                 let url =  services.bookFileStorage.absoluteFileURL(for: vm.book)
                 await services.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
@@ -121,7 +107,7 @@ struct ReaderDestination: View {
         }
         .onDisappear {
             syncBinding = nil
-            
+
             Task { await readAloud?.stop() }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -167,6 +153,29 @@ struct ReaderDestination: View {
                 )
                 .presentationDetents([.medium])
             }
+        }
+        .sheet(item: $pendingNarrationUpgradePrompt) { reason in
+            AIFeatureUpgradePrompt(
+                reason: reason,
+                onUpgrade: {
+                    pendingNarrationUpgradePrompt = nil
+                    onRequestPaywall("narration_exhausted")
+                },
+                onDismiss: { pendingNarrationUpgradePrompt = nil }
+            )
+        }
+        .sheet(item: Binding(
+            get: { voiceEntry.pendingUpgradePrompt },
+            set: { newValue in if newValue == nil { voiceEntry.dismissUpgradePrompt() } }
+        )) { reason in
+            AIFeatureUpgradePrompt(
+                reason: reason,
+                onUpgrade: {
+                    voiceEntry.dismissUpgradePrompt()
+                    onRequestPaywall("voice_chat_exhausted")
+                },
+                onDismiss: { voiceEntry.dismissUpgradePrompt() }
+            )
         }
     }
 }

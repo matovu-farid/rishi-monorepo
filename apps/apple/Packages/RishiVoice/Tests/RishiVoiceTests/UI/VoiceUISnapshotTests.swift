@@ -25,7 +25,9 @@ struct VoiceUISnapshotTests {
             .idle,
             .requestingMic,
             .fetchingKey,
+            .creatingSession,
             .connecting,
+            .registeringCall,
             .live,
             .reconnecting(attempt: 1),
             .reconnecting(attempt: 2),
@@ -69,7 +71,9 @@ struct VoiceUISnapshotTests {
             .idle,
             .requestingMic,
             .fetchingKey,
+            .creatingSession,
             .connecting,
+            .registeringCall,
             .live,
             .reconnecting(attempt: 1),
             .ending,
@@ -135,6 +139,15 @@ struct VoiceUISnapshotTests {
         _ = VoiceSessionView(state: state, onEnd: probe).body
         probe()
         #expect(fired == 1)
+    }
+
+    @Test("VoiceSessionView gives the character a native-aspect-ratio slot")
+    func sessionViewCharacterSlotPreservesAspectRatio() {
+        let slot = VoiceSessionView.characterSlotSize
+
+        #expect(slot.height == 160)
+        #expect(abs(slot.width - (slot.height * VoiceCharacterView.canvasAspectRatio)) < 0.001)
+        #expect(abs((slot.width / slot.height) - VoiceCharacterView.canvasAspectRatio) < 0.001)
     }
 
     // MARK: VoicePermissionPrompt

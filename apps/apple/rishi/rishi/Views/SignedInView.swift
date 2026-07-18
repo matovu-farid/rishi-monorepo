@@ -97,6 +97,15 @@ struct SignedInView: View {
                         
                         Task { await services.voicePresenter.retry() }
                     }
+                case .upgrade:
+                    Button("See plans") {
+                        services.voicePresenter.clearFailure()
+                        model.requestPaywall("voice_chat_exhausted")
+                    }
+                case .dismiss:
+                    Button("OK") {
+                        services.voicePresenter.clearFailure()
+                    }
                 }
                 Button("Dismiss", role: .cancel) {
                     services.voicePresenter.clearFailure()

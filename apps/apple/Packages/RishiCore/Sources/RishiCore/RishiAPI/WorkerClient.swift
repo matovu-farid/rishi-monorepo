@@ -223,11 +223,17 @@ public actor WorkerClient {
         case 401:
             throw RishiError.unauthenticated
         case 400..<500:
-            let envelope = (try? decoder.decode(ErrorEnvelope.self, from: data))
-                ?? ErrorEnvelope(error: .init(code: "http_4xx", message: "HTTP \(status)"))
-            throw RishiError.network(code: envelope.code, message: envelope.message)
+            let (code, message) = decodeWorkerErrorFields(from: data, status: status)
+            throw RishiError.network(code: code, message: message)
         case 500..<600:
-            // Retry handled by caller via re-throw of networkFailure-equivalent.
+            // Decode before retrying. Idempotent POSTs can mutate server state
+            // then return 5xx with an app code (e.g. voice-session create →
+            // 502 OPENAI_MINT_FAILED after the ledger session exists). Blind
+            // retries then hit 409 VOICE_SESSION_ALREADY_ACTIVE. Only empty /
+            // unparseable 5xx bodies keep the transient-retry path.
+            if let appError = decodeTypedWorkerError(from: data) {
+                throw RishiError.network(code: appError.code, message: appError.message)
+            }
             if attempt < maxAttempts {
                 throw RishiError.networkFailure(URLError(.networkConnectionLost))
             }
@@ -235,6 +241,33 @@ public actor WorkerClient {
         default:
             throw RishiError.network(code: "http_unknown", message: "HTTP \(status)")
         }
+    }
+
+    /// Decodes a 4xx/5xx body into `(code, message)`. Tries the nested
+    /// `{ error: { code, message } }` shape most worker routes use
+    /// (`ErrorEnvelope`) first — preserving every existing route's behavior
+    /// unchanged — then the flat `{ error, code }` shape the voice-session
+    /// routes return, then falls back to a generic `http_4xx` code so an
+    /// unparseable body never throws a decoding error instead of the
+    /// intended `RishiError.network`. See
+    /// `2026-07-17-voice-session-flow-wiring.md` Task 1.
+    private func decodeWorkerErrorFields(from data: Data, status: Int) -> (code: String, message: String) {
+        if let typed = decodeTypedWorkerError(from: data) {
+            return typed
+        }
+        return ("http_4xx", "HTTP \(status)")
+    }
+
+    /// Returns a typed app error when the body is a nested `ErrorEnvelope` or
+    /// flat `FlatErrorEnvelope`; `nil` for empty/unparseable bodies.
+    private func decodeTypedWorkerError(from data: Data) -> (code: String, message: String)? {
+        if let nested = try? decoder.decode(ErrorEnvelope.self, from: data) {
+            return (nested.code, nested.message)
+        }
+        if let flat = try? decoder.decode(FlatErrorEnvelope.self, from: data) {
+            return (flat.code, flat.error)
+        }
+        return nil
     }
 
     private func isRetryable(_ urlError: URLError) -> Bool {

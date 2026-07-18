@@ -16,7 +16,9 @@ import StoreKit
 struct rishiApp: App {
     @State private var deps = AppDependencies()
     @State private var router = AppRouter()
-  
+
+    @Environment(\.scenePhase) private var scenePhase
+
     var currentUserBox = CurrentUserBox()
 
     #if canImport(UIKit)
@@ -47,6 +49,7 @@ struct rishiApp: App {
 
                 .task {
                     await deps.bootstrap()
+                    await refreshEntitlementSnapshot()
                 }
                 .task {
                     // Configure and load your tips at app launch.
@@ -67,13 +70,35 @@ struct rishiApp: App {
                 }
                 
         }
-
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            Task { await refreshEntitlementSnapshot() }
+        }
         .commands {
             RishiMenuCommands(
                 router: deps.macCommandRouter,
                 account: deps.macAccountMenu
             )
         }
+    }
+
+    /// Launch/foreground entitlement-snapshot refresh, per both specs'
+    /// "The client performs entitlement sync at launch, foreground...".
+    /// Guards on a stored session so a genuinely signed-out fresh install
+    /// does not fire one guaranteed-401, log-spamming `/api/billing/me`
+    /// call before the user has ever signed in — the same
+    /// `Keychain.load(.userId)` check `RootView.realBodyContent`'s own
+    /// bootstrap `.task` already uses.
+    ///
+    /// Also calls `RestoreService.refreshOnDeviceEntitlementAtLaunch()` so
+    /// StoreKit on-device reconcile + entitlement-sync fire from this same
+    /// hook (storekit-four-products plan deferred the scenePhase observer
+    /// here to avoid a second lifecycle observer).
+    private func refreshEntitlementSnapshot() async {
+        guard (try? Keychain.load(.userId)) != nil else { return }
+        guard deps.services != nil else { return }
+        await deps.entitlementService.refreshSnapshot()
+        await deps.restoreService.refreshOnDeviceEntitlementAtLaunch()
     }
 }
 

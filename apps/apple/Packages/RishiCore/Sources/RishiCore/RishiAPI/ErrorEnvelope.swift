@@ -32,3 +32,16 @@ struct ErrorEnvelope: Codable, Sendable, Hashable {
     public var message: String { error.message }
     public var details: [String: String]? { error.details }
 }
+
+/// Decoded shape of the flat `{ "error": "<message>", "code": "<CODE>" }`
+/// 4xx/5xx error body used by the voice-session routes
+/// (`workers/worker/src/routes/voice-session-errors.ts` and
+/// `workers/worker/src/routes/voice-sessions.ts`'s own 400/502 responses) —
+/// distinct from the nested `ErrorEnvelope` shape most other worker routes
+/// use. `WorkerClient` tries `ErrorEnvelope` first, then this, before
+/// falling back to a generic code. See
+/// `2026-07-17-voice-session-flow-wiring.md` Task 1.
+struct FlatErrorEnvelope: Codable, Sendable, Hashable {
+    let error: String
+    let code: String
+}

@@ -31,12 +31,7 @@ import { registerEntitlementSyncRoute } from "./billing/entitlement-sync";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
-import {
-  buildRealtimeClientSecretsBody,
-  coerceLanguage,
-  mintRealtimeClientSecret,
-  type BuildClientSecretsInput,
-} from "./realtime/client-secrets";
+import { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
 import { user, user as userTable } from "./db/schema";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import authRoutes from "./routes/auth";
@@ -121,6 +116,10 @@ const OPENAI_TTS_VOICE_PRESETS = [
 const OPENAI_TTS_DEFAULT_VOICE = "marin";
 const OPENAI_TTS_MODEL_ID = "gpt-4o-mini-tts";
 const OPENAI_TTS_MODEL_NAME = "GPT-4o mini TTS";
+
+// Design spec's "Narration flow" step 4: "The Worker limits a request to a
+// standard-sized chunk, initially no more than 1,000 characters."
+const TTS_MAX_CHARS_PER_REQUEST = 1000;
 
 function displayName(id: string): string {
   return id
@@ -320,6 +319,141 @@ function respondWithTtsBytes(
   return buildTtsRawResponse(bytes, cacheStatus, entitlementHeader);
 }
 
+function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.byteLength + b.byteLength);
+  out.set(a, 0);
+  out.set(b, a.byteLength);
+  return out;
+}
+
+// Streams the provider's raw audio bytes straight through to the client as
+// they arrive — no `Content-Length` because the final size isn't known
+// upfront (design: "immediately streams the provider audio to the app once
+// response headers/body are available").
+function buildTtsRawStreamResponse(
+  stream: ReadableStream<Uint8Array>,
+  cacheStatus: "hit" | "miss",
+  entitlementHeader?: string,
+): Response {
+  const headers: Record<string, string> = {
+    "Content-Type": "audio/mpeg",
+    "X-TTS-Cache": cacheStatus,
+  };
+  if (entitlementHeader) {
+    headers["X-Entitlement-Remaining"] = entitlementHeader;
+  }
+  return new Response(stream, { headers });
+}
+
+// SSE variant of the above: re-chunks the provider stream into
+// `TTS_EVENT_CHUNK_BYTES`-sized frames as bytes arrive, instead of waiting
+// for the full audio body before splitting it (buildTtsEventResponse's
+// approach, which is fine for the already-buffered cache-hit path but would
+// defeat streaming here).
+function buildTtsEventStreamResponse(
+  source: ReadableStream<Uint8Array>,
+  requestKey: string,
+  cacheStatus: "hit" | "miss",
+  entitlementHeader?: string,
+): Response {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = source.getReader();
+      let index = 0;
+      let totalBytes = 0;
+      let pending: Uint8Array = new Uint8Array(0);
+
+      const emitChunk = (bytes: Uint8Array) => {
+        const chunkId = ttsChunkId(requestKey, index);
+        controller.enqueue(
+          encoder.encode(
+            encodeSseFrame([
+              ["id", chunkId],
+              ["event", "chunk"],
+              [
+                "data",
+                JSON.stringify({
+                  request_id: requestKey,
+                  chunk_id: chunkId,
+                  index,
+                  audio_b64: bytesToBase64(bytes),
+                }),
+              ],
+            ]),
+          ),
+        );
+        index += 1;
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          totalBytes += value.byteLength;
+          pending = concatUint8Arrays(pending, value);
+          while (pending.byteLength >= TTS_EVENT_CHUNK_BYTES) {
+            emitChunk(pending.slice(0, TTS_EVENT_CHUNK_BYTES));
+            pending = pending.slice(TTS_EVENT_CHUNK_BYTES);
+          }
+        }
+        if (pending.byteLength > 0) {
+          emitChunk(pending);
+        }
+        controller.enqueue(
+          encoder.encode(
+            encodeSseFrame([
+              ["id", ttsDoneId(requestKey)],
+              ["event", "done"],
+              [
+                "data",
+                JSON.stringify({
+                  request_id: requestKey,
+                  done: true,
+                  cache: cacheStatus,
+                  chunk_count: index,
+                  byte_length: totalBytes,
+                }),
+              ],
+            ]),
+          ),
+        );
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      source.cancel(reason).catch(() => {});
+    },
+  });
+
+  const headers: Record<string, string> = {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    "X-TTS-Cache": cacheStatus,
+  };
+  if (entitlementHeader) {
+    headers["X-Entitlement-Remaining"] = entitlementHeader;
+  }
+  return new Response(stream, { headers });
+}
+
+function respondWithTtsStream(
+  stream: ReadableStream<Uint8Array>,
+  requestKey: string,
+  cacheStatus: "hit" | "miss",
+  mode: TtsResponseMode,
+  entitlementHeader?: string,
+): Response {
+  if (mode === "events") {
+    return buildTtsEventStreamResponse(stream, requestKey, cacheStatus, entitlementHeader);
+  }
+  return buildTtsRawStreamResponse(stream, cacheStatus, entitlementHeader);
+}
+
 // Budget for the best-effort entitlement-snapshot read attached to a
 // successful (cache-miss) TTS response as `X-Entitlement-Remaining`. This
 // lets the client optimistically update its remaining-allowance UI without
@@ -478,8 +612,11 @@ app.get(
 );
 
 app.get("/api/groupID", async (c) => {
+  // Reader/Voice subscription group (local StoreKit id: rishi-reader-voice-group).
+  // Replace with the App Store Connect numeric group ID once ASC products ship.
+  // Legacy Pro group was "22149819".
   return c.json({
-    value: "22149819",
+    value: "rishi-reader-voice-group",
   });
 });
 // ─── Apple IAP routes (Phase 14) ──────────────────────────────────────────────
@@ -670,8 +807,11 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       return c.json({ error: "Missing or empty text" }, 400);
     }
 
-    if (text.length > 4096) {
-      return c.json({ error: "text must be 4096 characters or fewer" }, 400);
+    if (text.length > TTS_MAX_CHARS_PER_REQUEST) {
+      return c.json(
+        { error: `text must be ${TTS_MAX_CHARS_PER_REQUEST} characters or fewer` },
+        400,
+      );
     }
 
     const allowedVoices = [
@@ -731,9 +871,15 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       pendingReservationId = reservationId;
     } catch (reserveErr) {
       if (InsufficientAllowanceError.isInstance(reserveErr)) {
+        // Ledger message is plan-aware (trial credits vs paid narration).
+        const message =
+          typeof (reserveErr as { message?: unknown }).message === "string" &&
+          (reserveErr as { message: string }).message.length > 0
+            ? (reserveErr as { message: string }).message
+            : "Trial credits are exhausted";
         return c.json(
           {
-            error: "Trial credits are exhausted",
+            error: message,
             code: "INSUFFICIENT_ALLOWANCE",
           },
           402,
@@ -752,6 +898,10 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       response_format: "mp3",
     });
 
+    if (!speech.body) {
+      throw new Error("TTS provider response had no audio body");
+    }
+
     c.executionCtx.waitUntil(
       meterFromContext(c.env, c.get("userId"), {
         type: "tts",
@@ -760,28 +910,46 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       }),
     );
 
-    const audioBytes = new Uint8Array(await speech.arrayBuffer());
+    // Tee the provider's audio stream: one branch is returned to the client
+    // immediately (design: "immediately streams the provider audio to the
+    // app once response headers/body are available"); the other is drained
+    // by a waitUntil sidecar that populates the R2 cache and settles the
+    // reservation, without buffering the full audio or delaying first audio
+    // (design: "A sidecar stream concurrently ... writes the cache ...
+    // without buffering the full audio or delaying first audio").
+    const [clientStream, sidecarStream] = speech.body.tee();
 
-    // Fire-and-forget writeback; put errors must not surface to the response.
     c.executionCtx.waitUntil(
-      c.env.TTS_CACHE.put(key, audioBytes, {
-        httpMetadata: { contentType: "audio/mpeg" },
-      }).catch((e) => console.error("tts.cache.put.failed", e)),
-    );
-
-    // Settle the reservation via waitUntil so commit latency never blocks
-    // audio delivery (design: "must not wait for... cost reconciliation...
-    // before streaming audio"). This commits the reservation's originally
-    // estimated amount, not a measured generated duration — see this
-    // plan's "Exports for downstream plans" for the flagged
-    // precise-duration-parsing gap.
-    c.executionCtx.waitUntil(
-      ledger.commitTtsReservation(reservationId).catch((commitErr) =>
-        console.error("tts.reservation.commit.failed", {
-          reservationId,
-          commitErr,
-        }),
-      ),
+      (async () => {
+        try {
+          const sidecarBytes = new Uint8Array(
+            await new Response(sidecarStream).arrayBuffer(),
+          );
+          await c.env.TTS_CACHE.put(key, sidecarBytes, {
+            httpMetadata: { contentType: "audio/mpeg" },
+          }).catch((e) => console.error("tts.cache.put.failed", e));
+          // Commits the reservation's originally estimated amount, not a
+          // measured generated duration — see this plan's "Exports for
+          // downstream plans" for the flagged precise-duration-parsing gap.
+          await ledger.commitTtsReservation(reservationId).catch((commitErr) =>
+            console.error("tts.reservation.commit.failed", {
+              reservationId,
+              commitErr,
+            }),
+          );
+        } catch (sidecarErr) {
+          // The provider stream itself failed/was cut short after headers
+          // were already sent to the client — nothing was actually
+          // generated, so release rather than commit.
+          console.error("tts.sidecar.failed", sidecarErr);
+          await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
+            console.error("tts.reservation.release.failed", {
+              reservationId,
+              releaseErr,
+            }),
+          );
+        }
+      })(),
     );
     pendingReservationId = undefined;
 
@@ -789,8 +957,8 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     // response (see bestEffortEntitlementHeader).
     const entitlementHeader = await bestEffortEntitlementHeader(ledger);
 
-    return respondWithTtsBytes(
-      audioBytes,
+    return respondWithTtsStream(
+      clientStream,
       key,
       "miss",
       responseMode,
@@ -878,8 +1046,11 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       return c.json({ error: "Missing or empty text" }, 400);
     }
 
-    if (text.length > 4096) {
-      return c.json({ error: "text must be 4096 characters or fewer" }, 400);
+    if (text.length > TTS_MAX_CHARS_PER_REQUEST) {
+      return c.json(
+        { error: `text must be ${TTS_MAX_CHARS_PER_REQUEST} characters or fewer` },
+        400,
+      );
     }
 
     const validVoice = resolveElevenLabsVoiceId(voice);
@@ -922,9 +1093,15 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       pendingReservationId = reservationId;
     } catch (reserveErr) {
       if (InsufficientAllowanceError.isInstance(reserveErr)) {
+        // Ledger message is plan-aware (trial credits vs paid narration).
+        const message =
+          typeof (reserveErr as { message?: unknown }).message === "string" &&
+          (reserveErr as { message: string }).message.length > 0
+            ? (reserveErr as { message: string }).message
+            : "Trial credits are exhausted";
         return c.json(
           {
-            error: "Trial credits are exhausted",
+            error: message,
             code: "INSUFFICIENT_ALLOWANCE",
           },
           402,
@@ -973,6 +1150,10 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       );
     }
 
+    if (!speech.body) {
+      throw new Error("TTS provider response had no audio body");
+    }
+
     c.executionCtx.waitUntil(
       meterFromContext(c.env, c.get("userId"), {
         type: "tts",
@@ -981,31 +1162,43 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
       }),
     );
 
-    const audioBytes = new Uint8Array(await speech.arrayBuffer());
+    // Same tee + waitUntil sidecar pattern as the OpenAI route: stream to
+    // the client immediately; drain the sidecar for cache write + commit
+    // (or release if the provider stream fails after headers).
+    const [clientStream, sidecarStream] = speech.body.tee();
 
     c.executionCtx.waitUntil(
-      c.env.TTS_CACHE.put(key, audioBytes, {
-        httpMetadata: { contentType: "audio/mpeg" },
-      }).catch((e) => console.error("tts.cache.put.failed", e)),
-    );
-
-    // Settle via waitUntil — see the identical comment in the OpenAI route
-    // (Task 3) for why this never blocks the response, and for the
-    // estimated-vs-measured-duration gap this defers.
-    c.executionCtx.waitUntil(
-      ledger.commitTtsReservation(reservationId).catch((commitErr) =>
-        console.error("tts.reservation.commit.failed", {
-          reservationId,
-          commitErr,
-        }),
-      ),
+      (async () => {
+        try {
+          const sidecarBytes = new Uint8Array(
+            await new Response(sidecarStream).arrayBuffer(),
+          );
+          await c.env.TTS_CACHE.put(key, sidecarBytes, {
+            httpMetadata: { contentType: "audio/mpeg" },
+          }).catch((e) => console.error("tts.cache.put.failed", e));
+          await ledger.commitTtsReservation(reservationId).catch((commitErr) =>
+            console.error("tts.reservation.commit.failed", {
+              reservationId,
+              commitErr,
+            }),
+          );
+        } catch (sidecarErr) {
+          console.error("tts.sidecar.failed", sidecarErr);
+          await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
+            console.error("tts.reservation.release.failed", {
+              reservationId,
+              releaseErr,
+            }),
+          );
+        }
+      })(),
     );
     pendingReservationId = undefined;
 
     const entitlementHeader = await bestEffortEntitlementHeader(ledger);
 
-    return respondWithTtsBytes(
-      audioBytes,
+    return respondWithTtsStream(
+      clientStream,
       key,
       "miss",
       responseMode,
@@ -1029,64 +1222,15 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
   }
 });
 
-// Phase 25-06: POST migration (was GET ?language=). Body shape matches the iOS
-// RishiAPI.RealtimeClientSecretsEndpoint.Body produced in Plan 25-08 — all
-// fields optional so callers without a book (e.g. quick voice without a
-// reader open) still work. Unparseable / empty bodies degrade to
-// `{ language: "en" }`.
-app.post(
-  "/api/realtime/client_secrets",
-  requireAuth,
-  async (c) => {
-    c.executionCtx.waitUntil(
-      incrementApiUsage(c.env, c.get("userId"), "voiceChat"),
-    );
-    try {
-      const rawBody = await c.req
-        .json<Partial<BuildClientSecretsInput>>()
-        .catch((): Partial<BuildClientSecretsInput> => ({}));
-      const language = coerceLanguage(rawBody.language);
-      const minted = await mintRealtimeClientSecret(c.env.OPENAI_API_KEY, {
-        language,
-        bookId: rawBody.bookId,
-        currentPage: rawBody.currentPage,
-        pageText: rawBody.pageText,
-        outline: rawBody.outline,
-        activeParagraphText: rawBody.activeParagraphText,
-      });
-      // iOS RishiAPI/Endpoints/RealtimeAPI.swift:31-39 decodes the response as
-      // `{client_secret: String, session_id: String}` — both flat strings.
-      // Phase 17-05 (Gap 8 of the 2026-06-12 wire-contract audit) — the
-      // `local_<uuid>` fallback for a missing OpenAI `id` now lives inside
-      // `mintRealtimeClientSecret` (workers/worker/src/realtime/client-secrets.ts).
-      return c.json({
-        client_secret: minted.clientSecret,
-        session_id: minted.sessionId,
-      });
-    } catch (error) {
-      const axiosErr = error as {
-        response?: { status?: number; data?: unknown };
-        message?: string;
-      };
-      const upstreamStatus = axiosErr.response?.status ?? null;
-      const upstreamBody = axiosErr.response?.data ?? null;
-      const message = error instanceof Error ? error.message : "unknown";
-      console.error("Failed to get client secrets:", {
-        message,
-        upstreamStatus,
-        upstreamBody,
-      });
-      return c.json(
-        {
-          error: "Failed to get client secrets",
-          detail: { message, upstreamStatus, upstreamBody },
-        },
-        500,
-      );
-    }
-  },
-);
-
+// P0 removal: the legacy `/api/realtime/client_secrets` route used to mint
+// OpenAI Realtime ephemeral credentials directly, with no session creation
+// and no credit/allowance check — a live bypass of the UserUsageLedger DO.
+// The correct flow is now `POST /api/voice-sessions`
+// (`workers/worker/src/routes/voice-sessions.ts`), which creates a
+// ledger-backed session before letting the client mint/register a call.
+// `apps/rishi-electron` (desktop client) still calls this removed route and
+// has not yet migrated to `/api/voice-sessions` — that migration is tracked
+// separately and is not blocked by this removal.
 app.post(
   "/api/text/completions",
   requireAuth,

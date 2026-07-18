@@ -48,6 +48,14 @@
 // VerifyReceiptResponse       — `StoreKit/ReceiptVerifier.swift`. Server response value.
 // VerifyReceiptError          — `StoreKit/ReceiptVerifier.swift`. Verifier error enum.
 // ProductFetching             — `StoreKit/ReceiptVerifier.swift`. Protocol seam for product loading.
+// EntitlementSyncing            — `StoreKit/EntitlementSyncClient.swift`. Protocol seam.
+// EntitlementSyncClient         — `StoreKit/EntitlementSyncClient.swift`. Actor. Production
+//                                  sync client wrapping WorkerClient, POSTs to
+//                                  /api/billing/entitlement-sync. Used by PurchaseService;
+//                                  Store/CustomerEntitlements/RestoreService instead call
+//                                  the internal syncEntitlement(jws:) helper (awaited;
+//                                  finish only after success). EntitlementSyncHooks.onSynced
+//                                  is wired by the app to refreshSnapshot().
 
 // MARK: - Entitlement reconciliation
 //
@@ -57,6 +65,33 @@
 //                                flag the UI binds to ("user is Pro").
 // StoreKitIAPFlag             — `Entitlements/EntitlementReconciler.swift`. Namespace
 //                                holding the kill-switch flag for StoreKit IAP.
+// EntitlementSnapshotStore    — `Entitlements/EntitlementSnapshotStore.swift`. @MainActor
+//                                @Observable bridge from EntitlementService.currentSnapshot;
+//                                RootView and downstream views read `.snapshot`/`.clientStates`
+//                                via @Environment.
+// EntitlementClientState      — `Entitlements/EntitlementClientState.swift`. Typed flags: trial
+//                                exhaustion, paid narration/Voice-Chat exhaustion (derivable from
+//                                EntitlementSnapshot), plus Voice-Chat-warning/terminal-cap/
+//                                provider-setup-failure seams a later plan populates.
+
+// MARK: - AI-feature exhaustion gate
+//
+// AIFeature                   — `Entitlements/AIFeatureGate.swift`. .narration
+//                                / .voiceChat — the two gate-able AI entry points.
+// AIFeatureBlockReason        — `Entitlements/AIFeatureGate.swift`. Why an AI
+//                                feature tap was intercepted. Identifiable.
+// EntitlementSnapshot.blockReason(for:)
+//                              — `Entitlements/AIFeatureGate.swift`. Pure access
+//                                check on plan 12's EntitlementSnapshot (RishiCore).
+//                                Call before starting narration or a Voice Chat session.
+// RemainingAllowanceView      — `UI/RemainingAllowanceView.swift`. Renders the
+//                                account's remaining allowance (credits for
+//                                trial, human-readable time for Reader/Voice).
+//                                Never shows a raw credit number to a paid user.
+// AIFeatureUpgradePrompt      — `UI/AIFeatureUpgradePrompt.swift`. Non-blocking
+//                                sheet shown when an AI feature is intercepted.
+//                                Present via `.sheet(item:)`; core reading is
+//                                never blocked.
 
 // MARK: - Manage subscription
 //
@@ -73,6 +108,11 @@
 // MARK: - Models / Types
 //
 // EntitlementLevel            — `Models/EntitlementLevel.swift`. .free / .pro.
+// RishiProductID              — `Models/RishiProductID.swift`. The six Apple product ids
+//                                (2 legacy Pro + 4 Reader/Voice) — single source of truth
+//                                for Store.fetchProductIDs() and EntitlementLevel.initialize.
+// AppAccountToken              — `Entitlements/AppAccountToken.swift`. UUID v5 derivation
+//                                (byte-identical to the Worker's) + currentPurchaseOptions().
 // ProductSnapshot             — `StoreKit/ProductSnapshot.swift`. Sendable snapshot of a
 //                                StoreKit Product (id, display price, period).
 // ProductCatalog              — `StoreKit/ProductSnapshot.swift`. The loaded set of snapshots.

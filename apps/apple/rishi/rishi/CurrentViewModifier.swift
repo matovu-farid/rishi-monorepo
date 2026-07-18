@@ -41,7 +41,14 @@ private struct CustomerEntitlementsViewModifier: ViewModifier {
                         if let highestSubcription {
                             
                             subscriptionService.saveSubscription(subscription: highestSubcription)
-                            
+                            // Entitlement-sync may have just landed; refresh
+                            // so Settings/gates update without waiting for
+                            // the next foreground.
+                            if let entitlementService = services?.entitlementService {
+                                Task {
+                                    await entitlementService.refreshSnapshot()
+                                }
+                            }
                         }
                     }
                 } catch {
@@ -162,7 +169,7 @@ private struct ErrorObserverViewModifier: ViewModifier {
             // Observe errors encountered while checking customer entitlements.
             .onChange(of: customerEntitlements.error) { _, error in
                 switch error {
-                case .some(.invalidTransaction):
+                case .some(.invalidTransaction), .some(.entitlementSyncFailed):
                     self.error = error
                 case _:
                     return

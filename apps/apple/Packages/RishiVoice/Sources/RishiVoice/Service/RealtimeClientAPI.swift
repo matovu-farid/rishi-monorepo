@@ -101,6 +101,22 @@ public protocol RealtimeClientAPI: Sendable {
     /// impls need a hop; SDK-backed impl reads `Conversation.status` directly.
     func currentStatus() async -> RealtimeConnectionStatus
 
+    /// The OpenAI Realtime provider call ID captured from the `Location`
+    /// header of the WebRTC call-creation response that the most recent
+    /// successful `connect()` completed, per the no-card-credit-trial
+    /// spec's "Voice flow" step 3. `nil` before any successful `connect()`,
+    /// after `disconnect()`, or if that connect's response was missing/
+    /// unparseable the header (the documented failure case that spec step
+    /// 7 says must fail closed). Widens the protocol so
+    /// `RealtimeVoiceSession` — which only holds `any RealtimeClientAPI` —
+    /// can read the real, already-landed `RealtimeAPIAdapter.providerCallId`
+    /// (see the "realtime-call-id-capture" plan's "Exports for downstream
+    /// plans", which explicitly defers this widening decision to this
+    /// plan). Marked `async` so a future implementation could involve a
+    /// suspension point; `RealtimeAPIAdapter`'s existing synchronous
+    /// lock-guarded property satisfies this requirement as-is.
+    var providerCallId: String? { get async }
+
     /// Server-side error stream. Finishes when the client disconnects.
     func errorStream() -> AsyncStream<RealtimeClientError>
 

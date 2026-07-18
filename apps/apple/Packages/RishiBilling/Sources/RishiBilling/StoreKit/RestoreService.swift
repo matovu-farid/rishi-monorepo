@@ -56,15 +56,19 @@ public protocol RestoreProtocol: Sendable {
 /// calling it on every cold start would annoy users to no end. The
 /// startup path reads `Transaction.currentEntitlements` directly (no
 /// prompt); restore is a discrete user-initiated operation.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 public actor RestoreService {
 
     private let reconciler: EntitlementReconciler
 
-    /// Product ID prefix for the Rishi Pro tier — matches both
+    /// Product ID prefix for the legacy Rishi Pro tier — matches both
     /// `org.fidexa.rishi.pro.monthly` and `org.fidexa.rishi.pro.annual`.
-    /// Centralized constant so future tiers cannot accidentally be missed
-    /// by an out-of-band productID filter elsewhere.
+    /// Kept as public API for source compatibility; `readActiveProductIds()`
+    /// below no longer uses this alone for filtering — it checks
+    /// `EntitlementLevel.initialize(productId:) == .subscribed`
+    /// (`RishiProductID.all`), which covers this prefix's two ids plus the
+    /// four Reader/Voice ids, so a future new tier only needs to be added
+    /// to `RishiProductID.all` once, not duplicated here too.
     public static let productIdPrefix = "org.fidexa.rishi.pro."
 
     public init(reconciler: EntitlementReconciler) {
@@ -153,9 +157,22 @@ public actor RestoreService {
         var ids: [String] = []
         for await result in Transaction.currentEntitlements {
             guard case .verified(let tx) = result else { continue }
-            guard tx.productID.hasPrefix(Self.productIdPrefix) else { continue }
+            // `EntitlementLevel.initialize` (RishiProductID.all) recognizes
+            // both the legacy Pro ids and the four new Reader/Voice ids —
+            // the old `productIdPrefix`-only check below would have
+            // silently excluded every Reader/Voice restore.
+            guard EntitlementLevel.initialize(productId: tx.productID) == .subscribed else { continue }
             guard tx.revocationDate == nil else { continue }
             ids.append(tx.productID)
+            do {
+                try await syncEntitlement(jws: result.jwsRepresentation)
+            } catch {
+                // Restore already flipped the on-device reconciler from
+                // StoreKit entitlements; sync failure is logged inside
+                // syncEntitlement and retried on the next restore / purchase
+                // / unfinished replay. Do not abort the product-id walk.
+                continue
+            }
         }
         return ids
     }
@@ -166,5 +183,5 @@ public actor RestoreService {
 // Adopted via extension so the public protocol seam is wired without
 // editing the actor declaration line. PaywallViewModel + tests can take
 // `any RestoreProtocol`; production passes the concrete actor.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 extension RestoreService: RestoreProtocol {}

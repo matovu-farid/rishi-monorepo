@@ -87,15 +87,23 @@ public final class Conversation: @unchecked Sendable {
 		errorStream.finish()
 	}
 
-	public func connect(using request: URLRequest) async throws {
+	/// Connects the underlying WebRTC peer and returns the OpenAI-assigned
+	/// Realtime call ID captured from the `Location` header of the call-creation
+	/// response (`nil` if it was missing/malformed — see `WebRTCConnector`).
+	@discardableResult
+	public func connect(using request: URLRequest) async throws -> String? {
 		await AVAudioApplication.requestRecordPermission()
 
-		try await client.connect(using: request)
+		return try await client.connect(using: request)
 	}
 
-	public func connect(ephemeralKey: String, model: Model = .gptRealtime) async throws {
+	/// Convenience overload building the standard OpenAI Realtime WebRTC
+	/// connection request from an ephemeral key. Returns the same captured
+	/// provider call ID as `connect(using:)`.
+	@discardableResult
+	public func connect(ephemeralKey: String, model: Model = .gptRealtime) async throws -> String? {
 		do {
-			try await connect(using: .webRTCConnectionRequest(ephemeralKey: ephemeralKey, model: model))
+			return try await connect(using: .webRTCConnectionRequest(ephemeralKey: ephemeralKey, model: model))
 		} catch let error as WebRTCConnector.WebRTCError {
 			guard case .invalidEphemeralKey = error else { throw error }
 			throw ConversationError.invalidEphemeralKey

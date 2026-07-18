@@ -15,6 +15,7 @@ import {
   classifyTransition,
   type CurrentPeriodInfo,
 } from "./subscription-transitions";
+import { addOneCalendarMonth, rollAllowancePeriodsForward } from "./allowance-period-rollover";
 // NOTE: no runtime import of `../index` here -- same ESM-cycle constraint
 // as apple-verify-receipt.ts / apple-webhook.ts / apple-me.ts. `requireAuth`
 // is passed in by the route factory below.
@@ -133,12 +134,6 @@ const RequestSchema = z.object({
   transactionJWS: z.string().min(10),
 });
 
-function addOneCalendarMonth(date: Date): Date {
-  const result = new Date(date.getTime());
-  result.setUTCMonth(result.getUTCMonth() + 1);
-  return result;
-}
-
 // ─── applyAppleTransaction ─────────────────────────────────────────────────
 
 /**
@@ -176,6 +171,31 @@ function addOneCalendarMonth(date: Date): Date {
  * single-request-at-a-time execution model is the real backstop; this D1
  * read is a cheap first-pass optimization, not the sole correctness
  * mechanism.
+ *
+ * IDEMPOTENCY FIX (entitlement-sync-idempotency plan): the client resends
+ * the same still-valid transaction JWS on every foreground, restore, and
+ * launch -- NOT only when Apple actually issues a new transaction. Before
+ * this fix, every one of those repeats re-ran the classification/period-
+ * opening logic below and, for an annual product, misclassified itself as
+ * "renewed" every time (`expiresDate` is ~1 year out; the 1-month period
+ * it opened kept expiring against it), granting a fresh full allowance on
+ * every single foreground. This function now checks whether an
+ * `allowancePeriod` row already carries this exact `tx.transactionId` as
+ * its `sourceTransactionId` and, if so, skips every allowance-period side
+ * effect below entirely -- the `apple_subscriptions` status upsert above
+ * still runs unconditionally, since re-confirming "still active" is cheap
+ * and correct to repeat.
+ *
+ * ANNUAL-PRODUCT FIX (same plan): opening a period no longer relies on a
+ * fresh Apple transaction to advance month-to-month. `rollAllowancePeriodsForward`
+ * (./allowance-period-rollover.ts) runs at the end of this function on
+ * every call, independent of whether THIS call's transaction was new, and
+ * opens the next monthly period purely on wall-clock time whenever the
+ * current one has lapsed but the subscription's own paid term (Apple's
+ * `expiresDate`, stored on `apple_subscriptions.currentPeriodEnd`) has
+ * not. That is what lets an annual subscriber keep getting monthly
+ * allowance through months 2-12 without a new Apple transaction ever
+ * arriving.
  */
 export async function applyAppleTransaction(
   env: Env,
@@ -212,174 +232,242 @@ export async function applyAppleTransaction(
     .run();
 
   // 2. Full upgrade/downgrade/renewal/crossgrade transition matrix (design
-  // doc's "Subscription transitions" table). Replaces plan 6's
-  // "first-ever-period-only" `if (!existingActivePeriod)` branch.
+  // doc's "Subscription transitions" table) -- but ONLY for a transaction
+  // whose allowance-period side effects haven't already been applied. A
+  // period already exists with this exact `tx.transactionId` as its
+  // `sourceTransactionId` iff some earlier call already ran this branch
+  // for it (directly, or via a rollover chain that copied the id
+  // forward -- see "IDEMPOTENCY FIX" above and `allowance-period-
+  // rollover.ts`'s doc comment). Skipping the open/close/audit work below
+  // is what makes a repeated foreground sync of the same still-valid JWS
+  // a no-op for period creation. DO rehydration still happens: step 2b
+  // (`rollAllowancePeriodsForward`) always syncs the current D1 period to
+  // the ledger mirror, which heals a failed first-sync after D1 insert
+  // without resetting usage (same-id path in `syncAllowancePeriod`).
   if (isActive) {
-    // Read the user's single most recent allowance-period D1 row,
-    // regardless of whether it is still active -- see "Design decisions"
-    // #2. Ordering by createdAt (not periodEnd) always finds the period
-    // most recently opened, which is the correct "current" one even after
-    // an early truncation below can move an older row's periodEnd earlier
-    // than it originally was -- see "Design decisions" #6.
-    const mostRecentPeriod = await db
-      .select()
+    const alreadyProcessed = await db
+      .select({ id: allowancePeriod.id })
       .from(allowancePeriod)
-      .where(eq(allowancePeriod.userId, userId))
-      .orderBy(desc(allowancePeriod.createdAt))
+      .where(
+        and(
+          eq(allowancePeriod.userId, userId),
+          eq(allowancePeriod.sourceTransactionId, tx.transactionId),
+        ),
+      )
       .get();
 
-    let currentPeriod: CurrentPeriodInfo | null = null;
-    if (mostRecentPeriod) {
-      let productId: string | null = null;
-      if (mostRecentPeriod.sourceTransactionId) {
-        const sourceSub = await db
-          .select({ productId: appleSubscriptions.productId })
-          .from(appleSubscriptions)
-          .where(
-            eq(appleSubscriptions.appleTransactionId, mostRecentPeriod.sourceTransactionId),
-          )
-          .get();
-        productId = sourceSub?.productId ?? null;
+    if (!alreadyProcessed) {
+      // Read the user's single most recent allowance-period D1 row,
+      // regardless of whether it is still active -- see "Design decisions"
+      // #2. Ordering by createdAt (not periodEnd) always finds the period
+      // most recently opened, which is the correct "current" one even after
+      // an early truncation below can move an older row's periodEnd earlier
+      // than it originally was -- see "Design decisions" #6.
+      const mostRecentPeriod = await db
+        .select()
+        .from(allowancePeriod)
+        .where(eq(allowancePeriod.userId, userId))
+        .orderBy(desc(allowancePeriod.createdAt))
+        .get();
+
+      let currentPeriod: CurrentPeriodInfo | null = null;
+      if (mostRecentPeriod) {
+        let productId: string | null = null;
+        if (mostRecentPeriod.sourceTransactionId) {
+          const sourceSub = await db
+            .select({ productId: appleSubscriptions.productId })
+            .from(appleSubscriptions)
+            .where(
+              eq(appleSubscriptions.appleTransactionId, mostRecentPeriod.sourceTransactionId),
+            )
+            .get();
+          productId = sourceSub?.productId ?? null;
+        }
+        currentPeriod = {
+          id: mostRecentPeriod.id,
+          plan: mostRecentPeriod.plan,
+          productId,
+          periodEnd: mostRecentPeriod.periodEnd.getTime(),
+        };
       }
-      currentPeriod = {
-        id: mostRecentPeriod.id,
-        plan: mostRecentPeriod.plan,
-        productId,
-        periodEnd: mostRecentPeriod.periodEnd.getTime(),
+
+      const classification = classifyTransition({
+        currentPeriod,
+        newPlan: tx.plan,
+        newProductId: tx.productId,
+        now: nowMs,
+      });
+
+      const allowances = PLAN_ALLOWANCES[tx.plan];
+
+      const openFreshPeriod = async (
+        transitionReason: "initial" | "renewed" | "upgraded" | "downgraded" | "crossgrade",
+        priorPeriodId: string | null,
+      ): Promise<string> => {
+        const periodId = crypto.randomUUID();
+        const periodStart = new Date(tx.purchaseDate);
+        const periodEnd = addOneCalendarMonth(periodStart);
+
+        // Unique on (userId, periodStart): concurrent first-applies lose
+        // the insert and adopt the winner's row (same pattern as rollover).
+        const insertResult = await db
+          .insert(allowancePeriod)
+          .values({
+            id: periodId,
+            userId,
+            plan: tx.plan,
+            periodStart,
+            periodEnd,
+            narrationSecondsTotal: allowances.narrationSecondsTotal,
+            narrationSecondsUsed: 0,
+            voiceChatSecondsTotal: allowances.voiceChatSecondsTotal,
+            voiceChatSecondsUsed: 0,
+            transitionReason,
+            priorPeriodId,
+            sourceTransactionId: tx.transactionId,
+            createdAt: now,
+          })
+          .onConflictDoNothing({
+            target: [allowancePeriod.userId, allowancePeriod.periodStart],
+          })
+          .run();
+
+        const inserted =
+          ((insertResult as { meta?: { changes?: number } })?.meta?.changes ?? 0) > 0;
+
+        let resolvedId: string = periodId;
+        let resolvedPlan: ApplePlan = tx.plan;
+        let resolvedStart = periodStart;
+        let resolvedEnd = periodEnd;
+        let resolvedNarrationTotal = allowances.narrationSecondsTotal;
+        let resolvedVoiceTotal = allowances.voiceChatSecondsTotal;
+
+        if (!inserted) {
+          const winner = await db
+            .select()
+            .from(allowancePeriod)
+            .where(
+              and(
+                eq(allowancePeriod.userId, userId),
+                eq(allowancePeriod.periodStart, periodStart),
+              ),
+            )
+            .get();
+          if (!winner) {
+            throw new Error(
+              `openFreshPeriod conflict but no winner for userId=${userId} periodStart=${periodStart.toISOString()}`,
+            );
+          }
+          resolvedId = winner.id;
+          resolvedPlan = winner.plan;
+          resolvedStart = winner.periodStart;
+          resolvedEnd = winner.periodEnd;
+          resolvedNarrationTotal = winner.narrationSecondsTotal;
+          resolvedVoiceTotal = winner.voiceChatSecondsTotal;
+        }
+
+        // Plan 5's DO mirror holds exactly one "current" row -- syncing here
+        // always REPLACES whatever period it previously mirrored, so no
+        // separate "close" call is needed on the DO side (see "Design
+        // decisions" #7). Same-id resync (winner already mirrored) preserves
+        // usage counters.
+        await env.USER_USAGE_LEDGER.getByName(userId).syncAllowancePeriod({
+          id: resolvedId,
+          plan: resolvedPlan,
+          periodStart: resolvedStart.getTime(),
+          periodEnd: resolvedEnd.getTime(),
+          narrationSecondsTotal: resolvedNarrationTotal,
+          voiceChatSecondsTotal: resolvedVoiceTotal,
+        });
+
+        return resolvedId;
       };
-    }
 
-    const classification = classifyTransition({
-      currentPeriod,
-      newPlan: tx.plan,
-      newProductId: tx.productId,
-      newExpiresDate: tx.expiresDate,
-      now: nowMs,
-    });
+      // Truncates a still-active period's periodEnd to "now" for an
+      // IMMEDIATE transition (upgrade, or a same-product renewal signaled
+      // while the old period hadn't reached its boundary yet). Never call
+      // this for a period that has already lapsed naturally -- see "Design
+      // decisions" #4 -- that would incorrectly push its periodEnd LATER.
+      const closePeriodNow = async (periodId: string): Promise<void> => {
+        await db
+          .update(allowancePeriod)
+          .set({ periodEnd: now })
+          .where(eq(allowancePeriod.id, periodId))
+          .run();
+      };
 
-    const allowances = PLAN_ALLOWANCES[tx.plan];
+      let newPeriodId: string | null = null;
+      let priorPeriodIdForAudit: string | null = null;
 
-    const openFreshPeriod = async (
-      transitionReason: "initial" | "renewed" | "upgraded" | "downgraded" | "crossgrade",
-      priorPeriodId: string | null,
-    ): Promise<string> => {
-      const periodId = crypto.randomUUID();
-      const periodStart = new Date(tx.purchaseDate);
-      const periodEnd = addOneCalendarMonth(periodStart);
+      switch (classification.kind) {
+        case "first_period":
+          newPeriodId = await openFreshPeriod("initial", null);
+          break;
+
+        case "renewed":
+          priorPeriodIdForAudit = classification.priorPeriodId;
+          if (currentPeriod && currentPeriod.periodEnd > nowMs) {
+            await closePeriodNow(classification.priorPeriodId);
+          }
+          newPeriodId = await openFreshPeriod("renewed", classification.priorPeriodId);
+          break;
+
+        case "upgraded":
+          priorPeriodIdForAudit = classification.priorPeriodId;
+          if (currentPeriod && currentPeriod.periodEnd > nowMs) {
+            await closePeriodNow(classification.priorPeriodId);
+          }
+          newPeriodId = await openFreshPeriod("upgraded", classification.priorPeriodId);
+          break;
+
+        case "downgraded_applied":
+          priorPeriodIdForAudit = classification.priorPeriodId;
+          newPeriodId = await openFreshPeriod("downgraded", classification.priorPeriodId);
+          break;
+
+        case "crossgrade_applied":
+          priorPeriodIdForAudit = classification.priorPeriodId;
+          newPeriodId = await openFreshPeriod("crossgrade", classification.priorPeriodId);
+          break;
+
+        case "downgraded_deferred":
+        case "crossgrade_deferred":
+          // Design doc's "Subscription transitions" table: keep serving the
+          // current (higher-tier, or different-duration) period untouched
+          // until a later sync reports the new product as active. No D1
+          // write, no syncAllowancePeriod call.
+          priorPeriodIdForAudit = classification.priorPeriodId;
+          break;
+      }
 
       await db
-        .insert(allowancePeriod)
+        .insert(usageAuditLog)
         .values({
-          id: periodId,
+          id: crypto.randomUUID(),
           userId,
-          plan: tx.plan,
-          periodStart,
-          periodEnd,
-          narrationSecondsTotal: allowances.narrationSecondsTotal,
-          narrationSecondsUsed: 0,
-          voiceChatSecondsTotal: allowances.voiceChatSecondsTotal,
-          voiceChatSecondsUsed: 0,
-          transitionReason,
-          priorPeriodId,
-          sourceTransactionId: tx.transactionId,
+          eventType: "allowance_period.transition",
+          details: JSON.stringify({
+            classification: classification.kind,
+            priorPeriodId: priorPeriodIdForAudit,
+            newPeriodId,
+            transactionId: tx.transactionId,
+            productId: tx.productId,
+            plan: tx.plan,
+          }),
           createdAt: now,
         })
         .run();
-
-      // Plan 5's DO mirror holds exactly one "current" row -- syncing here
-      // always REPLACES whatever period it previously mirrored, so no
-      // separate "close" call is needed on the DO side (see "Design
-      // decisions" #7).
-      await env.USER_USAGE_LEDGER.getByName(userId).syncAllowancePeriod({
-        id: periodId,
-        plan: tx.plan,
-        periodStart: periodStart.getTime(),
-        periodEnd: periodEnd.getTime(),
-        narrationSecondsTotal: allowances.narrationSecondsTotal,
-        voiceChatSecondsTotal: allowances.voiceChatSecondsTotal,
-      });
-
-      return periodId;
-    };
-
-    // Truncates a still-active period's periodEnd to "now" for an
-    // IMMEDIATE transition (upgrade, or a same-product renewal signaled
-    // while the old period hadn't reached its boundary yet). Never call
-    // this for a period that has already lapsed naturally -- see "Design
-    // decisions" #4 -- that would incorrectly push its periodEnd LATER.
-    const closePeriodNow = async (periodId: string): Promise<void> => {
-      await db
-        .update(allowancePeriod)
-        .set({ periodEnd: now })
-        .where(eq(allowancePeriod.id, periodId))
-        .run();
-    };
-
-    let newPeriodId: string | null = null;
-    let priorPeriodIdForAudit: string | null = null;
-
-    switch (classification.kind) {
-      case "first_period":
-        newPeriodId = await openFreshPeriod("initial", null);
-        break;
-
-      case "no_change":
-        break;
-
-      case "renewed":
-        priorPeriodIdForAudit = classification.priorPeriodId;
-        if (currentPeriod && currentPeriod.periodEnd > nowMs) {
-          await closePeriodNow(classification.priorPeriodId);
-        }
-        newPeriodId = await openFreshPeriod("renewed", classification.priorPeriodId);
-        break;
-
-      case "upgraded":
-        priorPeriodIdForAudit = classification.priorPeriodId;
-        if (currentPeriod && currentPeriod.periodEnd > nowMs) {
-          await closePeriodNow(classification.priorPeriodId);
-        }
-        newPeriodId = await openFreshPeriod("upgraded", classification.priorPeriodId);
-        break;
-
-      case "downgraded_applied":
-        priorPeriodIdForAudit = classification.priorPeriodId;
-        newPeriodId = await openFreshPeriod("downgraded", classification.priorPeriodId);
-        break;
-
-      case "crossgrade_applied":
-        priorPeriodIdForAudit = classification.priorPeriodId;
-        newPeriodId = await openFreshPeriod("crossgrade", classification.priorPeriodId);
-        break;
-
-      case "downgraded_deferred":
-      case "crossgrade_deferred":
-        // Design doc's "Subscription transitions" table: keep serving the
-        // current (higher-tier, or different-duration) period untouched
-        // until a later sync reports the new product as active. No D1
-        // write, no syncAllowancePeriod call.
-        priorPeriodIdForAudit = classification.priorPeriodId;
-        break;
     }
-
-    await db
-      .insert(usageAuditLog)
-      .values({
-        id: crypto.randomUUID(),
-        userId,
-        eventType: "allowance_period.transition",
-        details: JSON.stringify({
-          classification: classification.kind,
-          priorPeriodId: priorPeriodIdForAudit,
-          newPeriodId,
-          transactionId: tx.transactionId,
-          productId: tx.productId,
-          plan: tx.plan,
-        }),
-        createdAt: now,
-      })
-      .run();
   }
+
+  // 2b. Roll the current allowance period forward on wall-clock time if it
+  // has lapsed but the anchoring Apple transaction's paid term has not --
+  // see "ANNUAL-PRODUCT FIX" above. Runs unconditionally (not gated on
+  // `isActive`/`alreadyProcessed` for THIS transaction): the period that
+  // needs rolling forward may belong to a different, still-valid
+  // subscription than the one `tx` describes, and a repeat sync of an
+  // already-processed transaction must still advance a lapsed period.
+  await rollAllowancePeriodsForward(env, userId, now);
 
   // 3. Append-only per-transaction audit row -- UNCHANGED from plan 6.
   // Written for every applied transaction (active or expired), independent

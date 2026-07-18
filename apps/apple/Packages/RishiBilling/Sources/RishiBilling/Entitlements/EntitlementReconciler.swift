@@ -40,7 +40,7 @@ public enum StoreKitIAPFlag {
 /// `@MainActor` because SwiftUI binds via Observation; setters are called
 /// from `PurchaseService` / `EntitlementService` continuation closures
 /// that already hop to `MainActor` for UI updates.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 @MainActor
 @Observable
 public final class EntitlementReconciler {

@@ -43,12 +43,30 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
     private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
 
+    // The OpenAI-assigned Realtime call ID (the `call_id` from the `Location`
+    // header returned by `POST /v1/realtime/calls`), captured on a successful
+    // `connect()`. `nil` before the first successful connect, after every
+    // `disconnect()`/`teardownActiveConversation()`, or if the provider's
+    // response was missing/malformed the `Location` header (see
+    // `WebRTCConnector.fetchRemoteSDP` for that capture-failure case). A
+    // later plan (voice-session-flow-wiring) reads this immediately after
+    // `connect(...)` returns successfully and registers it with the Worker;
+    // that plan must treat `nil` here as equivalent to a registration
+    // failure (close the connection, show a retryable error) — this plan
+    // does not implement that closing behavior.
+    private var _providerCallId: String?
+
     // Internal collaborators — constructed here so the public `init()` is
     // unchanged. `let` (stateless / handle-holding); behavior identical.
     private let audioUnit = WebRTCAudioUnitController()
     private let configBuilder = RealtimeSessionConfigBuilder()
     private let toolDispatcher = RealtimeToolCallDispatcher()
     private let pump = RealtimeEventPump()
+
+    /// See the `_providerCallId` doc comment above for the full contract.
+    public var providerCallId: String? {
+        lock.withLock { _providerCallId }
+    }
 
     public init() {}
 
@@ -155,7 +173,15 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             }
         }
         lock.withLock { self.conversation = convo }
-        try await convo.connect(ephemeralKey: ephemeralKey)
+        let capturedProviderCallId = try await convo.connect(ephemeralKey: ephemeralKey)
+        lock.withLock { self._providerCallId = capturedProviderCallId }
+        // Never log the raw call ID value (spec: "Do not record ... OpenAI
+        // call IDs in general logs") — presence/absence only.
+        if capturedProviderCallId == nil {
+            Log.event("voice.adapter.provider_call_id.missing", level: .warning)
+        } else {
+            Log.event("voice.adapter.provider_call_id.captured", level: .info)
+        }
         // The SDK's `connect()` returns after the SDP exchange but BEFORE the
         // WebRTC data channel opens. Until the data channel opens `convo.status`
         // reports `.disconnected` (its initial value — the SDK only flips it to
@@ -236,7 +262,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         if let convo {
             await MainActor.run { convo.disconnect() }
         }
-        lock.withLock { self.conversation = nil }
+        lock.withLock {
+            self.conversation = nil
+            self._providerCallId = nil
+        }
     }
 
     public func disconnect() async {

@@ -1,6 +1,7 @@
 import Foundation
 import StoreKit
 import RishiLogging
+import RishiCore
 
 // MARK: - Public outcome / error types
 
@@ -63,7 +64,7 @@ public protocol PurchaseProtocol: Sendable {
 /// Adopts ``PurchaseProtocol`` (plan 13-05) via the extension at the
 /// bottom of this file so the Wave-3 paywall view-model can depend on
 /// the protocol seam instead of the concrete actor.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 public actor PurchaseService: PurchaseUpdateForwarder {
 
     // MARK: Dependencies
@@ -71,6 +72,11 @@ public actor PurchaseService: PurchaseUpdateForwarder {
     private let productFetcher: any ProductFetching
     private let verifier: any ReceiptVerifier
     private let reconciler: EntitlementReconciler
+    private let entitlementSyncClient: any EntitlementSyncing
+    /// Called after a successful entitlement-sync POST so Settings/gates can
+    /// pick up the new snapshot without waiting for the next foreground.
+    /// Production wires this to ``EntitlementService/refreshSnapshot()``.
+    private let onEntitlementSynced: (@Sendable () async -> Void)?
     private let purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)
 
     // MARK: State
@@ -95,17 +101,37 @@ public actor PurchaseService: PurchaseUpdateForwarder {
     ///   (default = `{ try await $0.purchase() }`). PurchaseServiceTests
     ///   injects closures returning `.userCancelled` or `.pending` because
     ///   SKTestSession cannot reliably synthesize those outcomes.
-    @available(iOS 18.4, *)
+    @available(iOS 18.4, macOS 15.4, *)
     public init(
         productFetcher: any ProductFetching,
         verifier: any ReceiptVerifier,
         reconciler: EntitlementReconciler,
+        entitlementSyncClient: (any EntitlementSyncing)? = nil,
+        onEntitlementSynced: (@Sendable () async -> Void)? = nil,
         purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil
     ) {
         self.productFetcher = productFetcher
         self.verifier = verifier
         self.reconciler = reconciler
-        self.purchaseClosure = purchaseClosure ?? { product in try await product.purchase() }
+        self.entitlementSyncClient = entitlementSyncClient ?? Self.defaultEntitlementSyncClient()
+        self.onEntitlementSynced = onEntitlementSynced
+        self.purchaseClosure = purchaseClosure ?? { product in
+            let options = await AppAccountToken.currentPurchaseOptions()
+            return try await product.purchase(options: options)
+        }
+    }
+
+    /// Built the same way `WorkerEndpoint.send()` builds its own client:
+    /// `RISHI_API_URL` env var (falling back to the production API host) +
+    /// `KeychainSessionStore`-backed `RishiAuthTokenProvider`. Only used
+    /// when the caller does not inject a stub (tests always inject one via
+    /// `entitlementSyncClient:`).
+    private static func defaultEntitlementSyncClient() -> any EntitlementSyncing {
+        let baseURLString = ProcessInfo.processInfo.environment["RISHI_API_URL"]
+            ?? "https://api.fidexa.org"
+        let baseURL = URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
+        let tokenProvider = RishiAuthTokenProvider(keychain: KeychainSessionStore())
+        return EntitlementSyncClient(client: WorkerClient(baseURL: baseURL, tokenProvider: tokenProvider))
     }
 
     // MARK: - Purchase entry point
@@ -181,13 +207,27 @@ public actor PurchaseService: PurchaseUpdateForwarder {
                 transactionId: tx.id
             )
             if resp.verified {
+                do {
+                    try await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
+                } catch {
+                    Log.event("iap.update.entitlement_sync_threw_left_unfinished", level: .warning,
+                              data: [
+                                  "tx": "\(tx.id)",
+                                  "error": String(describing: error),
+                                  "source": source,
+                              ])
+                    return
+                }
                 await tx.finish()
                 await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
+                await onEntitlementSynced?()
                 Log.event("iap.update.granted_and_finished", level: .info,
                           data: ["tx": "\(tx.id)", "source": source])
             } else {
                 // Worker rejected — finish to break the loop.
                 await tx.finish()
+                try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
+                await onEntitlementSynced?()
                 Log.event("iap.update.rejected_and_finished", level: .warning,
                           data: [
                               "tx": "\(tx.id)",
@@ -241,14 +281,25 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         }
 
         if resp.verified {
+            do {
+                try await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
+            } catch {
+                // Leave UNFINISHED so Transaction.unfinished can replay.
+                Log.event("iap.purchase.entitlement_sync_failed_left_unfinished", level: .warning,
+                          data: ["tx": "\(tx.id)", "error": String(describing: error)])
+                throw PurchaseError.workerUnreachable(String(describing: error))
+            }
             await tx.finish()
             await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
+            await onEntitlementSynced?()
             Log.event("iap.purchase.granted", level: .info,
                       data: ["tx": "\(tx.id)", "productId": productId])
             return .granted(premiumUntil: resp.premiumUntil)
         } else {
             // Worker rejected — finish to break the loop; reconciler stays free.
             await tx.finish()
+            try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
+            await onEntitlementSynced?()
             Log.event("iap.purchase.worker_rejected", level: .warning,
                       data: ["tx": "\(tx.id)", "reason": resp.reason ?? "unknown"])
             return .rejected(reason: resp.reason ?? "unknown")
@@ -261,5 +312,5 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 // Adopted via extension so the public protocol seam is wired without
 // editing the actor declaration line. PaywallViewModel + tests can take
 // `any PurchaseProtocol`; production passes the concrete actor.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 extension PurchaseService: PurchaseProtocol {}

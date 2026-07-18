@@ -17,6 +17,11 @@ the main thread clean and coherent over long sessions.
 - Use parallel subagents when tasks are independent (one message, multiple Agent calls).
 - Reserve the main context for synthesis, decisions, and talking to the user.
 
+## Testing
+
+- Tests are not required by default. Add or update them when requested, when fixing a regression, or when a change has meaningful risk.
+- Do not block feature implementation on tests unless the user explicitly requests TDD or a test-first approach.
+
 ## Worker database access
 
 - In `workers/**`, use Drizzle for all database schema access and mutations in application and test code.

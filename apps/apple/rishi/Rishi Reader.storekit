@@ -1,133 +1,248 @@
 {
-  "appPolicies" : {
-    "eula" : "",
-    "policies" : [
+  "appPolicies": {
+    "eula": "",
+    "policies": [
       {
-        "locale" : "en_US",
-        "policyText" : "",
-        "policyURL" : ""
+        "locale": "en_US",
+        "policyText": "",
+        "policyURL": ""
       }
     ]
   },
-  "identifier" : "BF73D859",
-  "nonRenewingSubscriptions" : [
-
-  ],
-  "products" : [
-
-  ],
-  "settings" : {
-    "_applicationInternalID" : "6763041630",
-    "_askToBuyEnabled" : false,
-    "_billingGracePeriodEnabled" : false,
-    "_billingIssuesEnabled" : false,
-    "_developerTeamID" : "9VL7VRY6QZ",
-    "_disableDialogs" : false,
-    "_failTransactionsEnabled" : false,
-    "_lastSynchronizedDate" : 804778767.63425303,
-    "_locale" : "en_US",
-    "_renewalBillingIssuesEnabled" : false,
-    "_storefront" : "USA",
-    "_storeKitErrors" : [
-
-    ],
-    "_timeRate" : 0
+  "identifier": "BF73D859",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_applicationInternalID": "6763041630",
+    "_askToBuyEnabled": false,
+    "_billingGracePeriodEnabled": false,
+    "_billingIssuesEnabled": false,
+    "_developerTeamID": "9VL7VRY6QZ",
+    "_disableDialogs": false,
+    "_failTransactionsEnabled": false,
+    "_lastSynchronizedDate": 804778767.634253,
+    "_locale": "en_US",
+    "_renewalBillingIssuesEnabled": false,
+    "_storefront": "USA",
+    "_storeKitErrors": [],
+    "_timeRate": 0
   },
-  "subscriptionGroups" : [
+  "subscriptionGroups": [
     {
-      "id" : "22149819",
-      "localizations" : [
+      "id": "22149819",
+      "localizations": [
         {
-          "description" : "",
-          "displayName" : "Rishi Pro",
-          "locale" : "en_US"
+          "description": "",
+          "displayName": "Rishi Pro",
+          "locale": "en_US"
         }
       ],
-      "name" : "Rishi Pro",
-      "subscriptions" : [
+      "name": "Rishi Pro",
+      "subscriptions": [
         {
-          "adHocOffers" : [
-
-          ],
-          "billingPlans" : [
+          "adHocOffers": [],
+          "billingPlans": [
             {
-              "billingPlanType" : "BILLED_UPFRONT",
-              "commitmentDisplayPrice" : "79.99",
-              "displayPrice" : "79.99",
-              "internalID" : "6779146686_BILLED_UPFRONT",
-              "isEnabled" : true
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "79.99",
+              "displayPrice": "79.99",
+              "internalID": "6779146686_BILLED_UPFRONT",
+              "isEnabled": true
             }
           ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "79.99",
-          "familyShareable" : false,
-          "groupNumber" : 1,
-          "internalID" : "6779146686",
-          "introductoryOffers" : [
-
-          ],
-          "localizations" : [
+          "codeOffers": [],
+          "displayPrice": "79.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6779146686",
+          "introductoryOffers": [],
+          "localizations": [
             {
-              "description" : "AI chat, voice, premium TTS, library sync.",
-              "displayName" : "Rishi Pro Annual",
-              "locale" : "en_US"
+              "description": "AI chat, voice, premium TTS, library sync.",
+              "displayName": "Rishi Pro Annual",
+              "locale": "en_US"
             }
           ],
-          "productID" : "org.fidexa.rishi.pro.annual",
-          "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Rishi Pro Annual",
-          "subscriptionGroupID" : "22149819",
-          "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
+          "productID": "org.fidexa.rishi.pro.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Rishi Pro Annual",
+          "subscriptionGroupID": "22149819",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
         },
         {
-          "adHocOffers" : [
-
-          ],
-          "billingPlans" : [
+          "adHocOffers": [],
+          "billingPlans": [
             {
-              "billingPlanType" : "BILLED_UPFRONT",
-              "commitmentDisplayPrice" : "6.99",
-              "displayPrice" : "6.99",
-              "internalID" : "6779146832_BILLED_UPFRONT",
-              "isEnabled" : true
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "6.99",
+              "displayPrice": "6.99",
+              "internalID": "6779146832_BILLED_UPFRONT",
+              "isEnabled": true
             }
           ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "6.99",
-          "familyShareable" : false,
-          "groupNumber" : 1,
-          "internalID" : "6779146832",
-          "introductoryOffers" : [
-
-          ],
-          "localizations" : [
+          "codeOffers": [],
+          "displayPrice": "6.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6779146832",
+          "introductoryOffers": [],
+          "localizations": [
             {
-              "description" : "AI chat, voice, premium TTS, library sync.",
-              "displayName" : "Rishi Pro Monthly",
-              "locale" : "en_US"
+              "description": "AI chat, voice, premium TTS, library sync.",
+              "displayName": "Rishi Pro Monthly",
+              "locale": "en_US"
             }
           ],
-          "productID" : "org.fidexa.rishi.pro.monthly",
-          "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Rishi Pro Monthly",
-          "subscriptionGroupID" : "22149819",
-          "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
+          "productID": "org.fidexa.rishi.pro.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Rishi Pro Monthly",
+          "subscriptionGroupID": "22149819",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        }
+      ]
+    },
+    {
+      "id": "rishi-reader-voice-group",
+      "localizations": [
+        {
+          "description": "Rishi Reader and Rishi Voice subscriptions",
+          "displayName": "Rishi Reader & Voice",
+          "locale": "en_US"
+        }
+      ],
+      "name": "Rishi Reader & Voice",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "billingPlans": [
+            {
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "14.99",
+              "displayPrice": "14.99",
+              "internalID": "RISHI_VOICE_MONTHLY_INTERNAL_BILLED_UPFRONT",
+              "isEnabled": true
+            }
+          ],
+          "codeOffers": [],
+          "displayPrice": "14.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "RISHI_VOICE_MONTHLY_INTERNAL",
+          "introductoryOffers": [],
+          "localizations": [
+            {
+              "description": "4h AI narration, 30 min Voice Chat monthly.",
+              "displayName": "Rishi Voice Monthly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.voice.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Rishi Voice Monthly",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "billingPlans": [
+            {
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "143.99",
+              "displayPrice": "143.99",
+              "internalID": "RISHI_VOICE_ANNUAL_INTERNAL_BILLED_UPFRONT",
+              "isEnabled": true
+            }
+          ],
+          "codeOffers": [],
+          "displayPrice": "143.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "RISHI_VOICE_ANNUAL_INTERNAL",
+          "introductoryOffers": [],
+          "localizations": [
+            {
+              "description": "4h AI narration, 30 min Voice Chat. Billed yearly.",
+              "displayName": "Rishi Voice Annual",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.voice.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Rishi Voice Annual",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "billingPlans": [
+            {
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "7.99",
+              "displayPrice": "7.99",
+              "internalID": "RISHI_READER_MONTHLY_INTERNAL_BILLED_UPFRONT",
+              "isEnabled": true
+            }
+          ],
+          "codeOffers": [],
+          "displayPrice": "7.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "RISHI_READER_MONTHLY_INTERNAL",
+          "introductoryOffers": [],
+          "localizations": [
+            {
+              "description": "2h AI narration, 10 min Voice Chat monthly.",
+              "displayName": "Rishi Reader Monthly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.reader.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Rishi Reader Monthly",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "billingPlans": [
+            {
+              "billingPlanType": "BILLED_UPFRONT",
+              "commitmentDisplayPrice": "76.99",
+              "displayPrice": "76.99",
+              "internalID": "RISHI_READER_ANNUAL_INTERNAL_BILLED_UPFRONT",
+              "isEnabled": true
+            }
+          ],
+          "codeOffers": [],
+          "displayPrice": "76.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "RISHI_READER_ANNUAL_INTERNAL",
+          "introductoryOffers": [],
+          "localizations": [
+            {
+              "description": "2h AI narration, 10 min Voice Chat. Billed yearly.",
+              "displayName": "Rishi Reader Annual",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.reader.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Rishi Reader Annual",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
         }
       ]
     }
   ],
-  "version" : {
-    "major" : 5,
-    "minor" : 0
+  "version": {
+    "major": 5,
+    "minor": 0
   }
 }

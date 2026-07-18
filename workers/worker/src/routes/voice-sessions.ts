@@ -38,10 +38,11 @@ voiceSessionsRoutes.get("/:id/control", requireAuth, async (c) => {
   if (!snapshot) {
     return c.json({ error: "no_active_session" }, 404);
   }
-  if (snapshot.status === "terminal") {
-    return c.json({ error: "session_ended" }, 404);
-  }
 
+  // Terminal sessions still upgrade: the DO's fetch() accepts the WebSocket
+  // and sends a terminal `{ type: "snapshot", ... }` so reconnects can learn
+  // the ended state. Only unknown sessions 404 above.
+  //
   // The DO's own fetch() re-validates and performs the actual upgrade —
   // forward the raw request so the Upgrade/Connection headers survive.
   return stub.fetch(c.req.raw);

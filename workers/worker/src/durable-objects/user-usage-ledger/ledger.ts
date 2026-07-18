@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
@@ -20,7 +20,7 @@ import {
   type CurrentAllowancePeriodRow,
 } from "./schema";
 import type { VoiceSessionRow, VoiceSessionStatus } from "./schema";
-import { TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
+import { RESERVATION_STALE_TIMEOUT_MS, TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
 import type { EntitlementSnapshot } from "./types";
 import { VoiceSessionError } from "../voice-session/errors";
 import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
@@ -91,7 +91,29 @@ export class UserUsageLedger extends DurableObject<Env> {
     // Must complete before any request/RPC call is processed.
     ctx.blockConcurrencyWhile(async () => {
       migrate(this.db, migrations);
+      // Belt-and-suspenders: older DO instances may have applied the
+      // original `reservations` CREATE without later ALTER migrations
+      // (drizzle-kit folder migrations can be skipped if the journal
+      // name column is null). Code reads/writes `pool_kind` /
+      // `allowance_period_id` — ensure they exist before any RPC.
+      this.ensureReservationsPoolColumns();
     });
+  }
+
+  /** Idempotent ADD COLUMN for reservation pool tracking. */
+  private ensureReservationsPoolColumns(): void {
+    const cols = this.db
+      .values<[number, string]>(sql`PRAGMA table_info('reservations')`)
+      .map(([, name]) => name);
+    const have = new Set(cols);
+    if (!have.has("pool_kind")) {
+      this.db.run(sql.raw("ALTER TABLE `reservations` ADD `pool_kind` text"));
+    }
+    if (!have.has("allowance_period_id")) {
+      this.db.run(
+        sql.raw("ALTER TABLE `reservations` ADD `allowance_period_id` text"),
+      );
+    }
   }
 
   // ── Public RPC methods ──────────────────────────────────────────────
@@ -221,11 +243,14 @@ export class UserUsageLedger extends DurableObject<Env> {
         status: "pending",
         createdAt,
         settledAt: null,
+        poolKind: "paid",
+        allowancePeriodId: activePeriod.periodId,
       });
 
       this.ctx.waitUntil(
         this.mirrorReserveToD1({ id: reservationId, userId, amount: estimateSeconds, createdAt }),
       );
+      await this.ensureAlarmAtOrBefore(createdAt + RESERVATION_STALE_TIMEOUT_MS);
 
       return { reservationId };
     }
@@ -251,6 +276,8 @@ export class UserUsageLedger extends DurableObject<Env> {
       status: "pending",
       createdAt,
       settledAt: null,
+      poolKind: "trial",
+      allowancePeriodId: null,
     });
 
     this.ctx.waitUntil(
@@ -261,6 +288,7 @@ export class UserUsageLedger extends DurableObject<Env> {
         createdAt,
       }),
     );
+    await this.ensureAlarmAtOrBefore(createdAt + RESERVATION_STALE_TIMEOUT_MS);
 
     return { reservationId };
   }
@@ -272,29 +300,89 @@ export class UserUsageLedger extends DurableObject<Env> {
    * if the reservation was already released (invalid transition).
    */
   /**
-   * Commits a pending TTS reservation. Which pool it deducts from is
-   * re-derived at settlement time via `getActiveAllowancePeriod()` — see
-   * "Design decisions" #3 for why this is safe in practice and what the
-   * sharp edge is. Idempotent and error-throwing behavior is otherwise
-   * unchanged from plan 2.
+   * Commits a pending TTS reservation. Settles against whichever pool was
+   * PERSISTED on the row at reservation time (`poolKind`/
+   * `allowancePeriodId`, set by `reserveTts()`), never re-derived via
+   * `getActiveAllowancePeriod()` at commit time — a plan change or
+   * period rollover between reserve and commit must not silently move
+   * where an in-flight reservation settles. Idempotent and
+   * error-throwing behavior is otherwise unchanged from plan 2.
    */
   async commitTtsReservation(reservationId: string): Promise<void> {
     const reservation = await this.findReservation(reservationId);
     if (!reservation) throw new ReservationNotFoundError(reservationId);
     if (reservation.status === "committed") return;
-    if (reservation.status === "released") {
+    if (reservation.status === "released" || reservation.status === "expired") {
       throw new ReservationStateError(reservationId, reservation.status, "commit");
     }
 
     const userId = this.requireUserId();
     const settledAt = Date.now();
-    const activePeriod = await this.getActiveAllowancePeriod(settledAt);
 
     await this.db
       .update(reservations)
       .set({ status: "committed", settledAt })
       .where(eq(reservations.id, reservationId));
 
+    if (reservation.poolKind === "paid" && reservation.allowancePeriodId) {
+      const currentPeriod = await this.getCurrentAllowancePeriodRow();
+      if (currentPeriod && currentPeriod.periodId === reservation.allowancePeriodId) {
+        await this.db
+          .update(currentAllowancePeriod)
+          .set({
+            narrationSecondsUsed: sql`${currentAllowancePeriod.narrationSecondsUsed} + ${reservation.amount}`,
+            updatedAt: settledAt,
+          })
+          .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+
+        this.ctx.waitUntil(
+          this.mirrorPaidNarrationCommitToD1(
+            currentPeriod.periodId,
+            userId,
+            reservation.amount,
+            reservationId,
+            settledAt,
+          ),
+        );
+        return;
+      }
+
+      // The period this reservation was reserved against is no longer
+      // the current one — superseded by an upgrade/renewal, or otherwise
+      // gone. Its `narrationSecondsUsed` counter belongs to a period
+      // that doesn't exist as "current" anymore, so there is no correct
+      // pool left to add this charge to. The reservation stays
+      // `"committed"` (the narration WAS generated and delivered); only
+      // the ledger-side deduction is dropped, with an audit trail so
+      // this rare edge case is reviewable rather than silent.
+      this.ctx.waitUntil(
+        this.appendAuditLog(userId, "tts_reservation_settled_period_missing", {
+          reservationId,
+          expectedAllowancePeriodId: reservation.allowancePeriodId,
+          currentAllowancePeriodId: currentPeriod?.periodId ?? null,
+          amount: reservation.amount,
+        }),
+      );
+      return;
+    }
+
+    if (reservation.poolKind === "trial") {
+      await this.db
+        .update(trialLedger)
+        .set({ usedCredits: sql`${trialLedger.usedCredits} + ${reservation.amount}` })
+        .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
+
+      this.ctx.waitUntil(
+        this.mirrorCommitToD1(reservationId, userId, reservation.amount, settledAt),
+      );
+      return;
+    }
+
+    // Legacy reservation created before `poolKind` existed on this row —
+    // fall back to the pre-fix behavior of re-deriving the active pool
+    // at settlement time. Only reachable for a reservation that was
+    // still pending across the deploy that added this column.
+    const activePeriod = await this.getActiveAllowancePeriod(settledAt);
     if (activePeriod) {
       await this.db
         .update(currentAllowancePeriod)
@@ -335,7 +423,11 @@ export class UserUsageLedger extends DurableObject<Env> {
   async releaseTtsReservation(reservationId: string): Promise<void> {
     const reservation = await this.findReservation(reservationId);
     if (!reservation) throw new ReservationNotFoundError(reservationId);
-    if (reservation.status === "released") return;
+    // "expired" means the alarm-driven reconciliation sweep already
+    // returned this reservation's hold to the pool — releasing it now is
+    // a no-op for the same reason releasing an already-released
+    // reservation is.
+    if (reservation.status === "released" || reservation.status === "expired") return;
     if (reservation.status === "committed") {
       throw new ReservationStateError(reservationId, reservation.status, "release");
     }
@@ -463,7 +555,14 @@ export class UserUsageLedger extends DurableObject<Env> {
     const pending = await this.db
       .select({ amount: reservations.amount })
       .from(reservations)
-      .where(and(eq(reservations.status, "pending"), eq(reservations.kind, "tts")));
+      .where(
+        and(
+          eq(reservations.status, "pending"),
+          eq(reservations.kind, "tts"),
+          eq(reservations.poolKind, "paid"),
+          eq(reservations.allowancePeriodId, period.periodId),
+        ),
+      );
     const pendingTotal = pending.reduce((sum, row) => sum + row.amount, 0);
     return Math.max(0, period.narrationSecondsTotal - period.narrationSecondsUsed - pendingTotal);
   }
@@ -495,7 +594,19 @@ export class UserUsageLedger extends DurableObject<Env> {
     nonce: string;
     capIntervals: number;
   }> {
-    const live = await findLiveVoiceSession(this.db);
+    const userId = this.requireUserId();
+
+    // One-shot reconcile: a terminal row stuck in hangup not_started/pending
+    // (e.g. lost alarm) would otherwise block new sessions forever.
+    let live = await findLiveVoiceSession(this.db);
+    if (
+      live &&
+      live.status === "terminal" &&
+      (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
+    ) {
+      await this.reconcileTerminalHangup(live, userId);
+      live = await findLiveVoiceSession(this.db);
+    }
     if (live) {
       throw new VoiceSessionError(
         "session_already_active",
@@ -503,7 +614,6 @@ export class UserUsageLedger extends DurableObject<Env> {
       );
     }
 
-    const userId = this.requireUserId();
     const activePeriod = await this.getActiveAllowancePeriod();
 
     let planKind: "trial" | "reader" | "voice";
@@ -566,7 +676,7 @@ export class UserUsageLedger extends DurableObject<Env> {
       updatedAt: now,
     });
 
-    await this.ctx.storage.setAlarm(now + REGISTRATION_GRACE_MS);
+    await this.ensureAlarmAtOrBefore(now + REGISTRATION_GRACE_MS);
     await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId, planKind });
 
     return { rishiSessionId, nonce: minted.nonce, capIntervals };
@@ -619,35 +729,114 @@ export class UserUsageLedger extends DurableObject<Env> {
     // The first 30-second charge is scheduled from the moment registration
     // succeeds, not from session creation — an app that takes a few seconds
     // to complete WebRTC negotiation doesn't lose part of its first interval.
-    await this.ctx.storage.setAlarm(now + INTERVAL_MS);
+    await this.ensureAlarmAtOrBefore(now + INTERVAL_MS);
     await this.appendAuditLog(userId, "voice_session.call_registered", { rishiSessionId, callId });
 
-    const remainingCredits = await this.remainingTrialCredits();
-    // `broadcastToActiveSockets` does not exist yet — plan 4
-    // (2026-07-17-voice-control-websocket.md) adds it to this same class,
-    // alongside `fetch()`/`webSocketMessage`/`webSocketClose`/
-    // `webSocketError`. See this plan's "Prerequisite" section.
+    const allowance = await this.allowanceFieldsForSession(row);
     this.broadcastToActiveSockets({
       type: "allowance_remaining",
       rishiSessionId,
-      remainingCredits,
+      ...allowance,
       remainingIntervals: row.capIntervals - row.consumedIntervals,
     });
   }
 
   /**
-   * The single alarm for this DO drives three unrelated transitions,
-   * disambiguated by the row's own `status`/`hangupStatus`:
-   *  - `pending_registration` past its grace period → abandoned-session reconciliation.
-   *  - `active` → the next 30-second credit/interval tick.
-   *  - `terminal` with `hangupStatus` not yet resolved → bounded hangup retry.
+   * The single alarm for this DO drives two independent concerns, run on
+   * every invocation regardless of which one caused this particular
+   * alarm to fire:
+   *  1. `handleVoiceSessionAlarm` — the voice-session state machine,
+   *     disambiguated by the row's own `status`/`hangupStatus`:
+   *       - `pending_registration` past its grace period → abandoned-session reconciliation.
+   *       - `active` → the next 30-second credit/interval tick.
+   *       - `terminal` with `hangupStatus` not yet resolved → bounded hangup retry.
+   *  2. `reconcileStaleReservations` — recovers any `"tts"` reservation
+   *     abandoned mid-flight (see that method's doc comment).
+   *
+   * This DO has exactly one alarm slot, so after both run, the alarm is
+   * (re)scheduled for whichever is sooner: whatever `handleVoiceSessionAlarm`
+   * already needs (it calls `setAlarm` itself when it does), or the next
+   * pending reservation's staleness deadline. `ensureAlarmAtOrBefore`
+   * only ever moves the alarm EARLIER, so this never delays a
+   * voice-session-driven alarm that was already set during this same
+   * invocation.
    */
   async alarm(): Promise<void> {
+    const now = Date.now();
+    await this.handleVoiceSessionAlarm(now);
+    await this.reconcileStaleReservations(now);
+
+    const nextReservationDeadline = await this.earliestPendingReservationDeadline();
+    if (nextReservationDeadline !== null) {
+      await this.ensureAlarmAtOrBefore(nextReservationDeadline);
+    }
+  }
+
+  /**
+   * If no alarm is set, or the currently scheduled alarm is later than
+   * `deadlineMs`, schedule `deadlineMs`. Never pushes an already-sooner
+   * alarm later — required because this DO shares one alarm slot across
+   * voice ticks, hangup retries, and TTS reservation expiry.
+   */
+  private async ensureAlarmAtOrBefore(deadlineMs: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > deadlineMs) {
+      await this.ctx.storage.setAlarm(deadlineMs);
+    }
+  }
+
+  /**
+   * Sweeps `"pending"` TTS reservations older than
+   * `RESERVATION_STALE_TIMEOUT_MS`. Marking them `"expired"` drops their
+   * hold on the ORIGINAL pool captured at reserve time (`poolKind` /
+   * `allowancePeriodId`) — pending rows never deducted counters, so
+   * clearing pending status is the release. Prefer `releaseTtsReservation`
+   * would mark `"released"`; reconciliation uses `"expired"` per schema.
+   */
+  private async reconcileStaleReservations(now: number): Promise<void> {
+    const cutoff = now - RESERVATION_STALE_TIMEOUT_MS;
+    const stale = await this.db
+      .select()
+      .from(reservations)
+      .where(and(eq(reservations.status, "pending"), lt(reservations.createdAt, cutoff)));
+
+    for (const row of stale) {
+      await this.db
+        .update(reservations)
+        .set({ status: "expired", settledAt: now })
+        .where(eq(reservations.id, row.id));
+
+      // D1 has no "expired" status — mirror as released so the audit copy
+      // also stops counting the hold.
+      this.ctx.waitUntil(this.mirrorReleaseToD1(row.id, row.userId, row.amount, now));
+      this.ctx.waitUntil(
+        this.appendAuditLog(row.userId, "tts_reservation_expired", {
+          reservationId: row.id,
+          poolKind: row.poolKind ?? null,
+          allowancePeriodId: row.allowancePeriodId ?? null,
+          amount: row.amount,
+        }),
+      );
+    }
+  }
+
+  /** Earliest `createdAt + RESERVATION_STALE_TIMEOUT_MS` among pending rows, or null. */
+  private async earliestPendingReservationDeadline(): Promise<number | null> {
+    const [row] = await this.db
+      .select({ createdAt: reservations.createdAt })
+      .from(reservations)
+      .where(eq(reservations.status, "pending"))
+      .orderBy(asc(reservations.createdAt))
+      .limit(1);
+    if (!row) return null;
+    return row.createdAt + RESERVATION_STALE_TIMEOUT_MS;
+  }
+
+  private async handleVoiceSessionAlarm(now: number): Promise<void> {
     const row = await findRowNeedingAlarm(this.db);
     if (!row) return;
 
     const userId = this.requireUserId();
-    const now = Date.now();
 
     if (row.status === "pending_registration") {
       if (now - row.createdAt < REGISTRATION_GRACE_MS) {
@@ -656,13 +845,15 @@ export class UserUsageLedger extends DurableObject<Env> {
       }
       await markTerminal(this.db, row.rishiSessionId, "registration_timeout", now);
       await this.appendAuditLog(userId, "voice_session.abandoned", { rishiSessionId: row.rishiSessionId });
-      // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
       this.broadcastToActiveSockets({
         type: "session_ended",
         rishiSessionId: row.rishiSessionId,
         reason: "registration_timeout",
       });
-      // No callId was ever registered, so there is nothing to hang up on OpenAI's side.
+      this.closeSocketsForSession(row.rishiSessionId, "registration_timeout");
+      // No callId was ever registered — resolve hangup so createVoiceSession
+      // is not blocked by a terminal + not_started hangup row.
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now);
       return;
     }
 
@@ -671,10 +862,22 @@ export class UserUsageLedger extends DurableObject<Env> {
       return;
     }
 
-    // status === "terminal" and hangup hasn't resolved yet: bounded retry.
-    if (row.callId) {
-      await this.attemptHangup(row.rishiSessionId, row.callId, userId, row.hangupAttempts);
+    // status === "terminal" and hangup hasn't resolved yet.
+    await this.reconcileTerminalHangup(row, userId);
+  }
+
+  /**
+   * Resolves or retries hangup for a terminal session. No callId → mark
+   * succeeded (nothing to hang up). With callId → one hangup attempt (which
+   * schedules the next alarm on failure). Never leaves terminal+pending/
+   * not_started without a next alarm unless hangup is terminal.
+   */
+  private async reconcileTerminalHangup(row: VoiceSessionRow, userId: string): Promise<void> {
+    if (!row.callId) {
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", row.hangupAttempts, Date.now());
+      return;
     }
+    await this.attemptHangup(row.rishiSessionId, row.callId, userId, row.hangupAttempts);
   }
 
   /**
@@ -693,9 +896,20 @@ export class UserUsageLedger extends DurableObject<Env> {
    * mid-session would let an account's subscription-state change silently
    * switch which pool an in-progress call drains, which the spec does not
    * ask for and which would be confusing to a user mid-call.
+   *
+   * After charging the interval that just elapsed, this also checks
+   * whether the resulting balance can cover ANOTHER full interval
+   * before scheduling the next alarm. Without that check, a session
+   * whose balance runs out mid-cap would run one extra ~30s interval of
+   * OpenAI Realtime audio for free: the next tick would find nothing
+   * left to charge and terminate without charging it, but the audio
+   * already happened. Terminating here instead — one tick earlier, as
+   * soon as the shortfall is known — closes that gap.
    */
   private async tickActiveSession(row: VoiceSessionRow, userId: string, now: number): Promise<void> {
     let remainingAllowanceAfterTick: number;
+    let costPerInterval: number;
+    let exhaustionReason: VoiceSessionTerminalReason;
 
     if (row.planKind === "trial") {
       const remainingCredits = await this.remainingTrialCredits();
@@ -708,6 +922,8 @@ export class UserUsageLedger extends DurableObject<Env> {
         .set({ usedCredits: sql`${trialLedger.usedCredits} + ${CREDITS_PER_INTERVAL}` })
         .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
       remainingAllowanceAfterTick = remainingCredits - CREDITS_PER_INTERVAL;
+      costPerInterval = CREDITS_PER_INTERVAL;
+      exhaustionReason = "trial_credits_exhausted";
 
       await this.appendAuditLog(userId, "voice_session.interval_charged", {
         rishiSessionId: row.rishiSessionId,
@@ -731,6 +947,8 @@ export class UserUsageLedger extends DurableObject<Env> {
         })
         .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
       remainingAllowanceAfterTick = remainingSeconds - PAID_VOICE_CHAT_SECONDS_PER_INTERVAL;
+      costPerInterval = PAID_VOICE_CHAT_SECONDS_PER_INTERVAL;
+      exhaustionReason = "plan_voice_allowance_exhausted";
 
       this.ctx.waitUntil(this.mirrorPaidVoiceTickToD1(period.periodId, userId, now));
 
@@ -745,20 +963,33 @@ export class UserUsageLedger extends DurableObject<Env> {
 
     const consumedIntervals = row.consumedIntervals + 1;
     const remainingIntervals = row.capIntervals - consumedIntervals;
+    // How many MORE full intervals (N+1, N+2, ...) the just-updated
+    // balance can still cover — not counting the interval just charged
+    // above. `< 1` below is exactly the "can't afford the next interval"
+    // check the old code was missing.
+    const remainingAffordableIntervals = Math.floor(remainingAllowanceAfterTick / costPerInterval);
 
     this.broadcastToActiveSockets({
       type: "allowance_remaining",
       rishiSessionId: row.rishiSessionId,
-      remainingCredits: remainingAllowanceAfterTick,
+      remainingTrialCredits: row.planKind === "trial" ? remainingAllowanceAfterTick : 0,
+      remainingVoiceChatSeconds: row.planKind === "trial" ? 0 : remainingAllowanceAfterTick,
       remainingIntervals,
     });
 
-    if (remainingIntervals === 1) {
+    // Warn one tick before whichever limit — the interval cap or the
+    // allowance itself — will actually end the session next.
+    if (remainingIntervals === 1 || remainingAffordableIntervals === 1) {
       this.broadcastToActiveSockets({ type: "session_ending", rishiSessionId: row.rishiSessionId });
     }
 
     if (remainingIntervals <= 0) {
       await this.terminateSession(row, "voice_session_time_cap", userId, Date.now());
+      return;
+    }
+
+    if (remainingAffordableIntervals < 1) {
+      await this.terminateSession(row, exhaustionReason, userId, Date.now());
       return;
     }
 
@@ -773,8 +1004,8 @@ export class UserUsageLedger extends DurableObject<Env> {
   ): Promise<void> {
     await markTerminal(this.db, row.rishiSessionId, reason, now);
     await this.appendAuditLog(userId, "voice_session.terminal", { rishiSessionId: row.rishiSessionId, reason });
-    // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
     this.broadcastToActiveSockets({ type: "session_ended", rishiSessionId: row.rishiSessionId, reason });
+    this.closeSocketsForSession(row.rishiSessionId, reason);
 
     if (!row.callId) {
       // Terminated before a call was ever registered (shouldn't happen for
@@ -784,6 +1015,9 @@ export class UserUsageLedger extends DurableObject<Env> {
     }
 
     await setHangupStatus(this.db, row.rishiSessionId, "pending", 0, now);
+    // Schedule a retry deadline before the first attempt so a lost/failed
+    // attempt cannot leave terminal+pending with no alarm forever.
+    await this.ensureAlarmAtOrBefore(now + HANGUP_BACKOFF_MS[0]!);
     await this.attemptHangup(row.rishiSessionId, row.callId, userId, 0);
   }
 
@@ -824,18 +1058,18 @@ export class UserUsageLedger extends DurableObject<Env> {
             attempts: attempt,
           }),
         );
-        // `broadcastToActiveSockets` is added by plan 4 — see "Prerequisite".
         this.broadcastToActiveSockets({
           type: "session_ended",
           rishiSessionId,
           reason: "provider_hangup_failed",
         });
+        this.closeSocketsForSession(rishiSessionId, "provider_hangup_failed");
         return;
       }
 
       await setHangupStatus(this.db, rishiSessionId, "pending", attempt, Date.now());
-      const nextDelay = HANGUP_BACKOFF_MS[attempt - 1];
-      await this.ctx.storage.setAlarm(Date.now() + nextDelay);
+      const nextDelay = HANGUP_BACKOFF_MS[attempt - 1]!;
+      await this.ensureAlarmAtOrBefore(Date.now() + nextDelay);
     }
   }
 
@@ -852,24 +1086,17 @@ export class UserUsageLedger extends DurableObject<Env> {
 
   /**
    * Plain internal data snapshot of a voice session's current status and
-   * allowance — not a wire message itself. Used internally by this class
-   * (nothing in this plan calls it yet) and, once plan 4
-   * (2026-07-17-voice-control-websocket.md) lands, by that plan's `fetch()`
-   * to build the initial `{ type: "snapshot", ... }` message it sends
-   * right after accepting the control WebSocket, and by the Worker route
-   * that plan adds as a pre-upgrade RPC check. Returns `null` if no
-   * session with this id has ever existed on this ledger.
-   */
-  /**
-   * Return shape is unchanged from plan 3 — `remainingCredits` reuses the
-   * same field for either trial credits or paid Voice Chat seconds
-   * remaining, matching the dual-unit tradeoff documented on
-   * `createVoiceSession`/`tickActiveSession` (see "Design decisions" #4).
+   * allowance — not a wire message itself. Used by `fetch()` to build the
+   * initial `{ type: "snapshot", ... }` message after accepting the control
+   * WebSocket, and by the Worker route as a pre-upgrade RPC check. Returns
+   * `null` if no session with this id has ever existed on this ledger.
+   * Trial and paid remaining balances are separate fields (never packed).
    */
   async getSessionSnapshot(rishiSessionId: string): Promise<{
     rishiSessionId: string;
     status: VoiceSessionStatus;
-    remainingCredits?: number;
+    remainingTrialCredits?: number;
+    remainingVoiceChatSeconds?: number;
     remainingIntervals?: number;
     terminalReason?: VoiceSessionTerminalReason;
   } | null> {
@@ -884,21 +1111,31 @@ export class UserUsageLedger extends DurableObject<Env> {
       };
     }
 
-    let remainingCredits: number;
-    if (row.planKind === "trial") {
-      remainingCredits = await this.remainingTrialCredits();
-    } else {
-      const period = await this.getCurrentAllowancePeriodRow();
-      remainingCredits = period
-        ? Math.max(0, period.voiceChatSecondsTotal - period.voiceChatSecondsUsed)
-        : 0;
-    }
+    const allowance = await this.allowanceFieldsForSession(row);
 
     return {
       rishiSessionId,
       status: row.status,
-      remainingCredits,
+      ...allowance,
       remainingIntervals: row.capIntervals - row.consumedIntervals,
+    };
+  }
+
+  private async allowanceFieldsForSession(
+    row: VoiceSessionRow,
+  ): Promise<{ remainingTrialCredits: number; remainingVoiceChatSeconds: number }> {
+    if (row.planKind === "trial") {
+      return {
+        remainingTrialCredits: await this.remainingTrialCredits(),
+        remainingVoiceChatSeconds: 0,
+      };
+    }
+    const period = await this.getCurrentAllowancePeriodRow();
+    return {
+      remainingTrialCredits: 0,
+      remainingVoiceChatSeconds: period
+        ? Math.max(0, period.voiceChatSecondsTotal - period.voiceChatSecondsUsed)
+        : 0,
     };
   }
 
@@ -942,7 +1179,8 @@ export class UserUsageLedger extends DurableObject<Env> {
             type: "snapshot",
             rishiSessionId,
             status: snapshot.status,
-            remainingCredits: snapshot.remainingCredits,
+            remainingTrialCredits: snapshot.remainingTrialCredits,
+            remainingVoiceChatSeconds: snapshot.remainingVoiceChatSeconds,
             remainingIntervals: snapshot.remainingIntervals,
           };
     this.sendControlMessage(server, snapshotMessage);
@@ -1006,18 +1244,28 @@ export class UserUsageLedger extends DurableObject<Env> {
 
   // ---------- Seam plan 3's alarm() already calls ----------
   /**
-   * Sends `message` to every currently attached control socket for this
-   * ledger. Plan 3's (2026-07-17-user-usage-ledger-voice-session.md) own
-   * `registerCallId` and `alarm()` already call this every 30 seconds
-   * (`allowance_remaining`, then `session_ending` on the final interval)
-   * and once more at a terminal boundary (`session_ended`). The product
-   * spec guarantees one active voice session per account, so every socket
-   * `ctx.getWebSockets()` returns belongs to the same session — no
-   * per-socket session filtering is needed here.
+   * Sends `message` only to control sockets tagged with
+   * `message.rishiSessionId` (set at `acceptWebSocket`). Prevents a prior
+   * session's sockets from receiving another session's events if both are
+   * briefly attached during hangup/reconnect edge cases.
    */
   private broadcastToActiveSockets(message: ControlMessage): void {
+    const sessionId = message.rishiSessionId;
     for (const ws of this.ctx.getWebSockets()) {
+      if (!this.ctx.getTags(ws).includes(sessionId)) continue;
       this.sendControlMessage(ws, message);
+    }
+  }
+
+  /** Close every hibernatable control socket tagged with `rishiSessionId`. */
+  private closeSocketsForSession(rishiSessionId: string, reason: string): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      if (!this.ctx.getTags(ws).includes(rishiSessionId)) continue;
+      try {
+        ws.close(1000, reason);
+      } catch {
+        // Already CLOSING/CLOSED — nothing to do.
+      }
     }
   }
 
@@ -1075,10 +1323,12 @@ export class UserUsageLedger extends DurableObject<Env> {
       .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
     if (!ledger) return 0;
 
+    // Only trial-pool holds — paid TTS amounts are seconds and must not
+    // pollute credit math.
     const pending = await this.db
       .select({ amount: reservations.amount })
       .from(reservations)
-      .where(eq(reservations.status, "pending"));
+      .where(and(eq(reservations.status, "pending"), eq(reservations.poolKind, "trial")));
     const pendingTotal = pending.reduce((sum, row) => sum + row.amount, 0);
 
     return ledger.initialCredits - ledger.usedCredits - pendingTotal;

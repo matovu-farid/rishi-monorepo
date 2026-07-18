@@ -317,6 +317,8 @@ enum ServiceGraphFactory {
             return VoiceSessionPresenter(
                 coordinator: audioStack.coordinator,
                 workerClient: workerClient,
+                baseURL: baseURL,
+                tokenProvider: tokenProvider,
                 messageStore: messageStore,
                 conversationLookup: conversationLookup,
                 userIdProvider: { [userIdBox] in userIdBox.value },
@@ -328,6 +330,15 @@ enum ServiceGraphFactory {
         }
 
         let entitlementService = EntitlementService(workerClient: workerClient)
+        let entitlementSnapshotStore = await MainActor.run {
+            EntitlementSnapshotStore(service: entitlementService)
+        }
+        // Live SubscriptionStoreView path uses CustomerEntitlements →
+        // syncEntitlement (not PurchaseService). Wire snapshot refresh so
+        // gates/Settings update as soon as entitlement-sync succeeds.
+        EntitlementSyncHooks.onSynced = { [entitlementService] in
+            _ = await entitlementService.refreshSnapshot()
+        }
         let _ = await MainActor.run {
             ManageSubscriptionPresenter()
         }
@@ -356,6 +367,7 @@ enum ServiceGraphFactory {
         }
 
         let onboardingState = UserDefaultsOnboardingState()
+        let trialOnboardingState = UserDefaultsTrialOnboardingState()
         let onboardingCoordinator = await MainActor.run {
             OnboardingCoordinator(state: onboardingState)
         }
@@ -406,6 +418,8 @@ enum ServiceGraphFactory {
             voicePresenter: voicePresenter,
             bookSearch: bookSearch,
             indexingHook: indexingHook,
+            entitlementService: entitlementService,
+            entitlementSnapshotStore: entitlementSnapshotStore,
             entitlementReconciler: reconciler,
             readerAppEntitlementFlag: entitlementFlag,
             restoreService: restoreService,
@@ -413,6 +427,7 @@ enum ServiceGraphFactory {
             telemetryStore: telemetryStore,
             footerDetectionStore: footerDetectionStore,
             onboardingState: onboardingState,
+            trialOnboardingState: trialOnboardingState,
             onboardingCoordinator: onboardingCoordinator,
             readerDefaults: readerDefaults,
             groupID: groupID

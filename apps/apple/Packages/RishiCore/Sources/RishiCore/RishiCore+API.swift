@@ -25,6 +25,11 @@
 // MessageRole                 — `Models/Message.swift`. Enum: .user / .assistant / .system.
 // Position                    — `Models/Position.swift`. The last-read locator for a book (serialized as JSON string).
 // User                        — `Models/User.swift`. The signed-in user (id, email, displayName, hasPro).
+// EntitlementSnapshot         — `Models/EntitlementSnapshot.swift`. The 5-state server-owned
+//                                entitlement union from `GET /api/billing/me` (trial_active /
+//                                trial_exhausted / reader_active / voice_active /
+//                                subscription_expired). Decoded by `Endpoints/BillingAPI.swift`'s
+//                                `BillingMeEndpoint`. Consumed by RishiBilling.EntitlementService.
 
 // MARK: - Identifiers
 //

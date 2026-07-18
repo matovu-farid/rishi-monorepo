@@ -17,6 +17,9 @@
 //
 // OnboardingFlowView          — `UI/OnboardingFlowView.swift`. The full first-run experience:
 //                                intro pages -> Sign in with Apple -> mic -> voice language -> done.
+// NoCardTrialScreen             — `UI/NoCardTrialScreen.swift`. One-time,
+//                                per-account "100 free credits, no card"
+//                                explainer shown after first sign-in.
 
 // MARK: - Coordinators / Flows
 //
@@ -30,3 +33,9 @@
 //                                completed onboarding?
 // UserDefaultsOnboardingState — `Storage/OnboardingState.swift`. The production
 //                                implementation backed by UserDefaults.
+// TrialOnboardingState         — `Storage/TrialOnboardingState.swift`. Protocol.
+//                                Has this ACCOUNT (not device) seen the no-card
+//                                trial explainer?
+// UserDefaultsTrialOnboardingState
+//                              — `Storage/TrialOnboardingState.swift`. Production
+//                                implementation, keyed by `UserID`.

@@ -50,6 +50,9 @@ public struct SubscriptionsView: View {
                     }
                     
                 }
+                .inAppPurchaseOptions { _ in
+                    await AppAccountToken.currentPurchaseOptions()
+                }
                 .subscriptionStoreButtonLabel(.multiline)
                 .subscriptionStorePickerItemBackground(.thinMaterial)
                 .subscriptionStorePolicyDestination(

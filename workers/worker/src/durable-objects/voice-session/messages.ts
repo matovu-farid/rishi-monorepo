@@ -13,7 +13,8 @@ export type ControlMessage =
   | {
       type: "allowance_remaining";
       rishiSessionId: string;
-      remainingCredits: number;
+      remainingTrialCredits: number;
+      remainingVoiceChatSeconds: number;
       remainingIntervals: number;
     }
   | { type: "session_ending"; rishiSessionId: string }
@@ -37,7 +38,8 @@ export type ControlMessage =
       type: "snapshot";
       rishiSessionId: string;
       status: VoiceSessionStatus;
-      remainingCredits?: number;
+      remainingTrialCredits?: number;
+      remainingVoiceChatSeconds?: number;
       remainingIntervals?: number;
       reason?: VoiceSessionTerminalReason;
     };

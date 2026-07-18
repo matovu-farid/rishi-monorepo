@@ -18,7 +18,7 @@ import Observation
 /// compile UNCHANGED. The value source is the only thing that moved:
 /// `Resolver.production` is now a Phase-11 baseline fallback (`false`);
 /// Wave-3 wiring will switch call sites to read the live reconciler.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 @MainActor
 @Observable
 public final class ReaderAppEntitlementFlag {

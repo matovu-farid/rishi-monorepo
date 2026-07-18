@@ -52,6 +52,7 @@ struct SettingsContent: View {
                     onSyncNow: { Task { await sync.syncNow() } },
                     telemetryStore: services.telemetryStore,
                     footerDetectionStore: services.footerDetectionStore,
+                    entitlementSnapshot: services.entitlementSnapshotStore.snapshot,
                     onSignOut: {
                         //                        try? await auth.signOut()
                         currentUserBox.signout()

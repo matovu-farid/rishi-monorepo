@@ -1,3 +1,4 @@
+import RishiBilling
 import RishiChat
 import RishiCore
 import RishiLibrary
@@ -110,6 +111,29 @@ struct LibraryTabView: View {
                 )
             }
         #endif
+
+        .sheet(item: Bindable(model).paywallFeature, onDismiss: {
+            // Best-effort: purchase/restore via SubscriptionStoreView may have
+            // synced entitlements while the sheet was up.
+            Task { await services.entitlementService.refreshSnapshot() }
+        }) { _ in
+            if let groupId = services.groupID {
+                SubscriptionsView(color: .systemBlue, groupId: groupId)
+            } else {
+                NavigationStack {
+                    ContentUnavailableView(
+                        "Plans unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("Could not load subscription plans. Try again later.")
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { model.dismissPaywall() }
+                        }
+                    }
+                }
+            }
+        }
         
         .deepLinkHandling(model: model, refreshLibrary: { await vm.refresh() })
     }

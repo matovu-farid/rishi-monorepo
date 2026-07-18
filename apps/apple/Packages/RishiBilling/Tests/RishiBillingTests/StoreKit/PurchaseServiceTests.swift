@@ -87,6 +87,9 @@ struct PurchaseServiceTests {
             productFetcher: fetcher,
             verifier: verifier,
             reconciler: reconciler,
+            // Stub sync so sync-before-finish does not leave txns unfinished
+            // when the real WorkerClient is unreachable under `swift test`.
+            entitlementSyncClient: StubEntitlementSyncClient(),
             purchaseClosure: purchaseClosure
         )
     }
@@ -382,6 +385,10 @@ struct PurchaseServiceTests {
 }
 
 // MARK: - Test-only fetchers
+
+private struct StubEntitlementSyncClient: EntitlementSyncing {
+    func sync(transactionJWS: String) async throws {}
+}
 
 private struct SingleProductFetcher: ProductFetching, @unchecked Sendable {
     let product: Product

@@ -52,14 +52,9 @@
 			// semantics for no benefit. This binding may be wiped/recreated
 			// independently (e.g. to change key layout) without touching
 			// desktop state.
-			// id/preview_id are PLACEHOLDERS — replace with the real values from
-			// `npx wrangler kv namespace create RATE_LIMIT_KV` (and `--preview`)
-			// before this binding will work in `wrangler dev`/deploy. Could not
-			// be created here (no Cloudflare credentials/network access in this
-			// environment).
 			"binding": "RATE_LIMIT_KV",
-			"id": "REPLACE_WITH_REAL_ID_FROM_WRANGLER_KV_NAMESPACE_CREATE",
-			"preview_id": "REPLACE_WITH_REAL_PREVIEW_ID_FROM_WRANGLER_KV_NAMESPACE_CREATE"
+			"id": "34c4751c01a94f22a04a211f4eec8d54",
+			"preview_id": "76cdf05f101043a892c02ce590e4a694"
 		}
 	],
 	"durable_objects": {

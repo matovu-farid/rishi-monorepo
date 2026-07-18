@@ -1,6 +1,7 @@
 import SwiftUI
 import RishiUIKit
 import RishiBilling
+import RishiCore
 
 /// Settings section embedding RishiBilling's `ManageSubscriptionRow`.
 ///
@@ -14,12 +15,24 @@ public struct BillingSection: View {
 
     public let entitlement: ReaderAppEntitlementFlag.Resolver
 
-    public init(entitlement: ReaderAppEntitlementFlag.Resolver = .production) {
+    /// `nil` only in previews/tests that don't construct a full snapshot
+    /// store. Production always passes a real value — see
+    /// `SettingsContent.swift`'s `SettingsScreen(...)` call site.
+    public let entitlementSnapshot: EntitlementSnapshot?
+
+    public init(
+        entitlement: ReaderAppEntitlementFlag.Resolver = .production,
+        entitlementSnapshot: EntitlementSnapshot? = nil
+    ) {
         self.entitlement = entitlement
+        self.entitlementSnapshot = entitlementSnapshot
     }
 
     public var body: some View {
         Section {
+            if let entitlementSnapshot {
+                RemainingAllowanceView(snapshot: entitlementSnapshot)
+            }
             ManageSubscriptionRow()
         } header: {
             Text("Subscription")

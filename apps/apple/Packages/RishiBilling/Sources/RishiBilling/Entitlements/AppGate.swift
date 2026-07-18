@@ -1,6 +1,6 @@
 /// Pure top-level routing decision for the app shell. Keeps the branch logic
 /// out of the SwiftUI view so it is unit-testable.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 public enum AppGate: Equatable, Sendable {
     case loading
     case signedOut

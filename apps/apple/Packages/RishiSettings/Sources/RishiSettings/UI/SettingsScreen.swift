@@ -57,6 +57,11 @@ public struct SettingsScreen: View {
     /// `ReaderAppEntitlementFlag.isGranted`); tests override.
     public let billingEntitlement: ReaderAppEntitlementFlag.Resolver
 
+    /// The account's current entitlement snapshot (plan 12), threaded
+    /// straight to `BillingSection` for `RemainingAllowanceView`. `nil` only
+    /// in previews/tests.
+    public let entitlementSnapshot: EntitlementSnapshot?
+
     @State private var showDeleteConfirm = false
     @State private var deleteModel: DeleteAccountModel?
 
@@ -81,6 +86,7 @@ public struct SettingsScreen: View {
         telemetryStore: any TelemetryStore,
         footerDetectionStore: any FooterDetectionStore,
         billingEntitlement: ReaderAppEntitlementFlag.Resolver = .production,
+        entitlementSnapshot: EntitlementSnapshot? = nil,
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
@@ -100,6 +106,7 @@ public struct SettingsScreen: View {
         self.telemetryStore = telemetryStore
         self.footerDetectionStore = footerDetectionStore
         self.billingEntitlement = billingEntitlement
+        self.entitlementSnapshot = entitlementSnapshot
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
@@ -132,7 +139,7 @@ public struct SettingsScreen: View {
                 // sheet directly. The `onManageSubscription` parameter
                 // remains in `SettingsScreen`'s init for source compat
                 // until plan 13-05 / 13-06 cleans up the call chain.
-                BillingSection(entitlement: billingEntitlement)
+                BillingSection(entitlement: billingEntitlement, entitlementSnapshot: entitlementSnapshot)
                 ReaderDefaultsSection(
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily

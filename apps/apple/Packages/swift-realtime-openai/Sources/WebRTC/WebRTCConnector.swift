@@ -65,15 +65,21 @@ import FoundationNetworking
 		disconnect()
 	}
 
-	package func connect(using request: URLRequest) async throws {
-		guard connection.connectionState == .new else { return }
+	/// Connects the WebRTC peer and returns the OpenAI-assigned Realtime call
+	/// ID captured from the `Location` header (`nil` if the header was
+	/// missing/malformed on an otherwise-successful handshake, or if this call
+	/// was a no-op because the peer was already connected/connecting).
+	@discardableResult
+	package func connect(using request: URLRequest) async throws -> String? {
+		guard connection.connectionState == .new else { return nil }
 
 		guard AVAudioApplication.shared.recordPermission == .granted else {
 			throw WebRTCError.missingAudioPermission
 		}
 
-		try await performHandshake(using: request)
+		let providerCallId = try await performHandshake(using: request)
 		Self.configureAudioSession()
+		return providerCallId
 	}
 
 	public func send(event: ClientEvent) throws {
@@ -93,7 +99,7 @@ import FoundationNetworking
 extension WebRTCConnector {
 	public static func create(connectingTo request: URLRequest) async throws -> WebRTCConnector {
 		let connector = try create()
-		try await connector.connect(using: request)
+		_ = try await connector.connect(using: request)
 		return connector
 	}
 
@@ -146,7 +152,23 @@ private extension WebRTCConnector {
 		#endif
 	}
 
-	func performHandshake(using request: URLRequest) async throws {
+	/// Parses the OpenAI-assigned Realtime call ID from the `Location` header
+	/// returned by a successful `201` response to `POST /v1/realtime/calls`,
+	/// e.g. `Location: /v1/realtime/calls/rtc_abc123` -> `"rtc_abc123"`.
+	/// The header is a relative path, not an absolute URL — this takes the
+	/// last non-empty `/`-separated path segment rather than assuming a
+	/// scheme/host. Returns `nil` when the header is absent or has no
+	/// non-empty segment; that should not happen on a well-formed `201` but
+	/// is not treated as fatal here (see `fetchRemoteSDP`).
+	static func providerCallId(fromLocationHeader header: String?) -> String? {
+		guard let header,
+		      let lastSegment = header.split(separator: "/").last,
+		      !lastSegment.isEmpty
+		else { return nil }
+		return String(lastSegment)
+	}
+
+	func performHandshake(using request: URLRequest) async throws -> String? {
 		let sdp = try await Result { try await connection.offer(for: LKRTCMediaConstraints(mandatoryConstraints: ["levelControl": "true"], optionalConstraints: nil)) }
 			.mapError(WebRTCError.failedToCreateSDPOffer)
 			.get()
@@ -154,25 +176,47 @@ private extension WebRTCConnector {
 		do { try await connection.setLocalDescription(sdp) }
 		catch { throw WebRTCError.failedToSetLocalDescription(error) }
 
-		let remoteSdp = try await fetchRemoteSDP(using: request, localSdp: connection.localDescription!.sdp)
+		let result = try await fetchRemoteSDP(using: request, localSdp: connection.localDescription!.sdp)
 
-		do { try await connection.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: remoteSdp)) }
+		do { try await connection.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: result.remoteSdp)) }
 		catch { throw WebRTCError.failedToSetRemoteDescription(error) }
+
+		return result.providerCallId
 	}
 
-	private func fetchRemoteSDP(using request: URLRequest, localSdp: String) async throws -> String {
+	/// Carries both outputs of `fetchRemoteSDP`: the SDP answer body needed to
+	/// complete the WebRTC handshake, and the OpenAI-assigned Realtime call ID
+	/// read from the `Location` response header. File-private — this never
+	/// crosses the WebRTC module boundary; only `providerCallId` propagates
+	/// further up via `performHandshake`'s return value.
+	private struct RemoteSDPResult {
+		let remoteSdp: String
+		let providerCallId: String?
+	}
+
+	private func fetchRemoteSDP(using request: URLRequest, localSdp: String) async throws -> RemoteSDPResult {
 		var request = request
 		request.httpBody = localSdp.data(using: .utf8)
 		request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
 
 		let (data, response) = try await URLSession.shared.data(for: request)
 
-		guard let response = response as? HTTPURLResponse, response.statusCode == 201, let remoteSdp = String(data: data, encoding: .utf8) else {
+		guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 201, let remoteSdp = String(data: data, encoding: .utf8) else {
 			if (response as? HTTPURLResponse)?.statusCode == 401 { throw WebRTCError.invalidEphemeralKey }
 			throw WebRTCError.badServerResponse(response)
 		}
 
-		return remoteSdp
+		let providerCallId = Self.providerCallId(fromLocationHeader: httpResponse.value(forHTTPHeaderField: "Location"))
+		if providerCallId == nil {
+			// Should not happen on a well-formed 201 from POST /v1/realtime/calls.
+			// Capturing failure is distinct from an SDP-negotiation failure: the
+			// handshake still succeeded, so we do not throw here. Callers must
+			// treat a nil providerCallId as equivalent to a registration failure
+			// once they reach the point of registering it with the Rishi backend.
+			print("WebRTCConnector: OpenAI Realtime call response was missing/malformed Location header; provider call ID not captured for this call.")
+		}
+
+		return RemoteSDPResult(remoteSdp: remoteSdp, providerCallId: providerCallId)
 	}
 }
 

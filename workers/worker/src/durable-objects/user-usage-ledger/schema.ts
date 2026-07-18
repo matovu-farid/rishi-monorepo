@@ -20,9 +20,26 @@ export const reservations = sqliteTable("reservations", {
   userId: text("user_id").notNull(),
   kind: text("kind", { enum: ["tts", "voice_interval"] }).notNull(),
   amount: integer("amount").notNull(),
-  status: text("status", { enum: ["pending", "committed", "released"] }).notNull(),
-  createdAt: integer("created_at").notNull(), // epoch ms
+  // "expired" is a distinct terminal status from "released": both return
+  // the reservation's hold on the pool, but "expired" is set only by the
+  // alarm-driven reconciliation sweep (`reconcileStaleReservations` in
+  // ledger.ts) for a reservation whose owning request never came back to
+  // commit or release it, whereas "released" is always an explicit
+  // caller action.
+  status: text("status", { enum: ["pending", "committed", "released", "expired"] }).notNull(),
+  createdAt: integer("created_at").notNull(), // epoch ms; also this reservation's "reservedAt" for staleness checks
   settledAt: integer("settled_at"), // epoch ms, null while pending
+  // Which allowance pool was active AT RESERVATION TIME, captured once in
+  // `reserveTts()` and read back (never re-derived) in
+  // `commitTtsReservation()` — see that method's doc comment for why.
+  // Nullable because reservations created before this column existed
+  // (and any restored from an older DO snapshot) won't have it set; those
+  // fall back to the pre-fix "re-derive the active pool at commit time"
+  // behavior.
+  poolKind: text("pool_kind", { enum: ["trial", "paid"] }),
+  // `currentAllowancePeriod.periodId` this reservation was reserved
+  // against. Only ever set when `poolKind === "paid"`.
+  allowancePeriodId: text("allowance_period_id"),
 });
 
 // Voice-chat session lifecycle — one row per Rishi voice session (not per

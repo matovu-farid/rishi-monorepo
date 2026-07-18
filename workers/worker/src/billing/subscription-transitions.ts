@@ -27,7 +27,6 @@ const PLAN_TIER: Record<ApplePlan, number> = { reader: 1, voice: 2 };
 
 export type TransitionClassification =
   | { kind: "first_period" }
-  | { kind: "no_change" }
   | { kind: "renewed"; priorPeriodId: string }
   | { kind: "upgraded"; priorPeriodId: string }
   | { kind: "downgraded_deferred"; priorPeriodId: string }
@@ -36,18 +35,31 @@ export type TransitionClassification =
   | { kind: "crossgrade_applied"; priorPeriodId: string };
 
 /**
- * Classifies a freshly-verified Apple transaction against the user's most
- * recent allowance-period D1 row (active or lapsed -- see "Design
- * decisions" #2 for why callers must pass the single latest row regardless
- * of whether it has expired).
+ * Classifies a freshly-verified, NOT-YET-PROCESSED Apple transaction
+ * against the user's most recent allowance-period D1 row (active or
+ * lapsed -- see "Design decisions" #2 for why callers must pass the single
+ * latest row regardless of whether it has expired).
+ *
+ * Callers MUST only invoke this for a transaction that hasn't already had
+ * its allowance-period side effects applied (see `entitlement-sync.ts`'s
+ * `applyAppleTransaction` -- it checks `allowancePeriod.sourceTransactionId`
+ * for an existing row before calling this function at all). That
+ * precondition is what makes the same-tier/same-product branch below safe
+ * to treat as an unconditional "renewed": a distinct, not-yet-seen Apple
+ * transaction for the same product while the current period is active can
+ * only mean Apple has renewed it. Comparing `expiresDate` against the
+ * current period's `periodEnd` is deliberately NOT done here -- for an
+ * annual product `expiresDate` is far beyond the 1-month `periodEnd` on
+ * every sync, which is what caused the entitlement-sync-idempotency bug
+ * this function was rewritten to fix.
  *
  * Tier ranking is Voice (2) > Reader (1), per the design doc's "Subscription
  * transitions" section ("Voice monthly and yearly products are level 1;
  * Reader monthly and yearly products are level 2" in StoreKit's own
  * ranking, i.e. Voice outranks Reader). Product-ID equality (not just plan
- * equality) distinguishes a same-tier "renewal" (identical product, later
- * expiry) from a same-tier "crossgrade" (different product = a
- * monthly<->annual duration change within the same tier).
+ * equality) distinguishes a same-tier "renewal" (identical product) from a
+ * same-tier "crossgrade" (different product = a monthly<->annual duration
+ * change within the same tier).
  *
  * `"_deferred"` vs `"_applied"` for downgrade/crossgrade is decided purely
  * by whether the CURRENT period is still active: while it is, the change
@@ -59,10 +71,9 @@ export function classifyTransition(input: {
   currentPeriod: CurrentPeriodInfo | null;
   newPlan: ApplePlan;
   newProductId: string;
-  newExpiresDate: number; // epoch ms
   now: number; // epoch ms
 }): TransitionClassification {
-  const { currentPeriod, newPlan, newProductId, newExpiresDate, now } = input;
+  const { currentPeriod, newPlan, newProductId, now } = input;
 
   if (!currentPeriod) {
     return { kind: "first_period" };
@@ -95,9 +106,7 @@ export function classifyTransition(input: {
     return { kind: "downgraded_deferred", priorPeriodId: currentPeriod.id };
   }
   if (sameProduct) {
-    return newExpiresDate > currentPeriod.periodEnd
-      ? { kind: "renewed", priorPeriodId: currentPeriod.id }
-      : { kind: "no_change" };
+    return { kind: "renewed", priorPeriodId: currentPeriod.id };
   }
   return { kind: "crossgrade_deferred", priorPeriodId: currentPeriod.id };
 }

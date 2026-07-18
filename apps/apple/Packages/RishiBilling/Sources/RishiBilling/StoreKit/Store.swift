@@ -9,10 +9,10 @@ private let logger = Logger(subsystem: "Rishi", category: "Store")
 typealias ProductID = String
 
 func fetchProductIDs()->[ProductID]{
-    return ["org.fidexa.rishi.pro.monthly","org.fidexa.rishi.pro.annual"]
+    return RishiProductID.all
 }
 
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 @MainActor @Observable
 public final class Store {
     public static let shared: Store = .init()
@@ -60,7 +60,10 @@ public final class Store {
                 return
             }
 
-            await CustomerEntitlements.shared.process(transaction: transaction)
+            await CustomerEntitlements.shared.process(
+                transaction: transaction,
+                jws: verificationResult.jwsRepresentation
+            )
         case .pending:
             logger.debug("Pending")
             return
@@ -86,7 +89,7 @@ public enum StoreError: Error, Equatable {
     case invalidTransaction
 }
 
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 extension Store {
    
 

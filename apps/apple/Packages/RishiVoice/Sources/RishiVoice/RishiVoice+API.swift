@@ -41,14 +41,26 @@
 //                                on OpenAI's Realtime SDK. The app injects this in prod.
 // EphemeralKeyFetcher         — `Service/EphemeralKeyFetcher.swift`. Actor. Mints short-lived
 //                                Realtime keys via the Worker.
+// VoiceSessionAPIClient       — `Service/VoiceSessionAPIClient.swift`. Actor. Creates a Rishi
+//                                voice session + registers the OpenAI call ID via the Worker.
 // VoiceTranscriptBridge       — `Service/VoiceTranscriptBridge.swift`. Actor. Forwards voice
 //                                transcripts into the chat conversation as Message rows.
+// ControlWebSocketClient      — `Service/ControlWebSocketClient.swift`. Actor. Owns one Worker
+//                                control WebSocket per voice session: allowance/warning/error
+//                                messages via `messages: AsyncStream<ControlMessage>`,
+//                                terminal state via a mandatory `onTerminal` callback,
+//                                automatic capped-backoff reconnect.
 
 // MARK: - Protocols
 //
 // RealtimeClientAPI           — `Service/RealtimeClientAPI.swift`. The transport seam.
 //                                Tests use a fake; the app uses RealtimeAPIAdapter.
 // EphemeralKeyFetching        — `Service/EphemeralKeyFetcher.swift`. Protocol seam for tests.
+// VoiceSessionCoordinating    — `Service/VoiceSessionAPIClient.swift`. Protocol seam for tests.
+// ControlSocketConnecting     — `Service/ControlSocketConnecting.swift`. Transport seam wrapping
+//                                the landed ControlWebSocketClient (which conforms to it) —
+//                                messages/connect/reconnect/disconnect/sendClientAck. Tests use
+//                                a fake; the app uses the real ControlWebSocketClient.
 // VoiceTranscriptDirtyHook    — `Service/VoiceTranscriptBridge.swift`. Lets the bridge tell
 //                                the sync engine that new transcript messages exist.
 // NoopVoiceTranscriptDirtyHook — `Service/VoiceTranscriptBridge.swift`. Default no-op
@@ -73,3 +85,17 @@
 // RealtimeTranscriptEvent     — `Service/RealtimeClientAPI.swift`. A single transcript delta.
 // RealtimeClientError         — `Service/RealtimeClientAPI.swift`. Error wrapper for the client.
 // EphemeralKey                — `Service/EphemeralKeyFetcher.swift`. Short-lived realtime key.
+// StartedVoiceSession         — `Service/VoiceSessionAPIClient.swift`. Result of a successful
+//                                POST /api/voice-sessions call.
+// VoiceSessionStartFailure    — `State/VoiceSessionStatus.swift`. Why POST /api/voice-sessions failed.
+// VoiceSessionRegistrationFailure — `State/VoiceSessionStatus.swift`. Why register-call failed
+//                                (or the call ID was never captured).
+// ControlMessage              — `Service/ControlMessage.swift`. Decoded control-WebSocket frame:
+//                                .allowanceRemaining / .sessionEnding / .sessionEnded /
+//                                .sessionError / .snapshot.
+// ControlTerminalReason       — `Service/ControlMessage.swift`. Why a session ended, as reported
+//                                by the server (voiceSessionTimeCap, trialCreditsExhausted, ...).
+// ControlSnapshotStatus       — `Service/ControlMessage.swift`. .pendingRegistration / .active /
+//                                .terminal, carried on every `snapshot` message.
+// ControlTerminalSignal       — `Service/ControlWebSocketClient.swift`. Payload delivered to
+//                                `ControlWebSocketClient`'s `onTerminal` callback.

@@ -25,7 +25,7 @@ private let logger = Logger(subsystem: "Rishi", category: "RishiProStatus")
 //
 // The numerical-level value matches the subscription's level that you configure in
 // the StoreKit configuration file or App Store Connect.
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 public enum EntitlementLevel: String, CaseIterable, Comparable, Sendable {
     case unsubscribed
     case subscribed
@@ -33,7 +33,7 @@ public enum EntitlementLevel: String, CaseIterable, Comparable, Sendable {
     
     init?(for product: Product) throws(RishiProStatusError) {
         // The product must be a subscription to have service entitlements.
-        guard let subscription = product.subscription else { throw .invalidProduct }
+        guard product.subscription != nil else { throw .invalidProduct }
        
         self = .subscribed
     }
@@ -42,10 +42,8 @@ public enum EntitlementLevel: String, CaseIterable, Comparable, Sendable {
         
     }
     
-    public static func from(subscription:SubscriptionStatus)-> EntitlementLevel{
+    public static func from(subscription: SubscriptionStatus) -> EntitlementLevel {
         .initialize(productId: subscription.transaction.unsafePayloadValue.productID)
-        
-        
     }
     
     init(hasPro: Bool){
@@ -54,7 +52,7 @@ public enum EntitlementLevel: String, CaseIterable, Comparable, Sendable {
     }
     public static func initialize(productId: String)->EntitlementLevel {
         switch productId {
-        case _ where ["org.fidexa.rishi.pro.monthly","org.fidexa.rishi.pro.annual"].contains(productId):
+        case _ where RishiProductID.all.contains(productId):
                 .init(state: .subscribed)
             
         default :

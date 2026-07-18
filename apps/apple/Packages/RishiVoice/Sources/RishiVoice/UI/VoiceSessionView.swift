@@ -22,6 +22,13 @@ public struct VoiceSessionView: View {
     /// `ReaderScreen.toolbarAccessibilityIdentifiers` in RishiReader.
     nonisolated public static let openTextChatAccessibilityIdentifier = "voice.openTextChat"
 
+    /// Native-aspect-ratio slot for the voice character (height 160, width from
+    /// ``VoiceCharacterView/canvasAspectRatio`` — 138×179 composition).
+    static let characterSlotSize = CGSize(
+        width: 160 * VoiceCharacterView.canvasAspectRatio,
+        height: 160
+    )
+
     @Bindable private var state: VoiceSessionState
     private let onEnd: () -> Void
     private let onOpenTextChat: (() -> Void)?
@@ -41,6 +48,15 @@ public struct VoiceSessionView: View {
             VoiceStatusBadge(status: state.status)
                 .padding(.top, RishiSpacing.l)
 
+            if let allowanceLabel {
+                Text(allowanceLabel)
+                    .font(RishiTypography.caption)
+                    .foregroundStyle(
+                        state.isFinalInterval ? RishiColor.danger : RishiColor.textSecondary
+                    )
+                    .accessibilityLabel(allowanceLabel)
+            }
+
             Spacer(minLength: 0)
 
             // Visual orb. Static SF Symbol for now — a future plan can swap
@@ -48,7 +64,7 @@ public struct VoiceSessionView: View {
             Image(systemName: "waveform.circle.fill")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 160, height: 160)
+                .frame(width: Self.characterSlotSize.width, height: Self.characterSlotSize.height)
                 .foregroundStyle(orbColor)
                 .accessibilityHidden(true)
 
@@ -124,13 +140,49 @@ public struct VoiceSessionView: View {
         switch state.status {
         case .live:
             return RishiColor.accent
-        case .connecting, .fetchingKey, .requestingMic, .reconnecting:
+        case .connecting, .fetchingKey, .creatingSession, .registeringCall, .requestingMic, .reconnecting:
             return RishiColor.textSecondary
         case .failed:
             return RishiColor.danger
         case .idle, .ending, .ended:
             return RishiColor.divider
         }
+    }
+
+    /// Prefers the active allowance pool: trial credits while that pool is
+    /// still the binding one, otherwise Voice Chat seconds — never packs
+    /// seconds into a "credits" label.
+    private var allowanceLabel: String? {
+        let prefix = state.isFinalInterval ? "Ending soon · " : ""
+        if let credits = state.remainingTrialCredits,
+           credits > 0 || state.remainingVoiceChatSeconds == nil {
+            return "\(prefix)\(credits) trial credits left"
+        }
+        if let seconds = state.remainingVoiceChatSeconds {
+            return "\(prefix)\(Self.formatVoiceChatSeconds(seconds)) Voice Chat left"
+        }
+        if let credits = state.remainingTrialCredits {
+            return "\(prefix)\(credits) trial credits left"
+        }
+        if state.isFinalInterval {
+            return "Ending soon"
+        }
+        return nil
+    }
+
+    private static func formatVoiceChatSeconds(_ seconds: Int) -> String {
+        let clamped = max(0, seconds)
+        let minutes = clamped / 60
+        let rem = clamped % 60
+        if minutes >= 60 {
+            let hours = minutes / 60
+            let mins = minutes % 60
+            return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m"
+        }
+        if minutes > 0 {
+            return rem == 0 ? "\(minutes)m" : "\(minutes)m \(rem)s"
+        }
+        return "\(rem)s"
     }
 }
 

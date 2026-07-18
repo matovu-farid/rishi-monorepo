@@ -145,7 +145,8 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let indexingHook: any BookIndexingHook
 
-    //   let entitlementService: EntitlementService
+    let entitlementService: EntitlementService
+    let entitlementSnapshotStore: EntitlementSnapshotStore
     //   let manageSubscriptionPresenter: ManageSubscriptionPresenter
     //    let storeKitProductService: StoreKitProductService
     //    let purchaseService: PurchaseService
@@ -159,6 +160,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let footerDetectionStore: any FooterDetectionStore
     let onboardingState: any OnboardingState
+    let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
     let groupID: Optional<GroupId>

@@ -20,6 +20,7 @@ struct RootView: View {
     @State private var entitlementResolved = false
 
     @State private var showOnboarding = false
+    @State private var showNoCardTrialIntro = false
     @Environment(CurrentUserBox.self) private var currentUserBox
 
     var body: some View {
@@ -41,6 +42,7 @@ struct RootView: View {
 
         realBodyContent(deps: deps)
             .environment(\.services, deps.services)
+            .environment(deps.services!.entitlementSnapshotStore)
 
             .environment(
                 \.signOut,
@@ -84,9 +86,7 @@ struct RootView: View {
                 }
             }
     }
-    @Environment(SubscriptionService.self) private var subscriptionService
 
-    
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
             switch currentUserBox.state {
@@ -101,23 +101,13 @@ struct RootView: View {
                 ProgressView()
 
             case .signedIn(user: _):
-                switch subscriptionService.currentSubscription {
-                case .subscribed(subscription: _):
-                    SignedInView()
-                case .unsubscribed:
-                    if let groupID = deps.services?.groupID {
-
-                        SubscriptionsView(color: .rishiBrown, groupId: groupID)
-
-                    } else {
-                        #if DEBUG
-                            Text("GroupId not configured")
-                        #endif
-                        ProgressView()
-
-                    }
-
-                }
+                // Per spec ("Replace the binary signed-in subscription
+                // redirect with server-derived routing"): every signed-in
+                // user — trial, paid, exhausted, or expired — reaches
+                // SignedInView. AI-feature-specific upgrade prompts for
+                // exhausted/expired users are a later plan's job, built on
+                // the EntitlementSnapshotStore injected below.
+                SignedInView()
 
             }
         }
@@ -138,6 +128,9 @@ struct RootView: View {
 
                 entitlementResolved = true
                 showOnboarding = !completed
+                if completed {
+                    await presentNoCardTrialIntroIfNeeded(deps: deps)
+                }
             } else {
                 let completed = await deps.onboardingState
                     .hasCompletedOnboarding()
@@ -150,16 +143,39 @@ struct RootView: View {
             .fullScreenCover(isPresented: $showOnboarding) {
                 OnboardingHost(
                     services: deps.services!,
-                    onCompleted: { showOnboarding = false }
+                    onCompleted: {
+                        showOnboarding = false
+                        Task { await presentNoCardTrialIntroIfNeeded(deps: deps) }
+                    }
                 )
             }
         #else
             .sheet(isPresented: $showOnboarding) {
                 OnboardingHost(
                     services: deps.services!,
-                    onCompleted: { showOnboarding = false }
+                    onCompleted: {
+                        showOnboarding = false
+                        Task { await presentNoCardTrialIntroIfNeeded(deps: deps) }
+                    }
                 )
             }
         #endif
+            .fullScreenCover(isPresented: $showNoCardTrialIntro) {
+                NoCardTrialScreen(onGotIt: { showNoCardTrialIntro = false })
+            }
+    }
+
+    /// Shows the no-card trial explainer exactly once per account. Called
+    /// after the device-scoped onboarding wizard's cover has closed (or was
+    /// never shown), so the two full-screen covers never race — and again
+    /// from the initial bootstrap `.task` for the "wizard already completed
+    /// on a prior launch, but this account hasn't seen the intro yet" case
+    /// (e.g. a second account signing in on this device).
+    private func presentNoCardTrialIntroIfNeeded(deps: AppDependencies) async {
+        guard case .signedIn(let user) = currentUserBox.state else { return }
+        let alreadySeen = await deps.trialOnboardingState.hasSeenNoCardIntro(userId: user.id)
+        guard !alreadySeen else { return }
+        await deps.trialOnboardingState.setHasSeenNoCardIntro(true, userId: user.id)
+        showNoCardTrialIntro = true
     }
 }

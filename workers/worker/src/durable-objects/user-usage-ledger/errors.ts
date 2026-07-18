@@ -42,7 +42,7 @@ export class ReservationNotFoundError extends Error {
   }
 }
 
-export type ReservationStatus = "pending" | "committed" | "released";
+export type ReservationStatus = "pending" | "committed" | "released" | "expired";
 
 export class ReservationStateError extends Error {
   readonly code = "RESERVATION_STATE_ERROR" as const;

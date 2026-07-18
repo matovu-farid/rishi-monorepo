@@ -2,6 +2,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
 import { appleSubscriptions, subscription } from "../db/schema";
 import { createDb } from "../db/drizzle";
+import { rollAllowancePeriodsForward } from "./allowance-period-rollover";
 import type { EntitlementSnapshot } from "../durable-objects/user-usage-ledger/types";
 // Type-only import to avoid a runtime ESM cycle with ../index — same shape as
 // the 14-04 verify-receipt and 14-05 webhook factories. `requireAuth` is
@@ -133,6 +134,15 @@ export function registerBillingMeRoute(
   app.get("/api/billing/me", requireAuth, async (c) => {
     const db = createDb(c.env.DB);
     const userId = c.get("userId");
+
+    // `/me` is polled far more often than entitlement-sync (every app
+    // foreground) and is the only route many annual subscribers ever hit
+    // between renewals, so the time-based rollover check must live here
+    // too, not just in entitlement-sync.ts -- see allowance-period-
+    // rollover.ts's doc comment for why this is decoupled from any
+    // incoming Apple transaction. Rollover also always rehydrates the DO
+    // mirror from the current D1 period (idempotent same-id sync).
+    await rollAllowancePeriodsForward(c.env, userId);
 
     const deps: BillingMeDeps = {
       db: {

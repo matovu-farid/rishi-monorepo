@@ -18,7 +18,7 @@ import Foundation
 public typealias SubscriptionGroupID = String
 
 
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 @MainActor @Observable
 public final class CustomerEntitlements {
     
@@ -40,8 +40,24 @@ public final class CustomerEntitlements {
     
     public private(set) var error: CustomerEntitlementsError?
     
-    public func process(transaction: Transaction) async {
+    /// Sync entitlement with the worker, then finish. On sync failure the
+    /// transaction is left unfinished so `Transaction.unfinished` /
+    /// `Transaction.updates` can retry. Snapshot refresh runs via
+    /// ``EntitlementSyncHooks/onSynced`` after a successful POST.
+    public func process(transaction: Transaction, jws: String) async {
+        do {
+            try await syncEntitlement(jws: jws)
             await transaction.finish()
+            logger.debug("""
+            Finished transaction \(transaction.id) after successful entitlement sync
+            """)
+        } catch {
+            logger.error("""
+            Entitlement sync failed for transaction \(transaction.id) \
+            (\(transaction.productID)); leaving unfinished for replay: \(error)
+            """)
+            updateError(.entitlementSyncFailed)
+        }
     }
     
 
@@ -56,7 +72,7 @@ public final class CustomerEntitlements {
              
                
             
-                await self.process(transaction: transaction)
+                await self.process(transaction: transaction, jws: update.jwsRepresentation)
                 
                 do {
                     try await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
@@ -70,8 +86,8 @@ public final class CustomerEntitlements {
     
     public func checkForCurrentEntitlements() async {
         logger.debug("Checking for current entitlements")
-        for await transaction in Transaction.currentEntitlements {
-            guard let transaction = await unwrapVerificationResult(transaction) else {
+        for await result in Transaction.currentEntitlements {
+            guard let transaction = await unwrapVerificationResult(result) else {
                 logger.error("Encountered error while checking for current entitlements")
                 return
             }
@@ -80,8 +96,9 @@ public final class CustomerEntitlements {
             \(transaction.productID)
             """)
 //            SubscriptionService.shared.saveSubscription(subscription: .subscribed)
+            let jws = result.jwsRepresentation
             Task.detached(priority: .background) {
-                await self.process(transaction: transaction)
+                await self.process(transaction: transaction, jws: jws)
                 
             }
         }
@@ -90,8 +107,8 @@ public final class CustomerEntitlements {
     
     public func checkForUnfinishedTransactions() async {
         logger.debug("Checking for unfinished transactions")
-        for await transaction in Transaction.unfinished {
-            guard let transaction = await unwrapVerificationResult(transaction) else {
+        for await result in Transaction.unfinished {
+            guard let transaction = await unwrapVerificationResult(result) else {
                 logger.error("Encountered error while checking for unfinished transactions")
                 return
             }
@@ -99,8 +116,9 @@ public final class CustomerEntitlements {
             Processing unfinished transaction ID \(transaction.id) for \
             \(transaction.productID)
             """)
+            let jws = result.jwsRepresentation
             Task.detached(priority: .background) {
-                await self.process(transaction: transaction)
+                await self.process(transaction: transaction, jws: jws)
             }
         }
         logger.debug("Finished checking for unfinished transactions")
@@ -184,10 +202,12 @@ public enum CustomerEntitlementsError: Error, Equatable {
     case invalidTransaction
     case failedToFetchPersistedData
     case failedToUpdatePersistedData
+    /// Worker entitlement-sync POST failed; transaction left unfinished.
+    case entitlementSyncFailed
 }
 
 
-@available(iOS 18.4, *)
+@available(iOS 18.4, macOS 15.4, *)
 extension Sequence where Element == SubscriptionStatus {
     public var activeSubscriptionStatuses: [SubscriptionStatus] {
         filter {

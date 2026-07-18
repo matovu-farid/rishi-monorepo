@@ -479,7 +479,20 @@ export const trialGrant = sqliteTable("trial_grant", {
 // One row per monthly allowance period per user, for Reader/Voice paid plans.
 // `priorPeriodId` self-references this table to chain periods across
 // upgrades/renewals/crossgrades for audit (see design doc "Subscription
-// transitions"). `transitionReason` records why THIS period started.
+// transitions"). `transitionReason` records why THIS period started --
+// `rollover` marks a period opened purely on wall-clock time (see
+// `billing/allowance-period-rollover.ts`), as opposed to one opened by a
+// freshly-verified Apple transaction.
+//
+// `sourceTransactionId` does double duty (`billing/entitlement-sync.ts`,
+// `billing/allowance-period-rollover.ts`): (1) it is the idempotency
+// marker for a transaction-triggered open -- before opening a period for
+// an incoming Apple transaction, callers check whether any period already
+// has that exact `transactionId` here, and skip if so; (2) every
+// `rollover` period in a chain copies forward the SAME id from the period
+// it supersedes, so it always traces back to the one Apple transaction
+// (the original purchase or the latest renewal/upgrade/crossgrade) whose
+// `apple_subscriptions` row anchors the whole paid term's validity window.
 export const allowancePeriod = sqliteTable(
   "allowance_period",
   {
@@ -499,7 +512,7 @@ export const allowancePeriod = sqliteTable(
       .notNull()
       .default(0),
     transitionReason: text("transition_reason", {
-      enum: ["initial", "upgraded", "renewed", "crossgrade", "downgraded"],
+      enum: ["initial", "upgraded", "renewed", "crossgrade", "downgraded", "rollover"],
     }),
     priorPeriodId: text("prior_period_id").references(
       (): AnySQLiteColumn => allowancePeriod.id,
@@ -509,6 +522,13 @@ export const allowancePeriod = sqliteTable(
   },
   (t) => ({
     byUser: index("allowance_period_user_id").on(t.userId),
+    // Natural monthly bucket: rollover sets periodStart = prior periodEnd,
+    // so (userId, periodStart) is the idempotency key that stops concurrent
+    // /me + entitlement-sync from double-granting the same month.
+    uniqUserPeriodStart: uniqueIndex("allowance_period_user_period_start_uniq").on(
+      t.userId,
+      t.periodStart,
+    ),
   }),
 );
 

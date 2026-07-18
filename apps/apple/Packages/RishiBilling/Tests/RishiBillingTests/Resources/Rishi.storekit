@@ -1,77 +1,181 @@
 {
-  "identifier" : "RISHI-PRO-STOREKIT-CONFIG",
-  "nonRenewingSubscriptions" : [],
-  "products" : [],
-  "settings" : {
-    "_applicationInternalID" : "1000000000",
-    "_developerTeamID" : "TBD",
-    "_failTransactionsEnabled" : false,
-    "_locale" : "en_US",
-    "_storefront" : "USA",
-    "_storeKitErrors" : []
+  "identifier": "RISHI-PRO-STOREKIT-CONFIG",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_applicationInternalID": "1000000000",
+    "_developerTeamID": "TBD",
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "USA",
+    "_storeKitErrors": []
   },
-  "subscriptionGroups" : [
+  "subscriptionGroups": [
     {
-      "id" : "rishi-pro-group",
-      "localizations" : [
-        { "description" : "Rishi Pro subscription", "displayName" : "Rishi Pro", "locale" : "en_US" }
-      ],
-      "name" : "Rishi Pro",
-      "subscriptions" : [
+      "id": "rishi-pro-group",
+      "localizations": [
         {
-          "adHocOffers" : [],
-          "codeOffers" : [],
-          "displayPrice" : "7.99",
-          "familyShareable" : false,
-          "groupNumber" : 1,
-          "internalID" : "RISHI_PRO_MONTHLY_INTERNAL",
-          "introductoryOffer" : {
-            "internalID" : "RISHI_PRO_MONTHLY_TRIAL",
-            "paymentMode" : "free",
-            "subscriptionPeriod" : "P1W",
-            "numberOfPeriods" : 1
+          "description": "Rishi Pro subscription",
+          "displayName": "Rishi Pro",
+          "locale": "en_US"
+        }
+      ],
+      "name": "Rishi Pro",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "7.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "RISHI_PRO_MONTHLY_INTERNAL",
+          "introductoryOffer": {
+            "internalID": "RISHI_PRO_MONTHLY_TRIAL",
+            "paymentMode": "free",
+            "subscriptionPeriod": "P1W",
+            "numberOfPeriods": 1
           },
-          "localizations" : [
+          "localizations": [
             {
-              "description" : "Unlimited Read Aloud, voice chat, and cross-device sync. Renews monthly. Cancel anytime.",
-              "displayName" : "Rishi Pro Monthly",
-              "locale" : "en_US"
+              "description": "Unlimited Read Aloud, voice chat, and cross-device sync. Renews monthly. Cancel anytime.",
+              "displayName": "Rishi Pro Monthly",
+              "locale": "en_US"
             }
           ],
-          "productID" : "org.fidexa.rishi.pro.monthly",
-          "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Rishi Pro Monthly",
-          "subscriptionGroupID" : "rishi-pro-group",
-          "type" : "RecurringSubscription"
+          "productID": "org.fidexa.rishi.pro.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Rishi Pro Monthly",
+          "subscriptionGroupID": "rishi-pro-group",
+          "type": "RecurringSubscription"
         },
         {
-          "adHocOffers" : [],
-          "codeOffers" : [],
-          "displayPrice" : "74.99",
-          "familyShareable" : false,
-          "groupNumber" : 2,
-          "internalID" : "RISHI_PRO_ANNUAL_INTERNAL",
-          "introductoryOffer" : {
-            "internalID" : "RISHI_PRO_ANNUAL_TRIAL",
-            "paymentMode" : "free",
-            "subscriptionPeriod" : "P1W",
-            "numberOfPeriods" : 1
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "74.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "RISHI_PRO_ANNUAL_INTERNAL",
+          "introductoryOffer": {
+            "internalID": "RISHI_PRO_ANNUAL_TRIAL",
+            "paymentMode": "free",
+            "subscriptionPeriod": "P1W",
+            "numberOfPeriods": 1
           },
-          "localizations" : [
+          "localizations": [
             {
-              "description" : "Unlimited Read Aloud, voice chat, and cross-device sync. Renews annually. Cancel anytime.",
-              "displayName" : "Rishi Pro Annual",
-              "locale" : "en_US"
+              "description": "Unlimited Read Aloud, voice chat, and cross-device sync. Renews annually. Cancel anytime.",
+              "displayName": "Rishi Pro Annual",
+              "locale": "en_US"
             }
           ],
-          "productID" : "org.fidexa.rishi.pro.annual",
-          "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Rishi Pro Annual",
-          "subscriptionGroupID" : "rishi-pro-group",
-          "type" : "RecurringSubscription"
+          "productID": "org.fidexa.rishi.pro.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Rishi Pro Annual",
+          "subscriptionGroupID": "rishi-pro-group",
+          "type": "RecurringSubscription"
+        }
+      ]
+    },
+    {
+      "id": "rishi-reader-voice-group",
+      "localizations": [
+        {
+          "description": "Rishi Reader and Rishi Voice subscriptions",
+          "displayName": "Rishi Reader & Voice",
+          "locale": "en_US"
+        }
+      ],
+      "name": "Rishi Reader & Voice",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "14.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "RISHI_VOICE_MONTHLY_INTERNAL",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "4h AI narration, 30 min Voice Chat monthly.",
+              "displayName": "Rishi Voice Monthly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.voice.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Rishi Voice Monthly",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription"
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "143.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "RISHI_VOICE_ANNUAL_INTERNAL",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "4h AI narration, 30 min Voice Chat. Billed yearly.",
+              "displayName": "Rishi Voice Annual",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.voice.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Rishi Voice Annual",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription"
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "7.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "RISHI_READER_MONTHLY_INTERNAL",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "2h AI narration, 10 min Voice Chat monthly.",
+              "displayName": "Rishi Reader Monthly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.reader.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Rishi Reader Monthly",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription"
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "76.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "RISHI_READER_ANNUAL_INTERNAL",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "2h AI narration, 10 min Voice Chat. Billed yearly.",
+              "displayName": "Rishi Reader Annual",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "org.fidexa.rishi.reader.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Rishi Reader Annual",
+          "subscriptionGroupID": "rishi-reader-voice-group",
+          "type": "RecurringSubscription"
         }
       ]
     }
   ],
-  "version" : { "major" : 4, "minor" : 0 }
+  "version": {
+    "major": 4,
+    "minor": 0
+  }
 }

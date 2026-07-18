@@ -42,12 +42,37 @@ final class VoiceSessionPresenter {
 
     private let clientFactory: @MainActor () -> any RealtimeClientAPI
     private let keyFetcherFactory: @MainActor () -> any EphemeralKeyFetching
+    private let sessionCoordinatorFactory: @MainActor () -> (any VoiceSessionCoordinating)?
+    private let controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)
 
     private var bridgeTask: Task<Void, Never>?
+
+    /// Feature flag for the no-card-credit-trial voice-session flow (session
+    /// create → WebRTC connect → call-ID registration → control WebSocket).
+    /// Both of this plan's sibling dependencies (`RealtimeAPIAdapter.providerCallId`
+    /// and `ControlWebSocketClient`) are real, landed implementations as of
+    /// this writing — this flag is a staged-rollout gate, not a
+    /// missing-dependency guard. See `2026-07-17-voice-session-flow-wiring.md`'s
+    /// "Go/no-go signal" for the recommended flip sequence (verify this
+    /// plan's own `swift test`/typecheck steps pass first, then flip to
+    /// `true` for an internal build before a general rollout).
+    /// `nonisolated` so `@Sendable` factories (control socket) can read the
+    /// flag without hopping onto MainActor. Constant, never mutated.
+    nonisolated private static let isTrialVoiceSessionFlowEnabled = true
 
     init(
         coordinator: AudioSessionCoordinator,
         workerClient: WorkerClient,
+        // Defaulted (not required) so every existing call site —
+        // `ServiceGraphFactory` (updated explicitly) and the
+        // `VoiceSessionPresenter*Tests.swift` files that construct this
+        // type directly with their own `StubTokenProvider` — keeps
+        // compiling unchanged. The default is harmless: it's only ever
+        // read by `controlSocketFactory`'s closure, which itself is a
+        // no-op when `Self.isTrialVoiceSessionFlowEnabled` is false unless a
+        // caller also overrides `controlSocketFactory`.
+        baseURL: URL = URL(string: "https://api.fidexa.org")!,
+        tokenProvider: any TokenProvider = StaticTokenProvider(nil),
         messageStore: any MessageStore,
         conversationLookup: ConversationLookup,
         userIdProvider: @escaping @MainActor () -> UserID?,
@@ -56,7 +81,9 @@ final class VoiceSessionPresenter {
         bookSearch: (any BookSearch)? = nil,
         embedderPrewarm: (@Sendable () async -> Void)? = nil,
         clientFactory: (@MainActor () -> any RealtimeClientAPI)? = nil,
-        keyFetcherFactory: (@MainActor () -> any EphemeralKeyFetching)? = nil
+        keyFetcherFactory: (@MainActor () -> any EphemeralKeyFetching)? = nil,
+        sessionCoordinatorFactory: (@MainActor () -> (any VoiceSessionCoordinating)?)? = nil,
+        controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil
     ) {
         self.state = VoiceSessionState()
         self.coordinator = coordinator
@@ -74,6 +101,18 @@ final class VoiceSessionPresenter {
             keyFetcherFactory ?? {
                 EphemeralKeyFetcher(workerClient: workerClient)
             }
+        self.sessionCoordinatorFactory = sessionCoordinatorFactory ?? {
+            Self.isTrialVoiceSessionFlowEnabled ? VoiceSessionAPIClient(workerClient: workerClient) : nil
+        }
+        self.controlSocketFactory = controlSocketFactory ?? { rishiSessionId, onTerminal in
+            guard Self.isTrialVoiceSessionFlowEnabled else { return nil }
+            return ControlWebSocketClient(
+                baseURL: baseURL,
+                tokenProvider: tokenProvider,
+                rishiSessionId: rishiSessionId,
+                onTerminal: onTerminal
+            )
+        }
     }
     func getSession()->RealtimeVoiceSession? { self.session}
 
@@ -152,6 +191,8 @@ final class VoiceSessionPresenter {
             keyFetcher: fetcher,
             client: adapter,
             state: state,
+            sessionCoordinator: sessionCoordinatorFactory(),
+            controlSocketFactory: controlSocketFactory,
             responderFactory: responderFactory,
             embedderPrewarm: embedderPrewarm
         )

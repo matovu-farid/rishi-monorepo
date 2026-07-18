@@ -1,4 +1,4 @@
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
@@ -9,14 +9,25 @@ import {
 } from "../user-usage-ledger/schema";
 import type { VoiceSessionTerminalReason } from "./messages";
 
-/** At most one row can be in `pending_registration` or `active` at a time — enforced in application code, not a constraint, since SQLite has no partial-unique-index-on-computed-set syntax this simple. */
+/**
+ * Rows that block creating a new voice session: a live session, or a
+ * terminal session whose OpenAI hangup is still unresolved (`not_started` /
+ * `pending`). Spec: the client must not start another live session that
+ * would steal this DO's single alarm until hangup resolves
+ * (`succeeded` / `failed_permanently`).
+ */
 export async function findLiveVoiceSession(
   db: DrizzleSqliteDODatabase,
 ): Promise<VoiceSessionRow | null> {
   const rows = await db
     .select()
     .from(voiceSession)
-    .where(inArray(voiceSession.status, ["pending_registration", "active"]));
+    .where(
+      sql`${voiceSession.status} IN ('pending_registration', 'active')
+          OR (${voiceSession.status} = 'terminal' AND ${voiceSession.hangupStatus} IN ('not_started', 'pending'))`,
+    )
+    .orderBy(desc(voiceSession.updatedAt))
+    .limit(1);
   return rows[0] ?? null;
 }
 

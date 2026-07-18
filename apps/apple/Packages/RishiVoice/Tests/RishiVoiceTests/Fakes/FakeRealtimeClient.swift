@@ -21,6 +21,7 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     private var _connectBookContexts: [BookContextSnapshot?] = []
     private var _connectLanguages: [String?] = []
     private var _disconnectCalls = 0
+    private var _providerCallId: String?
     private var _connectShouldThrow: Error?
 
     private var _failAllConnectsWith: Error?
@@ -77,6 +78,13 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     /// Clear the "fail all connects" mode.
     public func clearAllConnectFailures() {
         lock.withLock { _failAllConnectsWith = nil }
+    }
+
+    /// Drive the value `providerCallId` returns. Defaults to `nil` (the
+    /// "missing Location header" / not-yet-connected case) so tests must
+    /// opt in to simulating a successful capture.
+    public func setProviderCallId(_ callId: String?) {
+        lock.withLock { _providerCallId = callId }
     }
 
     /// Drive a transcript event through the fake's stream. No-op if no
@@ -167,6 +175,7 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
         ) = lock.withLock {
             _disconnectCalls += 1
             _status = .disconnected
+            _providerCallId = nil
             let e = errorContinuation; errorContinuation = nil
             let t = transcriptContinuation; transcriptContinuation = nil
             let tc = toolCallContinuation; toolCallContinuation = nil
@@ -184,6 +193,10 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
             _status = next
             return next
         }
+    }
+
+    public var providerCallId: String? {
+        lock.withLock { _providerCallId }
     }
 
     public func errorStream() -> AsyncStream<RealtimeClientError> {
