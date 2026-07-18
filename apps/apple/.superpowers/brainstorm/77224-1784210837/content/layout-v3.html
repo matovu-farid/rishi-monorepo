@@ -1,0 +1,28 @@
+<h2>Actual animated character</h2>
+<p class="subtitle">This is the supplied <code>character.svg</code> served by the companion, shown in the proposed native-aspect-ratio slot.</p>
+
+<style>
+  .voice-preview { background:#fff; border-radius:28px; padding:18px 14px 16px; min-height:560px; color:#4d5b73; display:flex; flex-direction:column; box-shadow:0 8px 28px rgba(0,0,0,.12); }
+  .voice-status { text-align:center; font:600 19px -apple-system, BlinkMacSystemFont, sans-serif; margin:4px 0 8px; }
+  .voice-status span { color:#b18b67; }
+  .voice-stage { flex:1; display:flex; align-items:center; justify-content:center; min-height:320px; }
+  .voice-stage img { width:138px; height:179px; display:block; }
+  .voice-end { border:0; border-radius:42px; background:#e52424; color:#fff; font:500 22px -apple-system, BlinkMacSystemFont, sans-serif; padding:16px; width:92%; align-self:center; }
+</style>
+
+<div class="cards">
+  <div class="card" data-choice="native-aspect" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>Reference composition</h3>
+      <div class="voice-preview">
+        <div class="voice-status"><span>●</span> Live</div>
+        <div class="voice-stage">
+          <img src="/files/character.svg" alt="Supplied animated voice character">
+        </div>
+        <button class="voice-end">☎&nbsp; End</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">Select the preview if this is the correct character and placement. The code change will use the same supplied artwork rather than the wireframe.</p>

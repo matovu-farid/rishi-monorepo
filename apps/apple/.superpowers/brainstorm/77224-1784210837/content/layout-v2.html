@@ -1,0 +1,41 @@
+<h2>Character placement</h2>
+<p class="subtitle">Self-contained preview of the intended composition: status at the top, character centered in the flexible visual area, End control anchored at the bottom.</p>
+
+<style>
+  .voice-preview { background:#fff; border-radius:28px; padding:18px 14px 16px; min-height:520px; color:#4d5b73; display:flex; flex-direction:column; box-shadow:0 8px 28px rgba(0,0,0,.12); }
+  .voice-status { text-align:center; font: 600 19px -apple-system, BlinkMacSystemFont, sans-serif; margin:4px 0 8px; }
+  .voice-status span { color:#b18b67; }
+  .voice-stage { flex:1; display:flex; align-items:center; justify-content:center; min-height:280px; }
+  .voice-character { width:138px; height:179px; animation: bob 1.2s ease-in-out infinite alternate; }
+  @keyframes bob { from { transform:translateY(0) } to { transform:translateY(-3px) } }
+  .voice-end { border:0; border-radius:42px; background:#e52424; color:#fff; font:500 22px -apple-system, BlinkMacSystemFont, sans-serif; padding:16px; width:92%; align-self:center; }
+</style>
+
+<div class="cards">
+  <div class="card" data-choice="native-aspect" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>Native aspect-ratio slot</h3>
+      <div class="voice-preview">
+        <div class="voice-status"><span>●</span> Live</div>
+        <div class="voice-stage">
+          <svg class="voice-character" viewBox="0 0 138 179" role="img" aria-label="Animated cat character">
+            <g stroke="#4b3b34" stroke-width="2.2" stroke-linejoin="round">
+              <path fill="#b17d58" d="M48 8 59 2 70 18Q92 7 111 22l14-9-2 28q8 19-4 31-12 12-39 10-26-2-32-20-6-17 0-29Z"/>
+              <path fill="#fff" d="M50 47q12 10 28 8 15-2 31-9 5 22-6 29-20 13-43 0-9-8-10-28Z"/>
+              <circle cx="73" cy="44" r="5" fill="#111"/><circle cx="101" cy="43" r="5" fill="#111"/>
+              <path fill="none" d="M82 52q4 5 8 0M86 52v6q-5 5-10 0M86 58q5 5 11 0"/>
+              <path fill="#7d4359" d="M51 77q25-11 51 0l8 45-28 12-35-12Z"/>
+              <path fill="#fff" d="M50 119h25l-3 48H48Z"/><path fill="#fff" d="M78 119h26l7 48H84Z"/>
+              <path fill="#b17d58" d="M46 165q10-5 25 1l-2 8q-15 6-28 0Z"/><path fill="#b17d58" d="M84 166q13-6 26 0l4 8q-17 5-30-1Z"/>
+              <path fill="#7d4359" d="M51 80 34 102l14 11 16-24Z"/><path fill="#b17d58" d="M103 81q13-7 21 5l-12 12-12-7Z"/>
+              <path fill="none" d="M108 111q25 1 21 22-4 12-19 3"/>
+            </g>
+          </svg>
+        </div>
+        <button class="voice-end">☎&nbsp; End</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">This preview is intentionally self-contained; it tests the spatial rule, not the artwork fidelity. Select it if this is the intended placement.</p>
