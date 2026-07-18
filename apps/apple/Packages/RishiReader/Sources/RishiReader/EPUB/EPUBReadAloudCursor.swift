@@ -72,6 +72,29 @@ final class EPUBReadAloudCursor: @unchecked Sendable {
         return Array(all[start...])
     }
 
+    /// Nearby paragraph window around progression `startIndex` for user-nav
+    /// intent matching (`start-1...start+1`, clipped). Used when a page-crossing
+    /// swipe advances progression one chunk ahead while the spoken paragraph is
+    /// still visible — matching only `.first` would miss and falsely stop.
+    static func nearbyParagraphsForUserNavigationIntent(
+        publication: Publication,
+        locator: Locator
+    ) async -> [String] {
+        guard let resource = publication.get(locator.href) else { return [] }
+        let result = await resource.read().asString(encoding: .utf8)
+        guard case .success(let html) = result else { return [] }
+        let all = ParagraphChunker.chunk(html)
+        guard !all.isEmpty else { return [] }
+        let start = ParagraphChunker.startIndex(
+            forProgression: locator.locations.progression,
+            count: all.count
+        )
+        let lo = max(0, start - 1)
+        let hi = min(all.count - 1, start + 1)
+        guard lo <= hi else { return [] }
+        return Array(all[lo...hi])
+    }
+
     /// Paragraphs for read-aloud starting at the CURRENT page rather than the
     /// resource start. Reads the resource the locator points to, chunks it via
     /// `ParagraphChunker.chunk(_:)`, and drops the paragraphs that precede the

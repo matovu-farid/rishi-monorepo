@@ -24,6 +24,11 @@ import RishiLogging
         /// Bumps on every `start` so async `didFinish` from a prior `stop()`
         /// cannot mark the new session `.stopped` before it has played.
         private var playbackGeneration = 0
+        /// Set to `playbackGeneration` when `didStart` fires for that generation.
+        private var didStartForGeneration = 0
+        private var settledGeneration = 0
+        private var pendingResult: Result<Void, Error>?
+        private var waiter: CheckedContinuation<Void, Error>?
 
         public init(streamer: TTSStreamer, state: TTSPlaybackState) {
             self.streamer = streamer
@@ -41,10 +46,10 @@ import RishiLogging
             await stop()
             playbackGeneration += 1
             let generation = playbackGeneration
+            beginGeneration(generation)
 
             // Always leave `.stopped` before returning, including cache hits.
-            // Otherwise CustomTTSEngine.waitForPlaybackToFinish treats residual
-            // `.stopped` as "utterance done" and Readium skips ahead.
+            // UI status is for controls; speak completion uses waitUntilFinished.
             let textPrefix = String(request.text.prefix(60))
                 .replacingOccurrences(of: "\n", with: " ")
             await MainActor.run {
@@ -94,6 +99,52 @@ import RishiLogging
             monitorTask?.cancel()
             monitorTask = nil
             player.stop()
+            settle(.failure(CancellationError()), generation: playbackGeneration)
+        }
+
+        public func waitUntilFinished() async throws {
+            if let pending = pendingResult {
+                pendingResult = nil
+                try pending.get()
+                return
+            }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if let existing = waiter {
+                    waiter = continuation
+                    existing.resume(throwing: CancellationError())
+                    return
+                }
+                if let pending = pendingResult {
+                    pendingResult = nil
+                    continuation.resume(with: pending)
+                    return
+                }
+                waiter = continuation
+            }
+        }
+
+        private func beginGeneration(_ generation: Int) {
+            didStartForGeneration = 0
+            pendingResult = nil
+            if let existing = waiter {
+                waiter = nil
+                existing.resume(throwing: CancellationError())
+            }
+            // settledGeneration stays; settle guards on generation match.
+            _ = generation
+        }
+
+        private func settle(_ result: Result<Void, Error>, generation: Int) {
+            guard generation == playbackGeneration else { return }
+            guard settledGeneration != generation else { return }
+            settledGeneration = generation
+            if let waiter {
+                self.waiter = nil
+                pendingResult = nil
+                waiter.resume(with: result)
+            } else {
+                pendingResult = result
+            }
         }
 
         private func makeAudioStream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
@@ -167,6 +218,7 @@ import RishiLogging
                 ])
                 return
             }
+            didStartForGeneration = generation
             await MainActor.run {
                 // Do not clobber a failure that already won the race.
                 guard state.status != .error else { return }
@@ -199,6 +251,14 @@ import RishiLogging
                 "generation": String(generation),
                 "textPrefix": textPrefix,
             ])
+            if didStartForGeneration == generation {
+                settle(.success(()), generation: generation)
+            } else {
+                settle(
+                    .failure(TTSEnginePlaybackError.finishedWithoutPlaying),
+                    generation: generation
+                )
+            }
         }
 
         private func markFailed(message: String?, generation: Int) async {
@@ -216,6 +276,10 @@ import RishiLogging
                 "tts.player.failed",
                 level: .error,
                 data: ["error": text]
+            )
+            settle(
+                .failure(TTSEnginePlaybackError.playbackFailed(text)),
+                generation: generation
             )
         }
     }

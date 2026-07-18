@@ -16,4 +16,9 @@ public protocol TTSPlaying: Sendable {
     func pause() async
     func resume() async
     func stop() async
+    /// Waits until the latest `start` completes successfully or fails.
+    /// - Success only if playback actually started (`didStart`) then finished.
+    /// - Throws on failure, stop, or finish-without-start.
+    /// - Safe if finish happens before this call (pending result).
+    func waitUntilFinished() async throws
 }

@@ -4,7 +4,7 @@ import Foundation
 import RishiSettings
 
 @MainActor
-@Suite("AppVoiceDefaults.language")
+@Suite("AppReaderDefaults.voiceLanguage")
 struct AppVoiceDefaultsLanguageTests {
 
     private func makeSuite() -> (UserDefaults, String) {
@@ -18,8 +18,8 @@ struct AppVoiceDefaultsLanguageTests {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }
 
-        let prefs = AppVoiceDefaults(defaults: defaults)
-        #expect(prefs.language == .english)
+        let prefs = AppReaderDefaults(defaults: defaults)
+        #expect(prefs.voiceLanguage == .english)
     }
 
     @Test("explicit selection persists and round-trips")
@@ -27,10 +27,10 @@ struct AppVoiceDefaultsLanguageTests {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }
 
-        let prefs = AppVoiceDefaults(defaults: defaults)
-        prefs.language = .spanish
+        let prefs = AppReaderDefaults(defaults: defaults)
+        prefs.voiceLanguage = .spanish
 
-        #expect(prefs.language == .spanish)
-        #expect(defaults.string(forKey: "voice.defaults.language") == VoiceLanguageOption.spanish.rawValue)
+        #expect(prefs.voiceLanguage == .spanish)
+        #expect(defaults.string(forKey: "voice.language") == VoiceLanguageOption.spanish.rawValue)
     }
 }

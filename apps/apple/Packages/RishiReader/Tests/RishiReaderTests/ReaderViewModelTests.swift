@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import PDFKit
 import ReadiumShared
 import RishiCore
 import RishiTesting
@@ -309,6 +310,40 @@ struct ReaderViewModelTests {
                 break
             }
         }
+
+        #expect(extracted != nil)
+        #expect(extracted == expected)
+    }
+
+    @Test("firstParagraphForPageEntryPrefetch extracts PDF page text via PDFReadAloudParagraphs")
+    func firstParagraphForPageEntryPrefetchUsesPDFPage() async throws {
+        let url = try #require(Bundle.module.url(forResource: "sample", withExtension: "pdf"))
+        let store = InMemoryPositionStore()
+        let book = Book(
+            userId: UUID(),
+            title: "Sample",
+            formatType: .pdf,
+            fileURL: "Books/x/sample.pdf"
+        )
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let href = try #require(RelativeURL(path: "publication.pdf"))
+        let locator = Locator(
+            href: href,
+            mediaType: .pdf,
+            locations: Locator.Locations(page: 1)
+        )
+        let extracted = await vm.firstParagraphForPageEntryPrefetch(at: locator)
+        let expected = PDFReadAloudParagraphs.paragraphs(
+            from: try #require(PDFDocument(url: url)?.page(at: 0))
+        ).first
 
         #expect(extracted != nil)
         #expect(extracted == expected)

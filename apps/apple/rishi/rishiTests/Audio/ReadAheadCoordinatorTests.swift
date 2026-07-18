@@ -26,12 +26,10 @@ struct ReadAheadCoordinatorTests {
     actor RecordingChunkSource: TTSChunkSource {
         private(set) var requested: [TTSStreamRequest] = []
 
-        nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
-            Task { await self.append(request) }
+        func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+            requested.append(request)
             return AsyncThrowingStream { $0.finish() }
         }
-
-        private func append(_ request: TTSStreamRequest) { requested.append(request) }
 
         func snapshot() -> [TTSStreamRequest] { requested }
     }

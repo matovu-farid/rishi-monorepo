@@ -4,6 +4,7 @@ import Foundation
 import RishiAudio
 import RishiChat
 import RishiCore
+import RishiReader
 import RishiSettings
 import RishiVoice
 
@@ -92,7 +93,7 @@ struct ReaderVoiceEntryLanguageTests {
         let fakeClient = FakeClient()
         let keyFetcher = RecordingKeyFetcher()
         let userId = UUID()
-        let presenter = VoiceSessionPresenter(
+        let presenter = rishi.VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: WorkerClient(
                 baseURL: URL(string: "https://example.invalid")!,

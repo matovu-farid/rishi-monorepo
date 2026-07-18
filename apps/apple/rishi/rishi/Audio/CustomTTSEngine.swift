@@ -37,11 +37,29 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
         _ utterance: TTSUtterance,
         onSpeakRange: @escaping (Range<String.Index>) -> Void
     ) async -> Result<Void, TTSError> {
+        // Readium's TTSUtterance has no public initializer; tests call the
+        // component overload below. Production still enters through this path.
+        await speak(
+            text: utterance.text,
+            delay: utterance.delay,
+            voiceOrLanguage: utterance.voiceOrLanguage,
+            onSpeakRange: onSpeakRange
+        )
+    }
+
+    /// Speak entry that does not require constructing Readium's `TTSUtterance`
+    /// (memberwise init is internal to ReadiumNavigator).
+    func speak(
+        text: String,
+        delay: TimeInterval,
+        voiceOrLanguage: Either<TTSVoice, Language>,
+        onSpeakRange: @escaping (Range<String.Index>) -> Void
+    ) async -> Result<Void, TTSError> {
         do {
             try Task.checkCancellation()
 
             let voice: TTSVoice
-            switch utterance.voiceOrLanguage {
+            switch voiceOrLanguage {
             case let .left(requestedVoice):
                 voice = requestedVoice
             case let .right(language):
@@ -55,9 +73,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
                 voice = matchingVoice
             }
 
-            if utterance.delay > 0 {
+            if delay > 0 {
                 try await Task.sleep(
-                    nanoseconds: UInt64(utterance.delay * 1_000_000_000)
+                    nanoseconds: UInt64(delay * 1_000_000_000)
                 )
             }
 
@@ -65,9 +83,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
 
             // The remote stream does not expose word-level timing. Mark the
             // whole Readium paragraph active while its audio is playing.
-            onSpeakRange(utterance.text.startIndex..<utterance.text.endIndex)
+            onSpeakRange(text.startIndex..<text.endIndex)
 
-            let textPrefix = String(utterance.text.prefix(80))
+            let textPrefix = String(text.prefix(80))
                 .replacingOccurrences(of: "\n", with: " ")
             let startedAt = ContinuousClock.now
             let statusAtSpeakEntry = await MainActor.run { state.status.rawValue }
@@ -75,9 +93,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
             // Worker rejects text above TTS_MAX_CHARS_PER_REQUEST. Long EPUB
             // paragraphs must be split or play fails with http_400 and used
             // to advance as if the utterance succeeded.
-            let pieces = Self.requestPieces(for: utterance.text)
+            let pieces = Self.requestPieces(for: text)
             Log.event("tts.readaloud.speak.begin", data: [
-                "textLen": String(utterance.text.count),
+                "textLen": String(text.count),
                 "textPrefix": textPrefix,
                 "statusAtEntry": statusAtSpeakEntry,
                 "pieceCount": String(pieces.count),
@@ -100,10 +118,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
                         "textPrefix": piecePrefix,
                     ])
                     await player.start(request: request)
-                    try await waitForPlaybackToFinish(
-                        textPrefix: piecePrefix,
-                        startedAt: ContinuousClock.now
-                    )
+                    try await player.waitUntilFinished()
                 }
             } onCancel: {
                 Task { await player.stop() }
@@ -112,7 +127,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
             let elapsedMs = Int(startedAt.duration(to: .now) / .milliseconds(1))
             let statusAtEnd = await MainActor.run { state.status.rawValue }
             Log.event("tts.readaloud.speak.end", data: [
-                "textLen": String(utterance.text.count),
+                "textLen": String(text.count),
                 "textPrefix": textPrefix,
                 "elapsedMs": String(elapsedMs),
                 "statusAtEnd": statusAtEnd,
@@ -140,69 +155,6 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
         return pieces.isEmpty ? [text] : pieces
     }
 
-    private func waitForPlaybackToFinish(
-        textPrefix: String,
-        startedAt: ContinuousClock.Instant
-    ) async throws {
-        // Ignore residual `.stopped` from a prior utterance (cache-hit starts
-        // used to leave status uncleared). Only treat `.stopped` as completion
-        // after this utterance has been observed as `.loading` / `.playing`.
-        //
-        // WARNING: ReadAloudController also writes `.playing` onto this same
-        // state when the synthesizer starts an utterance (before audio), so
-        // hasStarted can become true from the synthesizer, not the engine.
-        var hasStarted = false
-        var sawEngineLoading = false
-        var sawEnginePlaying = false
-        while true {
-            try Task.checkCancellation()
-
-            let snapshot = await MainActor.run {
-                (state.status, state.error)
-            }
-            switch snapshot.0 {
-            case .loading:
-                hasStarted = true
-                sawEngineLoading = true
-                try await Task.sleep(nanoseconds: 50_000_000)
-            case .playing:
-                hasStarted = true
-                sawEnginePlaying = true
-                try await Task.sleep(nanoseconds: 50_000_000)
-            case .stopped:
-                if hasStarted {
-                    // Stream/player failures can briefly land on `.stopped`
-                    // before `.error`. Never treat a failed utterance as success.
-                    if let error = snapshot.1, !error.isEmpty {
-                        throw RemoteTTSError(message: error)
-                    }
-                    // Ended during loading without ever playing — almost always
-                    // an empty/failed stream. Advancing would skip the paragraph.
-                    if sawEngineLoading && !sawEnginePlaying {
-                        throw RemoteTTSError(
-                            message: "TTS ended before playback started"
-                        )
-                    }
-                    let elapsedMs = Int(startedAt.duration(to: .now) / .milliseconds(1))
-                    Log.event("tts.readaloud.speak.stopped", data: [
-                        "textPrefix": textPrefix,
-                        "elapsedMs": String(elapsedMs),
-                        "sawLoading": sawEngineLoading ? "1" : "0",
-                        "sawPlaying": sawEnginePlaying ? "1" : "0",
-                    ])
-                    return
-                }
-                try await Task.sleep(nanoseconds: 50_000_000)
-            case .error:
-                throw RemoteTTSError(
-                    message: snapshot.1 ?? "Remote TTS playback failed"
-                )
-            case .idle, .paused:
-                try await Task.sleep(nanoseconds: 50_000_000)
-            }
-        }
-    }
-
     private static let defaultVoices: [TTSVoice] = VoiceCatalog.all.map { identifier in
         TTSVoice(
             identifier: identifier,
@@ -212,10 +164,4 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
             quality: .high
         )
     }
-}
-
-private struct RemoteTTSError: Error, CustomStringConvertible {
-    let message: String
-
-    var description: String { message }
 }

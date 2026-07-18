@@ -36,6 +36,13 @@ final class ReadAloudController {
     /// Monotonic utterance counter for skip diagnostics (`tts.readaloud.utterance`).
     private var utteranceSeq = 0
     private var lastLoggedUtteranceText: String?
+    /// At most one credit-consuming page-follow per spoken utterance.
+    private var followCreditRemaining = 0
+    private var navigationIntentGeneration: UInt64 = 0
+    /// Test seam: force `isActivelySpeaking` without a live synthesizer.
+    #if DEBUG
+    private var testSpeakingOverride = false
+    #endif
 
     init(
         ttsEngine: any TTSPlaying,
@@ -99,6 +106,10 @@ final class ReadAloudController {
         paragraphs = []
         utteranceSeq = 0
         lastLoggedUtteranceText = nil
+        followCreditRemaining = 0
+        #if DEBUG
+        testSpeakingOverride = false
+        #endif
         showControls = true
 
         await ttsPresence.beginSession(
@@ -123,6 +134,10 @@ final class ReadAloudController {
 
     func stop() async {
         isPageEntryPrefetchEligible = true
+        followCreditRemaining = 0
+        #if DEBUG
+        testSpeakingOverride = false
+        #endif
         await stopCurrentPlayback()
         await ttsPresence.endSession()
         showControls = false
@@ -131,6 +146,109 @@ final class ReadAloudController {
         currentParagraph = nil
         currentLocator = nil
     }
+
+    /// Whether speech is in flight (Readium utterance or legacy bridge).
+    /// Used for page-turn intent: only then can a swipe mean "follow paragraph".
+    var isActivelySpeaking: Bool {
+        #if DEBUG
+        if testSpeakingOverride { return true }
+        #endif
+        if case .playing = readiumState { return true }
+        if bridge != nil, ttsState.status == .playing { return true }
+        return false
+    }
+
+    /// Starts a user-navigation intent and snapshots spoken state for that swipe.
+    @discardableResult
+    func beginUserNavigationIntent() -> ReadAloudUserNavigationSnapshot {
+        navigationIntentGeneration &+= 1
+        return ReadAloudUserNavigationSnapshot(
+            generation: navigationIntentGeneration,
+            isActivelySpeaking: isActivelySpeaking,
+            spokenParagraph: currentParagraph,
+            spokenPage: currentLocator?.locations.page,
+            followCreditRemaining: followCreditRemaining
+        )
+    }
+
+    /// Resolves page-turn intent for `snapshot.generation`. Returns `nil` when superseded.
+    func resolveUserNavigationIntent(
+        snapshot: ReadAloudUserNavigationSnapshot,
+        destinationParagraphs: [String],
+        destinationPage: Int?
+    ) -> ReadAloudUserNavigationIntent? {
+        guard snapshot.generation == navigationIntentGeneration else {
+            Log.event("tts.nav.intent", data: [
+                "generation": String(snapshot.generation),
+                "result": "stale",
+                "creditAfter": String(followCreditRemaining),
+            ])
+            return nil
+        }
+        let intent = ReadAloudUserNavigationIntent.resolve(
+            isActivelySpeaking: snapshot.isActivelySpeaking,
+            spokenParagraph: snapshot.spokenParagraph,
+            destinationParagraphs: destinationParagraphs,
+            spokenPage: snapshot.spokenPage,
+            destinationPage: destinationPage,
+            followCreditRemaining: snapshot.followCreditRemaining
+        )
+        switch intent {
+        case .continuePlaying(consumesFollowCredit: true):
+            // Only burn credit belonging to the snapshotted utterance. If the
+            // utterance advanced during extract, live credit was refilled for
+            // the new text — leave it alone.
+            if lastLoggedUtteranceText == snapshot.spokenParagraph {
+                followCreditRemaining = max(0, followCreditRemaining - 1)
+            }
+            Log.event("tts.nav.intent", data: [
+                "generation": String(snapshot.generation),
+                "result": "continue_consume",
+                "creditAfter": String(followCreditRemaining),
+            ])
+        case .continuePlaying(consumesFollowCredit: false):
+            Log.event("tts.nav.intent", data: [
+                "generation": String(snapshot.generation),
+                "result": "continue_same_page",
+                "creditAfter": String(followCreditRemaining),
+            ])
+        case .stopPlaying:
+            Log.event("tts.nav.intent", data: [
+                "generation": String(snapshot.generation),
+                "result": "stop",
+                "creditAfter": String(followCreditRemaining),
+            ])
+        }
+        return intent
+    }
+
+    #if DEBUG
+    /// Test setup: speaking + paragraph/page + `followCreditRemaining = 1`.
+    func simulateSpeakingForTests(paragraph: String, page: Int? = nil) {
+        currentParagraph = paragraph
+        lastLoggedUtteranceText = paragraph
+        followCreditRemaining = 1
+        testSpeakingOverride = true
+        if let page, let href = RelativeURL(path: "publication.pdf") {
+            currentLocator = Locator(
+                href: href,
+                mediaType: .pdf,
+                locations: Locator.Locations(fragments: ["page=\(page)"])
+            )
+        } else {
+            currentLocator = nil
+        }
+    }
+
+    /// Production-equivalent: refill credit only if `text` != last spoken utterance text.
+    func notifyUtterancePlayingForTests(text: String) {
+        currentParagraph = text
+        testSpeakingOverride = true
+        guard text != lastLoggedUtteranceText else { return }
+        lastLoggedUtteranceText = text
+        followCreditRemaining = 1
+    }
+    #endif
 
     func togglePlayback() async {
         if let readiumSynthesizer {
@@ -287,6 +405,10 @@ final class ReadAloudController {
         readiumSynthesizer?.stop()
         readiumSynthesizer = nil
         readiumState = .stopped
+        followCreditRemaining = 0
+        #if DEBUG
+        testSpeakingOverride = false
+        #endif
         ttsState.update(status: .stopped)
     }
 }
@@ -302,6 +424,10 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         switch state {
         case .stopped:
             isPageEntryPrefetchEligible = true
+            followCreditRemaining = 0
+            #if DEBUG
+            testSpeakingOverride = false
+            #endif
             currentParagraph = nil
             currentLocator = nil
             ttsState.update(status: .stopped)
@@ -314,10 +440,8 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
             isPageEntryPrefetchEligible = false
             currentLocator = range ?? utterance.locator
             currentParagraph = utterance.text
-            // NOTE: This writes the same TTSPlaybackState CustomTTSEngine waits
-            // on. Synthesizer `.playing` can arrive before the audio engine
-            // starts — keep this update, but utterance-order logs ignore
-            // range-only repeats so we can detect real skips.
+            // UI only: synthesizer lifecycle mirrors into ttsState for controls.
+            // CustomTTSEngine completion uses TTSPlaying.waitUntilFinished — not this field.
             ttsState.update(status: .playing)
             logUtteranceIfNew(utterance)
             if let publication = readiumPublication {
@@ -333,6 +457,7 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
     private func logUtteranceIfNew(_ utterance: PublicationSpeechSynthesizer.Utterance) {
         guard utterance.text != lastLoggedUtteranceText else { return }
         lastLoggedUtteranceText = utterance.text
+        followCreditRemaining = 1
         let seq = utteranceSeq
         utteranceSeq += 1
         let prefix = String(utterance.text.prefix(80))

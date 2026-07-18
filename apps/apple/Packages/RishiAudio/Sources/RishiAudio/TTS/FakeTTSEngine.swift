@@ -16,9 +16,9 @@ import os
 /// `(status == .stopped, currentPassageId == targetId)`.
 ///
 /// `@unchecked Sendable` justified: the only mutable state is the ordered call
-/// log, guarded by an `OSAllocatedUnfairLock` (mirrors `FakeAudioEngine`). All
-/// `TTSPlaybackState` mutation hops to `@MainActor` since the state object is
-/// main-actor-isolated.
+/// log and waiter box, guarded by an `OSAllocatedUnfairLock` (mirrors
+/// `FakeAudioEngine`). All `TTSPlaybackState` mutation hops to `@MainActor`
+/// since the state object is main-actor-isolated.
 public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
 
     /// Ordered call log so plan 29-03 can assert call ordering (e.g. "old
@@ -60,6 +60,7 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
     private let scriptsByPassageId: [String: Script]
 
     private let lock = OSAllocatedUnfairLock(initialState: [Call]())
+    private let waiterBox = OSAllocatedUnfairLock(initialState: WaiterBox())
 
     public init(state: TTSPlaybackState, script: Script = .normal) {
         self.state = state
@@ -100,6 +101,10 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
 
     public func start(request: TTSStreamRequest) async {
         append(.start(passageId: request.passageId))
+        // Supersede any prior waiter before scripting a new lifecycle.
+        failWaiterIfAny(CancellationError())
+        clearPending()
+
         let observable = state
         let passageId = request.passageId
         switch script(for: passageId) {
@@ -116,17 +121,20 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
                 observable.update(status: .stopped)
                 // currentPassageId intentionally left SET through .stopped.
             }
+            settle(.success(()))
         case .prewarmedFast:
             await MainActor.run {
                 observable.update(status: .stopped)
                 observable.currentPassageId = passageId
                 observable.error = nil
             }
+            settle(.failure(TTSEnginePlaybackError.finishedWithoutPlaying))
         case .error:
             await MainActor.run {
                 observable.update(status: .error)
                 observable.error = "FakeTTSEngine scripted error"
             }
+            settle(.failure(TTSEnginePlaybackError.playbackFailed("FakeTTSEngine scripted error")))
         case .holds:
             await MainActor.run {
                 observable.update(status: .loading)
@@ -138,6 +146,7 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
                 // Intentionally never transitions to .stopped: the advance
                 // watcher waits, so only explicit next()/previous() move the head.
             }
+            // Do not settle until stop().
         }
     }
 
@@ -157,5 +166,80 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
         append(.stop)
         let observable = state
         await MainActor.run { observable.update(status: .stopped) }
+        settle(.failure(CancellationError()))
+    }
+
+    public func waitUntilFinished() async throws {
+        if let pending = takePending() {
+            try pending.get()
+            return
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let action = waiterBox.withLock { box -> WaiterInstall in
+                if let pending = box.pendingResult {
+                    box.pendingResult = nil
+                    return .resumeNow(pending)
+                }
+                if let existing = box.waiter {
+                    box.waiter = continuation
+                    return .replace(existing)
+                }
+                box.waiter = continuation
+                return .installed
+            }
+            switch action {
+            case .resumeNow(let result):
+                continuation.resume(with: result)
+            case .replace(let existing):
+                existing.resume(throwing: CancellationError())
+            case .installed:
+                break
+            }
+        }
+    }
+
+    private func settle(_ result: Result<Void, Error>) {
+        let toResume: CheckedContinuation<Void, Error>? = waiterBox.withLock { box in
+            if let waiter = box.waiter {
+                box.waiter = nil
+                box.pendingResult = nil
+                return waiter
+            }
+            box.pendingResult = result
+            return nil
+        }
+        toResume?.resume(with: result)
+    }
+
+    private func failWaiterIfAny(_ error: Error) {
+        let toResume: CheckedContinuation<Void, Error>? = waiterBox.withLock { box in
+            let waiter = box.waiter
+            box.waiter = nil
+            return waiter
+        }
+        toResume?.resume(throwing: error)
+    }
+
+    private func clearPending() {
+        waiterBox.withLock { $0.pendingResult = nil }
+    }
+
+    private func takePending() -> Result<Void, Error>? {
+        waiterBox.withLock { box in
+            let pending = box.pendingResult
+            box.pendingResult = nil
+            return pending
+        }
+    }
+
+    private struct WaiterBox {
+        var pendingResult: Result<Void, Error>?
+        var waiter: CheckedContinuation<Void, Error>?
+    }
+
+    private enum WaiterInstall {
+        case resumeNow(Result<Void, Error>)
+        case replace(CheckedContinuation<Void, Error>)
+        case installed
     }
 }

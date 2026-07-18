@@ -34,17 +34,16 @@ struct CustomTTSEngineTests {
             userId: userId,
             voices: [englishVoice]
         )
-        let utterance = TTSUtterance(
-            text: "A remote paragraph.",
+        let text = "A remote paragraph."
+        let result = await engine.speak(
+            text: text,
             delay: 0,
             voiceOrLanguage: .left(englishVoice)
-        )
-
-        let result = await engine.speak(utterance) { _ in }
+        ) { _ in }
         let request = await player.request
 
         #expect(result.isSuccess)
-        #expect(request?.text == utterance.text)
+        #expect(request?.text == text)
         #expect(request?.voice == englishVoice.identifier)
         #expect(request?.model == "custom-model")
         #expect(request?.speed == 1.25)
@@ -61,13 +60,11 @@ struct CustomTTSEngineTests {
             userId: UserID(),
             voices: [englishVoice]
         )
-        let utterance = TTSUtterance(
+        let result = await engine.speak(
             text: "Bonjour.",
             delay: 0,
             voiceOrLanguage: .right(Language("fr"))
-        )
-
-        let result = await engine.speak(utterance) { _ in }
+        ) { _ in }
 
         guard case let .failure(.languageNotSupported(language, _)) = result else {
             Issue.record("Expected a languageNotSupported error, got \(result)")
@@ -89,15 +86,13 @@ struct CustomTTSEngineTests {
             userId: UserID(),
             voices: [englishVoice]
         )
-        let utterance = TTSUtterance(
-            text: "Next prefetched paragraph.",
-            delay: 0,
-            voiceOrLanguage: .left(englishVoice)
-        )
-
         let completion = SpeakCompletionFlag()
         let speakTask = Task {
-            let result = await engine.speak(utterance) { _ in }
+            let result = await engine.speak(
+                text: "Next prefetched paragraph.",
+                delay: 0,
+                voiceOrLanguage: .left(englishVoice)
+            ) { _ in }
             await completion.markDone()
             return result
         }
@@ -112,6 +107,28 @@ struct CustomTTSEngineTests {
         #expect(await completion.isDone() == true)
         #expect(result.isSuccess)
     }
+
+    @Test("speak fails when engine reports finish without play even if ttsState was .playing")
+    func speakFailsWhenEngineRejectsFinishWithoutPlay() async {
+        let state = TTSPlaybackState()
+        state.update(status: .playing) // dual-writer already stamped
+        let engine = CustomTTSEngine(
+            player: FinishWithoutPlayPlayer(state: state),
+            state: state,
+            settingsStore: InMemoryTTSSettingsStore(),
+            userId: UserID(),
+            voices: [englishVoice]
+        )
+        let result = await engine.speak(
+            text: "Must not advance.",
+            delay: 0,
+            voiceOrLanguage: .left(englishVoice)
+        ) { _ in }
+        guard case .failure = result else {
+            Issue.record("Expected failure so Readium does not playNextUtterance")
+            return
+        }
+    }
 }
 
 private actor SpeakCompletionFlag {
@@ -124,6 +141,8 @@ private actor SpeakCompletionFlag {
 private actor RecordingTTSPlayer: TTSPlaying {
     let state: TTSPlaybackState
     private(set) var request: TTSStreamRequest?
+    private var pendingResult: Result<Void, Error>?
+    private var waiter: CheckedContinuation<Void, Error>?
 
     init(state: TTSPlaybackState) {
         self.state = state
@@ -136,11 +155,40 @@ private actor RecordingTTSPlayer: TTSPlaying {
             state.update(status: .playing)
             state.update(status: .stopped)
         }
+        settle(.success(()))
+    }
+
+    func waitUntilFinished() async throws {
+        if let pending = pendingResult {
+            pendingResult = nil
+            try pending.get()
+            return
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            if let pending = pendingResult {
+                pendingResult = nil
+                continuation.resume(with: pending)
+                return
+            }
+            waiter = continuation
+        }
     }
 
     func pause() async {}
     func resume() async {}
-    func stop() async {}
+    func stop() async {
+        settle(.failure(CancellationError()))
+    }
+
+    private func settle(_ result: Result<Void, Error>) {
+        if let waiter {
+            self.waiter = nil
+            pendingResult = nil
+            waiter.resume(with: result)
+        } else {
+            pendingResult = result
+        }
+    }
 }
 
 /// Reproduces the cache-hit race: `start` leaves residual `.stopped` uncleared
@@ -148,6 +196,8 @@ private actor RecordingTTSPlayer: TTSPlaying {
 private actor CacheHitRaceTTSPlayer: TTSPlaying {
     let state: TTSPlaybackState
     private(set) var startCount = 0
+    private var pendingResult: Result<Void, Error>?
+    private var waiter: CheckedContinuation<Void, Error>?
 
     init(state: TTSPlaybackState) {
         self.state = state
@@ -156,6 +206,7 @@ private actor CacheHitRaceTTSPlayer: TTSPlaying {
     func start(request: TTSStreamRequest) async {
         startCount += 1
         // Intentionally do not clear `.stopped` — old cache-hit behavior.
+        // Completion is deferred until finishPlayback().
     }
 
     func finishPlayback() async {
@@ -164,6 +215,61 @@ private actor CacheHitRaceTTSPlayer: TTSPlaying {
             state.update(status: .playing)
             state.update(status: .stopped)
         }
+        settle(.success(()))
+    }
+
+    func waitUntilFinished() async throws {
+        if let pending = pendingResult {
+            pendingResult = nil
+            try pending.get()
+            return
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            if let pending = pendingResult {
+                pendingResult = nil
+                continuation.resume(with: pending)
+                return
+            }
+            waiter = continuation
+        }
+    }
+
+    func pause() async {}
+    func resume() async {}
+    func stop() async {
+        settle(.failure(CancellationError()))
+    }
+
+    private func settle(_ result: Result<Void, Error>) {
+        if let waiter {
+            self.waiter = nil
+            pendingResult = nil
+            waiter.resume(with: result)
+        } else {
+            pendingResult = result
+        }
+    }
+}
+
+private actor FinishWithoutPlayPlayer: TTSPlaying {
+    let state: TTSPlaybackState
+    init(state: TTSPlaybackState) { self.state = state }
+
+    func start(request: TTSStreamRequest) async {
+        // Mimic synthesizer dual-write contamination on shared UI state:
+        await MainActor.run {
+            state.update(status: .playing) // synthesizer stamp
+            state.update(status: .stopped) // empty finish
+        }
+    }
+
+    func waitUntilFinished() async throws {
+        // Engine contract: no didStart → failure (do not inspect state.status)
+        throw NSError(
+            domain: "TTSEnginePlayback",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "finished without playing"]
+        )
     }
 
     func pause() async {}

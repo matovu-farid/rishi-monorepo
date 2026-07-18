@@ -33,7 +33,7 @@ struct ReaderTTSBridgeSeamSmokeTests {
     
     
     private struct NoopChunkSource: TTSChunkSource {
-        func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
             AsyncThrowingStream { $0.finish() }
         }
     }

@@ -9,6 +9,9 @@ import Testing
 @MainActor
 struct ReadAloudControllerTests {
 
+    private let testBookID = "test-book"
+    private let testMetadata = NowPlayingMetadata(title: "Test Book")
+
     private func makeController(
         script: FakeTTSEngine.Script = .holds,
         source: any TTSChunkSource = ControllerNoopChunkSource()
@@ -19,14 +22,34 @@ struct ReadAloudControllerTests {
         let prewarmer = TTSPrewarmer(source: source)
         let configurer = FakeAudioSessionConfigurator()
         let coordinator = AudioSessionCoordinator(configurator: configurer)
+        let presence = rishi.TTSPresenceController(
+            state: state,
+            store: ControllerNoopPresenceStore()
+        )
         let userId = UserID()
         return ReadAloudController(
             ttsEngine: engine,
             ttsState: state,
             ttsSettingsStore: settingsStore,
             ttsPrewarmer: prewarmer,
+            ttsPresence: presence,
             coordidator: coordinator,
             userId: userId
+        )
+    }
+
+    private func start(
+        _ controller: ReadAloudController,
+        paragraphs: [String],
+        onPassageChange: @escaping (Int?) -> Void = { _ in },
+        onParagraphsExhausted: @escaping () async -> [String] = { [] }
+    ) async {
+        await controller.start(
+            paragraphs: paragraphs,
+            bookID: testBookID,
+            metadata: testMetadata,
+            onPassageChange: onPassageChange,
+            onParagraphsExhausted: onParagraphsExhausted
         )
     }
 
@@ -34,10 +57,7 @@ struct ReadAloudControllerTests {
     func paragraphsAndBridgeSetAfterStart() async {
         let controller = makeController()
 
-        await controller.start(
-            paragraphs: ["alpha", "bravo", "charlie"],
-            onPassageChange: { _ in }
-        )
+        await start(controller, paragraphs: ["alpha", "bravo", "charlie"])
 
         #expect(controller.paragraphs == ["alpha", "bravo", "charlie"])
         #expect(controller.bridge != nil)
@@ -52,10 +72,7 @@ struct ReadAloudControllerTests {
     func stopClearsState() async {
         let controller = makeController()
 
-        await controller.start(
-            paragraphs: ["one", "two"],
-            onPassageChange: { _ in }
-        )
+        await start(controller, paragraphs: ["one", "two"])
         #expect(controller.paragraphs.count == 2)
 
         await controller.stop()
@@ -71,7 +88,7 @@ struct ReadAloudControllerTests {
     func emptyParagraphListSkipsStart() async {
         let controller = makeController()
 
-        await controller.start(paragraphs: [], onPassageChange: { _ in })
+        await start(controller, paragraphs: [])
 
         #expect(controller.bridge == nil)
         #expect(controller.showControls == false)
@@ -82,10 +99,7 @@ struct ReadAloudControllerTests {
     func passageChangeInRangeSetsParagraph() async {
         let controller = makeController()
 
-        await controller.start(
-            paragraphs: ["alpha", "bravo", "charlie"],
-            onPassageChange: { _ in }
-        )
+        await start(controller, paragraphs: ["alpha", "bravo", "charlie"])
 
         controller.updateCurrentParagraph(for: 1)
 
@@ -98,10 +112,7 @@ struct ReadAloudControllerTests {
     func passageChangeOutOfRangeClearsParagraph() async {
         let controller = makeController()
 
-        await controller.start(
-            paragraphs: ["alpha", "bravo"],
-            onPassageChange: { _ in }
-        )
+        await start(controller, paragraphs: ["alpha", "bravo"])
 
         controller.updateCurrentParagraph(for: 0)
         #expect(controller.currentParagraph == "alpha")
@@ -116,7 +127,7 @@ struct ReadAloudControllerTests {
     func passageChangeNilClearsParagraph() async {
         let controller = makeController()
 
-        await controller.start(paragraphs: ["alpha"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["alpha"])
         controller.updateCurrentParagraph(for: 0)
         #expect(controller.currentParagraph == "alpha")
 
@@ -132,7 +143,8 @@ struct ReadAloudControllerTests {
     func passageChangeClosure_setsParagraph() async {
         let controller = makeController()
 
-        await controller.start(
+        await start(
+            controller,
             paragraphs: ["alpha", "bravo"],
             onPassageChange: { [weak controller] index in
                 controller?.updateCurrentParagraph(for: index)
@@ -151,7 +163,7 @@ struct ReadAloudControllerTests {
     func pickerInitialMatchesDefault() async {
         let controller = makeController()
 
-        await controller.start(paragraphs: ["x"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["x"])
 
         #expect(controller.pickerInitial == TTSSettings.default)
 
@@ -164,10 +176,10 @@ struct ReadAloudControllerTests {
     func doubleStartTearDownsFirst() async {
         let controller = makeController()
 
-        await controller.start(paragraphs: ["alpha"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["alpha"])
         let firstBridge = controller.bridge
 
-        await controller.start(paragraphs: ["bravo"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["bravo"])
         let secondBridge = controller.bridge
 
         #expect(secondBridge != nil)
@@ -193,7 +205,7 @@ struct ReadAloudControllerTests {
     func pageEntryPrefetchWarmsOneParagraph() async {
         let source = ControllerRecordingChunkSource()
         let controller = makeController(source: source)
-        await controller.start(paragraphs: ["current"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["current"])
         await controller.stop()
 
         #expect(controller.canPrefetchPageEntry)
@@ -209,7 +221,7 @@ struct ReadAloudControllerTests {
     func pageEntryPrefetchSkipsPlaying() async {
         let source = ControllerRecordingChunkSource()
         let controller = makeController(source: source)
-        await controller.start(paragraphs: ["current"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["current"])
 
         #expect(controller.canPrefetchPageEntry == false)
         await controller.prefetchFirstParagraph("playing page")
@@ -221,7 +233,7 @@ struct ReadAloudControllerTests {
     @Test("page-entry prefetch eligibility follows user pause and resume")
     func pageEntryPrefetchEligibilityTracksPauseAndResume() async {
         let controller = makeController()
-        await controller.start(paragraphs: ["current"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["current"])
 
         #expect(controller.canPrefetchPageEntry == false)
         await controller.togglePlayback()
@@ -236,11 +248,11 @@ struct ReadAloudControllerTests {
     @Test("starting a new Read Aloud session clears stopped eligibility")
     func newReadAloudSessionClearsStoppedEligibility() async {
         let controller = makeController()
-        await controller.start(paragraphs: ["first"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["first"])
         await controller.stop()
         #expect(controller.canPrefetchPageEntry)
 
-        await controller.start(paragraphs: ["second"], onPassageChange: { _ in })
+        await start(controller, paragraphs: ["second"])
 
         #expect(controller.canPrefetchPageEntry == false)
         await controller.stop()
@@ -249,9 +261,9 @@ struct ReadAloudControllerTests {
     @Test("final custom bridge exhaustion enables page-entry prefetch")
     func finalCustomBridgeExhaustionEnablesPageEntryPrefetch() async {
         let controller = makeController()
-        await controller.start(
+        await start(
+            controller,
             paragraphs: ["last"],
-            onPassageChange: { _ in },
             onParagraphsExhausted: { [] }
         )
 
@@ -265,9 +277,9 @@ struct ReadAloudControllerTests {
     @Test("intermediate custom bridge exhaustion does not enable page-entry prefetch")
     func intermediateCustomBridgeExhaustionSkipsPageEntryPrefetch() async {
         let controller = makeController()
-        await controller.start(
+        await start(
+            controller,
             paragraphs: ["current"],
-            onPassageChange: { _ in },
             onParagraphsExhausted: { ["next"] }
         )
 
@@ -282,6 +294,12 @@ private struct ControllerNoopChunkSource: TTSChunkSource {
     func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
         AsyncThrowingStream { $0.finish() }
     }
+}
+
+private final class ControllerNoopPresenceStore: TTSPresenceStore, @unchecked Sendable {
+    func read() -> TTSPresenceSnapshot? { nil }
+    func write(_ snapshot: TTSPresenceSnapshot) {}
+    func clear() {}
 }
 
 private actor ControllerRecordingChunkSource: TTSChunkSource {

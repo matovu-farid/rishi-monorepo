@@ -39,6 +39,11 @@ import RishiLogging
         /// session churn. Cleared in stop()/fail() (the only paths that tear the
         /// engine down).
         private var engineRunning = false
+        private var playbackGeneration = 0
+        private var didStartForGeneration = 0
+        private var settledGeneration = 0
+        private var pendingResult: Result<Void, Error>?
+        private var waiter: CheckedContinuation<Void, Error>?
 
         public init(
             streamer: TTSStreamer,
@@ -59,10 +64,17 @@ import RishiLogging
         public func start(request: TTSStreamRequest) async {
             // Tear down any in-flight session.
             await teardown()
+            settle(.failure(CancellationError()), generation: playbackGeneration)
+            playbackGeneration += 1
+            didStartForGeneration = 0
+            pendingResult = nil
+            if let existing = waiter {
+                waiter = nil
+                existing.resume(throwing: CancellationError())
+            }
             firstBufferScheduled = false
             // Always leave `.stopped` before returning, including cache hits.
-            // Callers that poll status (e.g. CustomTTSEngine) must not treat a
-            // residual `.stopped` from the previous passage as completion.
+            // Speak completion uses waitUntilFinished, not residual status.
             let observable = state
             await MainActor.run {
                 observable.error = nil
@@ -151,11 +163,46 @@ import RishiLogging
             engine.stop()
             engineRunning = false
             await coordinator.releaseActiveMode(.tts)
+            settle(.failure(CancellationError()), generation: playbackGeneration)
+        }
+
+        public func waitUntilFinished() async throws {
+            if let pending = pendingResult {
+                pendingResult = nil
+                try pending.get()
+                return
+            }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if let existing = waiter {
+                    waiter = continuation
+                    existing.resume(throwing: CancellationError())
+                    return
+                }
+                if let pending = pendingResult {
+                    pendingResult = nil
+                    continuation.resume(with: pending)
+                    return
+                }
+                waiter = continuation
+            }
         }
 
         // MARK: - Internals
 
         private func currentDecoder() -> MP3StreamDecoder? { activeDecoder }
+
+        private func settle(_ result: Result<Void, Error>, generation: Int) {
+            guard generation == playbackGeneration else { return }
+            guard settledGeneration != generation else { return }
+            settledGeneration = generation
+            if let waiter {
+                self.waiter = nil
+                pendingResult = nil
+                waiter.resume(with: result)
+            } else {
+                pendingResult = result
+            }
+        }
 
         private func onBufferScheduled(chunk: PCMChunk) async {
             let observable = state
@@ -164,6 +211,7 @@ import RishiLogging
             }
             if !firstBufferScheduled {
                 firstBufferScheduled = true
+                didStartForGeneration = playbackGeneration
                 engine.resume()
                 let passageId = chunk.passageId
                 await MainActor.run {
@@ -193,6 +241,15 @@ import RishiLogging
                 // (.stopped + currentPassageId) post-condition.
                 let observable = state
                 await MainActor.run { observable.update(status: .stopped) }
+                let generation = playbackGeneration
+                if didStartForGeneration == generation {
+                    settle(.success(()), generation: generation)
+                } else {
+                    settle(
+                        .failure(TTSEnginePlaybackError.finishedWithoutPlaying),
+                        generation: generation
+                    )
+                }
             }
         }
 
@@ -228,6 +285,10 @@ import RishiLogging
                 "tts.engine.error",
                 level: .error,
                 data: ["error": message]
+            )
+            settle(
+                .failure(TTSEnginePlaybackError.playbackFailed(message)),
+                generation: playbackGeneration
             )
         }
     }

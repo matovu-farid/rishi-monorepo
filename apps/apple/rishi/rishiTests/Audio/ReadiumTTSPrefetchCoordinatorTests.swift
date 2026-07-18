@@ -5,6 +5,7 @@ import Testing
 @testable import rishi
 
 @Suite("Readium TTS prefetch coordinator")
+@MainActor
 struct ReadiumTTSPrefetchCoordinatorTests {
 
     @Test("prefetch window excludes current paragraph and uses active settings")

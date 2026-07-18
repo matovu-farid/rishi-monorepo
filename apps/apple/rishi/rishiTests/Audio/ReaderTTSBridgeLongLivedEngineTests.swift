@@ -43,7 +43,7 @@ struct ReaderTTSBridgeLongLivedEngineTests {
     
     
     private struct InfiniteChunkSource: TTSChunkSource {
-        func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
             AsyncThrowingStream { _ in }
         }
     }

@@ -10,6 +10,7 @@ import Observation
 @preconcurrency import ReadiumShared
 import RishiCore
 import RishiLogging
+import PDFKit
 
 /// @Observable view-model for the EPUB reader. Mirrors the shape of
 /// `PDFReaderViewModel` (Phase 5):
@@ -286,8 +287,22 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// page-entry TTS prefetch. The publication and locator are captured
     /// synchronously on the main actor before the detached extraction begins,
     /// so the background task never reads mutable view-model state.
+    ///
+    /// EPUB and PDF both use this API (unified reader). PDF locators carry a
+    /// 1-based `locations.page` and are extracted via ``PDFReadAloudParagraphs``;
+    /// EPUB uses HTML chunking through ``EPUBReadAloudCursor``.
     @MainActor
     public func firstParagraphForPageEntryPrefetch(at locator: Locator) async -> String? {
+        if book.formatType == .pdf
+            || publication?.manifest.conforms(to: .pdf) == true
+        {
+            let url = documentURL
+            let page1Based = locator.locations.page
+            return await Task.detached(priority: .userInitiated) {
+                Self.firstPDFParagraph(documentURL: url, page1Based: page1Based)
+            }.value
+        }
+
         guard let publication else { return nil }
         let publicationSnapshot = publication
         let locatorSnapshot = locator
@@ -298,6 +313,49 @@ public final class ReaderViewModel: @unchecked Sendable {
                 locator: locatorSnapshot
             ).first
         }.value
+    }
+
+    /// Destination paragraph candidates for Read Aloud user-navigation intent.
+    ///
+    /// - PDF: single first paragraph (or empty), same extract as prefetch.
+    /// - EPUB: nearby window around progression start (`start-1...start+1`) so a
+    ///   page-crossing swipe whose progression jumped one chunk ahead can still
+    ///   match the spoken paragraph.
+    @MainActor
+    public func paragraphsForUserNavigationIntent(at locator: Locator) async -> [String] {
+        if book.formatType == .pdf
+            || publication?.manifest.conforms(to: .pdf) == true
+        {
+            if let first = await firstParagraphForPageEntryPrefetch(at: locator) {
+                return [first]
+            }
+            return []
+        }
+
+        guard let publication else { return [] }
+        let publicationSnapshot = publication
+        let locatorSnapshot = locator
+
+        return await Task.detached(priority: .userInitiated) {
+            await EPUBReadAloudCursor.nearbyParagraphsForUserNavigationIntent(
+                publication: publicationSnapshot,
+                locator: locatorSnapshot
+            )
+        }.value
+    }
+
+    /// 1-based Readium PDF page → first layout-aware paragraph on that page.
+    nonisolated private static func firstPDFParagraph(
+        documentURL: URL,
+        page1Based: Int?
+    ) -> String? {
+        guard let page1Based, page1Based > 0,
+              let document = PDFDocument(url: documentURL),
+              let page = document.page(at: page1Based - 1)
+        else {
+            return nil
+        }
+        return PDFReadAloudParagraphs.paragraphs(from: page).first
     }
 
     /// Paragraphs for read-aloud, starting at the CURRENT page rather than the

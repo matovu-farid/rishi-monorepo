@@ -1,4 +1,5 @@
 import SwiftUI
+import ReadiumShared
 import RishiAudio
 import RishiBilling
 import RishiCore
@@ -80,9 +81,26 @@ struct ReaderDestination: View {
 
 
 
-            vm.onUserNavigation = { _ in
-
-                Task { await readAloud?.stop() }
+            vm.onUserNavigation = { locator in
+                Task { @MainActor in
+                    guard let readAloud else { return }
+                    let snapshot = readAloud.beginUserNavigationIntent()
+                    let destinationParagraphs = await vm.paragraphsForUserNavigationIntent(at: locator)
+                    guard let intent = readAloud.resolveUserNavigationIntent(
+                        snapshot: snapshot,
+                        destinationParagraphs: destinationParagraphs,
+                        destinationPage: locator.locations.page
+                    ) else {
+                        // Superseded by a newer swipe — do not stop; do not consume credit.
+                        return
+                    }
+                    switch intent {
+                    case .continuePlaying:
+                        return
+                    case .stopPlaying:
+                        await readAloud.stop()
+                    }
+                }
             }
             vm.onUserNavigationForTTSPagePrefetch = { [weak vm] locator in
                 guard let readAloud, readAloud.canPrefetchPageEntry else { return }
