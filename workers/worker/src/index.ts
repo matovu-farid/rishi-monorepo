@@ -119,7 +119,7 @@ const OPENAI_TTS_MODEL_NAME = "GPT-4o mini TTS";
 
 // Design spec's "Narration flow" step 4: "The Worker limits a request to a
 // standard-sized chunk, initially no more than 1,000 characters."
-const TTS_MAX_CHARS_PER_REQUEST = 1000;
+const TTS_MAX_CHARS_PER_REQUEST = 4000;
 
 function displayName(id: string): string {
   return id

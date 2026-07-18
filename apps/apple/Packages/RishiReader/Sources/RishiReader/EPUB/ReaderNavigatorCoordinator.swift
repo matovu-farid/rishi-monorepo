@@ -423,10 +423,17 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
     /// matching a registered auto-follow locator are marked programmatic; an
     /// unmatched callback is a user page turn and reaches `onUserNavigation`.
     public func handleLocationChange(_ locator: Locator) {
+        let tokenBefore = programmaticNavigationCallbacks
         let isProgrammatic = programmaticNavigationCallbacks > 0
         if isProgrammatic {
             programmaticNavigationCallbacks -= 1
         }
+        Log.event("tts.nav.location", data: [
+            "isProgrammatic": isProgrammatic ? "1" : "0",
+            "tokenBefore": String(tokenBefore),
+            "href": locator.href.string,
+            "prog": locator.locations.progression.map { String(format: "%.4f", $0) } ?? "",
+        ])
         viewModel.didChangeLocation(
             locator,
             isProgrammatic: isProgrammatic

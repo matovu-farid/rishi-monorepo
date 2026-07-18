@@ -17,43 +17,67 @@ import RishiLogging
         private let streamer: TTSStreamer
         private let state: TTSPlaybackState
         private let player: AudioPlayer
+        private let callbacks: PlaybackCallbacks
 
         private var bridgeTask: Task<Void, Never>?
         private var monitorTask: Task<Void, Never>?
+        /// Bumps on every `start` so async `didFinish` from a prior `stop()`
+        /// cannot mark the new session `.stopped` before it has played.
+        private var playbackGeneration = 0
 
         public init(streamer: TTSStreamer, state: TTSPlaybackState) {
             self.streamer = streamer
             self.state = state
 
             let callbacks = PlaybackCallbacks()
+            self.callbacks = callbacks
             self.player = AudioPlayer(
                 didStartPlaying: { callbacks.didStart() },
                 didFinishPlaying: { callbacks.didFinish() }
             )
-            callbacks.didStart = { [weak self] in
-                Task { await self?.markPlaying() }
-            }
-            callbacks.didFinish = { [weak self] in
-                Task { await self?.markStopped() }
-            }
         }
 
         public func start(request: TTSStreamRequest) async {
             await stop()
+            playbackGeneration += 1
+            let generation = playbackGeneration
 
-            let shouldShowLoading = await streamer.shouldShowLoading(for: request)
-
+            // Always leave `.stopped` before returning, including cache hits.
+            // Otherwise CustomTTSEngine.waitForPlaybackToFinish treats residual
+            // `.stopped` as "utterance done" and Readium skips ahead.
+            let textPrefix = String(request.text.prefix(60))
+                .replacingOccurrences(of: "\n", with: " ")
             await MainActor.run {
                 state.error = nil
                 state.currentPassageId = request.passageId
-                if shouldShowLoading {
-                    state.update(status: .loading)
+                state.update(status: .loading)
+            }
+            Log.event("tts.player.status", data: [
+                "status": "loading",
+                "generation": String(generation),
+                "textPrefix": textPrefix,
+                "textLen": String(request.text.count),
+            ])
+
+            callbacks.didStart = { [weak self] in
+                Task { await self?.markPlaying(generation: generation, textPrefix: textPrefix) }
+            }
+            // AudioPlayer calls didFinishPlaying on both success (.completed)
+            // AND failure (.failed). Never map a failed finish to `.stopped` —
+            // CustomTTSEngine treats `.stopped` as speak success and Readium
+            // advances past the failed paragraph (the observed skip).
+            callbacks.didFinish = { [weak self] in
+                Task {
+                    await self?.handlePlaybackFinished(
+                        generation: generation,
+                        textPrefix: textPrefix
+                    )
                 }
             }
 
             let stream = makeAudioStream(request: request)
             player.start(stream, type: kAudioFileMP3Type)
-            monitorForPlaybackFailure()
+            monitorForPlaybackFailure(generation: generation)
         }
 
         public func pause() async {
@@ -93,7 +117,7 @@ import RishiLogging
             }
         }
 
-        private func monitorForPlaybackFailure() {
+        private func monitorForPlaybackFailure(generation: Int) {
             monitorTask?.cancel()
             monitorTask = Task { [weak self] in
                 guard let self else { return }
@@ -102,7 +126,10 @@ import RishiLogging
                         (player.currentState, player.currentError)
                     }
                     if snapshot.0 == .failed {
-                        await self.markFailed(message: snapshot.1?.debugDescription)
+                        await self.markFailed(
+                            message: snapshot.1?.debugDescription,
+                            generation: generation
+                        )
                         return
                     }
                     try? await Task.sleep(nanoseconds: 100_000_000)
@@ -110,22 +137,76 @@ import RishiLogging
             }
         }
 
-        private func markPlaying() async {
+        private func handlePlaybackFinished(generation: Int, textPrefix: String) async {
+            guard generation == playbackGeneration else {
+                Log.event("tts.player.status.stale", data: [
+                    "ignored": "finish",
+                    "generation": String(generation),
+                    "current": String(playbackGeneration),
+                    "textPrefix": textPrefix,
+                ])
+                return
+            }
+            let snapshot = await MainActor.run {
+                (player.currentState, player.currentError?.debugDescription)
+            }
+            if snapshot.0 == .failed {
+                await markFailed(message: snapshot.1, generation: generation)
+            } else {
+                await markStopped(generation: generation, textPrefix: textPrefix)
+            }
+        }
+
+        private func markPlaying(generation: Int, textPrefix: String) async {
+            guard generation == playbackGeneration else {
+                Log.event("tts.player.status.stale", data: [
+                    "ignored": "playing",
+                    "generation": String(generation),
+                    "current": String(playbackGeneration),
+                    "textPrefix": textPrefix,
+                ])
+                return
+            }
             await MainActor.run {
+                // Do not clobber a failure that already won the race.
+                guard state.status != .error else { return }
                 state.update(status: .playing)
             }
+            Log.event("tts.player.status", data: [
+                "status": "playing",
+                "generation": String(generation),
+                "textPrefix": textPrefix,
+            ])
         }
 
-        private func markStopped() async {
+        private func markStopped(generation: Int, textPrefix: String) async {
+            guard generation == playbackGeneration else {
+                Log.event("tts.player.status.stale", data: [
+                    "ignored": "stopped",
+                    "generation": String(generation),
+                    "current": String(playbackGeneration),
+                    "textPrefix": textPrefix,
+                ])
+                return
+            }
             await MainActor.run {
+                // Do not clobber a failure that already won the race.
+                guard state.status != .error else { return }
                 state.update(status: .stopped)
             }
+            Log.event("tts.player.status", data: [
+                "status": "stopped",
+                "generation": String(generation),
+                "textPrefix": textPrefix,
+            ])
         }
 
-        private func markFailed(message: String?) async {
+        private func markFailed(message: String?, generation: Int) async {
+            guard generation == playbackGeneration else { return }
             bridgeTask?.cancel()
             bridgeTask = nil
-            player.stop()
+            // Avoid player.stop() here: stop() clears .failed back to .initial
+            // and can race with waiters. Status/error are enough for speak().
             let text = message ?? "TTS playback failed"
             await MainActor.run {
                 state.update(status: .error)

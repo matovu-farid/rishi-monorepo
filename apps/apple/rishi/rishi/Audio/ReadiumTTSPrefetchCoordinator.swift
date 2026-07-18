@@ -2,11 +2,15 @@ import Foundation
 import ReadiumNavigator
 import ReadiumShared
 import RishiAudio
+import RishiCore
 import RishiReader
 
 /// Builds the requests immediately after the paragraph currently being spoken.
 /// Keeping this separate makes the prefetch window deterministic and testable.
 enum ReadiumTTSPrefetchRequestBuilder {
+    /// Matches `workers/worker` `TTS_MAX_CHARS_PER_REQUEST` and CustomTTSEngine.
+    static let maxCharsPerRequest = 4000
+
     static func makeRequests(
         paragraphs: [String],
         after currentParagraph: String,
@@ -16,14 +20,24 @@ enum ReadiumTTSPrefetchRequestBuilder {
         guard limit > 0, !paragraphs.isEmpty else { return [] }
 
         let startIndex = paragraphs.firstIndex(of: currentParagraph).map { $0 + 1 } ?? 0
-        return paragraphs.dropFirst(startIndex).prefix(limit).map { paragraph in
-            TTSStreamRequest(
-                text: paragraph,
-                voice: settings.voice,
-                model: settings.model,
-                speed: settings.speed
-            )
+        var requests: [TTSStreamRequest] = []
+        for paragraph in paragraphs.dropFirst(startIndex) {
+            let pieces = paragraph.count <= maxCharsPerRequest
+                ? [paragraph]
+                : ParagraphChunker.chunk(paragraph, maxChars: maxCharsPerRequest)
+            for piece in pieces where !piece.isEmpty {
+                requests.append(
+                    TTSStreamRequest(
+                        text: piece,
+                        voice: settings.voice,
+                        model: settings.model,
+                        speed: settings.speed
+                    )
+                )
+                if requests.count >= limit { return requests }
+            }
         }
+        return requests
     }
 }
 

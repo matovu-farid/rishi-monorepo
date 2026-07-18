@@ -4,6 +4,7 @@ import ReadiumNavigator
 import ReadiumShared
 import RishiAudio
 import RishiCore
+import RishiLogging
 import RishiReader
 
 @MainActor
@@ -32,6 +33,9 @@ final class ReadAloudController {
     private(set) var currentParagraph: String? = nil
     private(set) var currentLocator: Locator? = nil
     private var coordinator: AudioSessionCoordinator
+    /// Monotonic utterance counter for skip diagnostics (`tts.readaloud.utterance`).
+    private var utteranceSeq = 0
+    private var lastLoggedUtteranceText: String?
 
     init(
         ttsEngine: any TTSPlaying,
@@ -93,6 +97,8 @@ final class ReadAloudController {
         currentParagraph = nil
         currentLocator = nil
         paragraphs = []
+        utteranceSeq = 0
+        lastLoggedUtteranceText = nil
         showControls = true
 
         await ttsPresence.beginSession(
@@ -266,6 +272,11 @@ final class ReadAloudController {
     }
 
     private func stopCurrentPlayback() async {
+        Log.event("tts.nav.stop", data: [
+            "hadSynthesizer": readiumSynthesizer != nil ? "1" : "0",
+            "lastSeq": String(max(0, utteranceSeq - 1)),
+            "lastPrefix": lastLoggedUtteranceText.map { String($0.prefix(60)) } ?? "",
+        ])
         await readiumPrefetcher?.stop()
         readiumPrefetcher = nil
         readiumPublication = nil
@@ -303,7 +314,12 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
             isPageEntryPrefetchEligible = false
             currentLocator = range ?? utterance.locator
             currentParagraph = utterance.text
+            // NOTE: This writes the same TTSPlaybackState CustomTTSEngine waits
+            // on. Synthesizer `.playing` can arrive before the audio engine
+            // starts — keep this update, but utterance-order logs ignore
+            // range-only repeats so we can detect real skips.
             ttsState.update(status: .playing)
+            logUtteranceIfNew(utterance)
             if let publication = readiumPublication {
                 readiumPrefetcher?.update(
                     publication: publication,
@@ -312,6 +328,24 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
                 )
             }
         }
+    }
+
+    private func logUtteranceIfNew(_ utterance: PublicationSpeechSynthesizer.Utterance) {
+        guard utterance.text != lastLoggedUtteranceText else { return }
+        lastLoggedUtteranceText = utterance.text
+        let seq = utteranceSeq
+        utteranceSeq += 1
+        let prefix = String(utterance.text.prefix(80))
+            .replacingOccurrences(of: "\n", with: " ")
+        Log.event("tts.readaloud.utterance", data: [
+            "seq": String(seq),
+            "href": utterance.locator.href.string,
+            "css": utterance.locator.locations.cssSelector ?? "",
+            "prog": utterance.locator.locations.progression.map { String(format: "%.4f", $0) } ?? "",
+            "textLen": String(utterance.text.count),
+            "textPrefix": prefix,
+            "engineStatus": ttsState.status.rawValue,
+        ])
     }
 
     func publicationSpeechSynthesizer(
