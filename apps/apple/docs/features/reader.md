@@ -8,8 +8,11 @@ The Reader opens PDF files via Apple's PDFKit framework and EPUB files
 via the Readium 3.9 library (an open-source EPUB engine). Both formats
 share a chrome (toolbar, tap-to-toggle UI, themes, table of contents).
 The user can page through, highlight text in four colors, attach a note
-to a highlight, jump to a chapter, switch theme (light, sepia, dark),
-and on EPUB tune typography.
+to a highlight, jump to a chapter, switch theme (Match Device, light,
+sepia, dark), and on EPUB tune typography. Match Device is the default;
+it resolves to light or dark from the system appearance at read time.
+Settings reader defaults seed theme on open for any book without a
+per-book theme key yet (not font family).
 
 ## The user flow
 
@@ -26,10 +29,10 @@ and on EPUB tune typography.
 
 | Role | File |
 | --- | --- |
-| EPUB screen | `Packages/RishiReader/Sources/RishiReader/UI/EPUBReaderScreen.swift` |
-| PDF screen | `Packages/RishiReader/Sources/RishiReader/UI/PDFReaderScreen.swift` |
-| EPUB view model | `Packages/RishiReader/Sources/RishiReader/EPUB/EPUBReaderViewModel.swift` |
+| Unified reader screen (EPUB + PDF routes) | `Packages/RishiReader/Sources/RishiReader/UI/ReaderScreen.swift` |
+| EPUB view model | `Packages/RishiReader/Sources/RishiReader/EPUB/ReaderViewModel.swift` |
 | PDF view model | `Packages/RishiReader/Sources/RishiReader/PDF/PDFReaderViewModel.swift` |
+| Legacy PDF-only screen (compile parity, not in nav) | `Packages/RishiReader/Sources/RishiReader/UI/PDFReaderScreen.swift` |
 | Shared loading state | `Packages/RishiReader/Sources/RishiReader/ReaderLoadingState.swift` |
 | EPUB unpack cache | `Packages/RishiReader/Sources/RishiReader/EPUB/EPUBUnpackedCache.swift` |
 | PDF thumbnail cache | `Packages/RishiReader/Sources/RishiReader/PDF/PDFThumbnailCache.swift` |

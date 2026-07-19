@@ -68,7 +68,8 @@
 
 // MARK: - Models / Types
 //
-// ReaderTheme                 — `Model/ReaderTheme.swift`. .light / .dark / .sepia.
+// ReaderTheme                 — `Model/ReaderTheme.swift`. .matchDevice (default; resolves to
+//                                .light/.dark from system) / .light / .sepia / .dark.
 // ReaderFontFamily            — `Model/ReaderFontFamily.swift`. The supported EPUB fonts.
 // ReaderFontSize              — `Model/ReaderFontSize.swift`. Numeric font-size value type.
 // ReaderLineHeight            — `Model/ReaderLineHeight.swift`. Numeric line-height value type.

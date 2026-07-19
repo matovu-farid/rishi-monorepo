@@ -2,9 +2,9 @@ import SwiftUI
 import RishiUIKit
 import RishiReader
 
-/// App-wide reader defaults for new books. Per-book overrides remain inside
-/// the reader; this section drives the value applied on FIRST open of each
-/// new book.
+/// App-wide reader defaults. Per-book overrides remain inside the reader;
+/// this section drives the theme seeded when opening a book that has no
+/// per-book theme key yet.
 ///
 /// `ReaderSettingsStore` is per-book (it takes a `BookID`), so the Settings
 /// screen wires its own user-level defaults via the parent screen's
@@ -44,7 +44,7 @@ struct ReaderDefaultsSection: View {
                 .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.textPrimary)
         } footer: {
-            Text("Applied to new books. You can override theme + font per book inside the reader.")
+            Text("Default theme is applied when you open a book that has no per-book theme yet. You can override theme and font per book inside the reader.")
                 .font(RishiTypography.caption)
                 .foregroundStyle(RishiColor.textSecondary)
         }

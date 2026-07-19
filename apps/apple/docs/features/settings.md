@@ -6,11 +6,13 @@
 
 Settings is the single screen reached from the user-avatar button in the top bar. It groups every preference and account action the app exposes: who you are signed in as, which subscription you are on, reader defaults (theme and font family), Read Aloud defaults (voice and speed), sync status, telemetry opt-in, and the legal links and version footer. Account deletion lives here too.
 
+The Reader section exposes four themes — **Match Device** (default), Light, Sepia, and Dark. Match Device follows the system appearance (light or dark) at read time; Light, Sepia, and Dark are fixed overrides. The chosen default theme is written to a book the first time you open it **only when that book has no per-book theme saved yet**; changing Settings later does not rewrite books that already have a theme. Font family is a separate default and is not auto-seeded on open.
+
 ## The user flow
 
 - Tap the avatar in the top bar to open the Settings sheet.
 - Scroll through grouped sections: Account, Billing, Reader, Audio, Sync, Telemetry, About.
-- Adjust a setting — for example, change the reader theme to Sepia. The change is persisted immediately and the reader picks it up next time you open a book.
+- Adjust a setting — for example, change the reader default theme to Sepia. The change is persisted immediately; the next book you open that has no per-book theme yet will seed Sepia on first open.
 - Tap "Manage subscription" to open Apple's in-app Manage Subscriptions sheet, or "Delete account" to start the confirm-and-revoke flow.
 - Tap Done to dismiss; nothing needs to be "saved" — every change writes through as it happens.
 
