@@ -52,4 +52,30 @@ struct ReaderSettingsStoreTests {
         let expectedKey = "custom.ns.\(bookId.uuidString).theme"
         #expect(defaults.string(forKey: expectedKey) == "dark")
     }
+
+    @Test("persistedTheme and peek return nil when empty")
+    func persistedThemeAndPeekReturnNilWhenEmpty() async {
+        let store = UserDefaultsReaderSettingsStore(defaults: makeDefaults())
+        let bookId: BookID = UUID()
+        #expect(store.peekPersistedTheme(for: bookId) == nil)
+        #expect(await store.persistedTheme(for: bookId) == nil)
+    }
+
+    @Test("Round-trips matchDevice via persistedTheme and peek")
+    func roundTripsMatchDeviceViaPersistedThemeAndPeek() async {
+        let store = UserDefaultsReaderSettingsStore(defaults: makeDefaults())
+        let bookId: BookID = UUID()
+        await store.setTheme(.matchDevice, for: bookId)
+        #expect(store.peekPersistedTheme(for: bookId) == .matchDevice)
+        #expect(await store.persistedTheme(for: bookId) == .matchDevice)
+        #expect(await store.theme(for: bookId) == .matchDevice)
+    }
+
+    @Test("peek matches async persistedTheme")
+    func peekMatchesAsyncPersistedTheme() async {
+        let store = UserDefaultsReaderSettingsStore(defaults: makeDefaults())
+        let bookId: BookID = UUID()
+        await store.setTheme(.sepia, for: bookId)
+        #expect(store.peekPersistedTheme(for: bookId) == await store.persistedTheme(for: bookId))
+    }
 }

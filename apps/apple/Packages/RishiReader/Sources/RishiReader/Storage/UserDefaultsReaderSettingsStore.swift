@@ -36,13 +36,15 @@ public final class UserDefaultsReaderSettingsStore: ReaderSettingsStore, @unchec
 
     // MARK: - Theme
 
-    public func theme(for bookId: BookID) async -> ReaderTheme {
+    public func peekPersistedTheme(for bookId: BookID) -> ReaderTheme? {
         let key = themeKey(bookId)
         guard let raw = defaults.string(forKey: key),
-              let theme = ReaderTheme(rawValue: raw) else {
-            return .default
-        }
+              let theme = ReaderTheme(rawValue: raw) else { return nil }
         return theme
+    }
+
+    public func theme(for bookId: BookID) async -> ReaderTheme {
+        peekPersistedTheme(for: bookId) ?? .default
     }
 
     public func setTheme(_ theme: ReaderTheme, for bookId: BookID) async {

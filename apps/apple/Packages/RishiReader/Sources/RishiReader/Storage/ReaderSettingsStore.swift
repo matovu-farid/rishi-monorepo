@@ -16,6 +16,12 @@ public protocol ReaderSettingsStore: Sendable {
     /// Returns the persisted theme for the book, or ``ReaderTheme/default``.
     func theme(for bookId: BookID) async -> ReaderTheme
 
+    /// Returns the persisted theme when one exists, otherwise `nil`.
+    func persistedTheme(for bookId: BookID) async -> ReaderTheme?
+
+    /// Synchronous peek for first-frame hydration. Default `nil`.
+    func peekPersistedTheme(for bookId: BookID) -> ReaderTheme?
+
     /// Persists `theme` for `bookId`. Overwrites any previous value.
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async
 
@@ -29,6 +35,12 @@ public protocol ReaderSettingsStore: Sendable {
 }
 
 public extension ReaderSettingsStore {
+    func persistedTheme(for bookId: BookID) async -> ReaderTheme? {
+        peekPersistedTheme(for: bookId)
+    }
+
+    func peekPersistedTheme(for bookId: BookID) -> ReaderTheme? { nil }
+
     /// Default impl returns `ReaderTypography.default`. Conformers that
     /// don't yet persist typography (e.g. tests) get the default
     /// without having to stub.
