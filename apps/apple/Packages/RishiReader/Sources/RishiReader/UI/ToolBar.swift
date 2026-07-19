@@ -151,7 +151,7 @@ public struct ReaderToolBar: ViewModifier {
                 Task { await viewModel.flush() }
             }
         
-            .preferredColorScheme(viewModel.theme == .dark ? .dark : .light)
+            .preferredColorScheme(viewModel.theme.preferredColorScheme)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
     }

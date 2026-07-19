@@ -495,6 +495,7 @@ public struct PDFReaderScreen: View {
     @ViewBuilder
     private var background: some View {
         switch viewModel.theme {
+        case .matchDevice: RishiColor.readerBackgroundLight.ignoresSafeArea()
         case .light: RishiColor.readerBackgroundLight.ignoresSafeArea()
         case .sepia: RishiColor.readerBackgroundSepia.ignoresSafeArea()
         case .dark: RishiColor.readerBackgroundDark.ignoresSafeArea()

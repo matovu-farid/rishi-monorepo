@@ -85,6 +85,7 @@ public struct EPUBThemePicker: View {
 
     private func swatch(for theme: ReaderTheme) -> Color {
         switch theme {
+        case .matchDevice: return Color.primary.opacity(0.35)
         case .light: return RishiColor.readerBackgroundLight
         case .sepia: return RishiColor.readerBackgroundSepia
         case .dark:  return RishiColor.readerBackgroundDark
@@ -93,6 +94,7 @@ public struct EPUBThemePicker: View {
 
     private func label(for theme: ReaderTheme) -> String {
         switch theme {
+        case .matchDevice: return "Match Device"
         case .light: return "Light"
         case .sepia: return "Sepia"
         case .dark:  return "Dark"

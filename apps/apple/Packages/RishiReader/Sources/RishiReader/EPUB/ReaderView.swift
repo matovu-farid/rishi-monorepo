@@ -165,6 +165,7 @@ public struct ReaderView: UIViewControllerRepresentable {
 
     private func backgroundUIColor(_ theme: ReaderTheme) -> UIColor {
         switch theme {
+        case .matchDevice: return UIColor(RishiColor.readerBackgroundLight)
         case .light: return UIColor(RishiColor.readerBackgroundLight)
         case .sepia: return UIColor(RishiColor.readerBackgroundSepia)
         case .dark:  return UIColor(RishiColor.readerBackgroundDark)

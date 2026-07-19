@@ -64,6 +64,7 @@ public enum EPUBPreferencesBridge {
 
     static func readiumTheme(for theme: ReaderTheme) -> ReadiumNavigator.Theme {
         switch theme {
+        case .matchDevice: return .light // callers must pass resolved
         case .light: return .light
         case .sepia: return .sepia
         case .dark:  return .dark

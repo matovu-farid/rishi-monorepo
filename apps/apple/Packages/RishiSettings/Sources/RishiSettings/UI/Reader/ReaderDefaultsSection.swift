@@ -52,6 +52,7 @@ struct ReaderDefaultsSection: View {
 
     private func label(for theme: ReaderTheme) -> String {
         switch theme {
+        case .matchDevice: return "Match Device"
         case .light: return "Light"
         case .sepia: return "Sepia"
         case .dark:  return "Dark"

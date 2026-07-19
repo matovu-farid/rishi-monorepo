@@ -406,7 +406,7 @@ public struct ReaderScreen: View {
             Task { await viewModel.flush() }
         }
 
-        .preferredColorScheme(viewModel.theme == .dark ? .dark : .light)
+        .preferredColorScheme(viewModel.theme.preferredColorScheme)
     }
 
     //
@@ -510,6 +510,7 @@ public struct ReaderScreen: View {
     @ViewBuilder
     private var background: some View {
         switch viewModel.theme {
+        case .matchDevice: RishiColor.readerBackgroundLight.ignoresSafeArea()
         case .light: RishiColor.readerBackgroundLight.ignoresSafeArea()
         case .sepia: RishiColor.readerBackgroundSepia.ignoresSafeArea()
         case .dark: RishiColor.readerBackgroundDark.ignoresSafeArea()
@@ -536,6 +537,7 @@ public struct ReaderScreen: View {
 
     private var readerBarColor: SwiftUI.Color {
         switch viewModel.theme {
+        case .matchDevice: return RishiColor.readerBackgroundLight
         case .light: return RishiColor.readerBackgroundLight
         case .sepia: return RishiColor.readerBackgroundSepia
         case .dark: return RishiColor.readerBackgroundDark
