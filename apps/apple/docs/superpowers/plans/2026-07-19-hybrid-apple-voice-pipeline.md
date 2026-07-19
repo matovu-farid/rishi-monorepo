@@ -1,358 +1,294 @@
-# Hybrid Apple Voice Pipeline Implementation Plan
+# Cascaded Voice Pipeline Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a DEBUG-testable Apple-first Voice Chat path (on-device STT → Foundation Models or cloud nano LLM → AVSpeech) beside OpenAI `gpt-realtime-mini`, with Settings to A/B the engines and force-disable Foundation Models.
+**Goal:** Prove a cascaded Voice Chat pipeline (STT → LLM → TTS) beside OpenAI Realtime, then replace cascade components one at a time. Phase 1 is **OpenAI-only cascade**. Phase 2 swaps components.
 
-**Architecture:** `VoiceEngine` preference lives in **RishiCore** (`appleHybrid` | `openaiRealtimeMini`). DEBUG Settings pick the engine; **Release always forces `openaiRealtimeMini`**. Hybrid `POST /api/voice-sessions` with `engine: "hybrid"` creates the ledger row **and inline-activates** it (no OpenAI mint, no `register-call`). Realtime keeps today’s mint + register-call + hangup path but mints `gpt-realtime-mini`. Hybrid LLM is Foundation Models when available and the DEBUG FM toggle is on; otherwise a **non-persisting** `/api/chat` (`gpt-5-nano`) stream that must **not** go through `RishiChatService.stream` (that path always writes conversation history).
+**Architecture:** DEBUG `VoiceEngine` in RishiCore: `openaiCascade` | `openaiRealtimeMini`. Release always forces `openaiRealtimeMini`. Cascade sessions use ledger `sessionKind: "cascade"` with **inline activate** (no Realtime mint / no `register-call`). Cascade STT/LLM/TTS go through **new voice-scoped worker routes** that (a) require an active cascade session, (b) do **not** call `reserveTts` / narration metering, (c) do **not** use `requireActiveSubscription` (trial credit users must work — same as today’s voice-sessions). Realtime path keeps WebRTC and mints `gpt-realtime-mini`.
 
-**Tech Stack:** Swift 6 / SwiftUI; `FoundationModels` + `Speech` behind `#available` / `canImport`; `RishiCore` + `RishiVoice` + `RishiSettings`; worker voice-sessions + UserUsageLedger + ledger DO migrations.
+**Tech Stack:** OpenAI `gpt-4o-mini-transcribe`, `gpt-5-nano`, `gpt-4o-mini-tts`; RishiVoice cascade FSM + local mic capture; later Speech / FoundationModels / AVSpeech.
+
+## Phases (locked)
+
+### Phase 1 — OpenAI cascade (test the pipeline)
+
+| Piece | Model | Transport |
+| --- | --- | --- |
+| STT | `gpt-4o-mini-transcribe` | `POST /api/voice-sessions/:id/cascade/transcribe` |
+| LLM | `gpt-5-nano` | `POST /api/voice-sessions/:id/cascade/complete` (SSE or JSON text) |
+| TTS | `gpt-4o-mini-tts` | `POST /api/voice-sessions/:id/cascade/speech` |
+| Control | ledger 30s intervals | existing `GET /api/voice-sessions/:id/control` |
+| A/B | Cascade vs Realtime Mini | DEBUG Settings |
+
+**Do not** reuse `POST /api/audio/speech` for cascade replies — that route calls `ledger.reserveTts` and would burn **narration** allowance on top of Voice Chat intervals.
+
+**Do not** reuse `POST /api/audio/transcribe` as-is — it is **Deepgram-only** today.
+
+**Do not** reuse `POST /api/chat` / `POST /api/text/completions` for cascade LLM — both use `requireActiveSubscription`, which blocks no-card trial users who can still start voice sessions.
+
+**Exit criteria:** DEBUG build completes speak → transcript → answer → hear reply; allowance ticks; no text-chat history rows; trial-credit user can complete a turn; Realtime Mini still works.
+
+### Phase 2 — Replace components (after Phase 1 exit)
+
+1. STT → Apple `SpeechAnalyzer` (fallback OpenAI cascade STT)
+2. LLM → Foundation Models + DEBUG FM toggle (fallback nano)
+3. TTS → AVSpeech option (fallback cascade OpenAI TTS)
+
+Same FSM; swap protocol implementations only.
 
 ## Global Constraints
 
-- Stay on `main`; commit under `apps/apple/Packages/`, `apps/apple/rishi/`, `apps/apple/docs/`, `workers/worker/`, `packages/shared/`. Living plan copy: `apps/apple/docs/superpowers/plans/2026-07-19-hybrid-apple-voice-pipeline.md` (tracked). Mirror under gitignored `docs/superpowers/plans/` optional.
-- No emojis in code or commits.
-- Swift Testing only for Apple packages.
-- Do not replace Readium / StoreKit / AVFoundation — parallel hybrid session beside Realtime.
-- Package platforms stay iOS 17 / macOS 14; iOS 26 APIs via availability only.
-- Metering remains server-authoritative.
-- Engine picker + FM kill switch are `#if DEBUG` UI only.
-- Hybrid nano turns also incur normal `/api/chat` COGS **in addition to** voice-interval ledger burns — accepted for v1 (still far cheaper than Realtime audio).
+- Living plan: `apps/apple/docs/superpowers/plans/2026-07-19-hybrid-apple-voice-pipeline.md`
+- No emojis; Swift Testing; parallel path beside Realtime
+- iOS 17 / macOS 14 floors; iOS 26 only in Phase 2 behind availability
+- Metering server-authoritative via Voice Chat intervals for cascade wall-clock; cascade OpenAI calls still Stripe-meter as stt/chat/tts usage for observability but **must not** debit narration seconds
+- Engine picker `#if DEBUG` only
+- **Forbidden:** `RishiChatService.stream` for cascade LLM
 
 ## Product decisions (locked)
 
 | Decision | Choice |
 | --- | --- |
-| Release runtime engine | Always `openaiRealtimeMini` |
-| DEBUG preferred default | `appleHybrid` (resolver falls back if Speech unavailable) |
+| Release runtime | Always `openaiRealtimeMini` |
+| DEBUG default | `openaiCascade` |
 | Realtime model | `gpt-realtime-mini` |
-| Hybrid STT (v1) | SpeechAnalyzer only; else fall back to Realtime Mini |
-| Hybrid LLM | Foundation Models if enabled+available; else non-persisting `/api/chat` nano |
-| Hybrid TTS (v1) | AVSpeech only |
-| Hybrid activate | **Inline in create handler** — never a follow-up RPC, never fake `callId` on `register-call` |
-| Hybrid client hangup | **Local teardown only** (same as Realtime today — no new `POST .../end`) |
-| A/B | Switch engine between sessions in DEBUG Settings |
-| FM kill switch | DEBUG toggle → force cloud nano LLM |
+| Phase 1 models | OpenAI STT + nano + mini-tts (table above) |
+| Cascade activate | Inline in create when `engine: "cascade"` |
+| Client hangup | Local teardown only |
+| Phase 1 endpointing | Silence-based: **800ms** silence after speech → final; **min 400ms** speech; **max 30s** utterance; then auto-restart listen after TTS (unless user ended) |
+| Mic audio for STT | **16 kHz mono WAV** (`audio/wav`) uploaded as base64 JSON like existing transcribe body shape |
+| Cascade TTS voice | Default `marin` (same allow-list as `/api/audio/speech`) |
 
-## File map
+## Adversarial invariants (do not regress)
+
+1. Inline `activateCascadeSession` — never fake `callId` on `register-call`; grace (~10s) must not kill cascade.
+2. DO migration + **required** `ensureSessionKindColumn()`.
+3. `clientSecret: String?` on **both** `CreatedVoiceSession` and `StartedVoiceSession`; Realtime unwrap **same task**.
+4. `VoiceEngine` in **RishiCore**.
+5. Cascade provider routes verify `sessionKind === "cascade"` + `status === "active"` + ownership; reject otherwise.
+6. Cascade TTS **never** calls `reserveTts`.
+7. Cascade LLM/STT/TTS routes: `requireAuth` only + active cascade session check — **no** `requireActiveSubscription`.
+8. `activateCascadeSession` **must** mirror `registerCallId` alarm side-effects: after `status=active` / `callId=null`, call `ensureAlarmAtOrBefore(now + INTERVAL_MS)`. **Forbidden:** leaving the create-time `REGISTRATION_GRACE_MS` alarm as the next fire (first voice interval would charge at ~10s instead of ~30s).
+
+## File map (Phase 1)
 
 | File | Responsibility |
 | --- | --- |
-| `workers/worker/src/realtime/client-secrets.ts` | Mint mini |
-| `packages/shared/src/billing/default-rates.ts` | Mini rates |
-| `workers/worker/src/durable-objects/user-usage-ledger/schema.ts` | `sessionKind` |
-| `workers/worker/drizzle/ledger-do-migrations/` + `migrations.js` | DO SQLite ALTER for `session_kind` |
-| `workers/worker/src/durable-objects/voice-session/sql.ts` | Insert/update column writes |
-| `workers/worker/src/durable-objects/user-usage-ledger/ledger.ts` | `activateHybridSession` |
-| `workers/worker/src/routes/voice-sessions.ts` | Engine branch; inline hybrid activate |
-| `RishiCore/.../Endpoints/VoiceSessionsAPI.swift` | Optional `clientSecret`, `engine` |
-| `RishiVoice/.../Service/VoiceSessionAPIClient.swift` | `StartedVoiceSession.clientSecret: String?` |
-| `RishiCore/.../Voice/VoiceEngine*.swift` | Prefs + resolver |
-| `RishiSettings/.../Developer/DeveloperVoiceSection.swift` | DEBUG UI |
-| `RishiCore` or `RishiVoice` thin `VoiceChatCompleting` | Non-persisting `/api/chat` |
-| `RishiVoice/Hybrid/*` | STT, FM responder, session, TTS |
-| `VoiceSessionPresenter.swift` | Routing |
-| Docs under `apps/apple/docs/` | Pipeline + A/B runbook |
+| `client-secrets.ts` / rates | Mini mint |
+| Ledger schema + `drizzle/ledger-do-migrations/` + `ensureSessionKindColumn` | `session_kind` |
+| `voice-session/sql.ts`, `ledger.ts` | `activateCascadeSession` |
+| `routes/voice-sessions.ts` | create branch + cascade subroutes |
+| `RishiCore` VoiceEngine + VoiceSessionsAPI + cascade endpoint types | Prefs + wire |
+| `RishiVoice` client + `Cascade/*` | Mic, STT/LLM/TTS clients, FSM |
+| `RishiSettings` DeveloperVoiceSection | DEBUG picker |
+| Docs | Pipeline + A/B |
 
 ---
+
+# Phase 1 tasks
 
 ### Task 1: Switch Realtime mint to `gpt-realtime-mini`
 
-**Files:**
-- Modify: `workers/worker/src/realtime/client-secrets.ts`
-- Modify: `workers/worker/src/realtime-client-secrets.test.ts`
-- Modify: `packages/shared/src/billing/default-rates.ts`
+**Files:** `workers/worker/src/realtime/client-secrets.ts`, `realtime-client-secrets.test.ts`, `packages/shared/src/billing/default-rates.ts`
 
-- [ ] **Step 1:** Change locking test to expect `"gpt-realtime-mini"`.
-- [ ] **Step 2:** `bun test src/realtime-client-secrets.test.ts` — FAIL.
-- [ ] **Step 3:** Set `model: "gpt-realtime-mini"` in `buildRealtimeClientSecretsBody`.
-- [ ] **Step 4:** Add rates:
-
-```ts
-"gpt-realtime-mini": {
-  audioInputPer1M: 10.0,
-  audioOutputPer1M: 20.0,
-  textInputPer1M: 0.6,
-  textOutputPer1M: 2.4,
-},
-```
-
-- [ ] **Step 5:** `bun test src/realtime-client-secrets.test.ts src/billing/realtime-usage.test.ts` — PASS.
-- [ ] **Step 6: Commit**
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(billing): mint Voice Chat on gpt-realtime-mini
-EOF
-)"
-```
+- [ ] Test expects `"gpt-realtime-mini"`
+- [ ] Set mint model; add rate row (audio in/out 10/20, text 0.6/2.4)
+- [ ] `bun test src/realtime-client-secrets.test.ts src/billing/realtime-usage.test.ts`
+- [ ] Commit: `feat(billing): mint Voice Chat on gpt-realtime-mini`
 
 ---
 
-### Task 2: Ledger migration + inline hybrid activate
+### Task 2: Ledger migration + inline cascade activate
 
-**Files:**
-- Modify: `workers/worker/src/durable-objects/user-usage-ledger/schema.ts` — `sessionKind: text("session_kind").notNull().default("realtime")`
-- Create migration via `cd workers/worker && bun run db:generate:ledger` (or hand-write under `drizzle/ledger-do-migrations/`) and ensure `migrations.js` journal picks it up
-- **Required:** add idempotent `ensureSessionKindColumn()` in the ledger constructor (same belt-and-suspenders pattern as `ensureReservationsPoolColumns`) — DO journal-skip must not leave inserts writing a missing column
-- Modify: `workers/worker/src/durable-objects/voice-session/sql.ts` — insert/update includes `sessionKind`
-- Modify: `ledger.ts` — `createVoiceSession({ sessionKind })`, new `activateHybridSession(rishiSessionId, nonce)`
-- Modify: `voice-sessions.ts` — `engine` on body
-- Modify: `VoiceSessionsAPI.CreatedVoiceSession` — `clientSecret: String?`, `engine: String`
-- Modify: `VoiceSessionAPIClient.StartedVoiceSession` — `clientSecret: String?`, pass `engine`
-- Modify realtime call sites in the **same task** so the tree still compiles: unwrap/guard non-nil `clientSecret` on the Realtime path in `RealtimeVoiceSession.swift` (and any tests that construct `StartedVoiceSession` / `CreatedVoiceSession`). Do not leave that for Task 8.
-- Tests: `voice-sessions-hybrid.test.ts` + ledger hybrid tests
+**Files:** schema, `bun run db:generate:ledger`, **required** `ensureSessionKindColumn()`, `voice-session/sql.ts`, `ledger.ts`, `voice-sessions.ts`, `CreatedVoiceSession`, `StartedVoiceSession`, Realtime unwrap in `RealtimeVoiceSession` (+ tests)
 
-**Locked contract:**
+**Contract:**
 
-| | Realtime (`engine` omitted or `"realtime"`) | Hybrid (`engine: "hybrid"`) |
+| | Realtime | Cascade (`engine: "cascade"`) |
 | --- | --- | --- |
-| Mint OpenAI secret | Yes | **No** |
-| Response `clientSecret` | non-null string | **absent / null** |
-| Response `engine` | `"realtime"` | `"hybrid"` |
-| Activation | Client `POST /:id/register-call` with real OpenAI `callId` | **`activateHybridSession` called inside create handler before JSON response** |
-| `callId` column | set on register | stays `null` |
-| First interval alarm | on register-call | on hybrid activate |
-| Provider hangup | OpenAI hangup when `callId` set | skip (null `callId`) |
-| Client end | local teardown only | local teardown only |
+| Mint secret | Yes | No |
+| `clientSecret` | non-null | null |
+| Activation | `register-call` | **`activateCascadeSession` inside create** |
+| `callId` | set | null |
+| Interval start | on register | on cascade activate via `ensureAlarmAtOrBefore(now + INTERVAL_MS)` |
+| Hangup provider | if callId | skip |
+| Client end | local | local |
 
-`activateHybridSession` must:
-1. Verify single-use nonce (same crypto as `registerCallId`)
-2. Require `sessionKind === "hybrid"` and `status === "pending_registration"`
-3. Set `status: "active"`, `callRegisteredAt: now`, `nonceUsed: true`, `callId: null`
-4. `ensureAlarmAtOrBefore(now + INTERVAL_MS)`
-5. Broadcast `allowance_remaining`
-
-**Do not** reuse `register-call` with a synthetic call ID. **Do not** leave hybrid in `pending_registration` for a follow-up RPC.
-
-- [ ] **Step 1: Failing tests** — hybrid create returns null secret; session active with null callId past `REGISTRATION_GRACE_MS`; ticks burn allowance; hangup skips OpenAI; realtime path unchanged.
-- [ ] **Step 2: Generate/apply DO migration + implement activate + route inline call**
-- [ ] **Step 3:** `bun test` hybrid + ledger + existing voice-sessions tests
-- [ ] **Step 4: Update both iOS Codable types** (`CreatedVoiceSession` and `StartedVoiceSession`) **and** fix Realtime unwrap/guard + tests so `swift test --package-path apps/apple/Packages/RishiVoice` and RishiCore voice API tests still PASS
-- [ ] **Step 5: Commit**
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(worker): inline-activate hybrid voice sessions without call IDs
-
-Add ledger sessionKind migration and meter cascaded Voice Chat on intervals.
-EOF
-)"
-```
+- [ ] Tests: active past grace; **first interval tick ≥25s after activate** (not ~10s); ticks burn voice allowance; realtime unchanged; iOS packages compile
+- [ ] Commit: `feat(worker): inline-activate cascade voice sessions without call IDs`
 
 ---
 
-### Task 3: VoiceEngine preference in RishiCore
-
-**Files:**
-- Create: `RishiCore/Sources/RishiCore/Voice/VoiceEngine.swift`
-- Create: `RishiCore/Sources/RishiCore/Voice/VoiceEngineStore.swift`
-- Tests: `RishiCoreTests/Voice/VoiceEngineStoreTests.swift`
+### Task 3: VoiceEngine preference (RishiCore)
 
 ```swift
 public enum VoiceEngine: String, Sendable, CaseIterable {
-    case appleHybrid
+    case openaiCascade
     case openaiRealtimeMini
 }
-
-public protocol VoiceEngineStore: Sendable {
-    func preferredEngine() async -> VoiceEngine
-    func setPreferredEngine(_ engine: VoiceEngine) async
-    func useFoundationModels() async -> Bool
-    func setUseFoundationModels(_ value: Bool) async
-}
-
-public enum VoiceEngineResolver {
-    public static func resolved(
-        preferred: VoiceEngine,
-        speechAvailable: Bool,
-        isDebug: Bool
-    ) -> VoiceEngine
-}
 ```
 
-Resolver: Release → always `.openaiRealtimeMini`. DEBUG + hybrid + !speech → `.openaiRealtimeMini`. Else preferred.
+Release → always mini. DEBUG → preferred (default cascade). No FM toggles in Phase 1.
 
-Keys: `voice.engine`, `voice.useFoundationModels` (defaults: preferred `.appleHybrid`, FM `true`).
-
-- [ ] Tests for store + resolver matrix → implement → `swift test --package-path apps/apple/Packages/RishiCore --filter VoiceEngine` → commit
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(core): add VoiceEngine preference and Release-safe resolver
-EOF
-)"
-```
+- [ ] Tests → commit: `feat(core): add VoiceEngine preference and Release-safe resolver`
 
 ---
 
-### Task 4: DEBUG Developer Voice Settings
+### Task 4: DEBUG engine picker
+
+Cascade (OpenAI) / Realtime Mini. Footer: Release always Realtime Mini.
+
+- [ ] Commit: `feat(settings): DEBUG picker for cascade vs realtime-mini`
+
+---
+
+### Task 5: Worker cascade provider routes (STT + LLM + TTS)
+
+**Why a dedicated task:** Phase 1 fails if agents bolt onto Deepgram transcribe, narration-metered speech, or subscription-gated chat.
 
 **Files:**
-- `RishiSettings/.../UI/Developer/DeveloperVoiceSection.swift`
-- `SettingsScreen.swift` (`#if DEBUG`)
-- App wiring / `ServiceGraphFactory`
+- Create: `workers/worker/src/routes/voice-cascade-providers.ts` (mounted under voice-sessions)
+- Tests: `voice-cascade-providers.test.ts`
+- Rates: Phase 1 may Stripe-meter cascade LLM/TTS with existing `chat` / `tts` meter types. **Do not** invent an `stt` RateCard row in Phase 1 — skip `meterFromContext` for cascade STT or log-only until a real STT rate type exists.
 
-Consumes `any VoiceEngineStore` from RishiCore only. Footer: “DEBUG only. Release builds always use Realtime Mini.”
+**Shared guard for all three routes:**
+1. `requireAuth`
+2. Load live session for user; require `rishiSessionId` match, `sessionKind === "cascade"`, `status === "active"`
+3. Else 404/409 with stable error codes
 
-- [ ] Implement → confirm Release omits section → commit
+**`POST /api/voice-sessions/:id/cascade/transcribe`**
+- Body: `{ audio: base64, mime_type: "audio/wav" }` (same shape as today’s transcribe endpoint)
+- Call OpenAI transcriptions API with `model: "gpt-4o-mini-transcribe"`
+- Return `{ text: string }`
+- Stripe-meter: Phase 1 skip STT `meterFromContext` (no `stt` rate type yet); log bytes/model for debug
+- Max audio bytes: **2 MiB** (reject larger)
 
-```bash
-git commit -m "$(cat <<'EOF'
-feat(settings): DEBUG voice engine and Foundation Models toggles
-EOF
-)"
-```
+**`POST /api/voice-sessions/:id/cascade/complete`**
+- Body: `{ query: string, page_text?: string, active_paragraph_text?: string, rag_snippets?: string[], language?: string }`
+- `generateText` / streamText with `gpt-5-nano`, `store: false`
+- System prompt: short book tutor + soft-capped page/rag context (reuse soft-cap constant from shared voice-chat)
+- Return JSON `{ text: string }` for Phase 1 simplicity (SSE optional later)
+- Meter as chat usage; **no** `requireActiveSubscription`
 
----
+**`POST /api/voice-sessions/:id/cascade/speech`**
+- Body: `{ text, voice?, speed? }` — same validation clamps as `/api/audio/speech`
+- Call `openai.audio.speech.create` with `gpt-4o-mini-tts`
+- **Must not** call `ledger.reserveTts` / commit narration
+- May still use TTS R2 cache (cache hit = no OpenAI call); cache writes OK
+- Return audio bytes or SSE events matching existing speech response_mode if cheap to reuse; otherwise raw MP3 + `Content-Type: audio/mpeg` for Phase 1
+- Meter OpenAI TTS usage for observability only
 
-### Task 5: SpeechAnalyzer STT wrapper
-
-**Files:** `RishiVoice/Hybrid/SpeechTranscribing.swift`, `AppleSpeechTranscriber.swift`
-
-```swift
-public protocol SpeechTranscribing: Sendable {
-    var isAvailable: Bool { get }
-    func start() async throws
-    func stop() async
-    var transcripts: AsyncStream<SpeechTranscriptEvent> { get }
-}
-```
-
-Use `#available(iOS 26, macOS 26, *)`. Audio session: `.playAndRecord` + `.defaultToSpeaker` (shared with AVSpeech).
-
-- [ ] Availability test → implement → commit
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(voice): SpeechAnalyzer wrapper for hybrid Voice Chat STT
-EOF
-)"
-```
+- [ ] Failing route tests (active cascade OK; realtime session ID rejected; no session rejected; speech does not invoke reserveTts spy)
+- [ ] Implement
+- [ ] Commit: `feat(worker): cascade STT/LLM/TTS routes scoped to active voice sessions`
 
 ---
 
-### Task 6: LLM responders (FM + non-persisting nano)
+### Task 6: iOS mic capture + OpenAI STT client
 
 **Files:**
-- `RishiVoice/Hybrid/VoiceLLMResponding.swift`
-- `FoundationModelResponder.swift` (`canImport(FoundationModels)` + availability)
-- `CloudNanoResponder.swift`
-- `HybridLLMRouter.swift`
-- **New thin client (pick one, prefer A):**
-  - **A (preferred):** `RishiCore` protocol `VoiceChatCompleting` + `WorkerClient` implementation that `POST /api/chat`, parses SSE, **does not** touch conversation stores / dirty sync
-  - **B:** Promote a public non-persisting helper inside RishiChat and depend on it from RishiVoice — only if A is awkward
+- `RishiVoice/Cascade/SpeechTranscribing.swift`
+- `RishiVoice/Cascade/CascadeMicCapture.swift` (AVAudioEngine tap → 16 kHz mono PCM → WAV)
+- `RishiVoice/Cascade/OpenAISpeechTranscriber.swift`
+- `RishiCore` cascade transcribe endpoint Codable
 
-**Forbidden:** calling `RishiChatService.stream` / `ChatService.stream` for hybrid turns (persists chat history).
+**Endpointing (locked):**
+- Ring-buffer / running RMS silence detector
+- After ≥400ms of speech, **800ms** continuous silence → finalize utterance
+- Hard cap **30s** → force finalize
+- Upload WAV via cascade transcribe route; emit `SpeechTranscriptEvent(isFinal: true)`
+- Ignore finals with empty/whitespace text
+- Audio session: `.playAndRecord` + `.defaultToSpeaker` (shared with TTS playback)
 
-**Do not** add a hard `RishiChat` dependency to `RishiVoice` unless choosing B.
-
-Router: FM when `useFoundationModels && available`, else cloud nano.
-
-Prompt: short tutor instructions + soft-capped page text + eager on-device RAG snippets; keep FM prompts inside ~4K context.
-
-Note in code comment: nano turns bill as chat usage on the worker **and** the voice session burns interval allowance.
-
-- [ ] Router tests → implement FM + CloudNano via `VoiceChatCompleting` → package tests → commit
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(voice): hybrid LLM via Foundation Models or non-persisting nano chat
-EOF
-)"
-```
+- [ ] Unit-test silence detector with synthetic samples where feasible
+- [ ] Commit: `feat(voice): mic capture and OpenAI STT for cascade Voice Chat`
 
 ---
 
-### Task 7: Hybrid TTS (AVSpeech)
+### Task 7: Non-persisting cascade LLM client
 
-**Files:** `HybridSpeaking.swift`, `AVSpeechHybridSpeaker.swift`
+**Files:** `VoiceLLMResponding.swift`, `OpenAINanoResponder.swift`, cascade complete endpoint in RishiCore
 
-`stop()` cancels in-flight utterance for barge-in on new finals.
+Calls Task 5 complete route with page text + eager on-device RAG snippets. **Forbidden:** `RishiChatService.stream`.
 
-- [ ] Implement → commit
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(voice): AVSpeech playback for hybrid Voice Chat replies
-EOF
-)"
-```
+- [ ] Commit: `feat(voice): cascade gpt-5-nano client without chat persistence`
 
 ---
 
-### Task 8: HybridVoiceSession + presenter routing
+### Task 8: Cascade OpenAI TTS speaker
 
-**Files:**
-- `HybridVoiceSession.swift`
-- `HybridMeteringClient.swift` — start hybrid create (already active), open control WS, **local** tear-down on user end (no HTTP end)
-- `VoiceSessionPresenter.swift`, host/UI, `ServiceGraphFactory`
+**Files:** `CascadeSpeaking.swift`, `OpenAITTSCascadeSpeaker.swift`
 
-Resolve via `VoiceEngineResolver`. Hybrid turn loop: STT final → stop TTS → RAG → LLM → speak. DEBUG subtitle: engine + `foundation`|`nano`.
+Calls Task 5 speech route (not `/api/audio/speech`). Reuse RishiAudio MP3 decode/playback if practical. `stop()` cancels in-flight audio for barge-in.
+
+- [ ] Commit: `feat(voice): cascade gpt-4o-mini-tts speaker without narration debit`
+
+---
+
+### Task 9: CascadedVoiceSession + presenter routing
+
+**Files:** `CascadedVoiceSession.swift`, `CascadeMeteringClient.swift` (create+control WS; local end), `VoiceSessionPresenter`, DI
+
+Loop: start cascade → listen → on final → stop TTS → RAG → LLM → speak → listen again until session_ended / user end.
+
+DEBUG subtitle: `cascade` | `realtime-mini`.
 
 **Manual checklist:**
-- [ ] Hybrid + FM on / off
-- [ ] Realtime Mini path
-- [ ] Allowance ticks on both
-- [ ] Hybrid survives >15s without register-call
-- [ ] Release ignores hybrid preference
-- [ ] Hybrid turns do **not** appear in text chat history
+- [ ] Full cascade turn (paid + trial-credit account)
+- [ ] Realtime Mini works
+- [ ] Allowance ticks; narration seconds **unchanged** after cascade TTS turns
+- [ ] Survives >15s without register-call
+- [ ] Release ignores cascade preference
+- [ ] No new rows in text chat history
 
-- [ ] Implement → test → commit
-
-```bash
-git commit -m "$(cat <<'EOF'
-feat(voice): route Voice Chat through hybrid or realtime-mini engines
-EOF
-)"
-```
+- [ ] Commit: `feat(voice): route Voice Chat through OpenAI cascade or realtime-mini`
 
 ---
 
-### Task 9: Docs
+### Task 10: Phase 1 docs + exit notes
 
-**Files:**
-- `apps/apple/docs/VOICE-CHAT-PIPELINE.md`
-- `apps/apple/docs/RUNBOOK-VOICE-ENGINE-AB.md`
+`VOICE-CHAT-PIPELINE.md` + `RUNBOOK-VOICE-ENGINE-AB.md`: models, cascade routes, metering rules (voice intervals yes / narration no), A/B criteria, Phase 2 order.
 
-Include: inline hybrid activate, dual COGS note, no chat persistence, Release force-mini, A/B criteria, v1 limits.
+- [ ] Commit: `docs(voice): document OpenAI cascade vs realtime-mini A/B`
 
-- [ ] Write → commit
+---
 
-```bash
-git commit -m "$(cat <<'EOF'
-docs(voice): document hybrid Apple path and realtime-mini A/B
-EOF
-)"
-```
+# Phase 2 tasks (after Phase 1 exit)
+
+### Task 11: STT → SpeechAnalyzer
+### Task 12: LLM → Foundation Models + DEBUG kill switch
+### Task 13: TTS → AVSpeech option
+### Task 14: Phase 2 docs / recommended defaults
 
 ---
 
 ## Out of scope
 
-- Release engine picker / App Store A/B
-- Cloud STT cascade fallback
-- Premium TTS for hybrid replies
-- Electron hybrid
-- PCC LLM tier
+- Release engine picker
+- Electron cascade
+- PCC LLM
 - Mid-call engine switch
-- New HTTP voice-session end endpoint
+- New HTTP session end
 - Price/allowance changes
+- Replacing Realtime entirely
+- Using Deepgram for Phase 1 baseline
 
 ## Self-review
 
 | Requirement | Task |
 | --- | --- |
 | Mini mint | 1 |
-| DO migration + inline hybrid activate | 2 |
-| Release-safe resolve | 3, 8 |
-| DEBUG Settings + FM kill | 3, 4, 6 |
-| SpeechAnalyzer | 5 |
-| FM or non-persisting nano | 6 |
-| AVSpeech | 7 |
-| Routing + A/B | 8 |
-| Docs | 9 |
+| Cascade activate + migration | 2 |
+| Engine prefs + DEBUG UI | 3, 4 |
+| Worker cascade STT/LLM/TTS (no narration / no sub-gate) | 5 |
+| Mic + STT client | 6 |
+| LLM + TTS clients | 7, 8 |
+| Session routing + A/B | 9 |
+| Docs | 10 |
 
-**Order:** 1 → 2 → 3 → 4 → 5 ∥ 6 ∥ 7 → 8 → 9
+**Order:** 1 → 2 → 3 → 4 → 5 → 6 ∥ 7 ∥ 8 → 9 → 10. Then Phase 2.
 
-**Hard gate:** Do not start Task 8 until Task 2 proves hybrid stays `active` past registration grace with `callId == null` and ticks intervals.
+**Hard gates:**
+- No Task 9 until Task 2 proves cascade stays active past grace with null callId.
+- No Task 6–8 clients until Task 5 routes exist and tests prove speech skips `reserveTts`.
+- No Phase 2 until Phase 1 exit criteria pass (including trial-credit turn + narration unchanged).
