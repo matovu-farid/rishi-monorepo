@@ -14,7 +14,7 @@ describe("parseRealtimeUsageBody", () => {
     if (result.ok) {
       expect(result.usage).toEqual({
         type: "realtime",
-        model: "gpt-realtime",
+        model: "gpt-realtime-mini",
         audioInputTokens: 1000,
         audioOutputTokens: 500,
         textInputTokens: 0,

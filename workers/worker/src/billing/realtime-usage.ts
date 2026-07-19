@@ -1,14 +1,14 @@
 import type { OpenAiUsage } from "@rishi/shared/billing/cost";
 
 /**
- * Per-report cap. Roughly $50 worth of realtime audio at gpt-realtime
- * rates (audio in $32/1M, audio out $64/1M, plus margin). Anyone
+ * Per-report cap. Roughly $15 worth of realtime audio at gpt-realtime-mini
+ * rates (audio in $10/1M, audio out $20/1M, plus margin). Anyone
  * sending more in a single report is almost certainly buggy or
  * malicious; we 400 and ask them to split.
  */
 export const REALTIME_MAX_TOKENS_PER_REPORT = 500_000;
 
-const REALTIME_MODEL = "gpt-realtime";
+const REALTIME_MODEL = "gpt-realtime-mini";
 
 type ParseResult =
   | { ok: true; usage: OpenAiUsage }
