@@ -194,7 +194,7 @@ describe("buildRealtimeClientSecretsBody", () => {
   it("uses session.type='realtime' and a known realtime model", () => {
     const body = buildRealtimeClientSecretsBody({ language: "en" })
     expect(body.session.type).toBe("realtime")
-    expect(body.session.model).toBe("gpt-realtime")
+    expect(body.session.model).toBe("gpt-realtime-mini")
   })
 
   it("requests expires_after anchored at created_at with a sensible TTL", () => {

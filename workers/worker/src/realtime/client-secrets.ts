@@ -91,7 +91,7 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
     },
     session: {
       type: "realtime",
-      model: "gpt-realtime",
+      model: "gpt-realtime-mini",
       instructions,
       tools: [
         {

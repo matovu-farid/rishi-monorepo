@@ -46,5 +46,11 @@ export const DEFAULT_RATES: RateCard = {
       textInputPer1M: 4.0,
       textOutputPer1M: 16.0,
     },
+    "gpt-realtime-mini": {
+      audioInputPer1M: 10.0,
+      audioOutputPer1M: 20.0,
+      textInputPer1M: 0.6,
+      textOutputPer1M: 2.4,
+    },
   },
 };
