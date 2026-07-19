@@ -60,6 +60,14 @@ public enum EntitlementSnapshot: Sendable, Equatable {
             return nil
         }
     }
+
+    /// `true` when the snapshot is a paid active period (Reader or Voice).
+    public var isPaidActive: Bool {
+        switch self {
+        case .readerActive, .voiceActive: return true
+        default: return false
+        }
+    }
 }
 
 // MARK: - Decodable

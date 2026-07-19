@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
+import {
+  verifyAppleJWS,
+  JWSInvalid,
+  allowsXcodeStoreKitTesting,
+} from "./jws-verify";
 import { buildTestKit, type TestKit } from "./jws-fixtures";
 
 let kit: TestKit;
@@ -121,6 +125,80 @@ describe("verifyAppleJWS — X.509 chain validation (security review)", () => {
     await expect(
       verifyAppleJWS(jws, { rootCa: kit.rootDer }),
     ).rejects.toMatchObject({ name: "JWSInvalid", reason: "x5c" });
+  });
+});
+
+describe("verifyAppleJWS — StoreKit Testing (Xcode)", () => {
+  it("accepts a 1-cert Xcode JWS when allowXcodeStoreKitTesting is true", async () => {
+    const jws = await kit.signXcodeFixture({
+      sub: "tx-0",
+      productId: "org.fidexa.rishi.reader.monthly",
+      environment: "Xcode",
+    });
+    const payload = await verifyAppleJWS<{
+      sub: string;
+      environment: string;
+    }>(jws, { allowXcodeStoreKitTesting: true });
+    expect(payload.sub).toBe("tx-0");
+    expect(payload.environment).toBe("Xcode");
+  });
+
+  it("rejects Xcode JWS when allowXcodeStoreKitTesting is omitted (production)", async () => {
+    const jws = await kit.signXcodeFixture({
+      sub: "tx-0",
+      environment: "Xcode",
+    });
+    await expect(verifyAppleJWS(jws)).rejects.toMatchObject({
+      name: "JWSInvalid",
+      reason: "x5c",
+    });
+  });
+
+  it("rejects 1-cert non-Xcode JWS even when allowXcode is true", async () => {
+    const jws = await kit.signXcodeFixture({
+      sub: "tx-0",
+      environment: "Sandbox",
+    });
+    await expect(
+      verifyAppleJWS(jws, { allowXcodeStoreKitTesting: true }),
+    ).rejects.toMatchObject({ name: "JWSInvalid", reason: "x5c" });
+  });
+});
+
+describe("allowsXcodeStoreKitTesting", () => {
+  it("is false when ENVIRONMENT is production", () => {
+    expect(allowsXcodeStoreKitTesting({ ENVIRONMENT: "production" })).toBe(
+      false,
+    );
+  });
+
+  it("is true only for exact staging / development allowlist", () => {
+    expect(allowsXcodeStoreKitTesting({ ENVIRONMENT: "staging" })).toBe(true);
+    expect(allowsXcodeStoreKitTesting({ ENVIRONMENT: "development" })).toBe(
+      true,
+    );
+  });
+
+  it("denies unknown or differently-cased ENVIRONMENT values", () => {
+    expect(allowsXcodeStoreKitTesting({ ENVIRONMENT: "preview" })).toBe(false);
+    expect(allowsXcodeStoreKitTesting({ ENVIRONMENT: "Staging" })).toBe(false);
+    expect(allowsXcodeStoreKitTesting({ ENVIRONMENT: "Development" })).toBe(
+      false,
+    );
+  });
+
+  it("allows ENABLE_TEST_AUTH === true regardless of ENVIRONMENT", () => {
+    expect(allowsXcodeStoreKitTesting({ ENABLE_TEST_AUTH: "true" })).toBe(true);
+    expect(
+      allowsXcodeStoreKitTesting({
+        ENVIRONMENT: "production",
+        ENABLE_TEST_AUTH: "true",
+      }),
+    ).toBe(true);
+    expect(allowsXcodeStoreKitTesting({ ENABLE_TEST_AUTH: "false" })).toBe(
+      false,
+    );
+    expect(allowsXcodeStoreKitTesting({})).toBe(false);
   });
 });
 

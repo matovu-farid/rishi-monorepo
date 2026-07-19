@@ -10,7 +10,13 @@ final class SignedInViewModel {
     var showSettings = false
     private(set) var bookHints: [BookID: Book] = [:]
 
-    func requestPaywall(_ name: String) {
+    func requestPaywall(_ name: String, serverPaidActive: Bool = false) {
+        if serverPaidActive,
+           name != "narration_exhausted",
+           name != "voice_chat_exhausted"
+        {
+            return
+        }
         paywallFeature = PaywallFeature(name: name)
     }
     func dismissPaywall() { paywallFeature = nil }

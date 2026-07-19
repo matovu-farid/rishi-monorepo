@@ -28,7 +28,13 @@
  * the Cloudflare Workers runtime (RESEARCH §2, Pitfall 8).
  */
 import "reflect-metadata";
-import { decodeProtectedHeader, importX509, jwtVerify, type JWTPayload } from "jose";
+import {
+  decodeJwt,
+  decodeProtectedHeader,
+  importX509,
+  jwtVerify,
+  type JWTPayload,
+} from "jose";
 import * as x509 from "@peculiar/x509";
 import { APPLE_ROOT_CA_G3_DER } from "./apple-root-ca-g3";
 
@@ -69,6 +75,30 @@ export interface VerifyOpts {
    * for time-travel tests; production omits.
    */
   now?: Date;
+  /**
+   * When true, accept StoreKit Testing (Xcode) JWTs: typically a 1-cert
+   * self-signed chain with `environment: "Xcode"`, verified against that
+   * leaf without Apple Root CA pinning. Mirror Apple's Environment.XCODE
+   * behavior. MUST stay false in production.
+   */
+  allowXcodeStoreKitTesting?: boolean;
+}
+
+/**
+ * True when this worker deployment may accept StoreKit Testing JWTs.
+ *
+ * Allowlist only: exact `ENVIRONMENT` of `staging` | `development`, or
+ * `ENABLE_TEST_AUTH === "true"`. Everything else (including unset env,
+ * `production`, and unknown ENVIRONMENT values) is denied.
+ */
+export function allowsXcodeStoreKitTesting(env: {
+  ENVIRONMENT?: string;
+  ENABLE_TEST_AUTH?: string;
+}): boolean {
+  if (env.ENVIRONMENT === "staging" || env.ENVIRONMENT === "development") {
+    return true;
+  }
+  return env.ENABLE_TEST_AUTH === "true";
 }
 
 /** Constant-time byte-array equality. */
@@ -94,6 +124,64 @@ function b64StdToBytes(b64: string): Uint8Array {
 /** True iff `now` falls within [cert.notBefore, cert.notAfter]. */
 function isWithinValidity(cert: x509.X509Certificate, now: Date): boolean {
   return now >= cert.notBefore && now <= cert.notAfter;
+}
+
+/**
+ * Verify a StoreKit Testing (Xcode) JWS: 1-cert self-signed chain, no
+ * Apple Root CA pin. Still requires a cryptographically valid ES256
+ * signature over the payload using x5c[0].
+ */
+async function verifyXcodeStoreKitJWS<T extends JWTPayload>(
+  jws: string,
+  x5c: string[],
+  opts: VerifyOpts,
+): Promise<T> {
+  const now = opts.now ?? new Date();
+  if (x5c.length < 1) {
+    throw new JWSInvalid("x5c", "Xcode JWS missing x5c leaf certificate");
+  }
+
+  let leafCert: x509.X509Certificate;
+  try {
+    leafCert = new x509.X509Certificate(b64StdToBytes(x5c[0]));
+  } catch (e) {
+    throw new JWSInvalid("chain", `Xcode x5c[0] parse failed: ${String(e)}`);
+  }
+
+  if (!isWithinValidity(leafCert, now)) {
+    throw new JWSInvalid(
+      "expired",
+      `Xcode leaf cert outside validity window (${leafCert.notBefore.toISOString()} .. ${leafCert.notAfter.toISOString()})`,
+    );
+  }
+
+  let leafKey: CryptoKey;
+  try {
+    if (opts.leafKeyResolver) {
+      leafKey = await opts.leafKeyResolver(x5c);
+    } else {
+      const leafPem = `-----BEGIN CERTIFICATE-----\n${x5c[0]}\n-----END CERTIFICATE-----\n`;
+      leafKey = (await importX509(leafPem, "ES256")) as CryptoKey;
+    }
+  } catch (e) {
+    throw new JWSInvalid("chain", `Xcode leaf key import failed: ${String(e)}`);
+  }
+
+  try {
+    const { payload } = await jwtVerify(jws, leafKey, {
+      algorithms: ["ES256"],
+    });
+    if ((payload as { environment?: unknown }).environment !== "Xcode") {
+      throw new JWSInvalid(
+        "payload",
+        "Xcode verification path requires environment claim Xcode",
+      );
+    }
+    return payload as T;
+  } catch (e) {
+    if (e instanceof JWSInvalid) throw e;
+    throw new JWSInvalid("payload", `Xcode jwtVerify failed: ${String(e)}`);
+  }
 }
 
 /**
@@ -124,20 +212,47 @@ export async function verifyAppleJWS<T extends JWTPayload>(
     throw new JWSInvalid("alg", `expected ES256, got ${String(header.alg)}`);
   }
 
-  // Step 2b: x5c must be present AND contain exactly the [leaf, intermediate,
-  // root] chain. Apple always ships 3 entries (RESEARCH §7.1); rejecting
-  // short chains forecloses the "we can't byte-pin the root if it's missing"
-  // attack surface.
   const x5cRaw = (header as { x5c?: unknown }).x5c;
-  if (!Array.isArray(x5cRaw) || x5cRaw.length < 3) {
+  if (!Array.isArray(x5cRaw) || x5cRaw.length < 1) {
     throw new JWSInvalid(
       "x5c",
-      `x5c header missing or has fewer than 3 entries (got ${
+      `x5c header missing or empty (got ${
         Array.isArray(x5cRaw) ? x5cRaw.length : "none"
       })`,
     );
   }
   const x5c = x5cRaw as string[];
+
+  // StoreKit Testing JWTs claim environment "Xcode" and ship a 1-cert
+  // self-signed chain (not Apple Root CA-G3). Detect via unverified
+  // payload claim, then either accept (non-prod) or reject (prod).
+  let unverifiedEnvironment: unknown;
+  try {
+    unverifiedEnvironment = (decodeJwt(jws) as { environment?: unknown })
+      .environment;
+  } catch (e) {
+    throw new JWSInvalid("payload", `decodeJwt failed: ${String(e)}`);
+  }
+  if (unverifiedEnvironment === "Xcode") {
+    if (!opts.allowXcodeStoreKitTesting) {
+      throw new JWSInvalid(
+        "x5c",
+        "Xcode StoreKit Testing JWS rejected (production / allowXcode disabled)",
+      );
+    }
+    return verifyXcodeStoreKitJWS<T>(jws, x5c, opts);
+  }
+
+  // Step 2b: production/sandbox require the [leaf, intermediate, root]
+  // chain. Apple always ships 3 entries (RESEARCH §7.1); rejecting short
+  // chains forecloses the "we can't byte-pin the root if it's missing"
+  // attack surface.
+  if (x5c.length < 3) {
+    throw new JWSInvalid(
+      "x5c",
+      `x5c header missing or has fewer than 3 entries (got ${x5c.length})`,
+    );
+  }
 
   // Step 3: pin the root identity. Byte-compare the wire root against the
   // pinned bytes BEFORE any signature work — fastest reject for the most

@@ -165,7 +165,10 @@ public actor RestoreService {
             guard tx.revocationDate == nil else { continue }
             ids.append(tx.productID)
             do {
-                try await syncEntitlement(jws: result.jwsRepresentation)
+                let syncResult = try await syncEntitlement(jws: result.jwsRepresentation)
+                // verified:false is a business reject for this JWS — not fatal
+                // to restore; onSynced only fires on verified so continue either way.
+                if !syncResult.verified { continue }
             } catch {
                 // Restore already flipped the on-device reconciler from
                 // StoreKit entitlements; sync failure is logged inside

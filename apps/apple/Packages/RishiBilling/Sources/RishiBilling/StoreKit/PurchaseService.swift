@@ -116,7 +116,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         self.entitlementSyncClient = entitlementSyncClient ?? Self.defaultEntitlementSyncClient()
         self.onEntitlementSynced = onEntitlementSynced
         self.purchaseClosure = purchaseClosure ?? { product in
-            let options = await AppAccountToken.currentPurchaseOptions()
+            let options = try await AppAccountToken.currentPurchaseOptions()
             return try await product.purchase(options: options)
         }
     }
@@ -208,7 +208,21 @@ public actor PurchaseService: PurchaseUpdateForwarder {
             )
             if resp.verified {
                 do {
-                    try await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
+                    let syncResult = try await entitlementSyncClient.sync(
+                        transactionJWS: result.jwsRepresentation
+                    )
+                    if !syncResult.verified {
+                        // Business reject after verify-receipt succeeded —
+                        // finish to break the loop; do not grant locally.
+                        await tx.finish()
+                        Log.event("iap.update.entitlement_sync_rejected_and_finished", level: .warning,
+                                  data: [
+                                      "tx": "\(tx.id)",
+                                      "reason": syncResult.reason ?? "unknown",
+                                      "source": source,
+                                  ])
+                        return
+                    }
                 } catch {
                     Log.event("iap.update.entitlement_sync_threw_left_unfinished", level: .warning,
                               data: [
@@ -224,10 +238,10 @@ public actor PurchaseService: PurchaseUpdateForwarder {
                 Log.event("iap.update.granted_and_finished", level: .info,
                           data: ["tx": "\(tx.id)", "source": source])
             } else {
-                // Worker rejected — finish to break the loop.
+                // Worker rejected — finish to break the loop; do not treat as
+                // entitlement-synced success (reconciler stays free).
                 await tx.finish()
-                try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
-                await onEntitlementSynced?()
+                _ = try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
                 Log.event("iap.update.rejected_and_finished", level: .warning,
                           data: [
                               "tx": "\(tx.id)",
@@ -282,7 +296,21 @@ public actor PurchaseService: PurchaseUpdateForwarder {
 
         if resp.verified {
             do {
-                try await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
+                let syncResult = try await entitlementSyncClient.sync(
+                    transactionJWS: result.jwsRepresentation
+                )
+                if !syncResult.verified {
+                    // Entitlement sync business reject after verify-receipt
+                    // succeeded — finish like verify-receipt reject; do not
+                    // set subscribed or treat as entitlement-synced success.
+                    await tx.finish()
+                    Log.event("iap.purchase.entitlement_sync_rejected", level: .warning,
+                              data: [
+                                  "tx": "\(tx.id)",
+                                  "reason": syncResult.reason ?? "unknown",
+                              ])
+                    return .rejected(reason: syncResult.reason ?? "unknown")
+                }
             } catch {
                 // Leave UNFINISHED so Transaction.unfinished can replay.
                 Log.event("iap.purchase.entitlement_sync_failed_left_unfinished", level: .warning,
@@ -297,9 +325,9 @@ public actor PurchaseService: PurchaseUpdateForwarder {
             return .granted(premiumUntil: resp.premiumUntil)
         } else {
             // Worker rejected — finish to break the loop; reconciler stays free.
+            // Do not call onEntitlementSynced on verify-receipt reject.
             await tx.finish()
-            try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
-            await onEntitlementSynced?()
+            _ = try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
             Log.event("iap.purchase.worker_rejected", level: .warning,
                       data: ["tx": "\(tx.id)", "reason": resp.reason ?? "unknown"])
             return .rejected(reason: resp.reason ?? "unknown")

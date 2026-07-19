@@ -32,12 +32,12 @@ Paid plans use human-readable narration and Voice Chat time allowances, not cred
 
 | Plan | Monthly price | Annual price | Natural AI narration | Voice Chat | Per-session Voice Chat cap |
 | --- | --- | --- | --- | --- | --- |
-| Rishi Reader | $7.99/month | $76.99/year | 2 hours/month | 10 minutes/month | 10 minutes |
-| Rishi Voice | $14.99/month | $143.99/year | 4 hours/month at launch | 30 minutes/month | 20 minutes |
+| Rishi Reader | $7.99/month | $76.99/year | 6 hours/month | 90 minutes/month | 10 minutes |
+| Rishi Voice | $14.99/month | $143.99/year | 12 hours/month | 180 minutes/month | 20 minutes |
 
 The annual prices are approximately 20% below twelve monthly payments and should be presented as “Save about 20% with annual.” Annual billing does not bank or front-load usage: both paid plans retain the same monthly narration and Voice Chat reset, with no rollover or overages.
 
-Both paid plans include unlimited core reading, library, highlights, and sync. All narration is OpenAI-generated natural narration; the product does not position device narration as an included fallback. The four-hour Rishi Voice narration allowance is deliberately conservative at launch and may be increased only after production cost telemetry validates the high-usage case.
+Both paid plans include unlimited core reading, library, highlights, and sync. All narration is OpenAI-generated natural narration; the product does not position device narration as an included fallback. Reader is exactly half of Voice on monthly narration and Voice Chat allowances. Voice Chat remains the dominant variable cost; hard monthly and per-session caps still apply.
 
 Reader and Voice products are in the same StoreKit subscription group, with Voice ranked above Reader. A Reader-to-Voice upgrade takes effect immediately under StoreKit billing and begins a full fresh Voice allowance period; Rishi does not calculate the price difference or subtract Reader usage from the new Voice allowance. A Voice-to-Reader downgrade takes effect at renewal, so the user keeps Voice access until then. Same-tier monthly/annual changes take effect at renewal.
 

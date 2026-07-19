@@ -100,7 +100,10 @@ struct SignedInView: View {
                 case .upgrade:
                     Button("See plans") {
                         services.voicePresenter.clearFailure()
-                        model.requestPaywall("voice_chat_exhausted")
+                        model.requestPaywall(
+                            "voice_chat_exhausted",
+                            serverPaidActive: services.entitlementSnapshotStore.snapshot.isPaidActive
+                        )
                     }
                 case .dismiss:
                     Button("OK") {

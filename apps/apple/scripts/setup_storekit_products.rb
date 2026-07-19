@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-# Create the Rishi Pro subscription products in App Store Connect via the
-# REST API. Idempotent — re-running skips existing entities.
+# Create the Rishi Reader / Rishi Voice subscription products in App Store
+# Connect via the REST API. Idempotent — re-running skips existing entities.
 #
 # Why not fastlane? Spaceship (the ASC client fastlane bundles) does not
 # wrap the subscription endpoints. We hit /v1/subscriptions directly with
@@ -20,14 +20,18 @@ require "json"
 require "uri"
 
 BUNDLE_ID   = "org.fidexa.rishi"
-GROUP_NAME  = "Rishi Pro"
+GROUP_NAME  = "Rishi Reader & Voice"
+# IDs must match RishiProductID + workers/worker/src/billing/apple-product-plans.ts.
+# Legacy org.fidexa.rishi.pro.* products are not created here.
 PRODUCTS    = [
-  { product_id: "org.fidexa.rishi.pro.monthly", name: "Rishi Pro Monthly", period: "ONE_MONTH" },
-  { product_id: "org.fidexa.rishi.pro.annual",  name: "Rishi Pro Annual",  period: "ONE_YEAR"  }
+  { product_id: "org.fidexa.rishi.voice.monthly",  name: "Rishi Voice Monthly",  period: "ONE_MONTH" },
+  { product_id: "org.fidexa.rishi.voice.annual",   name: "Rishi Voice Annual",   period: "ONE_YEAR"  },
+  { product_id: "org.fidexa.rishi.reader.monthly", name: "Rishi Reader Monthly", period: "ONE_MONTH" },
+  { product_id: "org.fidexa.rishi.reader.annual",  name: "Rishi Reader Annual",  period: "ONE_YEAR"  },
 ]
 # Apple caps subscription localization description at 55 chars. This is
 # the one-liner shown on the paywall sheet, NOT the App Store page description.
-DESCRIPTION = "AI chat, voice, premium TTS, library sync."
+DESCRIPTION = "AI narration and Voice Chat for your library."
 
 ASC_BASE = "https://api.appstoreconnect.apple.com"
 

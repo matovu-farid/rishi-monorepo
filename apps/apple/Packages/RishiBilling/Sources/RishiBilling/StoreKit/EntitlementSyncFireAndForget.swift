@@ -10,6 +10,19 @@ public enum EntitlementSyncHooks {
     nonisolated(unsafe) public static var onSynced: (@Sendable () async -> Void)?
 }
 
+/// Outcome of a successful HTTP round-trip to entitlement-sync.
+/// `verified: false` is a business reject (permanent / mismatch), not a
+/// transport failure — callers should finish the StoreKit transaction.
+public struct EntitlementSyncResult: Sendable, Equatable {
+    public let verified: Bool
+    public let reason: String?
+
+    public init(verified: Bool, reason: String?) {
+        self.verified = verified
+        self.reason = reason
+    }
+}
+
 /// Awaits entitlement sync for call sites that are bare singletons with no
 /// dependency-injection surface today (``Store``, ``CustomerEntitlements``,
 /// ``RestoreService``). Builds its own throwaway `WorkerClient` per call via
@@ -17,21 +30,30 @@ public enum EntitlementSyncHooks {
 /// `VerifyEndPont(...).send()` already uses in
 /// `CustomerEntitlements.observeTransactionUpdates()`.
 ///
-/// On success, invokes ``EntitlementSyncHooks/onSynced`` so Settings/gates
-/// can refresh without waiting for paywall dismiss or the next foreground.
-/// On failure, logs and rethrows so the caller can leave the StoreKit
-/// transaction unfinished for `Transaction.unfinished` / `updates` replay.
+/// On HTTP success with `verified: true`, invokes ``EntitlementSyncHooks/onSynced``
+/// so Settings/gates can refresh without waiting for paywall dismiss or the
+/// next foreground. On HTTP success with `verified: false`, returns the
+/// result without calling `onSynced` (caller finishes the transaction).
+/// On transport failure, logs and rethrows so the caller can leave the
+/// StoreKit transaction unfinished for `Transaction.unfinished` / `updates` replay.
 ///
 /// ``PurchaseService`` does NOT use this helper — it already has a real DI
 /// graph (``EntitlementSyncClient``) and keeps using that for testability.
-func syncEntitlement(jws: String) async throws {
+func syncEntitlement(jws: String) async throws -> EntitlementSyncResult {
     do {
         let response = try await EntitlementSyncEndpoint(
             body: .init(transactionJWS: jws)
         ).send()
         Log.event("iap.entitlement_sync.done", level: .info,
                   data: ["verified": "\(response.verified)"])
-        await EntitlementSyncHooks.onSynced?()
+        let result = EntitlementSyncResult(
+            verified: response.verified,
+            reason: response.reason
+        )
+        if result.verified {
+            await EntitlementSyncHooks.onSynced?()
+        }
+        return result
     } catch {
         Log.event("iap.entitlement_sync.failed", level: .warning,
                   data: ["error": String(describing: error)])

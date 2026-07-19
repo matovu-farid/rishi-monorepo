@@ -31,10 +31,19 @@ public enum RishiProductID {
         voiceMonthly, voiceAnnual,
     ]
 
-    /// The four new Reader/Voice ids only, excluding legacy Pro. No caller
-    /// needs this yet; kept for the next plan that must distinguish "new
-    /// tier" ids from "legacy Pro" ids (e.g. a grandfathering plan).
+    /// The four new Reader/Voice ids only, excluding legacy Pro.
     public static let readerAndVoice: [String] = [
         readerMonthly, readerAnnual, voiceMonthly, voiceAnnual,
+    ]
+
+    /// Merchandising order for `SubscriptionStoreView(productIDs:)`.
+    /// Monthlies first, cheapest entry plan first. Independent of ASC
+    /// subscription-group rank (Voice=1, Reader=2), which still governs
+    /// upgrade/downgrade when purchased.
+    public static let paywallDisplayOrder: [String] = [
+        readerMonthly,
+        voiceMonthly,
+        readerAnnual,
+        voiceAnnual,
     ]
 }

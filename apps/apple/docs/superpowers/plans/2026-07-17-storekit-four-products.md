@@ -296,7 +296,7 @@ In `apps/apple/rishi/Rishi Reader.storekit`, the `subscriptionGroups` array curr
           ],
           "localizations" : [
             {
-              "description" : "4h AI narration, 30 min Voice Chat monthly.",
+              "description" : "12h AI narration, 180 min Voice Chat monthly.",
               "displayName" : "Rishi Voice Monthly",
               "locale" : "en_US"
             }
@@ -335,7 +335,7 @@ In `apps/apple/rishi/Rishi Reader.storekit`, the `subscriptionGroups` array curr
           ],
           "localizations" : [
             {
-              "description" : "4h AI narration, 30 min Voice Chat. Billed yearly.",
+              "description" : "12h AI narration, 180 min Voice Chat. Billed yearly.",
               "displayName" : "Rishi Voice Annual",
               "locale" : "en_US"
             }
@@ -374,7 +374,7 @@ In `apps/apple/rishi/Rishi Reader.storekit`, the `subscriptionGroups` array curr
           ],
           "localizations" : [
             {
-              "description" : "2h AI narration, 10 min Voice Chat monthly.",
+              "description" : "6h AI narration, 90 min Voice Chat monthly.",
               "displayName" : "Rishi Reader Monthly",
               "locale" : "en_US"
             }
@@ -413,7 +413,7 @@ In `apps/apple/rishi/Rishi Reader.storekit`, the `subscriptionGroups` array curr
           ],
           "localizations" : [
             {
-              "description" : "2h AI narration, 10 min Voice Chat. Billed yearly.",
+              "description" : "6h AI narration, 90 min Voice Chat. Billed yearly.",
               "displayName" : "Rishi Reader Annual",
               "locale" : "en_US"
             }
@@ -455,7 +455,7 @@ Add a second element to that file's `subscriptionGroups` array (after the existi
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "4h AI narration, 30 min Voice Chat monthly.",
+              "description" : "12h AI narration, 180 min Voice Chat monthly.",
               "displayName" : "Rishi Voice Monthly",
               "locale" : "en_US"
             }
@@ -476,7 +476,7 @@ Add a second element to that file's `subscriptionGroups` array (after the existi
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "4h AI narration, 30 min Voice Chat. Billed yearly.",
+              "description" : "12h AI narration, 180 min Voice Chat. Billed yearly.",
               "displayName" : "Rishi Voice Annual",
               "locale" : "en_US"
             }
@@ -497,7 +497,7 @@ Add a second element to that file's `subscriptionGroups` array (after the existi
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "2h AI narration, 10 min Voice Chat monthly.",
+              "description" : "6h AI narration, 90 min Voice Chat monthly.",
               "displayName" : "Rishi Reader Monthly",
               "locale" : "en_US"
             }
@@ -518,7 +518,7 @@ Add a second element to that file's `subscriptionGroups` array (after the existi
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "2h AI narration, 10 min Voice Chat. Billed yearly.",
+              "description" : "6h AI narration, 90 min Voice Chat. Billed yearly.",
               "displayName" : "Rishi Reader Annual",
               "locale" : "en_US"
             }

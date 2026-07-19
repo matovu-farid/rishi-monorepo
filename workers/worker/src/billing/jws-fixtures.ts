@@ -45,6 +45,11 @@ export interface TestKit {
   /** Build a legitimate JWS signed by the real leaf key. */
   signFixture: (payload: JWTPayload, opts?: SignFixtureOpts) => Promise<string>;
   /**
+   * StoreKit Testing–shaped JWS: single self-signed cert in x5c, signed by
+   * that cert's key. Caller should set `environment: "Xcode"` in the payload.
+   */
+  signXcodeFixture: (payload: JWTPayload) => Promise<string>;
+  /**
    * Forged-leaf attack JWS: attacker generates their own keypair + self-signed
    * leaf cert, parks it at x5c[0], puts the REAL kit intermediate + root at
    * x5c[1..2], and signs the payload with the attacker key. A verifier that
@@ -210,6 +215,20 @@ export async function buildTestKit(): Promise<TestKit> {
     leafCert: leaf.cert,
     signFixture: (payload, opts = {}) =>
       buildJws(leafB64, intermediateB64, rootB64, leaf.privateKey, payload, opts),
+    signXcodeFixture: async (payload) => {
+      // StoreKit Testing uses a single self-signed cert as its own root.
+      const xcode = await issueRoot(
+        "StoreKit Test Certificate",
+        new Date(now.getTime() - 60_000),
+        farFuture,
+      );
+      const xcodeB64 = derToB64Std(xcode.cert.rawData);
+      const headerObj = { alg: "ES256", x5c: [xcodeB64] };
+      const signer = new SignJWT(payload).setProtectedHeader(
+        headerObj as unknown as Parameters<SignJWT["setProtectedHeader"]>[0],
+      );
+      return await signer.sign(xcode.privateKey);
+    },
     signForgedLeafFixture: async (payload) => {
       // Attacker forges a self-signed leaf cert using their own key, then
       // ships [attackerLeaf, realIntermediate, realRoot]. JWS is signed with

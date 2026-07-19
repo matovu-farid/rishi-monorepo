@@ -1,7 +1,7 @@
 # StoreKit Sandbox Runbook
 
-**Audience:** matovu90@gmail.com plus any QA operator who needs to validate the Rishi Pro subscription loop before a TestFlight push or App Review submission.
-**Purpose:** validate the Rishi Pro subscription loop end-to-end against Apple's Sandbox environment.
+**Audience:** matovu90@gmail.com plus any QA operator who needs to validate the Rishi Reader / Rishi Voice subscription loop before a TestFlight push or App Review submission.
+**Purpose:** validate the Reader/Voice subscription loop end-to-end against Apple's Sandbox environment.
 
 Run this runbook BEFORE every TestFlight build and BEFORE each App Review submission. It is the only thing standing between "`swift test` green" and "a real subscription transacts end-to-end against Apple's verification chain."
 
@@ -26,23 +26,25 @@ Confirm each item before moving on:
 
 This is a per-product one-time configuration. Skip if §0 confirmed the products are already registered.
 
-1. Sign in to App Store Connect → **Apps** → `org.fidexa.rishi` → **In-App Purchases**.
-2. **Subscription Group:** click **+** → name `Rishi Pro` → reference name `rishi-pro-group`.
-3. Inside the group, create two auto-renewable subscriptions:
+1. Sign in to App Store Connect → **Apps** → `org.fidexa.rishi` → **In-App Purchases** (Subscriptions).
+2. **Subscription Group:** click **+** → name `Rishi Reader & Voice` → reference name `rishi-reader-voice-group`.
+3. Inside the group, create four auto-renewable subscriptions (Voice rank 1 / higher, Reader rank 2 / lower — matches StoreKit group numbers):
 
-   | Product ID                       | Reference Name      | Duration | Price (US) |
-   | -------------------------------- | ------------------- | -------- | ---------- |
-   | `org.fidexa.rishi.pro.monthly`   | Rishi Pro Monthly   | 1 month  | $4.99      |
-   | `org.fidexa.rishi.pro.annual`    | Rishi Pro Annual    | 1 year   | $39.99     |
+   | Product ID                          | Reference Name         | Duration | Price (US) |
+   | ----------------------------------- | ---------------------- | -------- | ---------- |
+   | `org.fidexa.rishi.voice.monthly`    | Rishi Voice Monthly    | 1 month  | $14.99     |
+   | `org.fidexa.rishi.voice.annual`     | Rishi Voice Annual     | 1 year   | $143.99    |
+   | `org.fidexa.rishi.reader.monthly`   | Rishi Reader Monthly   | 1 month  | $7.99      |
+   | `org.fidexa.rishi.reader.annual`    | Rishi Reader Annual    | 1 year   | $76.99     |
 
-4. For each product configure an introductory offer: payment mode **Free**, period **7 days**, **1 period**.
-5. Fill in the App Store Information localizations (English at minimum). Use the 3.1.2 disclosure copy from `13-CONTEXT.md`.
+4. For each product configure an introductory offer if required by current pricing policy (otherwise skip).
+5. Fill in the App Store Information localizations (English at minimum).
 6. Add a Review Note for each product pointing the App Review team at the runbook's §10 checklist.
 7. Status: leave at **Ready to Submit**. Apple ties subscription review to app review — submit when the app build is submitted.
 
-> Pricing is operator discretion per `13-CONTEXT.md` (Claude's Discretion section). The product **IDs are LOCKED** — they MUST match the strings in `apps/apple/rishi/rishi/Rishi.storekit` and in `StoreKitProductService.monthlyProductId` / `.annualProductId`.
+> Product **IDs are LOCKED** — they MUST match `RishiProductID` in `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Models/RishiProductID.swift`, the worker map in `workers/worker/src/billing/apple-product-plans.ts`, and `apps/apple/rishi/Rishi Reader.storekit`. Legacy `org.fidexa.rishi.pro.*` ids are grandfathered for existing subscribers only; do **not** create new Pro products.
 
-Verify: both products appear in the IAP list with status `Ready to Submit`, grouped under `Rishi Pro`.
+Verify: all four Reader/Voice products appear in the IAP list with status `Ready to Submit`, grouped under `Rishi Reader & Voice`.
 
 ---
 
@@ -74,8 +76,8 @@ Verify: the tester appears in the Sandbox Testers list. The first time you sign 
 ### 3.2 iOS Simulator
 
 1. Xcode → **Settings** → **Accounts** → **+** → **Apple ID** → sign in with the Sandbox tester.
-2. Build and run Rishi on the simulator. The default `rishi` scheme uses the local `Rishi.storekit` config — see §4 for the difference vs. real Sandbox.
-3. NOTE: simulator IAP uses the LOCAL `Rishi.storekit` config UNLESS you switch to the `rishi (Sandbox)` scheme. The local config is great for daily dev but does NOT exercise Apple's verification chain — for App Review pre-submission ALWAYS use the Sandbox scheme on a real device.
+2. Build and run Rishi on the simulator. The default `rishi` scheme uses the local `Rishi Reader.storekit` config — see §4 for the difference vs. real Sandbox.
+3. NOTE: simulator IAP uses the LOCAL StoreKit config UNLESS you switch to the `rishi (Sandbox)` scheme. The local config is great for daily dev but does NOT exercise Apple's verification chain — for App Review pre-submission ALWAYS use the Sandbox scheme on a real device.
 
 ### 3.3 Mac Catalyst
 
@@ -89,7 +91,7 @@ Verify: the tester appears in the Sandbox Testers list. The first time you sign 
 
 | Scheme            | StoreKit Config        | When to use                                                       |
 | ----------------- | ---------------------- | ----------------------------------------------------------------- |
-| `rishi` (default) | `Rishi.storekit` (local) | Daily development — offline, fast, no ASC roundtrip               |
+| `rishi` (default) | `Rishi Reader.storekit` (local) | Daily development — offline, fast, no ASC roundtrip               |
 | `rishi (Sandbox)` | None — uses real ASC sandbox | This runbook (end-to-end Sandbox validation; App Review pre-flight) |
 
 To create the Sandbox scheme (one-time, already wired in `rishi.xcodeproj` per Plan 13-01):
@@ -176,7 +178,7 @@ Sandbox does NOT support self-service refunds via **Settings → Subscriptions**
 
 **Path B — Xcode Debug Refund (faster, only works on the local `.storekit` config, NOT the Sandbox scheme):**
 
-1. Run the **default** `rishi` scheme (local `Rishi.storekit`, NOT `rishi (Sandbox)`).
+1. Run the **default** `rishi` scheme (local `Rishi Reader.storekit`, NOT `rishi (Sandbox)`).
 2. Xcode → **Debug** → **StoreKit** → **Manage Transactions** → select the active transaction → **Refund Purchase**.
 3. This exercises iOS-side handling but does NOT hit the worker webhook — useful for unit-level smoke; not sufficient for App Review pre-flight.
 

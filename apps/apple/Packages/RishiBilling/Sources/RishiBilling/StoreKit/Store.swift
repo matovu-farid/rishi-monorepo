@@ -62,7 +62,8 @@ public final class Store {
 
             await CustomerEntitlements.shared.process(
                 transaction: transaction,
-                jws: verificationResult.jwsRepresentation
+                jws: verificationResult.jwsRepresentation,
+                origin: .purchaseCompletion
             )
         case .pending:
             logger.debug("Pending")

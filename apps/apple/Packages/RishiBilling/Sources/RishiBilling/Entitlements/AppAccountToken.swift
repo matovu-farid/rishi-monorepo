@@ -2,6 +2,14 @@ import Foundation
 import CryptoKit
 import StoreKit
 import RishiCore
+import RishiLogging
+
+/// Thrown when a purchase is attempted without a persisted session, so StoreKit
+/// cannot be given a matching `appAccountToken`. Callers must fail closed —
+/// never purchase without a token.
+public enum AppAccountTokenError: Error {
+    case missingSession
+}
 
 /// Derives and supplies the `appAccountToken` StoreKit purchase option that
 /// links an Apple transaction to the authenticated Rishi user, per the
@@ -43,17 +51,19 @@ public enum AppAccountToken {
 
     /// StoreKit purchase options for the currently signed-in user, ready to
     /// pass to `product.purchase(options:)`, the `\.purchase` `PurchaseAction`,
-    /// or `SubscriptionStoreView`'s `.inAppPurchaseOptions(_:)`. Returns an
-    /// empty set (StoreKit's own default — no `appAccountToken` attached)
-    /// if no session is currently persisted. The paywall is only reachable
-    /// while signed in, so this is a defensive fallback, not an expected
-    /// path; a purchase without a token simply cannot be matched to a Rishi
-    /// account server-side, which the Worker's entitlement-sync guard
-    /// already rejects safely (`app_account_token_mismatch`).
+    /// or `SubscriptionStoreView`'s `.inAppPurchaseOptions(_:)`.
+    ///
+    /// Throws ``AppAccountTokenError/missingSession`` when no session is
+    /// persisted — purchases must not proceed without an `appAccountToken`,
+    /// because the Worker rejects unmatched syncs and the local StoreKit
+    /// entitlement would look "paid" while the server stays free.
     public static func currentPurchaseOptions(
         sessionStore: KeychainSessionStore = KeychainSessionStore()
-    ) async -> Set<Product.PurchaseOption> {
-        guard let session = try? await sessionStore.load() else { return [] }
+    ) async throws -> Set<Product.PurchaseOption> {
+        guard let session = try? await sessionStore.load() else {
+            Log.event("iap.app_account_token.missing_session", level: .error)
+            throw AppAccountTokenError.missingSession
+        }
         return [.appAccountToken(derive(userId: session.userId))]
     }
 

@@ -240,6 +240,54 @@ struct PurchaseServiceTests {
         }
     }
 
+    // MARK: - Entitlement sync verified:false → rejected, no grant / no sync hook
+
+    @Test
+    func testEntitlementSyncRejects_finishes_noReconcilerSubscribe_noOnSynced() async throws {
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier(result: .success(
+                .init(verified: true, premiumUntil: .distantFuture, reason: nil)
+            ))
+            let reconciler = await self.makeReconciler()
+            let previousFlag = StoreKitIAPFlag.isEnabled
+            StoreKitIAPFlag.setEnabled(true)
+            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+
+            let syncedCounter = OnSyncedCallCounter()
+            let service = PurchaseService(
+                productFetcher: SingleProductFetcher(product: product),
+                verifier: verifier,
+                reconciler: reconciler,
+                entitlementSyncClient: StubEntitlementSyncClient(
+                    result: .init(verified: false, reason: "app_account_token_mismatch")
+                ),
+                onEntitlementSynced: {
+                    await syncedCounter.increment()
+                },
+                purchaseClosure: nil
+            )
+
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            guard case .rejected(let reason) = outcome else {
+                Issue.record("expected .rejected, got \(outcome)")
+                return
+            }
+            #expect(reason == "app_account_token_mismatch")
+            let level = await MainActor.run { reconciler.level }
+            #expect(level == .free, "sync reject must not flip reconciler")
+            #expect(await syncedCounter.count == 0, "onEntitlementSynced must not run on sync reject")
+
+            var unfinishedCount = 0
+            for await result in Transaction.unfinished {
+                if case .verified(let tx) = result, tx.productID == self.monthlyId {
+                    unfinishedCount += 1
+                }
+            }
+            #expect(unfinishedCount == 0, "sync reject should finish the transaction")
+        }
+    }
+
     // MARK: - IAP-03 userCancelled via injected closure (no daemon needed)
 
     @Test
@@ -387,7 +435,11 @@ struct PurchaseServiceTests {
 // MARK: - Test-only fetchers
 
 private struct StubEntitlementSyncClient: EntitlementSyncing {
-    func sync(transactionJWS: String) async throws {}
+    var result: EntitlementSyncResult = .init(verified: true, reason: nil)
+
+    func sync(transactionJWS: String) async throws -> EntitlementSyncResult {
+        result
+    }
 }
 
 private struct SingleProductFetcher: ProductFetching, @unchecked Sendable {
@@ -402,6 +454,11 @@ private struct AlwaysNilProductFetcher: ProductFetching {
 }
 
 // MARK: - Blocking stub for in-flight dedup test
+
+private actor OnSyncedCallCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
+}
 
 private actor BlockingStubReceiptVerifier: ReceiptVerifier {
 

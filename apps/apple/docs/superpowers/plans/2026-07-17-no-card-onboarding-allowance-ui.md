@@ -399,7 +399,7 @@ Two documented warning thresholds (task requirement: "define and document"):
 - **Trial credits:** low when remaining `< 5` credits (spec explicitly suggests this exact number).
 - **Paid time allowances:** low when remaining `< 10%` of that plan's period allowance for that feature (spec: "warn before a limit"; 10% is this plan's chosen definition of "before").
 
-Per-plan period totals are hardcoded from the pricing table (`2026-07-17-no-card-credit-trial-design.md`: Reader = 2h narration / 10min Voice Chat; Voice = 4h narration / 30min Voice Chat) because `EntitlementSnapshot.PaidPeriod` carries *remaining* seconds, not the period total — the total is a plan-level constant, not per-request server state.
+Per-plan period totals are hardcoded from the pricing table (`2026-07-17-no-card-credit-trial-design.md`: Reader = 6h narration / 90min Voice Chat; Voice = 12h narration / 180min Voice Chat) because `EntitlementSnapshot.PaidPeriod` carries *remaining* seconds, not the period total — the total is a plan-level constant, not per-request server state.
 
 - [ ] **Step 1: Create the formatter + thresholds**
 
@@ -411,10 +411,10 @@ import Foundation
 /// "less than 10% remaining" warning threshold — `EntitlementSnapshot.PaidPeriod`
 /// carries remaining seconds, not the period total.
 enum PlanAllowance {
-    static let readerNarrationSeconds = 2 * 60 * 60
-    static let readerVoiceChatSeconds = 10 * 60
-    static let voiceNarrationSeconds = 4 * 60 * 60
-    static let voiceVoiceChatSeconds = 30 * 60
+    static let readerNarrationSeconds = 6 * 60 * 60
+    static let readerVoiceChatSeconds = 90 * 60
+    static let voiceNarrationSeconds = 12 * 60 * 60
+    static let voiceVoiceChatSeconds = 180 * 60
 }
 
 /// Documented warning thresholds. See Task 4 rationale in

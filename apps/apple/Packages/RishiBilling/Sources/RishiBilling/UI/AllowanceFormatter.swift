@@ -5,10 +5,10 @@ import Foundation
 /// "less than 10% remaining" warning threshold — `EntitlementSnapshot.PaidPeriod`
 /// carries remaining seconds, not the period total.
 enum PlanAllowance {
-    static let readerNarrationSeconds = 2 * 60 * 60
-    static let readerVoiceChatSeconds = 10 * 60
-    static let voiceNarrationSeconds = 4 * 60 * 60
-    static let voiceVoiceChatSeconds = 30 * 60
+    static let readerNarrationSeconds = 6 * 60 * 60
+    static let readerVoiceChatSeconds = 90 * 60
+    static let voiceNarrationSeconds = 12 * 60 * 60
+    static let voiceVoiceChatSeconds = 180 * 60
 }
 
 /// Documented warning thresholds. See Task 4 rationale in

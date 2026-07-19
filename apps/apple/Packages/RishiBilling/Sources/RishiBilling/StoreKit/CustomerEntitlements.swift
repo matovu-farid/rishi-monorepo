@@ -24,6 +24,7 @@ public final class CustomerEntitlements {
     
     private var transactionUpdatesTask: Task<Void, any Error>?
     private var statusUpdatesTask: Task<Void, any Error>?
+    private var inFlightTransactionIds: Set<UInt64> = []
     
     isolated deinit {
         transactionUpdatesTask?.cancel()
@@ -40,30 +41,80 @@ public final class CustomerEntitlements {
     
     public private(set) var error: CustomerEntitlementsError?
     
-    /// Sync entitlement with the worker, then finish. On sync failure the
-    /// transaction is left unfinished so `Transaction.unfinished` /
-    /// `Transaction.updates` can retry. Snapshot refresh runs via
-    /// ``EntitlementSyncHooks/onSynced`` after a successful POST.
-    public func process(transaction: Transaction, jws: String) async {
-        do {
-            try await syncEntitlement(jws: jws)
-            await transaction.finish()
+    /// Sync entitlement with the worker, then finish on any successful HTTP
+    /// (verified or business reject). On transport failure the transaction
+    /// is left unfinished so `Transaction.unfinished` / `Transaction.updates`
+    /// can retry. Snapshot refresh runs via ``EntitlementSyncHooks/onSynced``
+    /// only when the worker reports `verified: true`.
+    ///
+    /// User-facing `.entitlementSyncFailed` is only set for
+    /// ``EntitlementProcessOrigin/purchaseCompletion``. Background paths
+    /// (paywall open / unfinished replay) log rejects without alerting —
+    /// StoreKit Testing JWTs commonly fail Apple-root worker verify.
+    public func process(
+        transaction: Transaction,
+        jws: String,
+        origin: EntitlementProcessOrigin = .backgroundSync
+    ) async {
+        if inFlightTransactionIds.contains(transaction.id) {
             logger.debug("""
-            Finished transaction \(transaction.id) after successful entitlement sync
+            Skipping duplicate process for in-flight transaction \(transaction.id)
             """)
+            return
+        }
+        inFlightTransactionIds.insert(transaction.id)
+        defer { inFlightTransactionIds.remove(transaction.id) }
+
+        do {
+            let result = try await syncEntitlement(jws: jws)
+            await transaction.finish()
+            if result.verified {
+                logger.debug("""
+                Finished transaction \(transaction.id) after successful entitlement sync
+                """)
+            } else {
+                logger.error("""
+                Entitlement sync rejected transaction \(transaction.id) \
+                (\(transaction.productID)); reason: \(result.reason ?? "unknown")
+                """)
+                if shouldSurfaceEntitlementSyncFailure(
+                    origin: origin,
+                    transaction: transaction
+                ) {
+                    updateError(.entitlementSyncFailed)
+                }
+            }
         } catch {
             logger.error("""
             Entitlement sync failed for transaction \(transaction.id) \
             (\(transaction.productID)); leaving unfinished for replay: \(error)
             """)
-            updateError(.entitlementSyncFailed)
+            if shouldSurfaceEntitlementSyncFailure(
+                origin: origin,
+                transaction: transaction
+            ) {
+                updateError(.entitlementSyncFailed)
+            }
         }
+    }
+
+    /// Surface sync rejects only for a real purchase attempt that is not
+    /// StoreKit Testing (Xcode). Xcode rejects are expected until/unless the
+    /// non-prod worker accepts StoreKit Testing JWTs.
+    private func shouldSurfaceEntitlementSyncFailure(
+        origin: EntitlementProcessOrigin,
+        transaction: Transaction
+    ) -> Bool {
+        guard origin == .purchaseCompletion else { return false }
+        if transaction.environment == .xcode { return false }
+        return true
     }
     
 
     
     
     public func observeTransactionUpdates() {
+        transactionUpdatesTask?.cancel()
         transactionUpdatesTask = Task { [weak self] in
             logger.debug("Observing transaction updates")
             for await update in Transaction.updates {
@@ -72,7 +123,11 @@ public final class CustomerEntitlements {
              
                
             
-                await self.process(transaction: transaction, jws: update.jwsRepresentation)
+                await self.process(
+                    transaction: transaction,
+                    jws: update.jwsRepresentation,
+                    origin: .purchaseCompletion
+                )
                 
                 do {
                     try await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
@@ -127,6 +182,7 @@ public final class CustomerEntitlements {
     
     
     public func observeStatusUpdates() {
+        statusUpdatesTask?.cancel()
         statusUpdatesTask = Task { [weak self] in
             logger.debug("Observing status updates")
             for await status in SubscriptionStatus.updates {
@@ -198,11 +254,23 @@ public final class CustomerEntitlements {
     }
 }
 
+/// Why ``CustomerEntitlements/process(transaction:jws:origin:)`` was invoked.
+/// Controls whether a failed sync surfaces a user-facing error.
+public enum EntitlementProcessOrigin: Sendable {
+    /// Same-session purchase completion, including `Transaction.updates`
+    /// for live purchase / Ask-to-Buy resolution.
+    case purchaseCompletion
+    /// `Transaction.currentEntitlements` or `Transaction.unfinished` replay.
+    case backgroundSync
+}
+
 public enum CustomerEntitlementsError: Error, Equatable {
     case invalidTransaction
     case failedToFetchPersistedData
     case failedToUpdatePersistedData
-    /// Worker entitlement-sync POST failed; transaction left unfinished.
+    /// Worker entitlement-sync failed (transport) or returned verified:false
+    /// (business reject). Transport leaves the transaction unfinished;
+    /// verified:false finishes it (unretriable for this JWS).
     case entitlementSyncFailed
 }
 

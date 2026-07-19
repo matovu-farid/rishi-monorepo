@@ -96,10 +96,13 @@
 		"BOOK_MAX_PER_USER": "500", // count of non-deleted books / user
 		"BOOK_MAX_USER_BYTES": "10737418240" // 10 GB total per user (sum of fileSize)
 		// ENABLE_TEST_AUTH + TEST_AUTH_SECRET are intentionally NOT defined here.
-		// Set them ONLY in dev/staging via `wrangler secret put` to keep prod
-		// hard-gated by absence.
+		// NEVER add ENABLE_TEST_AUTH to production vars or `wrangler secret put`
+		// for this worker. When ENABLE_TEST_AUTH === "true", the worker accepts
+		// Xcode StoreKit Testing JWTs (local fake purchases) and opens test-only
+		// auth routes — that must stay off on api.fidexa.org. Set these ONLY in
+		// a dedicated non-prod worker/env via `wrangler secret put`.
 		// ENABLE_OPS_ADMIN + OPS_ADMIN_SECRET (src/routes/ops-flags.ts) follow the
-		// exact same rule: set ONLY in dev/staging via `wrangler secret put`.
+		// exact same rule: set ONLY in non-prod via `wrangler secret put`.
 	},
 	"routes": [
 		{

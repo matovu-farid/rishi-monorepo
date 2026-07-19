@@ -8,11 +8,10 @@
  * `entitlement-sync.ts`'s other imports, and so it can never form an import
  * cycle with the file that consumes it.
  *
- * Naming follows the existing `org.fidexa.rishi.pro.monthly` /
- * `org.fidexa.rishi.pro.annual` convention (apps/apple/scripts/
- * setup_storekit_products.rb) -- `.annual`, not `.yearly` -- so App Store
- * Connect product creation (the iOS "storekit-products" plan) and this
- * table use byte-identical strings.
+ * Product IDs must match `RishiProductID` in the Apple app and
+ * `apps/apple/scripts/setup_storekit_products.rb` — `.annual`, not `.yearly`
+ * — so App Store Connect product creation and this table use byte-identical
+ * strings. Legacy `org.fidexa.rishi.pro.*` ids are not in this map.
  *
  * `durationMonths` is NOT consumed by this plan's allowance-period logic
  * (every plan gets a 1-month allowance period regardless of billing
@@ -41,8 +40,8 @@ export const APPLE_PRODUCT_PLAN_MAP: Record<string, ApplePlanMapping> = {
 
 /**
  * Full monthly allowance-period totals per plan (design doc's paid-plan
- * product policy table): Reader gets 2h narration / 10m Voice Chat; Voice
- * gets 4h narration / 30m Voice Chat. Units are seconds, matching
+ * product policy table): Reader gets 6h narration / 90m Voice Chat; Voice
+ * gets 12h narration / 180m Voice Chat. Units are seconds, matching
  * `allowancePeriod.narrationSecondsTotal` / `.voiceChatSecondsTotal`
  * (workers/worker/src/db/schema.ts).
  */
@@ -50,6 +49,6 @@ export const PLAN_ALLOWANCES: Record<
   ApplePlan,
   { narrationSecondsTotal: number; voiceChatSecondsTotal: number }
 > = {
-  reader: { narrationSecondsTotal: 2 * 60 * 60, voiceChatSecondsTotal: 10 * 60 },
-  voice: { narrationSecondsTotal: 4 * 60 * 60, voiceChatSecondsTotal: 30 * 60 },
+  reader: { narrationSecondsTotal: 6 * 60 * 60, voiceChatSecondsTotal: 90 * 60 },
+  voice: { narrationSecondsTotal: 12 * 60 * 60, voiceChatSecondsTotal: 180 * 60 },
 };

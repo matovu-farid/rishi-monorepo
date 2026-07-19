@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
-import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
+import { verifyAppleJWS, JWSInvalid, allowsXcodeStoreKitTesting } from "./jws-verify";
 import { allowancePeriod, appleSubscriptions, usageAuditLog } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import {
@@ -101,7 +101,8 @@ export interface DecodedAppleTransaction {
   appAccountToken?: string;
   purchaseDate: number;
   expiresDate: number;
-  environment: "Sandbox" | "Production";
+  /** Apple transaction environment. Xcode = StoreKit Testing (local). */
+  environment: "Sandbox" | "Production" | "Xcode";
 }
 
 /** A `DecodedAppleTransaction` that has passed every entitlement-sync guard. */
@@ -112,6 +113,7 @@ export interface VerifiedAppleTransaction {
   plan: ApplePlan;
   purchaseDate: number;
   expiresDate: number;
+  /** Persisted env; Xcode StoreKit Testing is stored as Sandbox. */
   environment: "Sandbox" | "Production";
   appAccountToken: string;
 }
@@ -542,7 +544,11 @@ export async function handleEntitlementSync(
     return { verified: false, reason: "bundle_id_mismatch", snapshot: null };
   }
 
-  if (decoded.environment !== "Sandbox" && decoded.environment !== "Production") {
+  if (
+    decoded.environment !== "Sandbox" &&
+    decoded.environment !== "Production" &&
+    decoded.environment !== "Xcode"
+  ) {
     return { verified: false, reason: "invalid_environment", snapshot: null };
   }
 
@@ -567,6 +573,10 @@ export async function handleEntitlementSync(
     };
   }
 
+  // DB enum is Sandbox|Production only; StoreKit Testing maps to Sandbox.
+  const persistedEnvironment: "Sandbox" | "Production" =
+    decoded.environment === "Xcode" ? "Sandbox" : decoded.environment;
+
   const verifiedTx: VerifiedAppleTransaction = {
     transactionId: decoded.transactionId,
     originalTransactionId: decoded.originalTransactionId,
@@ -574,7 +584,7 @@ export async function handleEntitlementSync(
     plan: mapping.plan,
     purchaseDate: decoded.purchaseDate,
     expiresDate: decoded.expiresDate,
-    environment: decoded.environment,
+    environment: persistedEnvironment,
     appAccountToken: decoded.appAccountToken,
   };
 
@@ -619,8 +629,13 @@ export function registerEntitlementSyncRoute(
           appAccountToken?: string;
           purchaseDate: number;
           expiresDate: number;
-          environment: "Sandbox" | "Production";
-        }>(jws);
+          environment: "Sandbox" | "Production" | "Xcode";
+        }>(jws, {
+          allowXcodeStoreKitTesting: allowsXcodeStoreKitTesting({
+            ENVIRONMENT: (env as Env & { ENVIRONMENT?: string }).ENVIRONMENT,
+            ENABLE_TEST_AUTH: env.ENABLE_TEST_AUTH,
+          }),
+        });
         return {
           bundleId: payload.bundleId,
           productId: payload.productId,

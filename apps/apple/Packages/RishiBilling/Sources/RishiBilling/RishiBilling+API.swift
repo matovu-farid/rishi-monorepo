@@ -112,7 +112,7 @@
 //                                (2 legacy Pro + 4 Reader/Voice) — single source of truth
 //                                for Store.fetchProductIDs() and EntitlementLevel.initialize.
 // AppAccountToken              — `Entitlements/AppAccountToken.swift`. UUID v5 derivation
-//                                (byte-identical to the Worker's) + currentPurchaseOptions().
+//                                (byte-identical to the Worker's) + currentPurchaseOptions() throws.
 // ProductSnapshot             — `StoreKit/ProductSnapshot.swift`. Sendable snapshot of a
 //                                StoreKit Product (id, display price, period).
 // ProductCatalog              — `StoreKit/ProductSnapshot.swift`. The loaded set of snapshots.

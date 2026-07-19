@@ -2,93 +2,97 @@ import StoreKit
 import SwiftUI
 import RishiCore
 import RishiBilling
-
-// TODO: Change this before prod
+import RishiUIKit
 
 public struct SubscriptionsView: View {
-    var color: UIColor
+    @State private var hasSession: Bool?
+    @State private var tokenError = false
+    /// Preloaded `appAccountToken` — only non-nil after a confirmed session.
+    /// Used so `.inAppPurchaseOptions` never returns `[]` (which would allow
+    /// a purchase without account binding; that API is non-throwing).
+    @State private var appAccountToken: UUID?
 
-    @Environment(CurrentUserBox.self) private var currentUserBox
-    @Environment(SubscriptionService.self) private var subscriptionService
-    @State private var showSignedIn = false
-    public init(color: UIColor, groupId:GroupId) {
-        self.color = color
-        self.groupId = groupId
-    }
-    
-    
-
-    private var groupId: GroupId
     public var body: some View {
-        NavigationStack{
+        NavigationStack {
             ZStack {
-                Color(color)
+                RishiColor.accent
                     .opacity(0.1)
                     .ignoresSafeArea()
-                SubscriptionStoreView(groupID: groupId.value) {
-                    
-                    VStack {
-                        
-                        Image("rishi")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 100, height: 100)
-                            .clipShape(.rect(cornerRadius: 20))
-                        Text("Rishi Reader")
-                            .fontWeight(.semibold)
-                            .font(.largeTitle)
-                        VStack(spacing: 10) {
-                            Text("Bring every book to life")
-                                .font(.headline)
-                                .foregroundStyle(.blue)
-                            Text(
-                                "Listen to books with natural voices, ask questions as you read, and pick up where you left off on any device"
-                            )
-                        }.padding(10)
-                            .multilineTextAlignment(.center)
-                        
-                    }
-                    
-                }
-                .inAppPurchaseOptions { _ in
-                    await AppAccountToken.currentPurchaseOptions()
-                }
-                .subscriptionStoreButtonLabel(.multiline)
-                .subscriptionStorePickerItemBackground(.thinMaterial)
-                .subscriptionStorePolicyDestination(
-                    url: URL(string: "https://rishi.fidexa.org/privacy")!,
-                    for: .privacyPolicy
-                )
-                .subscriptionStorePolicyDestination(
-                    url: URL(string: "https://rishi.fidexa.org/terms")!,
-                    for: .termsOfService
-                )
-                
-                .tint(Color(color))
-                
+                content
             }
             .task {
-                let ids = [
-                    "org.fidexa.rishi.pro.monthly",
-                    "org.fidexa.rishi.pro.annual"
-                ]
-                
-                do {
-                    let products = try await Product.products(for: ids)
-                    print(products)
-                } catch {
-                    print(error)
+                guard let session = try? await KeychainSessionStore().load() else {
+                    hasSession = false
+                    appAccountToken = nil
+                    return
+                }
+                appAccountToken = AppAccountToken.derive(userId: session.userId)
+                hasSession = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if tokenError {
+            ContentUnavailableView(
+                "Purchase unavailable",
+                systemImage: "exclamationmark.triangle",
+                description: Text("Could not attach your account to this purchase. Sign in again and retry.")
+            )
+        } else if hasSession == false {
+            ContentUnavailableView(
+                "Sign in required",
+                systemImage: "person.crop.circle.badge.exclamationmark",
+                description: Text("Sign in to purchase a plan so your subscription can be linked to your account.")
+            )
+        } else if hasSession == true, let token = appAccountToken {
+            SubscriptionStoreView(productIDs: RishiProductID.paywallDisplayOrder) {
+                VStack {
+                    Image("rishi")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 100, height: 100)
+                        .clipShape(.rect(cornerRadius: 20))
+                    Text("Rishi Reader")
+                        .fontWeight(.semibold)
+                        .font(.largeTitle)
+                    VStack(spacing: 10) {
+                        Text("Bring every book to life")
+                            .font(.headline)
+                            .foregroundStyle(RishiColor.accent)
+                        Text(
+                            "Listen to books with natural voices, ask questions as you read, and pick up where you left off on any device"
+                        )
+                    }.padding(10)
+                        .multilineTextAlignment(.center)
                 }
             }
+            // Non-throwing StoreKit API — return only the preloaded token; never [].
+            .inAppPurchaseOptions { _ in
+                [.appAccountToken(token)]
+            }
+            .onInAppPurchaseStart { _ in
+                // Defense in depth: if the session vanished after the store
+                // appeared, flip to the error UI (cannot cancel the SK sheet).
+                if (try? await KeychainSessionStore().load()) == nil {
+                    await MainActor.run { tokenError = true }
+                }
+            }
+            .subscriptionStoreButtonLabel(.multiline)
+            .subscriptionStorePickerItemBackground(.thinMaterial)
+            .subscriptionStorePolicyDestination(
+                url: URL(string: "https://rishi.fidexa.org/privacy")!,
+                for: .privacyPolicy
+            )
+            .subscriptionStorePolicyDestination(
+                url: URL(string: "https://rishi.fidexa.org/terms")!,
+                for: .termsOfService
+            )
+            .tint(RishiColor.accent)
             .checkCustomerEntitlements()
-            .task {
-                if case .subscribed(subscription: _) = subscriptionService.currentSubscription {
-                    showSignedIn = true
-                }
-            }
-            .navigationDestination(isPresented: $showSignedIn) {
-                SignedInView()
-            }
+        } else {
+            ProgressView()
         }
     }
 }

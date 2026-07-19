@@ -7,8 +7,8 @@ Rishi launches its no-card trial and both paid plans together on one server-auth
 | Plan | Price | Included each monthly allowance period |
 | --- | --- | --- |
 | Trial | $0, no card | 100 non-expiring credits; trial TTS costs one successful non-cache request credit; trial Voice Chat costs two credits per completed 30-second interval, up to 25 total minutes and 20 minutes per session |
-| Rishi Reader | $7.99/month or $76.99/year | 2 hours Natural AI narration and 10 minutes Voice Chat; a Voice Chat session is at most 10 minutes |
-| Rishi Voice | $14.99/month or $143.99/year | 4 hours Natural AI narration at launch and 30 minutes Voice Chat; a Voice Chat session is at most 20 minutes |
+| Rishi Reader | $7.99/month or $76.99/year | 6 hours Natural AI narration and 90 minutes Voice Chat; a Voice Chat session is at most 10 minutes |
+| Rishi Voice | $14.99/month or $143.99/year | 12 hours Natural AI narration and 180 minutes Voice Chat; a Voice Chat session is at most 20 minutes |
 
 Annual subscriptions pay upfront but receive the same allowance every monthly allowance period. Paid allowances do not roll over and have no overages. Rishi uses OpenAI-generated natural narration only; device narration is not a product fallback.
 

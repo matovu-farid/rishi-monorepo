@@ -7,10 +7,12 @@ import RishiLogging
 /// ``ReceiptVerifier``'s existing seam shape.
 public protocol EntitlementSyncing: Sendable {
     /// POST the transaction's JWS to `/api/billing/entitlement-sync`.
-    /// Throws on transport / server failure so callers can leave the
-    /// StoreKit transaction unfinished for replay. Callers that already
-    /// decided to finish (e.g. permanent worker reject) may catch and log.
-    func sync(transactionJWS: String) async throws
+    /// Returns ``EntitlementSyncResult`` on successful HTTP (including
+    /// business rejects with `verified: false`). Throws only on transport /
+    /// server failure so callers can leave the StoreKit transaction
+    /// unfinished for replay. Does not invoke ``EntitlementSyncHooks`` —
+    /// the caller (``PurchaseService``) decides when to refresh.
+    func sync(transactionJWS: String) async throws -> EntitlementSyncResult
 }
 
 /// Production ``EntitlementSyncing`` wrapping ``WorkerClient``. Follows
@@ -22,13 +24,17 @@ public actor EntitlementSyncClient: EntitlementSyncing {
         self.client = client
     }
 
-    public func sync(transactionJWS: String) async throws {
+    public func sync(transactionJWS: String) async throws -> EntitlementSyncResult {
         do {
             let response = try await client.send(
                 EntitlementSyncEndpoint(body: .init(transactionJWS: transactionJWS))
             )
             Log.event("iap.entitlement_sync.done", level: .info,
                       data: ["verified": "\(response.verified)"])
+            return EntitlementSyncResult(
+                verified: response.verified,
+                reason: response.reason
+            )
         } catch {
             Log.event("iap.entitlement_sync.failed", level: .warning,
                       data: ["error": String(describing: error)])

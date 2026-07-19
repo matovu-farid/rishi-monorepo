@@ -58,7 +58,10 @@ struct LibraryTabView: View {
                 ReaderDestinationView(
                     route: route,
                     hint: model.hint(for: route.bookId),
-                    onRequestPaywall: { model.requestPaywall($0) }
+                    onRequestPaywall: { name in
+                        let paid = services.entitlementSnapshotStore.snapshot.isPaidActive
+                        model.requestPaywall(name, serverPaidActive: paid)
+                    }
                 )
             }
             .navigationDestination(for: ConversationsRoute.self) { _ in
@@ -117,8 +120,8 @@ struct LibraryTabView: View {
             // synced entitlements while the sheet was up.
             Task { await services.entitlementService.refreshSnapshot() }
         }) { _ in
-            if let groupId = services.groupID {
-                SubscriptionsView(color: .systemBlue, groupId: groupId)
+            if services.groupID != nil {
+                SubscriptionsView()
             } else {
                 NavigationStack {
                     ContentUnavailableView(
@@ -134,7 +137,14 @@ struct LibraryTabView: View {
                 }
             }
         }
-        
+        .onChange(of: services.entitlementSnapshotStore.snapshot) { old, snapshot in
+            // Dismiss only when crossing into paid-active (verified grant).
+            // Do not dismiss when already paid (allowance upgrade / plan change).
+            if model.paywallFeature != nil, snapshot.isPaidActive, !old.isPaidActive {
+                model.dismissPaywall()
+            }
+        }
+
         .deepLinkHandling(model: model, refreshLibrary: { await vm.refresh() })
     }
 }
