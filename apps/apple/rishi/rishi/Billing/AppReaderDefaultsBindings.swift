@@ -26,7 +26,7 @@ final class AppReaderDefaults {
         get {
             guard let raw = defaults.string(forKey: Self.themeKey),
                 let theme = ReaderTheme(rawValue: raw)
-            else { return .light }
+            else { return .default }
             return theme
         }
         set { defaults.set(newValue.rawValue, forKey: Self.themeKey) }

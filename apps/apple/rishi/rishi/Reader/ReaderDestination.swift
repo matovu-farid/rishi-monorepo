@@ -28,6 +28,15 @@ struct ReaderDestination: View {
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void
     ) {
+        let peeked = services.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
+        let initial = peeked ?? services.readerDefaults.theme
+        vm.theme = initial
+        if peeked == nil {
+            let store = services.readerSettingsStore
+            let bookId = vm.book.id
+            Task { await store.setTheme(initial, for: bookId) }
+        }
+
         self._vm = State(initialValue: vm)
         self.services = services
         self.userId = userId
@@ -43,6 +52,7 @@ struct ReaderDestination: View {
     var body: some View {
         ReaderScreen(
             viewModel: vm,
+            appDefaultTheme: services.readerDefaults.theme,
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
             bookmarkStore: services.bookmarkStore,

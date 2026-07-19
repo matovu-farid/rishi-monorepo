@@ -45,6 +45,8 @@ public struct ReaderScreen: View {
 
     private let viewModel: ReaderViewModel
 
+    private let appDefaultTheme: ReaderTheme
+
     private let readerSettingsStore: (any ReaderSettingsStore)?
 
     private let highlightStore: (any HighlightStore)?
@@ -63,6 +65,7 @@ public struct ReaderScreen: View {
     private let readAloudParagraph: String?
     private let readAloudLocator: Locator?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     @Environment(\.dismiss) private var dismiss
 
@@ -118,6 +121,7 @@ public struct ReaderScreen: View {
 
     public init(
         viewModel: ReaderViewModel,
+        appDefaultTheme: ReaderTheme = .default,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         bookmarkStore: (any BookmarkStore)? = nil,
@@ -128,6 +132,7 @@ public struct ReaderScreen: View {
         readAloudLocator: Locator? = nil
     ) {
         self.viewModel = viewModel
+        self.appDefaultTheme = appDefaultTheme
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.bookmarkStore = bookmarkStore
@@ -137,9 +142,15 @@ public struct ReaderScreen: View {
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
     }
+
+    private var resolvedTheme: ReaderTheme {
+        viewModel.theme.resolved(isDark: colorScheme == .dark)
+    }
+
     private var Reader: some View {
         ReaderView(
             viewModel: viewModel,
+            pageTheme: resolvedTheme,
             onSelectionChange: { selection in
                 highlightInteractor.handleSelectionChange(selection)
             },
@@ -288,7 +299,9 @@ public struct ReaderScreen: View {
             }
             await viewModel.load()
             if let settings = readerSettingsStore {
-                viewModel.theme = await settings.theme(for: viewModel.book.id)
+                if await settings.persistedTheme(for: viewModel.book.id) == nil {
+                    await settings.setTheme(appDefaultTheme, for: viewModel.book.id)
+                }
                 viewModel.typography = await settings.typography(
                     for: viewModel.book.id
                 )
@@ -344,6 +357,10 @@ public struct ReaderScreen: View {
             }
             .onChange(of: viewModel.typography) { _, _ in applyPreferences() }
             .onChange(of: viewModel.theme) { _, _ in applyPreferences() }
+            .onChange(of: colorScheme) { _, _ in
+                guard viewModel.theme == .matchDevice else { return }
+                applyPreferences()
+            }
             .onChange(of: currentSpread) { _, _ in applyPreferences() }
 
             .onChange(of: readAloudParagraph) { _, _ in
@@ -509,7 +526,7 @@ public struct ReaderScreen: View {
 
     @ViewBuilder
     private var background: some View {
-        switch viewModel.theme {
+        switch resolvedTheme {
         case .matchDevice: RishiColor.readerBackgroundLight.ignoresSafeArea()
         case .light: RishiColor.readerBackgroundLight.ignoresSafeArea()
         case .sepia: RishiColor.readerBackgroundSepia.ignoresSafeArea()
@@ -536,7 +553,7 @@ public struct ReaderScreen: View {
     }
 
     private var readerBarColor: SwiftUI.Color {
-        switch viewModel.theme {
+        switch resolvedTheme {
         case .matchDevice: return RishiColor.readerBackgroundLight
         case .light: return RishiColor.readerBackgroundLight
         case .sepia: return RishiColor.readerBackgroundSepia
@@ -771,7 +788,7 @@ public struct ReaderScreen: View {
         private func applyPreferences() {
             coordinatorRef.coordinator?.applyPreferences(
                 typography: viewModel.typography,
-                theme: viewModel.theme,
+                theme: resolvedTheme,
                 spread: currentSpread
             )
         }

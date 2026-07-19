@@ -32,6 +32,7 @@ import RishiLogging
 public struct ReaderView: UIViewControllerRepresentable {
 
     public let viewModel: ReaderViewModel
+    public let pageTheme: ReaderTheme
     /// Called whenever the user makes (or clears) a text selection in
     /// the navigator. The screen uses this to anchor the floating
     /// ``EPUBHighlightContextMenu``.
@@ -58,11 +59,13 @@ public struct ReaderView: UIViewControllerRepresentable {
 
     public init(
         viewModel: ReaderViewModel,
+        pageTheme: ReaderTheme,
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
         onTap: @escaping (CGPoint) -> Void = { _ in },
         coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
         self.viewModel = viewModel
+        self.pageTheme = pageTheme
         self.onSelectionChange = onSelectionChange
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
@@ -78,7 +81,7 @@ public struct ReaderView: UIViewControllerRepresentable {
 
     public func makeUIViewController(context: Context) -> UIViewController {
         let container = UIViewController()
-        container.view.backgroundColor = backgroundUIColor(viewModel.theme)
+        container.view.backgroundColor = backgroundUIColor(pageTheme)
         context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.onTap = onTap
         coordinatorRef.coordinator = context.coordinator
@@ -88,7 +91,7 @@ public struct ReaderView: UIViewControllerRepresentable {
     }
 
     public func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        uiViewController.view.backgroundColor = backgroundUIColor(viewModel.theme)
+        uiViewController.view.backgroundColor = backgroundUIColor(pageTheme)
         // Refresh closure to track SwiftUI re-renders (the screen owns
         // state that the closure captures — pendingSelection bindings, etc).
         context.coordinator.onSelectionChange = onSelectionChange
