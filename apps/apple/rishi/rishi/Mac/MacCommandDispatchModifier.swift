@@ -73,6 +73,7 @@ struct MacCommandDispatchModifier: ViewModifier {
 
     private func mapReaderTheme(_ macTheme: MacReaderTheme) -> ReaderTheme {
         switch macTheme {
+        case .matchDevice: return .matchDevice
         case .light: return .light
         case .sepia: return .sepia
         case .dark:  return .dark

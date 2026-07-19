@@ -128,7 +128,8 @@ struct RishiMenuCommands: Commands {
 private struct ThemeMenuItems: View {
     @FocusedValue(\.readerPrefsMenu) private var prefs
     var body: some View {
-        Picker("Theme", selection: prefs?.theme ?? .constant(.light)) {
+        Picker("Theme", selection: prefs?.theme ?? .constant(.default)) {
+            Text("Match Device").tag(ReaderTheme.matchDevice)
             Text("Light").tag(ReaderTheme.light)
             Text("Sepia").tag(ReaderTheme.sepia)
             Text("Dark").tag(ReaderTheme.dark)

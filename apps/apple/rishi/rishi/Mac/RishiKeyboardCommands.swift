@@ -46,7 +46,7 @@ enum MacCommandIntent: Equatable, Sendable {
 enum MacTab: String, Equatable, Sendable, Codable { case library, chats }
 
 
-enum MacReaderTheme: String, Equatable, Sendable { case light, sepia, dark }
+enum MacReaderTheme: String, Equatable, Sendable { case matchDevice, light, sepia, dark }
 
 
 enum RishiCommand {
