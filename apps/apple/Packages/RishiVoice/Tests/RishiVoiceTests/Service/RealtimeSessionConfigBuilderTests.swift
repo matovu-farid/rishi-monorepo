@@ -29,7 +29,7 @@ struct RealtimeSessionConfigBuilderTests {
                 output: .init(voice: .alloy, speed: 1.0, format: audio)
             ),
             instructions: "",
-            model: .gptRealtime
+            model: .gptRealtimeMini
         )
 
         builder.configure(session: &session, bookContext: bookContext)
@@ -69,7 +69,7 @@ struct RealtimeSessionConfigBuilderTests {
                 output: .init(voice: .alloy, speed: 1.0, format: audio)
             ),
             instructions: "",
-            model: .gptRealtime
+            model: .gptRealtimeMini
         )
 
         builder.configure(session: &session, bookContext: nil, language: "es")

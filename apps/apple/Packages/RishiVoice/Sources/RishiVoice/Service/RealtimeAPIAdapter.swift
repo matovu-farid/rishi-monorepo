@@ -108,7 +108,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         var session = SDKSession(
             audio: configBuilder.makeSessionAudio(language: language),
             instructions: "",
-            model: .gptRealtime
+            model: .gptRealtimeMini
         )
         configBuilder.configure(session: &session, bookContext: bookContext, language: language)
         return session
@@ -173,7 +173,12 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             }
         }
         lock.withLock { self.conversation = convo }
-        let capturedProviderCallId = try await convo.connect(ephemeralKey: ephemeralKey)
+        let capturedProviderCallId = try await convo.connect(
+            ephemeralKey: ephemeralKey,
+            // Must match worker mint (`gpt-realtime-2.1-mini`). SDK default is
+            // `.gptRealtime`, which produces POST …/calls?model=gpt-realtime → 400.
+            model: .gptRealtimeMini
+        )
         lock.withLock { self._providerCallId = capturedProviderCallId }
         // Never log the raw call ID value (spec: "Do not record ... OpenAI
         // call IDs in general logs") — presence/absence only.

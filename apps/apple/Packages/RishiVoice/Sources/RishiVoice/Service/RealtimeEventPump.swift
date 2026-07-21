@@ -95,33 +95,49 @@ final class RealtimeEventPump: @unchecked Sendable {
         }
 
         // Transcript pump — `entries` is `@MainActor` `@Observable`. The SDK
-        // doesn't surface a delta-stream, so we poll `entries.count` at ~5Hz
-        // and emit a transcript event for each new finalized message.
+        // mutates message content/status in place, so re-scan the full array.
+        // Downstream (`VoiceTranscriptBridge`) expects **deltas** (`+=`), so
+        // emit only the suffix grown since the last emission for this index.
         transcriptPump = Task {
-            var lastSeenIndex = 0
+            var lastEmitted: [Int: (text: String, isFinal: Bool)] = [:]
             while !Task.isCancelled {
                 let snapshot: [Item] = await MainActor.run { convo.entries }
-                if snapshot.count > lastSeenIndex {
-                    for item in snapshot[lastSeenIndex..<snapshot.count] {
-                        guard case let .message(msg) = item else { continue }
-                        let role: TranscriptRole = (msg.role == .assistant)
-                            ? .assistant : .user
-                        // Concatenate all .text accessors across content parts.
-                        // `.text` unifies `.text`, `.inputText`, and
-                        // `.audio(_).transcript` — exactly the surface we need.
-                        let text = msg.content
-                            .compactMap { $0.text }
-                            .joined(separator: "")
-                        guard !text.isEmpty else { continue }
-                        let isFinal = (msg.status == .completed)
-                        let event = RealtimeTranscriptEvent(
-                            role: role,
-                            content: text,
-                            isFinal: isFinal
-                        )
-                        transcriptContinuation()?.yield(event)
+                for (index, item) in snapshot.enumerated() {
+                    guard case let .message(msg) = item else { continue }
+                    let role: TranscriptRole = (msg.role == .assistant)
+                        ? .assistant : .user
+                    // Concatenate all .text accessors across content parts.
+                    // `.text` unifies `.text`, `.inputText`, and
+                    // `.audio(_).transcript` — exactly the surface we need.
+                    let text = msg.content
+                        .compactMap { $0.text }
+                        .joined(separator: "")
+                    guard !text.isEmpty else { continue }
+                    let isFinal = (msg.status == .completed)
+                    let prev = lastEmitted[index]
+                    if let prev, prev.text == text, prev.isFinal == isFinal {
+                        continue
                     }
-                    lastSeenIndex = snapshot.count
+                    lastEmitted[index] = (text, isFinal)
+
+                    let delta: String
+                    if let prev, text.hasPrefix(prev.text) {
+                        delta = String(text.dropFirst(prev.text.count))
+                    } else {
+                        delta = text
+                    }
+                    // Skip no-op growth; still emit empty+final so the bridge
+                    // can flush its buffer when only status flips to completed.
+                    if delta.isEmpty, !(isFinal && prev?.isFinal != true) {
+                        continue
+                    }
+
+                    let event = RealtimeTranscriptEvent(
+                        role: role,
+                        content: delta,
+                        isFinal: isFinal
+                    )
+                    transcriptContinuation()?.yield(event)
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
             }
