@@ -36,6 +36,11 @@ struct RealtimeVoiceSessionPreemptionTests {
             backoff: { _ in .zero },
             maxReconnects: 3
         )
+        // Production presenter owns preempt → requestEnd; package tests
+        // register the local end() handler explicitly.
+        await coordinator.registerPreemption(for: .voice) {
+            _ = await session.end()
+        }
         await session.start(language: "en")              // drives to .live
         #expect(state.status == .live)
         #expect(await coordinator.currentMode == .voice)

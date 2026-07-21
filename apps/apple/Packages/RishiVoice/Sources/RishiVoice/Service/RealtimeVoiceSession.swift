@@ -163,11 +163,11 @@ public actor RealtimeVoiceSession {
             return
         }
 
-        // Claim shared audio ownership up front so the coordinator knows this
-        // voice session is the active owner before we fetch the key or connect.
-        await coordinator.registerPreemption(for: .voice) { [weak self] in
-            _ = await self?.end()
-        }
+        // Claim shared audio ownership. Do NOT register a preempt handler here —
+        // the app presenter owns single-flight `requestEnd` (local teardown +
+        // background ledger delivery). Registering `end()` here would overwrite
+        // that handler during connect/register and skip POST …/end on preempt.
+        // Package tests that need preempt must register explicitly before start.
         await coordinator.requestActiveMode(.voice)
 
         let snapshot: BookContextSnapshot? = bookId.map { id in

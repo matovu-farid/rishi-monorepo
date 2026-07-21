@@ -239,12 +239,6 @@ final class VoiceSessionPresenter {
             activeParagraphText: bookContext?.activeParagraphText
         )
 
-        // Session.start overwrites the preempt handler with its own end();
-        // re-bind so preemption goes through single-flight requestEnd + delivery.
-        await coordinator.registerPreemption(for: .voice) { [weak self] in
-            await self?.requestEnd()
-        }
-
         if case .failed(let reason) = state.status {
             enterFailure(reason: reason)
         }
@@ -256,6 +250,8 @@ final class VoiceSessionPresenter {
     /// cover swipe, and audio preemption. Does **not** gate delivery on
     /// `isPresenting` (optimistic dismiss clears it first).
     func requestEnd() async {
+        // Nothing left to tear down (and not mid-present) — ignore double tap.
+        guard session != nil || isPresenting else { return }
         guard !isRequestingEnd else { return }
         isRequestingEnd = true
 
@@ -273,10 +269,11 @@ final class VoiceSessionPresenter {
         currentBookContext = nil
         currentLanguage = "en"
 
-        guard let rishiSessionId, let coordinatorForDelivery else {
-            isRequestingEnd = false
-            return
-        }
+        // Release the End flight before background delivery so a new session
+        // can start and End without waiting on hangup retries.
+        isRequestingEnd = false
+
+        guard let rishiSessionId, let coordinatorForDelivery else { return }
 
         endDeliveryTask = Task { [weak self] in
             await self?.deliverEnd(
@@ -294,7 +291,8 @@ final class VoiceSessionPresenter {
     /// Retries ledger hangup a few times with short backoff. Success includes
     /// HTTP ok and already-terminal / `NO_ACTIVE_VOICE_SESSION` (handled inside
     /// `VoiceSessionAPIClient.endSession`). On exhaustion, surfaces an
-    /// acknowledge-only alert — never `retry()` / start.
+    /// acknowledge-only alert — never `retry()` / start — and never dismisses
+    /// a newer live cover.
     private func deliverEnd(
         rishiSessionId: String,
         using coordinator: any VoiceSessionCoordinating
@@ -302,7 +300,6 @@ final class VoiceSessionPresenter {
         for attempt in 1...Self.endDeliveryMaxAttempts {
             do {
                 try await coordinator.endSession(rishiSessionId: rishiSessionId)
-                isRequestingEnd = false
                 return
             } catch {
                 Log.event("voice.presenter.end_delivery.failed", level: .warning, data: [
@@ -317,8 +314,14 @@ final class VoiceSessionPresenter {
             }
         }
 
+        if isPresenting {
+            // A newer session is already up — do not clobber it with end-failure UI.
+            Log.event("voice.presenter.end_delivery.exhausted_while_live", level: .warning, data: [
+                "rishiSessionId": rishiSessionId,
+            ])
+            return
+        }
         enterFailure(reason: .sessionEndFailed)
-        isRequestingEnd = false
     }
 
     func retry() async {
