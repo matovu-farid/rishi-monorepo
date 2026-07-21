@@ -110,3 +110,23 @@ public struct RegisterVoiceCallEndpoint: WorkerEndpointWithBody {
         public let ok: Bool
     }
 }
+
+// MARK: - POST /api/voice-sessions/:id/end
+
+/// Client hangup for a Rishi voice session. Called on intentional End so the
+/// ledger goes terminal promptly rather than burning intervals until idle
+/// timeout. Also unblocks create after abandoned pending_registration.
+public struct EndVoiceSessionEndpoint: WorkerEndpoint {
+    public typealias Response = EndVoiceSessionResponse
+
+    public let method: HTTPMethod = .POST
+    public let path: String
+
+    public init(rishiSessionId: String) {
+        self.path = "/api/voice-sessions/\(rishiSessionId)/end"
+    }
+
+    public struct EndVoiceSessionResponse: Decodable, Sendable, Equatable {
+        public let ok: Bool
+    }
+}

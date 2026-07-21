@@ -34,6 +34,10 @@ public actor VoiceTranscriptBridge {
     private let messageStore: any MessageStore
     private let dirtyHook: any VoiceTranscriptDirtyHook
     private let clock: @Sendable () -> Date
+    /// Optional inactivity ping — fired on every transcript event (user and
+    /// assistant, partial or final). Used by realtime to send
+    /// `client_activity` without consuming a second `transcriptStream()`.
+    private let onActivity: (@Sendable () async -> Void)?
 
     // Per-role accumulator: in-progress text waiting for an `isFinal` flush.
     private var userBuffer: String = ""
@@ -42,11 +46,13 @@ public actor VoiceTranscriptBridge {
     public init(
         messageStore: any MessageStore,
         dirtyHook: any VoiceTranscriptDirtyHook = NoopVoiceTranscriptDirtyHook(),
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        onActivity: (@Sendable () async -> Void)? = nil
     ) {
         self.messageStore = messageStore
         self.dirtyHook = dirtyHook
         self.clock = clock
+        self.onActivity = onActivity
     }
 
     /// Drive the bridge by iterating the given stream. Updates `state` on
@@ -69,6 +75,10 @@ public actor VoiceTranscriptBridge {
         conversationId: ConversationID,
         state: VoiceSessionState
     ) async {
+        if let onActivity {
+            await onActivity()
+        }
+
         // Update the in-progress buffer and push to the live UI state.
         switch event.role {
         case .user:      userBuffer += event.content

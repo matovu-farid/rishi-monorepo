@@ -330,6 +330,21 @@ public actor RealtimeVoiceSession {
         await reconnect?.cancel()
         controlMessageTask?.cancel(); controlMessageTask = nil
         responderTask?.cancel(); responderTask = nil
+
+        // Terminal the ledger before control disconnect so intentional End
+        // does not leave an active row burning intervals until idle timeout.
+        let sessionId = activeVoiceSession?.rishiSessionId
+        if let sessionId, let sessionCoordinator {
+            do {
+                try await sessionCoordinator.endSession(rishiSessionId: sessionId)
+            } catch {
+                Log.event("voice.session.end_session.failed", level: .warning, data: [
+                    "rishiSessionId": sessionId,
+                    "error": String(describing: error),
+                ])
+            }
+        }
+
         await client.disconnect()
         await controlSocket?.disconnect()
         await coordinator.releaseActiveMode(.voice)
@@ -339,6 +354,12 @@ public actor RealtimeVoiceSession {
         currentLanguage = nil
         activeVoiceSession = nil
         controlSocket = nil
+    }
+
+    /// Best-effort inactivity ping for the control WebSocket. Called from
+    /// `VoiceTranscriptBridge` on every user/assistant transcript event.
+    public func notifyVoiceActivity() async {
+        await controlSocket?.sendClientActivity()
     }
 
     // MARK: - Control WebSocket (trial-voice-session flow only)
@@ -467,12 +488,7 @@ public actor RealtimeVoiceSession {
                 await self.reconnectController().startStatusObservation()
             },
             onExhausted: { [weak self] in
-                guard let self else { return }
-                await self.coordinator.releaseActiveMode(.voice)
-                await self.fail(
-                    reason: .networkLost,
-                    message: "Reconnect exhausted after \(self.maxReconnects) attempts"
-                )
+                await self?.handleReconnectExhausted()
             }
         )
         let controller = ReconnectController(
@@ -494,6 +510,43 @@ public actor RealtimeVoiceSession {
     /// `ReconnectController` (a separate actor) never touches the FSM flag
     /// directly. Returns `true` if the session is gone (treat as ending).
     private func readIsEnding() -> Bool { isEnding }
+
+    /// Full teardown when the WebRTC reconnect ladder is exhausted. Mirrors
+    /// intentional `end()` ordering (ledger before control disconnect) but
+    /// lands in `.failed(.networkLost)` and does not refresh activity.
+    private func handleReconnectExhausted() async {
+        guard !isEnding else { return }
+        isEnding = true
+        await reconnect?.cancel()
+        controlMessageTask?.cancel()
+        controlMessageTask = nil
+        responderTask?.cancel()
+        responderTask = nil
+
+        let sessionId = activeVoiceSession?.rishiSessionId
+        if let sessionId, let sessionCoordinator {
+            do {
+                try await sessionCoordinator.endSession(rishiSessionId: sessionId)
+            } catch {
+                Log.event("voice.session.end_session.failed", level: .warning, data: [
+                    "rishiSessionId": sessionId,
+                    "error": String(describing: error),
+                ])
+            }
+        }
+
+        await client.disconnect()
+        await controlSocket?.disconnect()
+        await coordinator.releaseActiveMode(.voice)
+        await fail(
+            reason: .networkLost,
+            message: "Reconnect exhausted after \(maxReconnects) attempts"
+        )
+        currentBookContext = nil
+        currentLanguage = nil
+        activeVoiceSession = nil
+        controlSocket = nil
+    }
 
     // MARK: - Helpers
 
@@ -580,6 +633,8 @@ public actor RealtimeVoiceSession {
             return "We couldn't confirm the voice connection in time. Please try again."
         case .providerHangupFailed:
             return "Voice chat ended unexpectedly. Please try again."
+        case .inactivityTimeout:
+            return "Voice chat ended due to inactivity."
         case .unknown(let raw):
             return "Voice chat ended (\(raw))."
         }

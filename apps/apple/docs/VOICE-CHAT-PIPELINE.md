@@ -175,7 +175,7 @@ sequenceDiagram
 
 ## 5. Session end
 
-Teardown order is load-bearing: `responderTask` is cancelled *before* `client.disconnect()` so it can't attempt `sendToolResult` on a closed data channel. The audio session is released last.
+Teardown order is load-bearing: `responderTask` is cancelled *before* `client.disconnect()` so it can't attempt `sendToolResult` on a closed data channel. The audio session is released last. Intentional End also calls `POST .../end` before control disconnect so the ledger goes terminal promptly.
 
 ```mermaid
 sequenceDiagram
@@ -184,6 +184,7 @@ sequenceDiagram
     participant View as ChatPanelHost
     participant Pres as VoiceSessionPresenter
     participant Sess as RealtimeVoiceSession
+    participant Ledger as UserUsageLedger
     participant SDK as RealtimeAPIAdapter
     participant API as OpenAI Realtime API
     participant Audio as AudioSessionCoordinator
@@ -196,6 +197,8 @@ sequenceDiagram
     Sess->>Sess: cancel responderTask
     Note right of Sess: cancel BEFORE disconnect<br/>so in-flight tool results<br/>don't race
     Sess->>Sess: cancel statusObservationTask
+    Sess->>+Ledger: POST .../end (client_ended)
+    Ledger-->>-Sess: ok
 
     Sess->>+SDK: disconnect()
     SDK->>API: close WebRTC peer
@@ -211,10 +214,42 @@ sequenceDiagram
 
 ---
 
+## Inactivity timeout (5 minutes)
+
+Server-authoritative idle end on `UserUsageLedger`. Realtime sessions terminate with reason `inactivity_timeout` when `lastActivityAt` is missing or older than **5 minutes** (`INACTIVITY_TIMEOUT_MS`). Detection lag is up to one Voice Chat interval (~30s) after the 5-minute mark — the existing alarm runs the check; there is no second idle alarm.
+
+### What counts as activity
+
+| Signal | Refreshes `lastActivityAt`? |
+| --- | --- |
+| Control WS `{type:"client_activity"}` on user **or** assistant transcript progress (partial or final) | **yes** (WS-tagged session only) |
+| 30s interval charge / allowance tick | **no** |
+| Control WS connect, snapshot, allowance broadcast | **no** |
+| Advisory `{type:"client_ack"}` / `disconnect()` teardown | **no** |
+
+`VoiceTranscriptBridge` is the sole `transcriptStream()` consumer and fires `onActivity` → `RealtimeVoiceSession.notifyVoiceActivity()` → `sendClientActivity()` on every event.
+
+### OpenAI hangup
+
+`terminateSession(..., "inactivity_timeout")` uses the same hangup path as other terminal reasons: when `callId` is set, the ledger attempts OpenAI hangup.
+
+### Create after timeout
+
+A timed-out session is terminal. The next `POST /api/voice-sessions` gets a **new** session UUID. Null-`callId` orphans (abandoned pending registration) are force-ended on create; realtime with a pending hangup may need one reconcile on create (existing behavior).
+
+### Intentional End vs idle
+
+| Path | Behavior |
+| --- | --- |
+| User taps End | Client calls `POST .../end` **before** control disconnect (`RealtimeVoiceSession.end`) so the ledger goes terminal promptly — not left burning intervals until idle timeout |
+| Idle ≥ 5 min | Server terminates; client receives `session_ended` / terminal snapshot with `inactivity_timeout` and shows “Voice chat ended due to inactivity.” |
+
+---
+
 ## Design notes
 
 - **No on-device STT or TTS.** Both happen server-side in the OpenAI Realtime API. The SDK owns mic capture and speaker playback; raw PCM frames never surface to `RishiVoice`.
 - **RAG is a tool callback, not a pre-prompt step.** The LLM decides when to call `bookContext(query)`; on-device search only runs on demand. This keeps cold-start cheap and lets the model issue multiple queries per turn.
 - **Embedder prewarm is parallelized** with the ephemeral key fetch to hide the ~500 ms CoreML cold-load behind the network round-trip.
-- **Two parallel consumers of `transcriptStream()`**: `RealtimeVoiceSession` drives live UI state, `VoiceTranscriptBridge` persists final messages. UI never blocks on disk writes.
-- **Teardown ordering is load-bearing.** Cancelling `responderTask` before `client.disconnect()` prevents the responder from attempting `sendToolResult` on a closed data channel.
+- **Single consumer of `transcriptStream()`:** `VoiceTranscriptBridge` persists finals, updates live UI state, and pings `{type:"client_activity"}` for inactivity. Do not attach a second reader.
+- **Teardown ordering is load-bearing.** Cancelling `responderTask` before `client.disconnect()` prevents the responder from attempting `sendToolResult` on a closed data channel. Interval ticks and teardown `client_ack` must never refresh `lastActivityAt`.

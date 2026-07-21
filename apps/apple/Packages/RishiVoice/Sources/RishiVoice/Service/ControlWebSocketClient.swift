@@ -54,6 +54,7 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     }
 
     private static let clientAckJSON = #"{"type":"client_ack"}"#
+    private static let clientActivityJSON = #"{"type":"client_activity"}"#
 
     private let baseURL: URL
     private let tokenProvider: any TokenProvider
@@ -155,6 +156,14 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     public func sendClientAck() async {
         guard let currentTask else { return }
         try? await currentTask.send(.string(Self.clientAckJSON))
+    }
+
+    /// Sends `{type:"client_activity"}` so the ledger refreshes
+    /// `lastActivityAt`. Failures are swallowed — a missed ping only
+    /// shortens the idle window, never blocks the local session.
+    public func sendClientActivity() async {
+        guard let currentTask else { return }
+        try? await currentTask.send(.string(Self.clientActivityJSON))
     }
 
     // MARK: - Connection

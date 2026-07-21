@@ -37,4 +37,10 @@ public protocol ControlSocketConnecting: Sendable {
     /// Sends the advisory `client_ack`. Never required by this plan; kept
     /// on the seam for parity with the concrete type's full surface.
     func sendClientAck() async
+
+    /// Sends `{type:"client_activity"}` to refresh server-side
+    /// `lastActivityAt` for inactivity timeout. Call on user and assistant
+    /// transcript progress (partial or final). Must not be used from
+    /// `disconnect()` / teardown.
+    func sendClientActivity() async
 }

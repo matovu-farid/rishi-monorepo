@@ -34,6 +34,15 @@ public protocol VoiceSessionCoordinating: Sendable {
     /// must close the just-opened OpenAI WebRTC connection (see
     /// `VoiceSessionRegistrationFailure`).
     func registerCall(rishiSessionId: String, callId: String, nonce: String) async throws
+
+    /// `POST /api/voice-sessions/:id/end` — client hangup so the ledger does
+    /// not stay `active` after intentional End / local teardown.
+    func endSession(rishiSessionId: String) async throws
+}
+
+extension VoiceSessionCoordinating {
+    /// Default no-op so Realtime-only test doubles compile until updated.
+    public func endSession(rishiSessionId: String) async throws {}
 }
 
 /// Production `VoiceSessionCoordinating`, backed by the existing
@@ -82,6 +91,24 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
             ])
         } catch {
             Log.event("voice.session.register_call.failed", level: .error, data: [
+                "rishiSessionId": rishiSessionId,
+                "error": String(describing: error),
+            ])
+            throw error
+        }
+    }
+
+    public func endSession(rishiSessionId: String) async throws {
+        let endpoint = EndVoiceSessionEndpoint(rishiSessionId: rishiSessionId)
+        do {
+            _ = try await workerClient.send(endpoint)
+            Log.event("voice.session.end.succeeded", level: .info, data: [
+                "rishiSessionId": rishiSessionId,
+            ])
+        } catch {
+            // Best-effort: local UI teardown must proceed even if the network
+            // fails; orphan cleanup on next create covers the gap.
+            Log.event("voice.session.end.failed", level: .warning, data: [
                 "rishiSessionId": rishiSessionId,
                 "error": String(describing: error),
             ])

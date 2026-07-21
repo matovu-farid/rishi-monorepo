@@ -124,4 +124,15 @@ struct VoiceFailureAlertTests {
         #expect(alert.message == "Override")
         #expect(alert.primaryAction == .openSettings)
     }
+
+    @Test("inactivityTimeout maps to inactivity copy + retry")
+    func inactivityTimeoutCopy() {
+        let alert = VoiceFailureAlert(
+            reason: .sessionTerminated(reason: .inactivityTimeout),
+            message: nil
+        )
+        #expect(alert.title == "Voice chat ended")
+        #expect(alert.message == "Voice chat ended due to inactivity.")
+        #expect(alert.primaryAction == .retry)
+    }
 }

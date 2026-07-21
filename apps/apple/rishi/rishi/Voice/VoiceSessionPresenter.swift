@@ -168,10 +168,6 @@ final class VoiceSessionPresenter {
 
         let adapter = clientFactory()
         let fetcher = keyFetcherFactory()
-        let bridge = VoiceTranscriptBridge(
-            messageStore: messageStore,
-            dirtyHook: dirtyHook
-        )
 
         let responderFactory:
             RealtimeVoiceSession.BookContextResponderFactory? = bookSearch.map {
@@ -197,6 +193,16 @@ final class VoiceSessionPresenter {
             embedderPrewarm: embedderPrewarm
         )
         self.session = session
+
+        // transcriptStream() is single-consumer — ping activity from the
+        // bridge (sole consumer) rather than a parallel stream reader.
+        let bridge = VoiceTranscriptBridge(
+            messageStore: messageStore,
+            dirtyHook: dirtyHook,
+            onActivity: {
+                await session.notifyVoiceActivity()
+            }
+        )
 
         let conversationId = conversation.id
         let presenterState = state

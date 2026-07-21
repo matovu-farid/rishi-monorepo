@@ -59,7 +59,7 @@
 // VoiceSessionCoordinating    — `Service/VoiceSessionAPIClient.swift`. Protocol seam for tests.
 // ControlSocketConnecting     — `Service/ControlSocketConnecting.swift`. Transport seam wrapping
 //                                the landed ControlWebSocketClient (which conforms to it) —
-//                                messages/connect/reconnect/disconnect/sendClientAck. Tests use
+//                                messages/connect/reconnect/disconnect/sendClientAck/sendClientActivity. Tests use
 //                                a fake; the app uses the real ControlWebSocketClient.
 // VoiceTranscriptDirtyHook    — `Service/VoiceTranscriptBridge.swift`. Lets the bridge tell
 //                                the sync engine that new transcript messages exist.

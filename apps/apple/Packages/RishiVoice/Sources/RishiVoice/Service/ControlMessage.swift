@@ -24,6 +24,7 @@ public enum ControlTerminalReason: Sendable, Equatable {
     case registrationTimeout
     case planVoiceAllowanceExhausted
     case providerHangupFailed
+    case inactivityTimeout
     case unknown(String)
 }
 
@@ -37,6 +38,7 @@ extension ControlTerminalReason: Decodable {
         case "registration_timeout": self = .registrationTimeout
         case "plan_voice_allowance_exhausted": self = .planVoiceAllowanceExhausted
         case "provider_hangup_failed": self = .providerHangupFailed
+        case "inactivity_timeout": self = .inactivityTimeout
         default: self = .unknown(raw)
         }
     }
@@ -72,10 +74,9 @@ extension ControlSnapshotStatus: Decodable {
 /// live JSON shapes this decoder implements.
 ///
 /// Decode-only by design: every case here is a server → client message.
-/// The one client → server shape (`{"type":"client_ack"}`) is a fixed
-/// literal sent by `ControlWebSocketClient`, not modeled as a case of this
-/// type — it never needs to be decoded, and giving it a case here would
-/// invite a caller to mistakenly expect it on the `messages` stream.
+/// Client → server shapes (`{"type":"client_ack"}`, `{"type":"client_activity"}`)
+/// are fixed literals sent by `ControlWebSocketClient`, not modeled as cases
+/// of this type — they never need to be decoded on the `messages` stream.
 public enum ControlMessage: Sendable, Equatable {
     case allowanceRemaining(
         rishiSessionId: String,

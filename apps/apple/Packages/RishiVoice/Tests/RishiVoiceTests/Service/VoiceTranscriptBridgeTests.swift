@@ -99,7 +99,36 @@ struct VoiceTranscriptBridgeTests {
         #expect(state.partialAssistantTranscript == "Once upon ")
     }
 
+    @Test("onActivity fires for user and assistant events (partial and final)")
+    func onActivityFiresForBothRoles() async {
+        let conversationId = UUID()
+        let store = InMemoryMessageStore()
+        let counter = ActivityCounter()
+        let bridge = VoiceTranscriptBridge(
+            messageStore: store,
+            onActivity: { await counter.increment() }
+        )
+        let state = VoiceSessionState()
+        let (stream, continuation) = AsyncStream<RealtimeTranscriptEvent>.makeStream()
+
+        let task = Task {
+            await bridge.consume(stream: stream, conversationId: conversationId, state: state)
+        }
+        continuation.yield(.init(role: .user, content: "Hi", isFinal: false))
+        continuation.yield(.init(role: .user, content: "!", isFinal: true))
+        continuation.yield(.init(role: .assistant, content: "Hello", isFinal: true))
+        continuation.finish()
+        await task.value
+
+        #expect(await counter.count == 3)
+    }
+
     // MARK: - Helpers
+
+    actor ActivityCounter {
+        private(set) var count = 0
+        func increment() { count += 1 }
+    }
 
     final class RecordingDirtyHook: VoiceTranscriptDirtyHook, @unchecked Sendable {
         private let lock = NSLock()

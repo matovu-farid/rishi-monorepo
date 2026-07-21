@@ -58,7 +58,7 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         switch reason {
         case .trialCreditsExhausted, .planVoiceAllowanceExhausted:
             return true
-        case .voiceSessionTimeCap, .registrationTimeout, .providerHangupFailed, .unknown:
+        case .voiceSessionTimeCap, .registrationTimeout, .providerHangupFailed, .inactivityTimeout, .unknown:
             return false
         }
     }
@@ -102,6 +102,7 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         case .planVoiceAllowanceExhausted:  return "Voice Chat allowance used up"
         case .registrationTimeout:          return "Couldn't confirm the connection"
         case .providerHangupFailed:         return "Voice chat ended"
+        case .inactivityTimeout:            return "Voice chat ended"
         case .unknown:                      return "Voice chat ended"
         }
     }
@@ -182,6 +183,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
             return "We couldn't confirm the voice connection in time. Please try again."
         case .providerHangupFailed:
             return "Voice chat ended unexpectedly. Please try again."
+        case .inactivityTimeout:
+            return "Voice chat ended due to inactivity."
         case .unknown(let raw):
             return "Voice chat ended (\(raw))."
         }
