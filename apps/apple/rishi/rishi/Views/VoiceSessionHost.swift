@@ -42,7 +42,7 @@ struct VoiceSessionHost: View {
             VoiceSessionView(
                 state: state,
 
-                onEnd: { Task { await presenter.end() } },
+                onEnd: { Task { await presenter.requestEnd() } },
                 onOpenTextChat: { showTextChat = true }
             )
         }

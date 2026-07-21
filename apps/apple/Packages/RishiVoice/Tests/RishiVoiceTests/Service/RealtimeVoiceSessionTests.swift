@@ -41,10 +41,24 @@ struct RealtimeVoiceSessionTests {
         let fakes = makeSession(micDecision: .granted)
         await fakes.session.start()
         #expect(fakes.state.status == .live)
-        await fakes.session.end()
+        let firstId = await fakes.session.end()
+        #expect(firstId == nil) // legacy flow has no Rishi session id
         #expect(fakes.state.status == .ended)
         #expect(fakes.client.disconnectCalls == 1)
         #expect(await fakes.coordinator.currentMode == .idle)
+    }
+
+    @Test("End re-entry is a no-op — second call does not disconnect again")
+    func endReentryIsNoOp() async throws {
+        let fakes = makeSession(micDecision: .granted)
+        await fakes.session.start()
+        _ = await fakes.session.end()
+        #expect(fakes.client.disconnectCalls == 1)
+
+        let secondId = await fakes.session.end()
+        #expect(secondId == nil)
+        #expect(fakes.client.disconnectCalls == 1)
+        #expect(fakes.state.status == .ended)
     }
 
     // MARK: - Failure paths

@@ -47,6 +47,15 @@ final class VoiceSessionPresenter {
 
     private var bridgeTask: Task<Void, Never>?
 
+    /// Single-flight for End (button, cover swipe, audio preemption). Cleared
+    /// when local teardown finishes with no session id to deliver, or when
+    /// background end delivery completes (success or informational failure).
+    private var isRequestingEnd = false
+
+    /// Background `POST …/end` retries after optimistic dismiss. Not cancelled
+    /// on a subsequent `start` — delivery for the prior session id still matters.
+    private var endDeliveryTask: Task<Void, Never>?
+
     /// Feature flag for the no-card-credit-trial voice-session flow (session
     /// create → WebRTC connect → call-ID registration → control WebSocket).
     /// Both of this plan's sibling dependencies (`RealtimeAPIAdapter.providerCallId`
@@ -59,6 +68,11 @@ final class VoiceSessionPresenter {
     /// `nonisolated` so `@Sendable` factories (control socket) can read the
     /// flag without hopping onto MainActor. Constant, never mutated.
     nonisolated private static let isTrialVoiceSessionFlowEnabled = true
+
+    /// End-delivery attempts after optimistic local teardown.
+    private static let endDeliveryMaxAttempts = 3
+    /// Backoff between end-delivery attempts: 400ms, 800ms.
+    private static let endDeliveryBackoffMs = 400
 
     init(
         coordinator: AudioSessionCoordinator,
@@ -141,7 +155,7 @@ final class VoiceSessionPresenter {
 
         state.reset()
         await coordinator.registerPreemption(for: .voice) { [weak self] in
-            await self?.end()
+            await self?.requestEnd()
         }
         // Acquire audio session BEFORE fetching the key. If the key fetch
         // fails we already own the session and must release it cleanly.
@@ -225,22 +239,86 @@ final class VoiceSessionPresenter {
             activeParagraphText: bookContext?.activeParagraphText
         )
 
+        // Session.start overwrites the preempt handler with its own end();
+        // re-bind so preemption goes through single-flight requestEnd + delivery.
+        await coordinator.registerPreemption(for: .voice) { [weak self] in
+            await self?.requestEnd()
+        }
+
         if case .failed(let reason) = state.status {
             enterFailure(reason: reason)
         }
     }
 
-    func end() async {
-        guard isPresenting else { return }
-        await session?.end()
+    /// Optimistic End: dismiss the cover immediately, tear down local
+    /// WebRTC/control/audio without awaiting hangup, then retry
+    /// `POST …/end` in the background. Single-flight across End button,
+    /// cover swipe, and audio preemption. Does **not** gate delivery on
+    /// `isPresenting` (optimistic dismiss clears it first).
+    func requestEnd() async {
+        guard !isRequestingEnd else { return }
+        isRequestingEnd = true
+
+        // Dismiss first — before local teardown / delivery.
+        isPresenting = false
+
+        let coordinatorForDelivery = sessionCoordinatorFactory()
+        let rishiSessionId = await session?.end()
+
         bridgeTask?.cancel()
         bridgeTask = nil
         session = nil
-        isPresenting = false
         currentBookId = nil
         pendingInitialQuote = nil
         currentBookContext = nil
         currentLanguage = "en"
+
+        guard let rishiSessionId, let coordinatorForDelivery else {
+            isRequestingEnd = false
+            return
+        }
+
+        endDeliveryTask = Task { [weak self] in
+            await self?.deliverEnd(
+                rishiSessionId: rishiSessionId,
+                using: coordinatorForDelivery
+            )
+        }
+    }
+
+    /// Compatibility alias — all End entry points use ``requestEnd``.
+    func end() async {
+        await requestEnd()
+    }
+
+    /// Retries ledger hangup a few times with short backoff. Success includes
+    /// HTTP ok and already-terminal / `NO_ACTIVE_VOICE_SESSION` (handled inside
+    /// `VoiceSessionAPIClient.endSession`). On exhaustion, surfaces an
+    /// acknowledge-only alert — never `retry()` / start.
+    private func deliverEnd(
+        rishiSessionId: String,
+        using coordinator: any VoiceSessionCoordinating
+    ) async {
+        for attempt in 1...Self.endDeliveryMaxAttempts {
+            do {
+                try await coordinator.endSession(rishiSessionId: rishiSessionId)
+                isRequestingEnd = false
+                return
+            } catch {
+                Log.event("voice.presenter.end_delivery.failed", level: .warning, data: [
+                    "rishiSessionId": rishiSessionId,
+                    "attempt": String(attempt),
+                    "error": String(describing: error),
+                ])
+                if attempt < Self.endDeliveryMaxAttempts {
+                    let delayMs = Self.endDeliveryBackoffMs * attempt
+                    try? await Task.sleep(for: .milliseconds(delayMs))
+                }
+            }
+        }
+
+        enterFailure(reason: .sessionEndFailed)
+        isRequestingEnd = false
     }
 
     func retry() async {
@@ -260,6 +338,7 @@ final class VoiceSessionPresenter {
         bridgeTask = nil
         session = nil
         isPresenting = false
+        isRequestingEnd = false
         currentBookId = nil
         pendingInitialQuote = nil
         currentBookContext = nil

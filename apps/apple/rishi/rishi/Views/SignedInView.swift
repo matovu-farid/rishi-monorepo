@@ -57,8 +57,7 @@ struct SignedInView: View {
                     get: { services.voicePresenter.isPresenting },
                     set: { newValue in
                         if newValue == false {
-                            
-                            Task { await services.voicePresenter.end() }
+                            Task { await services.voicePresenter.requestEnd() }
                         }
                     }
                 ),

@@ -6,8 +6,10 @@ import Foundation
 ///
 /// Maps a ``VoiceSessionFailureReason`` to the user-facing title/message copy
 /// and the single primary affordance ("Open Settings" for `.micDenied`,
-/// "Try again" for every other reason). A caller-supplied `message` override
-/// (e.g. `VoiceSessionState.lastError`) wins over the default body copy.
+/// "See plans" for exhaustion / insufficient credits, dismiss-only for
+/// `.sessionEndFailed`, "Try again" for other retryable reasons). A
+/// caller-supplied `message` override (e.g. `VoiceSessionState.lastError`)
+/// wins over the default body copy.
 ///
 /// Kept pure (no UIKit / SwiftUI): the app layer owns the Settings deep-link
 /// and the alert presentation; this type only carries the strings + the
@@ -49,6 +51,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
             return .upgrade
         case .sessionTerminated(let terminationReason) where Self.isExhaustionReason(terminationReason):
             return .upgrade
+        case .sessionEndFailed:
+            return .dismiss
         default:
             return .retry
         }
@@ -91,6 +95,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         case .audioSession: return "Audio setup failed"
         case .sessionTerminated(let reason):
             return Self.sessionTerminatedTitle(for: reason)
+        case .sessionEndFailed:
+            return "Couldn't confirm end"
         case .unknown:      return "Something went wrong"
         }
     }
@@ -166,6 +172,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
             return "We couldn't configure audio. Make sure no other app is using the microphone."
         case .sessionTerminated(let reason):
             return Self.sessionTerminatedBody(for: reason)
+        case .sessionEndFailed:
+            return "Voice chat closed on this device, but we couldn't confirm it with the server. It should clear on its own shortly."
         case .unknown(let msg):
             return msg.isEmpty ? "An unexpected error occurred." : msg
         }

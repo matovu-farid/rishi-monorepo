@@ -125,6 +125,17 @@ struct VoiceFailureAlertTests {
         #expect(alert.primaryAction == .openSettings)
     }
 
+    @Test("sessionEndFailed → dismiss-only affordance + confirm-end copy")
+    func sessionEndFailed() {
+        let alert = VoiceFailureAlert(reason: .sessionEndFailed, message: nil)
+        #expect(alert.title == "Couldn't confirm end")
+        #expect(
+            alert.message
+                == "Voice chat closed on this device, but we couldn't confirm it with the server. It should clear on its own shortly."
+        )
+        #expect(alert.primaryAction == .dismiss)
+    }
+
     @Test("inactivityTimeout maps to inactivity copy + retry")
     func inactivityTimeoutCopy() {
         let alert = VoiceFailureAlert(

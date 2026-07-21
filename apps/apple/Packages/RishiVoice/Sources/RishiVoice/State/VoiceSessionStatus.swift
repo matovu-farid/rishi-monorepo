@@ -159,6 +159,10 @@ public enum VoiceSessionFailureReason: Sendable, Equatable {
     /// compatibility with a server-added reason. Trial-voice-session flow
     /// only.
     case sessionTerminated(reason: ControlTerminalReason)
+    /// Local End / dismiss already tore down WebRTC and audio, but background
+    /// `POST …/end` delivery failed after retries. Informational only —
+    /// auto-retry already ran; do not offer "Try again" that starts a new session.
+    case sessionEndFailed
     case unknown(String)
 }
 

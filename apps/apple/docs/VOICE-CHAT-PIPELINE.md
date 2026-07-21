@@ -175,7 +175,9 @@ sequenceDiagram
 
 ## 5. Session end
 
-Teardown order is load-bearing: `responderTask` is cancelled *before* `client.disconnect()` so it can't attempt `sendToolResult` on a closed data channel. The audio session is released last. Intentional End also calls `POST .../end` before control disconnect so the ledger goes terminal promptly.
+Teardown order is load-bearing: `responderTask` is cancelled *before* `client.disconnect()` so it can't attempt `sendToolResult` on a closed data channel. The audio session is released last.
+
+**Optimistic End (intentional hangup):** the cover dismisses and local WebRTC/control/audio tear down immediately without awaiting ledger hangup. `VoiceSessionPresenter` then retries `POST …/end` in the background (2–3 attempts, short backoff). HTTP success and already-terminal / `NO_ACTIVE_VOICE_SESSION` count as success. If all attempts fail, an acknowledge-only alert is shown (no “Try again” that starts a new session). Registered realtime sessions are **not** auto-orphaned on create — delivery matters.
 
 ```mermaid
 sequenceDiagram
@@ -190,26 +192,21 @@ sequenceDiagram
     participant Audio as AudioSessionCoordinator
 
     User->>+View: tap "End session"
-    View->>+Pres: end()
-    Pres->>Pres: cancel bridgeTask
-    Pres->>+Sess: end()
-
+    View->>+Pres: requestEnd()
+    Pres->>Pres: isPresenting = false (dismiss cover)
+    Pres->>+Sess: end() (local only)
     Sess->>Sess: cancel responderTask
     Note right of Sess: cancel BEFORE disconnect<br/>so in-flight tool results<br/>don't race
-    Sess->>Sess: cancel statusObservationTask
-    Sess->>+Ledger: POST .../end (client_ended)
-    Ledger-->>-Sess: ok
-
     Sess->>+SDK: disconnect()
     SDK->>API: close WebRTC peer
     SDK-->>-Sess: closed
-
     Sess->>+Audio: releaseActiveMode(.voice)
     Audio-->>-Sess: AVAudioSession deactivated
-
-    Sess-->>-Pres: ended
-    Pres-->>-View: status = .idle
-    View-->>-User: collapsed chat panel
+    Sess-->>-Pres: rishiSessionId (if any)
+    Pres-->>-View: cover already dismissed
+    Note over Pres,Ledger: background delivery (retries)
+    Pres->>+Ledger: POST .../end (client_ended)
+    Ledger-->>-Pres: ok (or already terminal)
 ```
 
 ---
@@ -241,7 +238,7 @@ A timed-out session is terminal. The next `POST /api/voice-sessions` gets a **ne
 
 | Path | Behavior |
 | --- | --- |
-| User taps End | Client calls `POST .../end` **before** control disconnect (`RealtimeVoiceSession.end`) so the ledger goes terminal promptly — not left burning intervals until idle timeout |
+| User taps End | Cover dismisses + local teardown immediately; presenter retries `POST …/end` in background. Failure → dismiss-only alert (auto-retry already ran). Registered realtime is not auto-orphaned on create. |
 | Idle ≥ 5 min | Server terminates; client receives `session_ended` / terminal snapshot with `inactivity_timeout` and shows “Voice chat ended due to inactivity.” |
 
 ---

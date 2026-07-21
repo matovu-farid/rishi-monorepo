@@ -106,13 +106,30 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
                 "rishiSessionId": rishiSessionId,
             ])
         } catch {
-            // Best-effort: local UI teardown must proceed even if the network
-            // fails; orphan cleanup on next create covers the gap.
+            // Already gone / already terminal is success for client hangup.
+            // Registered realtime sessions are NOT auto-orphaned on create —
+            // callers must retry real delivery failures.
+            if Self.isAlreadyTerminalEndError(error) {
+                Log.event("voice.session.end.already_terminal", level: .info, data: [
+                    "rishiSessionId": rishiSessionId,
+                ])
+                return
+            }
             Log.event("voice.session.end.failed", level: .warning, data: [
                 "rishiSessionId": rishiSessionId,
                 "error": String(describing: error),
             ])
             throw error
         }
+    }
+
+    /// `NO_ACTIVE_VOICE_SESSION` means the ledger has nothing live to end
+    /// (missing row or already reconciled). Treat as successful hangup.
+    private static func isAlreadyTerminalEndError(_ error: any Error) -> Bool {
+        guard let rishiError = error as? RishiError else { return false }
+        if case .network(let code, _) = rishiError {
+            return code == WorkerErrorCode.noActiveVoiceSession
+        }
+        return false
     }
 }

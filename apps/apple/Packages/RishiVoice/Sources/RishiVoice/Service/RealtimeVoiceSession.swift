@@ -166,7 +166,7 @@ public actor RealtimeVoiceSession {
         // Claim shared audio ownership up front so the coordinator knows this
         // voice session is the active owner before we fetch the key or connect.
         await coordinator.registerPreemption(for: .voice) { [weak self] in
-            await self?.end()
+            _ = await self?.end()
         }
         await coordinator.requestActiveMode(.voice)
 
@@ -324,26 +324,21 @@ public actor RealtimeVoiceSession {
         await reconnectController().startStatusObservation()
     }
 
-    public func end() async {
+    /// Tears down local WebRTC / control / audio immediately without awaiting
+    /// ledger `POST …/end`. Returns the Rishi session id (if any) so the
+    /// presenter can deliver hangup in the background. Re-entrant: a second
+    /// call while ending is a no-op and returns `nil` (single-flight delivery
+    /// belongs to the first caller).
+    @discardableResult
+    public func end() async -> String? {
+        guard !isEnding else { return nil }
         isEnding = true
+        let sessionId = activeVoiceSession?.rishiSessionId
+
         await update(.ending)
         await reconnect?.cancel()
         controlMessageTask?.cancel(); controlMessageTask = nil
         responderTask?.cancel(); responderTask = nil
-
-        // Terminal the ledger before control disconnect so intentional End
-        // does not leave an active row burning intervals until idle timeout.
-        let sessionId = activeVoiceSession?.rishiSessionId
-        if let sessionId, let sessionCoordinator {
-            do {
-                try await sessionCoordinator.endSession(rishiSessionId: sessionId)
-            } catch {
-                Log.event("voice.session.end_session.failed", level: .warning, data: [
-                    "rishiSessionId": sessionId,
-                    "error": String(describing: error),
-                ])
-            }
-        }
 
         await client.disconnect()
         await controlSocket?.disconnect()
@@ -354,6 +349,7 @@ public actor RealtimeVoiceSession {
         currentLanguage = nil
         activeVoiceSession = nil
         controlSocket = nil
+        return sessionId
     }
 
     /// Best-effort inactivity ping for the control WebSocket. Called from
@@ -511,9 +507,9 @@ public actor RealtimeVoiceSession {
     /// directly. Returns `true` if the session is gone (treat as ending).
     private func readIsEnding() -> Bool { isEnding }
 
-    /// Full teardown when the WebRTC reconnect ladder is exhausted. Mirrors
-    /// intentional `end()` ordering (ledger before control disconnect) but
-    /// lands in `.failed(.networkLost)` and does not refresh activity.
+    /// Full teardown when the WebRTC reconnect ladder is exhausted. Still
+    /// awaits ledger `endSession` here (no optimistic UI dismiss on this path)
+    /// then lands in `.failed(.networkLost)`.
     private func handleReconnectExhausted() async {
         guard !isEnding else { return }
         isEnding = true
