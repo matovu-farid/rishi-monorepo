@@ -33,13 +33,18 @@ import {
   markNonceUsedAndRegisterCall,
   markTerminal,
   setHangupStatus,
+  touchLastActivityAt,
 } from "../voice-session/sql";
 import { callOpenAiHangup } from "../voice-session/openai-hangup";
 import type { ControlMessage, VoiceSessionTerminalReason } from "../voice-session/messages";
+import {
+  REGISTRATION_GRACE_MS,
+  VOICE_INTERVAL_MS,
+  shouldTerminateForInactivity,
+} from "../voice-session/timing";
 
 const CREDITS_PER_INTERVAL = 2;
 const CAP_INTERVALS_TRIAL = 40; // 20 minutes at the 30s cadence
-const INTERVAL_MS = 30_000;
 // Per-session Voice Chat caps by plan, at the same 30s cadence as the
 // trial (`CAP_INTERVALS_TRIAL`). Reader: 10 minutes. Voice: 20 minutes —
 // same total as the trial cap, kept as its own named constant so the two
@@ -48,12 +53,13 @@ const CAP_INTERVALS_READER = 20;
 const CAP_INTERVALS_VOICE = 40;
 
 // Seconds deducted from a paid period's voiceChatSecondsUsed per alarm
-// tick — equal to INTERVAL_MS in seconds. Also the minimum remaining
+// tick — equal to VOICE_INTERVAL_MS in seconds. Also the minimum remaining
 // paid-Voice-Chat balance required to start a new session.
-const PAID_VOICE_CHAT_SECONDS_PER_INTERVAL = INTERVAL_MS / 1000;
-const ClientControlMessageSchema = z.object({ type: z.literal("client_ack") });
-/** How long a session may sit `pending_registration` before it's reconciled as abandoned. Documented per the spec's "short grace period" requirement. */
-const REGISTRATION_GRACE_MS = 10_000;
+const PAID_VOICE_CHAT_SECONDS_PER_INTERVAL = VOICE_INTERVAL_MS / 1000;
+const ClientControlMessageSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("client_ack") }),
+  z.object({ type: z.literal("client_activity") }),
+]);
 /**
  * Bounded OpenAI-hangup retry backoff. Attempt 1 happens immediately when a
  * session goes terminal (inside `terminateSession`); if it fails, the alarm
@@ -97,6 +103,7 @@ export class UserUsageLedger extends DurableObject<Env> {
       // name column is null). Code reads/writes `pool_kind` /
       // `allowance_period_id` — ensure they exist before any RPC.
       this.ensureReservationsPoolColumns();
+      this.ensureLastActivityAtColumn();
     });
   }
 
@@ -114,6 +121,26 @@ export class UserUsageLedger extends DurableObject<Env> {
         sql.raw("ALTER TABLE `reservations` ADD `allowance_period_id` text"),
       );
     }
+  }
+
+  /**
+   * Idempotent ADD COLUMN + live-row backfill for inactivity tracking.
+   * Self-guarding COALESCE keeps re-runs / tick-bumped `updated_at` from
+   * refreshing activity once `last_activity_at` is set.
+   */
+  private ensureLastActivityAtColumn(): void {
+    const cols = this.db
+      .values<[number, string]>(sql`PRAGMA table_info('voice_session')`)
+      .map(([, name]) => name);
+    if (!cols.includes("last_activity_at")) {
+      this.db.run(sql.raw("ALTER TABLE `voice_session` ADD `last_activity_at` integer"));
+    }
+    this.db.run(
+      sql.raw(`UPDATE voice_session
+SET last_activity_at = COALESCE(last_activity_at, updated_at, call_registered_at, created_at)
+WHERE status IN ('pending_registration', 'active')
+  AND last_activity_at IS NULL;`),
+    );
   }
 
   // ── Public RPC methods ──────────────────────────────────────────────
@@ -595,24 +622,7 @@ export class UserUsageLedger extends DurableObject<Env> {
     capIntervals: number;
   }> {
     const userId = this.requireUserId();
-
-    // One-shot reconcile: a terminal row stuck in hangup not_started/pending
-    // (e.g. lost alarm) would otherwise block new sessions forever.
-    let live = await findLiveVoiceSession(this.db);
-    if (
-      live &&
-      live.status === "terminal" &&
-      (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
-    ) {
-      await this.reconcileTerminalHangup(live, userId);
-      live = await findLiveVoiceSession(this.db);
-    }
-    if (live) {
-      throw new VoiceSessionError(
-        "session_already_active",
-        "a voice session is already active for this user",
-      );
-    }
+    await this.assertNoBlockingLiveSession(userId);
 
     const activePeriod = await this.getActiveAllowancePeriod();
 
@@ -672,6 +682,7 @@ export class UserUsageLedger extends DurableObject<Env> {
       terminalAt: null,
       hangupStatus: "not_started",
       hangupAttempts: 0,
+      lastActivityAt: now,
       createdAt: now,
       updatedAt: now,
     });
@@ -680,6 +691,92 @@ export class UserUsageLedger extends DurableObject<Env> {
     await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId, planKind });
 
     return { rishiSessionId, nonce: minted.nonce, capIntervals };
+  }
+
+  private async assertNoBlockingLiveSession(userId: string): Promise<void> {
+    // One-shot reconcile: a terminal row stuck in hangup not_started/pending
+    // (e.g. lost alarm) would otherwise block new sessions forever.
+    let live = await findLiveVoiceSession(this.db);
+    if (
+      live &&
+      live.status === "terminal" &&
+      (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
+    ) {
+      await this.reconcileTerminalHangup(live, userId);
+      live = await findLiveVoiceSession(this.db);
+    }
+    // Null-callId sessions (abandoned pending_registration, or any path
+    // without an OpenAI call) only tear down locally. Auto-clear those
+    // orphans so a restart / mint-retry can start a new session.
+    if (live && !live.callId) {
+      await this.forceEndSession(live, "client_ended");
+      live = await findLiveVoiceSession(this.db);
+    }
+    if (live) {
+      throw new VoiceSessionError(
+        "session_already_active",
+        "a voice session is already active for this user",
+      );
+    }
+  }
+
+  /**
+   * Marks a live (or hangup-pending) session terminal and resolves hangup
+   * when there is no OpenAI callId. Used for client end + orphan cleanup
+   * on create.
+   */
+  async endVoiceSession(rishiSessionId: string): Promise<{ ok: true }> {
+    this.requireUserId();
+    const row = await findVoiceSessionById(this.db, rishiSessionId);
+    if (!row) {
+      throw new VoiceSessionError(
+        "no_active_session",
+        "no matching voice session to end",
+      );
+    }
+    if (row.status === "terminal" && row.hangupStatus === "succeeded") {
+      return { ok: true };
+    }
+    if (row.status === "terminal" && row.hangupStatus === "failed_permanently") {
+      return { ok: true };
+    }
+    await this.forceEndSession(row, "client_ended");
+    return { ok: true };
+  }
+
+  private async forceEndSession(
+    row: VoiceSessionRow,
+    reason: VoiceSessionTerminalReason,
+  ): Promise<void> {
+    const userId = this.requireUserId();
+    const now = Date.now();
+    if (row.status !== "terminal") {
+      await markTerminal(this.db, row.rishiSessionId, reason, now);
+    }
+    // No provider call to hang up — resolve immediately so create is unblocked.
+    if (!row.callId) {
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now);
+      try {
+        await this.ctx.storage.deleteAlarm();
+      } catch {
+        // No alarm — fine.
+      }
+    } else if (row.hangupStatus === "not_started" || row.hangupStatus === "pending") {
+      await this.reconcileTerminalHangup(
+        { ...row, status: "terminal", terminalReason: reason, terminalAt: now },
+        userId,
+      );
+    }
+    this.broadcastToActiveSockets({
+      type: "session_ended",
+      rishiSessionId: row.rishiSessionId,
+      reason,
+    });
+    this.closeSocketsForSession(row.rishiSessionId, reason);
+    await this.appendAuditLog(userId, "voice_session.client_ended", {
+      rishiSessionId: row.rishiSessionId,
+      reason,
+    });
   }
 
   /**
@@ -729,7 +826,7 @@ export class UserUsageLedger extends DurableObject<Env> {
     // The first 30-second charge is scheduled from the moment registration
     // succeeds, not from session creation — an app that takes a few seconds
     // to complete WebRTC negotiation doesn't lose part of its first interval.
-    await this.ensureAlarmAtOrBefore(now + INTERVAL_MS);
+    await this.ensureAlarmAtOrBefore(now + VOICE_INTERVAL_MS);
     await this.appendAuditLog(userId, "voice_session.call_registered", { rishiSessionId, callId });
 
     const allowance = await this.allowanceFieldsForSession(row);
@@ -907,6 +1004,13 @@ export class UserUsageLedger extends DurableObject<Env> {
    * soon as the shortfall is known — closes that gap.
    */
   private async tickActiveSession(row: VoiceSessionRow, userId: string, now: number): Promise<void> {
+    // After ensure + create/register seed, lastActivityAt must be set.
+    // Do NOT fall back to updatedAt (interval ticks bump it every 30s).
+    if (shouldTerminateForInactivity(row.lastActivityAt, now)) {
+      await this.terminateSession(row, "inactivity_timeout", userId, now);
+      return;
+    }
+
     let remainingAllowanceAfterTick: number;
     let costPerInterval: number;
     let exhaustionReason: VoiceSessionTerminalReason;
@@ -993,7 +1097,7 @@ export class UserUsageLedger extends DurableObject<Env> {
       return;
     }
 
-    await this.ctx.storage.setAlarm(now + INTERVAL_MS);
+    await this.ctx.storage.setAlarm(now + VOICE_INTERVAL_MS);
   }
 
   private async terminateSession(
@@ -1092,6 +1196,17 @@ export class UserUsageLedger extends DurableObject<Env> {
    * `null` if no session with this id has ever existed on this ledger.
    * Trial and paid remaining balances are separate fields (never packed).
    */
+  /**
+   * Records real user/assistant activity for inactivity timeout.
+   * No-op if the session is missing or already terminal. Scoped to the
+   * given rishiSessionId only (no cross-session refresh).
+   */
+  async touchVoiceSessionActivity(rishiSessionId: string): Promise<{ ok: true }> {
+    this.requireUserId();
+    await touchLastActivityAt(this.db, rishiSessionId, Date.now());
+    return { ok: true };
+  }
+
   async getSessionSnapshot(rishiSessionId: string): Promise<{
     rishiSessionId: string;
     status: VoiceSessionStatus;
@@ -1203,11 +1318,18 @@ export class UserUsageLedger extends DurableObject<Env> {
       this.sendControlError(ws, "Unrecognized control message.");
       return;
     }
-    // client_ack carries no enforcement weight — see the type's doc comment
-    // in voice-session/messages.ts. Logged for audit only.
-    console.log(
-      JSON.stringify({ event: "voice_control.client_ack", rishiSessionId: this.rishiSessionIdFor(ws) }),
-    );
+    const rishiSessionId = this.rishiSessionIdFor(ws);
+    if (parsed.data.type === "client_activity") {
+      // Enforcement signal for inactivity timeout — touch only the
+      // WebSocket-tagged session (ignore any client-supplied id).
+      if (rishiSessionId) {
+        await this.touchVoiceSessionActivity(rishiSessionId);
+      }
+      console.log(JSON.stringify({ event: "voice_control.client_activity", rishiSessionId }));
+      return;
+    }
+    // client_ack is advisory/teardown-only — never refreshes lastActivityAt.
+    console.log(JSON.stringify({ event: "voice_control.client_ack", rishiSessionId }));
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {

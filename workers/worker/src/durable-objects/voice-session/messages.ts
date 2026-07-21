@@ -4,7 +4,11 @@ export type VoiceSessionTerminalReason =
   | "voice_session_time_cap"
   | "trial_credits_exhausted"
   | "registration_timeout"
-  | "plan_voice_allowance_exhausted";
+  | "plan_voice_allowance_exhausted"
+  /** Client closed the UI / process; hangup when callId present. */
+  | "client_ended"
+  /** No real user/assistant activity for INACTIVITY_TIMEOUT_MS. */
+  | "inactivity_timeout";
 
 /** Sent as a follow-up `session_ended` reason if OpenAI hangup never succeeds after bounded retries. */
 export type HangupFailureReason = "provider_hangup_failed";

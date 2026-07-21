@@ -79,8 +79,34 @@ export async function markNonceUsedAndRegisterCall(
 ): Promise<void> {
   await db
     .update(voiceSession)
-    .set({ status: "active", nonceUsed: true, callId, callRegisteredAt: now, updatedAt: now })
+    .set({
+      status: "active",
+      nonceUsed: true,
+      callId,
+      callRegisteredAt: now,
+      lastActivityAt: now,
+      updatedAt: now,
+    })
     .where(eq(voiceSession.rishiSessionId, rishiSessionId));
+}
+
+/**
+ * Bumps `lastActivityAt` for a live session only. No-op if the row is
+ * missing or already terminal — callers fire-and-forget after
+ * client_activity.
+ */
+export async function touchLastActivityAt(
+  db: DrizzleSqliteDODatabase,
+  rishiSessionId: string,
+  now: number,
+): Promise<void> {
+  await db
+    .update(voiceSession)
+    .set({ lastActivityAt: now, updatedAt: now })
+    .where(
+      sql`${voiceSession.rishiSessionId} = ${rishiSessionId}
+          AND ${voiceSession.status} IN ('pending_registration', 'active')`,
+    );
 }
 
 export async function incrementConsumedIntervals(

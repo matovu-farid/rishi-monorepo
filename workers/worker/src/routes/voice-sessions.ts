@@ -134,6 +134,25 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
   }
 });
 
+// ---------- POST /:id/end (client hangup) ----------
+
+/**
+ * Ends a Rishi voice session from the client so intentional End does not
+ * leave an active row burning intervals until inactivity timeout. Also
+ * unblocks create after abandoned pending_registration orphans.
+ */
+voiceSessionsRoutes.post("/:id/end", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const rishiSessionId = c.req.param("id");
+  const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
+  try {
+    await stub.endVoiceSession(rishiSessionId);
+  } catch (err) {
+    return voiceSessionErrorResponse(c, err);
+  }
+  return c.json({ ok: true });
+});
+
 // ---------- POST /:id/register-call (bind the OpenAI call ID to this session) ----------
 
 const RegisterCallBodySchema = z.object({

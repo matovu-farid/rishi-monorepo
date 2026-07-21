@@ -69,6 +69,8 @@ export const voiceSession = sqliteTable("voice_session", {
       "trial_credits_exhausted",
       "registration_timeout",
       "plan_voice_allowance_exhausted",
+      "client_ended",
+      "inactivity_timeout",
     ],
   }),
   terminalAt: integer("terminal_at"), // epoch ms
@@ -78,6 +80,9 @@ export const voiceSession = sqliteTable("voice_session", {
     .notNull()
     .default("not_started"),
   hangupAttempts: integer("hangup_attempts").notNull().default(0),
+  // Last real user/assistant activity (not interval ticks). Nullable for
+  // legacy rows until ensureLastActivityAtColumn backfills live sessions.
+  lastActivityAt: integer("last_activity_at"), // epoch ms
   createdAt: integer("created_at").notNull(), // epoch ms
   updatedAt: integer("updated_at").notNull(), // epoch ms
 });
