@@ -34,6 +34,8 @@ struct VoiceTranscriptBridgeTests {
         #expect(messages.first?.conversationId == conversationId)
         #expect(hook.messageUpdates.count == 1)
         #expect(hook.conversationUpdates == [conversationId])
+        // Final must remain visible in live UI (not cleared on isFinal).
+        #expect(state.partialAssistantTranscript == "Hello!")
     }
 
     @Test("Final user fragment persists independently of assistant buffer")
@@ -59,6 +61,8 @@ struct VoiceTranscriptBridgeTests {
         #expect(messages.first?.content == "Hi")
         // The assistant buffer is preserved in the live state.
         #expect(state.partialAssistantTranscript == "draft")
+        // User final also stays visible until the next user utterance.
+        #expect(state.partialUserTranscript == "Hi")
     }
 
     @Test("Empty isFinal event does not persist")
@@ -78,6 +82,54 @@ struct VoiceTranscriptBridgeTests {
 
         let messages = try await store.messages(for: conversationId)
         #expect(messages.isEmpty)
+    }
+
+    @Test("Partials plus empty final flush keep full text visible")
+    func emptyFinalFlushKeepsVisibleTranscript() async throws {
+        let conversationId = UUID()
+        let store = InMemoryMessageStore()
+        let bridge = VoiceTranscriptBridge(messageStore: store)
+        let state = VoiceSessionState()
+        let (stream, continuation) = AsyncStream<RealtimeTranscriptEvent>.makeStream()
+
+        let task = Task {
+            await bridge.consume(stream: stream, conversationId: conversationId, state: state)
+        }
+        continuation.yield(.init(role: .assistant, content: "Once ", isFinal: false))
+        continuation.yield(.init(role: .assistant, content: "upon ", isFinal: false))
+        continuation.yield(.init(role: .assistant, content: "a time", isFinal: false))
+        // Pump flush pattern: empty content + isFinal after deltas.
+        continuation.yield(.init(role: .assistant, content: "", isFinal: true))
+        continuation.finish()
+        await task.value
+
+        let messages = try await store.messages(for: conversationId)
+        #expect(messages.count == 1)
+        #expect(messages.first?.content == "Once upon a time")
+        #expect(state.partialAssistantTranscript == "Once upon a time")
+    }
+
+    @Test("Next non-empty partial for a role clears held final then shows new text")
+    func nextPartialReplacesHeldFinal() async throws {
+        let conversationId = UUID()
+        let store = InMemoryMessageStore()
+        let bridge = VoiceTranscriptBridge(messageStore: store)
+        let state = VoiceSessionState()
+        let (stream, continuation) = AsyncStream<RealtimeTranscriptEvent>.makeStream()
+
+        let task = Task {
+            await bridge.consume(stream: stream, conversationId: conversationId, state: state)
+        }
+        continuation.yield(.init(role: .assistant, content: "First turn", isFinal: false))
+        continuation.yield(.init(role: .assistant, content: "", isFinal: true))
+        continuation.yield(.init(role: .assistant, content: "Second", isFinal: false))
+        continuation.finish()
+        await task.value
+
+        let messages = try await store.messages(for: conversationId)
+        #expect(messages.count == 1)
+        #expect(messages.first?.content == "First turn")
+        #expect(state.partialAssistantTranscript == "Second")
     }
 
     @Test("Partial fragments update VoiceSessionState live")

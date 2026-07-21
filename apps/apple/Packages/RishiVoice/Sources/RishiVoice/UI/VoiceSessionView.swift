@@ -68,9 +68,8 @@ public struct VoiceSessionView: View {
                 .foregroundStyle(orbColor)
                 .accessibilityHidden(true)
 
-            // Live transcript area. Auto-scrolling not required at this stage
-            // — both partial buffers are short-lived strings that get cleared
-            // on the next `clearTranscript(role:)`.
+            // Live transcript area. Finals stay visible until the bridge
+            // clears that role on the next non-empty partial (new utterance).
             VStack(alignment: .leading, spacing: RishiSpacing.s) {
                 if !state.partialAssistantTranscript.isEmpty {
                     Text(state.partialAssistantTranscript)

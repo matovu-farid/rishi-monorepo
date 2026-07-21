@@ -34,9 +34,9 @@ public final class VoiceSessionState {
         self.status = status
     }
 
-    /// Append a (likely partial) transcript fragment. Final fragments are
-    /// persisted via `VoiceTranscriptBridge` (Plan 10-04) and SHOULD be
-    /// followed by `clearTranscript(role:)` to reset the live buffer.
+    /// Append a (likely partial) transcript fragment. Finals are persisted via
+    /// `VoiceTranscriptBridge` and left visible; the bridge calls
+    /// `clearTranscript(role:)` only when that role starts its next utterance.
     public func appendTranscript(role: TranscriptRole, content: String) {
         switch role {
         case .user:      partialUserTranscript += content

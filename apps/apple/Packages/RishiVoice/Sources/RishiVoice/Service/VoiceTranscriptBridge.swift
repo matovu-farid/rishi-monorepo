@@ -79,6 +79,19 @@ public actor VoiceTranscriptBridge {
             await onActivity()
         }
 
+        // Hold the previous final on screen until this role starts a new
+        // utterance (first non-empty fragment after the internal buffer reset).
+        let bufferIsEmpty: Bool
+        switch event.role {
+        case .user:      bufferIsEmpty = userBuffer.isEmpty
+        case .assistant: bufferIsEmpty = assistantBuffer.isEmpty
+        }
+        if bufferIsEmpty && !event.content.isEmpty {
+            await MainActor.run {
+                state.clearTranscript(role: event.role)
+            }
+        }
+
         // Update the in-progress buffer and push to the live UI state.
         switch event.role {
         case .user:      userBuffer += event.content
@@ -95,9 +108,8 @@ public actor VoiceTranscriptBridge {
         case .user:      content = userBuffer;      userBuffer = ""
         case .assistant: content = assistantBuffer; assistantBuffer = ""
         }
-        await MainActor.run {
-            state.clearTranscript(role: event.role)
-        }
+        // Do not clearTranscript here — keep the finalized text visible
+        // (including through empty+final flush) until the next turn starts.
 
         // Skip empty finals (defensive — the SDK occasionally flushes an
         // empty `isFinal=true` event at turn boundaries).
