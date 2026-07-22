@@ -99,6 +99,7 @@ public actor VoiceTranscriptBridge {
         }
         await MainActor.run {
             state.appendTranscript(role: event.role, content: event.content)
+            applyActivityPhase(for: event, to: state)
         }
 
         guard event.isFinal else { return }
@@ -140,6 +141,22 @@ public actor VoiceTranscriptBridge {
         switch role {
         case .user:      return .user
         case .assistant: return .assistant
+        }
+    }
+
+    @MainActor
+    private func applyActivityPhase(for event: RealtimeTranscriptEvent, to state: VoiceSessionState) {
+        switch event.role {
+        case .assistant:
+            if event.isFinal {
+                state.apply(activityPhase: .listening)
+            } else if !event.content.isEmpty {
+                state.apply(activityPhase: .speaking)
+            }
+        case .user:
+            if !event.content.isEmpty {
+                state.apply(activityPhase: .listening)
+            }
         }
     }
 }

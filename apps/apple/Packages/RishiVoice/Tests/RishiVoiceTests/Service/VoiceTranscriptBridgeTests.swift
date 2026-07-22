@@ -151,6 +151,60 @@ struct VoiceTranscriptBridgeTests {
         #expect(state.partialAssistantTranscript == "Once upon ")
     }
 
+    @Test("assistant partial sets activityPhase speaking")
+    func assistantPartialSetsSpeaking() async {
+        let conversationId = UUID()
+        let store = InMemoryMessageStore()
+        let bridge = VoiceTranscriptBridge(messageStore: store)
+        let state = VoiceSessionState()
+        let (stream, continuation) = AsyncStream<RealtimeTranscriptEvent>.makeStream()
+
+        let task = Task {
+            await bridge.consume(stream: stream, conversationId: conversationId, state: state)
+        }
+        continuation.yield(.init(role: .assistant, content: "Hel", isFinal: false))
+        continuation.finish()
+        await task.value
+
+        #expect(state.activityPhase == .speaking)
+    }
+
+    @Test("assistant final sets activityPhase listening")
+    func assistantFinalSetsListening() async {
+        let conversationId = UUID()
+        let store = InMemoryMessageStore()
+        let bridge = VoiceTranscriptBridge(messageStore: store)
+        let state = VoiceSessionState()
+        let (stream, continuation) = AsyncStream<RealtimeTranscriptEvent>.makeStream()
+
+        let task = Task {
+            await bridge.consume(stream: stream, conversationId: conversationId, state: state)
+        }
+        continuation.yield(.init(role: .assistant, content: "Done", isFinal: true))
+        continuation.finish()
+        await task.value
+
+        #expect(state.activityPhase == .listening)
+    }
+
+    @Test("user partial sets activityPhase listening")
+    func userPartialSetsListening() async {
+        let conversationId = UUID()
+        let store = InMemoryMessageStore()
+        let bridge = VoiceTranscriptBridge(messageStore: store)
+        let state = VoiceSessionState()
+        let (stream, continuation) = AsyncStream<RealtimeTranscriptEvent>.makeStream()
+
+        let task = Task {
+            await bridge.consume(stream: stream, conversationId: conversationId, state: state)
+        }
+        continuation.yield(.init(role: .user, content: "Hi", isFinal: false))
+        continuation.finish()
+        await task.value
+
+        #expect(state.activityPhase == .listening)
+    }
+
     @Test("onActivity fires for user and assistant events (partial and final)")
     func onActivityFiresForBothRoles() async {
         let conversationId = UUID()

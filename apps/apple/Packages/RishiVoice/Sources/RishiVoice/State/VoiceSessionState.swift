@@ -28,10 +28,28 @@ public final class VoiceSessionState {
     /// (e.g. `VoiceSessionView`) reads this to show a warning banner.
     public var isFinalInterval: Bool = false
 
+    /// Chrome waveform / status hint. Updated by ``apply(status:)`` and
+    /// ``VoiceTranscriptBridge`` transcript events.
+    public var activityPhase: VoiceActivityPhase = .connecting
+
     public init() {}
 
     public func apply(status: VoiceSessionStatus) {
         self.status = status
+        switch status {
+        case .reconnecting:
+            activityPhase = .reconnecting
+        case .live:
+            activityPhase = .listening
+        case .idle, .requestingMic, .fetchingKey, .creatingSession, .connecting, .registeringCall:
+            activityPhase = .connecting
+        case .ending, .ended, .failed:
+            break
+        }
+    }
+
+    public func apply(activityPhase: VoiceActivityPhase) {
+        self.activityPhase = activityPhase
     }
 
     /// Append a (likely partial) transcript fragment. Finals are persisted via
@@ -83,5 +101,6 @@ public final class VoiceSessionState {
         self.remainingVoiceChatSeconds = nil
         self.remainingIntervals = nil
         self.isFinalInterval = false
+        self.activityPhase = .connecting
     }
 }
