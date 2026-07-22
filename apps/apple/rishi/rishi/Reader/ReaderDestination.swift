@@ -2,6 +2,7 @@ import SwiftUI
 import ReadiumShared
 import RishiAudio
 import RishiBilling
+import RishiChat
 import RishiCore
 import RishiLibrary
 import RishiReader
@@ -9,6 +10,7 @@ import RishiSearch
 import RishiSync
 import RishiUIKit
 import RishiSettings
+import RishiVoice
 
 struct ReaderDestination: View {
     let services: BootstrappedServices
@@ -21,6 +23,8 @@ struct ReaderDestination: View {
     @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
 
     @State private var voiceEntry: ReaderVoiceEntry
+    @State private var showVoiceTextChat = false
+    @State private var voiceTextVM: ChatPanelViewModel?
 
     init(
         vm: ReaderViewModel,
@@ -141,32 +145,89 @@ struct ReaderDestination: View {
         .onDisappear {
             syncBinding = nil
 
-            Task { await readAloud?.stop() }
+            Task {
+                await services.voicePresenter.requestEnd()
+                await readAloud?.stop()
+            }
         }
         .overlay(alignment: .bottomTrailing) {
-            IndexingIndicatorChip(
-                bookId: vm.book.id,
-                bookSearch: services.bookSearch
-            )
-            .padding(.trailing, RishiSpacing.m)
-            .padding(.bottom, RishiSpacing.s)
+            if !services.voicePresenter.isPresenting {
+                IndexingIndicatorChip(
+                    bookId: vm.book.id,
+                    bookSearch: services.bookSearch
+                )
+                .padding(.trailing, RishiSpacing.m)
+                .padding(.bottom, RishiSpacing.s)
+            }
         }
         .overlay {
-            if let ra = readAloud {
-                ReadAloudControlsOverlay(
-                    controller: ra,
+            let voiceActive = services.voicePresenter.isPresenting
+            let ttsVisible = readAloud?.showControls == true
+            if ReaderAudioChromeVisibility.shouldShow(
+                voiceActive: voiceActive,
+                ttsVisible: ttsVisible
+            ) {
+                ReaderAudioChromeOverlay(
+                    isVisible: true,
+                    mode: voiceActive ? .voice : .tts,
                     ttsState: services.ttsState,
+                    voiceState: services.voicePresenter.state,
+                    readAloud: readAloud,
                     onOpenVoiceChat: {
                         Task {
-                            await ra.stop()
+                            let controller = ensureReadAloudController()
+                            await controller.pauseForVoiceHandoff()
                             voiceEntry.presentVoice(
                                 bookId: vm.book.id,
                                 context: vm.voiceContext(),
                                 initialQuote: nil
                             )
                         }
-                    }
+                    },
+                    onOpenReadAloud: {
+                        Task {
+                            await services.voicePresenter.requestEnd()
+                            await ensureReadAloudController().openReadAloudFromVoice(vm: vm)
+                        }
+                    },
+                    onEndVoice: {
+                        Task {
+                            await services.voicePresenter.requestEnd()
+                            await readAloud?.resumeAfterVoiceIfNeeded()
+                        }
+                    },
+                    onOpenTextChat: { showVoiceTextChat = true }
                 )
+            }
+        }
+        .sheet(isPresented: $showVoiceTextChat) {
+            NavigationStack {
+                if let voiceTextVM {
+                    ChatPanelView(
+                        viewModel: voiceTextVM,
+                        initialQuote: services.voicePresenter.pendingInitialQuote
+                    )
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .task(id: services.voicePresenter.currentBookId) {
+                voiceTextVM = nil
+                if let convo = try? await services.conversationLookup.findOrCreate(
+                    userId: userId,
+                    bookId: services.voicePresenter.currentBookId
+                ) {
+                    voiceTextVM = ChatPanelViewModel.make(
+                        conversation: convo,
+                        services: services
+                    )
+                }
+            }
+        }
+        .onChange(of: services.voicePresenter.pendingInitialQuote) { _, quote in
+            if quote != nil {
+                showVoiceTextChat = true
             }
         }
         .sheet(isPresented: Binding(
@@ -210,5 +271,21 @@ struct ReaderDestination: View {
                 onDismiss: { voiceEntry.dismissUpgradePrompt() }
             )
         }
+    }
+
+    @MainActor
+    private func ensureReadAloudController() -> ReadAloudController {
+        if let readAloud { return readAloud }
+        let controller = ReadAloudController(
+            ttsEngine: services.ttsEngine,
+            ttsState: services.ttsState,
+            ttsSettingsStore: services.ttsSettingsStore,
+            ttsPrewarmer: services.ttsPrewarmer,
+            ttsPresence: services.ttsPresenceController,
+            coordidator: services.audioCoordinator,
+            userId: userId
+        )
+        readAloud = controller
+        return controller
     }
 }

@@ -39,6 +39,7 @@ final class ReadAloudController {
     /// At most one credit-consuming page-follow per spoken utterance.
     private var followCreditRemaining = 0
     private var navigationIntentGeneration: UInt64 = 0
+    private(set) var wantsAutoResumeAfterVoice = false
     /// Test seam: force `isActivelySpeaking` without a live synthesizer.
     #if DEBUG
     private var testSpeakingOverride = false
@@ -112,6 +113,7 @@ final class ReadAloudController {
         #endif
         showControls = true
 
+        await registerTTSPreemption()
         await ttsPresence.beginSession(
             bookID: vm.book.id.uuidString,
             title: vm.book.title,
@@ -263,6 +265,47 @@ final class ReadAloudController {
                 await bridge.resume()
             }
         }
+        if ttsState.status == .paused {
+            wantsAutoResumeAfterVoice = false
+        }
+    }
+
+    /// Pauses an active read-aloud session before opening voice chat, preserving
+    /// position for ``resumeAfterVoiceIfNeeded()`` when the user returns.
+    func pauseForVoiceHandoff() async {
+        let wasPlaying = ttsState.status == .playing || isActivelySpeaking
+        guard wasPlaying else {
+            wantsAutoResumeAfterVoice = false
+            return
+        }
+        wantsAutoResumeAfterVoice = true
+        if let readiumSynthesizer {
+            if case .playing = readiumState {
+                readiumSynthesizer.pauseOrResume()
+            }
+        } else if let bridge {
+            await bridge.pause()
+        }
+    }
+
+    func resumeAfterVoiceIfNeeded() async {
+        guard wantsAutoResumeAfterVoice else { return }
+        wantsAutoResumeAfterVoice = false
+        await togglePlayback()
+    }
+
+    func openReadAloudFromVoice(vm: ReaderViewModel) async {
+        if wantsAutoResumeAfterVoice {
+            await resumeAfterVoiceIfNeeded()
+        } else {
+            await startReader(vm: vm)
+        }
+    }
+
+    private func registerTTSPreemption() async {
+        await coordinator.registerPreemption(for: .tts) { [weak self] in
+            await self?.pauseForVoiceHandoff()
+        }
     }
 
     func previous() async {
@@ -354,6 +397,7 @@ final class ReadAloudController {
             speed: pickerInitial.speed
         )
         showControls = true
+        await registerTTSPreemption()
         await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
     }
 

@@ -13,9 +13,25 @@ import SwiftUI
 ///   * crashes in token lookups, and
 ///   * regressions where a new `VoiceSessionStatus` case is added but the
 ///     UI doesn't fan out the switch.
+import Testing
+import SwiftUI
+@testable import RishiVoice
+
 @MainActor
 @Suite("Voice UI construction smoke")
 struct VoiceUISnapshotTests {
+
+    // MARK: VoiceControlsView
+
+    @Test("VoiceControlsView constructs for every activityPhase")
+    func controlsViewConstructsAllPhases() {
+        for phase in [VoiceActivityPhase.connecting, .listening, .speaking, .reconnecting] {
+            let state = VoiceSessionState()
+            state.apply(status: .live)
+            state.apply(activityPhase: phase)
+            _ = VoiceControlsView(state: state, onEnd: {}, onOpenReadAloud: {}).body
+        }
+    }
 
     // MARK: VoiceStatusBadge
 

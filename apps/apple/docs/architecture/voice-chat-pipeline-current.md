@@ -28,7 +28,7 @@ flowchart TB
 
 ## What each node does
 
-**Chat Panel UI** — the chat screen has a voice button. Tapping it asks for a voice session; while a session is live, a full-screen cover shows status, a waveform, the live transcript, and an End button.
+**Chat Panel UI** — the reader shows a draggable pill chrome (shared with Read Aloud) while voice is active: waveform, status label, Read Aloud handoff, End. The book remains visible. Allowance warnings appear only as "Ending soon" in the final interval.
 
 **VoiceSession** — the conductor. One actor owns one session at a time. It drives the lifecycle (idle → connecting → live → ended), gets a key from the worker, opens the peer connection, listens for transcript events, and tears everything down on end or failure.
 

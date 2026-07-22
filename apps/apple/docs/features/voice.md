@@ -13,20 +13,25 @@ peer-to-peer real-time media protocol used by browsers for video calls.
 
 ## The user flow
 
-- From the reader or the chat panel, tap the voice button.
+- From the reader, tap the voice button in the toolbar or the voice-chat
+  button on the read-aloud pill.
 - The first time, iOS asks for microphone permission. If denied, the
   user sees an explanation with a button into Settings.
-- A status badge shows "connecting", then "live". A waveform appears.
-- The user talks; the assistant responds with voice; the transcript
-  appears underneath in real time.
-- Tap end. The session shuts down and the transcript is saved as a new
-  chat conversation tied to the current book.
+- A draggable pill chrome appears over the book (same shell as Read Aloud)
+  showing a waveform, status ("Connecting…", "Listening…", "Speaking…"),
+  Read Aloud / End controls. The book stays visible.
+- The user talks; the assistant responds with voice. Transcripts persist
+  to the conversation log but are not shown in the pill.
+- Tap End, or switch back to Read Aloud from the pill. TTS resumes from
+  the same paragraph when read-aloud was active before voice.
 
 ## Where it lives
 
 | Role | File |
 | --- | --- |
-| Entry point view | `Packages/RishiVoice/Sources/RishiVoice/UI/VoiceSessionView.swift` |
+| Reader pill chrome | `Packages/RishiVoice/Sources/RishiVoice/UI/VoiceControlsView.swift` |
+| Legacy full-screen UI (previews/tests) | `Packages/RishiVoice/Sources/RishiVoice/UI/VoiceSessionView.swift` |
+| Overlay shell (app target) | `rishi/rishi/Reader/ReaderAudioChromeOverlay.swift` |
 | Permission prompt | `Packages/RishiVoice/Sources/RishiVoice/UI/VoicePermissionPrompt.swift` |
 | Session lifecycle (actor) | `Packages/RishiVoice/Sources/RishiVoice/Service/RealtimeVoiceSession.swift` |
 | Observable session state | `Packages/RishiVoice/Sources/RishiVoice/State/` |

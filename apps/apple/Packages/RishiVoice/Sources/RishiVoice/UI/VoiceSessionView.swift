@@ -1,17 +1,11 @@
 import SwiftUI
 import RishiUIKit
 
-/// Full-screen call UI for an active voice session.
+/// Legacy full-screen call UI for an active voice session.
 ///
-/// Binds to the ``VoiceSessionState`` produced by ``RealtimeVoiceSession``
-/// (Plan 10-03) and renders:
-///   * a status badge at the top,
-///   * a large waveform orb whose tint reflects the current lifecycle phase,
-///   * the live partial assistant + user transcripts,
-///   * a destructive End button that invokes the injected ``onEnd`` closure.
-///
-/// **VOICE-08**: this surface NEVER routes through CallKit and presents no
-/// system call UI. The End button is plain SwiftUI.
+/// Production reader chrome uses ``VoiceControlsView`` in a draggable pill
+/// overlay (`ReaderAudioChromeOverlay`). This view remains for previews and
+/// construction smoke tests.
 public struct VoiceSessionView: View {
 
     /// Accessibility identifier for the optional "open text chat" control.

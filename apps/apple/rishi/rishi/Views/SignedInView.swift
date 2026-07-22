@@ -52,27 +52,12 @@ struct SignedInView: View {
                 )
             }
             
-            .fullScreenCover(
-                isPresented: Binding(
-                    get: { services.voicePresenter.isPresenting },
-                    set: { newValue in
-                        if newValue == false {
-                            Task { await services.voicePresenter.requestEnd() }
-                        }
-                    }
-                ),
-                onDismiss: {
-                    
+            .onChange(of: services.voicePresenter.isPresenting) { _, presenting in
+                if !presenting {
                     services.voicePresenter.promotePendingFailure()
                 }
-            ) {
-                VoiceSessionHost(
-                    presenter: services.voicePresenter,
-                    services: services,
-                    userId: user.id
-                )
             }
-            
+
             .alert(
                 voiceFailureTitle,
                 isPresented: Binding(
