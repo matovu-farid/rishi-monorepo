@@ -29,6 +29,15 @@ struct RealtimeAPIAdapterSmokeTests {
         #expect(status == .disconnected)
     }
 
+    @Test("Adapter prewarm builds a disconnected transport")
+    func prewarmLeavesTransportDisconnected() async {
+        let adapter = RealtimeAPIAdapter()
+        await adapter.prewarm()
+        let status = await adapter.currentStatus()
+        #expect(status == .disconnected)
+        await adapter.disconnect()
+    }
+
     @Test("FakeRealtimeClient records connect call + transitions to connected")
     func fakeRecordsConnect() async throws {
         let fake = FakeRealtimeClient()

@@ -85,6 +85,12 @@ public struct RealtimeToolCallEvent: Sendable, Equatable {
 /// frames directly. Transcript events are the only conversation-layer
 /// data that crosses this boundary.
 public protocol RealtimeClientAPI: Sendable {
+    /// Build the local realtime transport before an ephemeral key is ready.
+    /// Implementations may use this hook to overlap peer construction with
+    /// server-side session setup. The transport remains disconnected and
+    /// cannot send or consume audio until `connect` succeeds.
+    func prewarm() async
+
     /// Open a WebRTC voice session with the given ephemeral key. Throws on
     /// negotiation failure (network, key rejected, SDP failure).
     func connect(
@@ -153,6 +159,9 @@ public protocol RealtimeClientAPI: Sendable {
 }
 
 public extension RealtimeClientAPI {
+    /// Test/fallback clients do not need a transport to prewarm.
+    func prewarm() async {}
+
     func connect(ephemeralKey: String) async throws {
         try await connect(ephemeralKey: ephemeralKey, bookContext: nil, language: nil, deferMicCapture: false)
     }

@@ -36,6 +36,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     private let lock = NSLock()
     private var conversation: SDKConversation?
+    /// A disconnected Conversation whose peer/data-channel objects have been
+    /// constructed ahead of the ephemeral-key request. `connect()` consumes
+    /// this once for the initial connection; reconnects always get a fresh
+    /// peer because WebRTC connections cannot be reused after teardown.
+    private var prewarmTask: Task<SDKConversation, Never>?
 
     // Persistent stream continuations across the adapter's lifetime. New
     // consumers re-call to get a new stream backed by the same continuation
@@ -81,6 +86,31 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     }
 
     public init() {}
+
+    /// Pre-construct the local WebRTC peer while the Worker creates the
+    /// Rishi/OpenAI session. This does not negotiate, open a data channel, or
+    /// enable audio; it only moves expensive factory/track construction off
+    /// the connection critical path. The task is shared so concurrent callers
+    /// never create two peers.
+    public func prewarm() async {
+        audioUnit.enableManualModeOnce()
+        let task: Task<SDKConversation, Never>? = lock.withLock {
+            guard conversation == nil else { return nil }
+            if let prewarmTask { return prewarmTask }
+            let task = Task { @MainActor in
+                SDKConversation(debug: false)
+            }
+            prewarmTask = task
+            return task
+        }
+        if let task {
+            await withTaskCancellationHandler {
+                _ = await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        }
+    }
 
     // MARK: - White-box test seams (preserved)
 
@@ -230,13 +260,29 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // configuration authoritative for the initial connection; reconnects
         // re-apply the latest page context above, while `sessionUpdates` below
         // validates that the resulting configuration arrived.
-        let convo = await MainActor.run { () -> SDKConversation in
-            if isReconnect {
-                return SDKConversation(debug: false) { [self] session in
-                    session = makeConfiguredSession(bookContext: bookContext, language: language)
+        // A prewarmed peer is valid only for the first connection. If this is
+        // a reconnect, discard the pending task and construct a fresh peer —
+        // WebRTC does not permit reusing a closed connection.
+        let pendingPrewarm: Task<SDKConversation, Never>? = lock.withLock {
+            let task = prewarmTask
+            prewarmTask = nil
+            return task
+        }
+        if isReconnect {
+            pendingPrewarm?.cancel()
+        }
+        let convo: SDKConversation
+        if !isReconnect, let pendingPrewarm {
+            convo = await pendingPrewarm.value
+        } else {
+            convo = await MainActor.run { () -> SDKConversation in
+                if isReconnect {
+                    return SDKConversation(debug: false) { [self] session in
+                        session = makeConfiguredSession(bookContext: bookContext, language: language)
+                    }
                 }
+                return SDKConversation(debug: false)
             }
-            return SDKConversation(debug: false)
         }
         Log.event(
             isReconnect ? "voice.adapter.session.update.reconnect" : "voice.adapter.session.update.server_minted",
@@ -500,6 +546,13 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     public func disconnect() async {
         // Pump + Conversation teardown is the shared single-peer path.
         await teardownActiveConversation()
+
+        let pendingPrewarm: Task<SDKConversation, Never>? = lock.withLock {
+            let task = prewarmTask
+            prewarmTask = nil
+            return task
+        }
+        pendingPrewarm?.cancel()
 
         let (errCont, txCont, tcCont): (
             AsyncStream<RealtimeClientError>.Continuation?,

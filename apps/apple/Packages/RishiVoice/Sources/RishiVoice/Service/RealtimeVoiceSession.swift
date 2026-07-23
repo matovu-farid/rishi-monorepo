@@ -211,10 +211,17 @@ public actor RealtimeVoiceSession {
         currentBookContext = snapshot
         currentLanguage = language
 
-        let prewarmTask: Task<Void, Never>? = {
-            guard bookId != nil, let warm = embedderPrewarm else { return nil }
-            return Task { await warm() }
-        }()
+        // Construct the local WebRTC peer while the Worker mints the session
+        // secret. The adapter keeps this transport disconnected until
+        // `connect()` consumes it; embedder warmup shares the same task so
+        // both independent costs overlap the server request.
+        let prewarmTask: Task<Void, Never>? = Task {
+            async let transport: Void = client.prewarm()
+            if bookId != nil, let warm = embedderPrewarm {
+                await warm()
+            }
+            await transport
+        }
 
         if let sessionCoordinator {
             await startTrialVoiceSession(
