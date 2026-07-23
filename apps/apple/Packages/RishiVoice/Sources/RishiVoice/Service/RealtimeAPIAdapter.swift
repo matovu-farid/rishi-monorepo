@@ -320,17 +320,29 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         try await Self.waitUntilConnected(statusUpdates: statusUpdates)
         Log.event("voice.adapter.connected", level: .info)
 
-        Log.event("voice.adapter.session.wait", level: .info)
-        let sessionSnapshot = try await Self.waitUntilConfiguredSession(sessionUpdates: sessionUpdates)
+        // The initial ephemeral secret already contains the complete session
+        // configuration. Waiting for `session.created` here adds avoidable
+        // latency and can strand the UI in Connecting if a provider event is
+        // delayed even though the data channel is usable. Reconnects still
+        // wait for the updated snapshot because they intentionally refresh
+        // page context through `session.update`.
+        let sessionSnapshot: SDKSession?
+        if isReconnect {
+            Log.event("voice.adapter.session.wait.reconnect", level: .info)
+            sessionSnapshot = try await Self.waitUntilConfiguredSession(sessionUpdates: sessionUpdates)
+        } else {
+            Log.event("voice.adapter.session.server_minted_no_wait", level: .info)
+            sessionSnapshot = await MainActor.run { convo.session }
+        }
         let entryCount = await MainActor.run { convo.entries.count }
         Log.event("voice.adapter.session.snapshot", level: .info, data: [
-            "hasSession": String(true),
+            "hasSession": String(sessionSnapshot != nil),
             "entryCount": String(entryCount),
-            "toolCount": String(sessionSnapshot.tools?.count ?? 0),
-            "hasBookTool": String(Self.sessionHasBookContext(sessionSnapshot)),
-            "toolChoice": String(describing: sessionSnapshot.toolChoice),
-            "instructionsBytes": String(sessionSnapshot.instructions.utf8.count),
-            "instructionsHasBookContext": String(sessionSnapshot.instructions.contains("bookContext")),
+            "toolCount": String(sessionSnapshot?.tools?.count ?? 0),
+            "hasBookTool": String(sessionSnapshot.map(Self.sessionHasBookContext) ?? false),
+            "toolChoice": String(describing: sessionSnapshot?.toolChoice),
+            "instructionsBytes": String(sessionSnapshot?.instructions.utf8.count ?? 0),
+            "instructionsHasBookContext": String(sessionSnapshot?.instructions.contains("bookContext") ?? false),
         ])
 
         // Activation handoff: keep the VoIP unit OFF until local AVAudioEngine
