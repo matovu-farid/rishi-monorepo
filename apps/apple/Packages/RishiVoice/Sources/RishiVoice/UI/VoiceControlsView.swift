@@ -73,50 +73,60 @@ public struct VoiceControlsView: View {
     }
 
     private var controlsRow: some View {
+        fullControlsRow
+    }
+
+    private var fullControlsRow: some View {
         HStack(spacing: 0) {
+            leadingControls.frame(width: 104, alignment: .leading)
+            centerSlot
+            trailingControls.frame(width: 104, alignment: .trailing)
+        }
+        .frame(minWidth: 264)
+        .overlay { waveform }
+    }
+
+    private var leadingControls: some View {
+        iconButton(
+            systemName: "speaker.wave.2.fill",
+            foregroundStyle: RishiColor.accent,
+            accessibilityIdentifier: Self.openReadAloudAccessibilityIdentifier,
+            accessibilityLabel: "Read Aloud",
+            action: onOpenReadAloud
+        )
+    }
+
+    private var trailingControls: some View {
+        HStack(spacing: RishiSpacing.s) {
             iconButton(
-                systemName: "speaker.wave.2.fill",
-                foregroundStyle: RishiColor.accent,
-                accessibilityIdentifier: Self.openReadAloudAccessibilityIdentifier,
-                accessibilityLabel: "Read Aloud",
-                action: onOpenReadAloud
+                systemName: "phone.down.fill",
+                foregroundStyle: RishiColor.danger,
+                accessibilityIdentifier: Self.endAccessibilityIdentifier,
+                accessibilityLabel: "End voice session",
+                action: onEnd
             )
 
-            Spacer(minLength: 0)
-
-            // Keep a reserved center slot so the trailing controls cannot
-            // overlap the waveform when the optional text-chat button is shown.
-            Color.clear
-                .frame(width: 56, height: Self.iconButtonSize)
-                .accessibilityHidden(true)
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: RishiSpacing.s) {
+            if let onOpenTextChat {
                 iconButton(
-                    systemName: "phone.down.fill",
-                    foregroundStyle: RishiColor.danger,
-                    accessibilityIdentifier: Self.endAccessibilityIdentifier,
-                    accessibilityLabel: "End voice session",
-                    action: onEnd
+                    systemName: "bubble.left.and.bubble.right",
+                    foregroundStyle: RishiColor.accent,
+                    accessibilityIdentifier: Self.openTextChatAccessibilityIdentifier,
+                    accessibilityLabel: "Open text chat",
+                    action: onOpenTextChat
                 )
-
-                if let onOpenTextChat {
-                    iconButton(
-                        systemName: "bubble.left.and.bubble.right",
-                        foregroundStyle: RishiColor.accent,
-                        accessibilityIdentifier: Self.openTextChatAccessibilityIdentifier,
-                        accessibilityLabel: "Open text chat",
-                        action: onOpenTextChat
-                    )
-                }
             }
         }
-        .overlay {
-            VoiceWaveformView(phase: displayPhase)
-                .frame(width: 56, height: 40)
-        }
-        .frame(maxWidth: .infinity)
+    }
+
+    private var centerSlot: some View {
+        Color.clear
+            .frame(width: 56, height: Self.iconButtonSize)
+            .accessibilityHidden(true)
+    }
+
+    private var waveform: some View {
+        VoiceWaveformView(phase: displayPhase)
+            .frame(width: 56, height: 40)
     }
 
     private var displayPhase: VoiceActivityPhase {
