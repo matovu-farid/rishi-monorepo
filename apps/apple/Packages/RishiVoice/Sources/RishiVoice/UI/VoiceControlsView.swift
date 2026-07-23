@@ -43,6 +43,7 @@ public struct VoiceControlsView: View {
                         .padding(.vertical, RishiSpacing.xs)
                         .background(.thinMaterial, in: Capsule())
                         .accessibilityLabel("Voice session status: \(statusText)")
+                        .accessibilityAddTraits(.updatesFrequently)
                         .transition(.opacity)
                         .offset(y: -RishiSpacing.xl)
                 }
@@ -59,6 +60,15 @@ public struct VoiceControlsView: View {
             }
             .onChange(of: state.isFinalInterval) { _, _ in
                 updateStatusPresentation()
+            }
+            .task(id: transientStatusGeneration) {
+                let generation = transientStatusGeneration
+                guard transientStatus != nil else { return }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, transientStatusGeneration == generation else { return }
+                withAnimation {
+                    transientStatus = nil
+                }
             }
     }
 
@@ -177,16 +187,6 @@ public struct VoiceControlsView: View {
     private func updateStatusPresentation() {
         transientStatusGeneration &+= 1
         transientStatus = transientStatusLabel
-
-        guard transientStatus != nil else { return }
-        let generation = transientStatusGeneration
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !Task.isCancelled, transientStatusGeneration == generation else { return }
-            withAnimation {
-                transientStatus = nil
-            }
-        }
     }
 
     private func performButtonAction(_ action: @escaping () -> Void) -> () -> Void {
