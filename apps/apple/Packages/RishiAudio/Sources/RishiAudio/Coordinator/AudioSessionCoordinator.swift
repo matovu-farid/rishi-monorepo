@@ -25,6 +25,7 @@ public actor AudioSessionCoordinator {
     /// just its AVAudioSession config. Enforces the single-audio-owner
     /// invariant at the resource owner. `@Sendable` to cross actor boundaries.
     private var preemptHandlers: [ActiveMode: @Sendable () async -> Void] = [:]
+    private var suspensionHandlers: [ActiveMode: @Sendable () async -> Void] = [:]
 
     /// Register the closure that fully stops the owner of `mode`. Owners call
     /// this just before they `requestActiveMode(mode)`. Re-registering
@@ -33,12 +34,24 @@ public actor AudioSessionCoordinator {
         preemptHandlers[mode] = handler
     }
 
+    /// Register the active owner's pause action for system interruptions and
+    /// output-route loss. Suspension deliberately keeps ownership in policy so
+    /// an explicit Play action can resume the same TTS session.
+    public func registerSuspension(for mode: ActiveMode, handler: @escaping @Sendable () async -> Void) {
+        suspensionHandlers[mode] = handler
+    }
+
     /// Await the outgoing owner's stop closure (if any). The closure typically
     /// calls back into `releaseActiveMode`, which the actor processes while
     /// this call is suspended — leaving the policy at `.idle` before the new
     /// mode is applied.
     private func preempt(_ mode: ActiveMode) async {
         guard let handler = preemptHandlers[mode] else { return }
+        await handler()
+    }
+
+    private func suspend(_ mode: ActiveMode) async {
+        guard let handler = suspensionHandlers[mode] else { return }
         await handler()
     }
 
@@ -141,6 +154,7 @@ public actor AudioSessionCoordinator {
     private func handleInterruption(_ event: AudioInterruptionEvent) async {
         switch event {
         case .began:
+            if policy.mode == .tts { await suspend(.tts) }
             apply(policy.reduce(.interrupted))
             Log.event("audio.interruption", level: .info, data: ["event": "began"])
         case .endedShouldResume:
@@ -155,6 +169,7 @@ public actor AudioSessionCoordinator {
     private func handleRouteChange(_ event: AudioRouteChangeEvent) async {
         switch event {
         case .oldDeviceUnavailable:
+            if policy.mode == .tts { await suspend(.tts) }
             apply(policy.reduce(.routeUnavailable))
             Log.event("audio.route.changed", level: .info, data: ["event": "oldDeviceUnavailable"])
         case .newDeviceAvailable, .categoryChange, .override, .wakeFromSleep, .noSuitableRoute, .unknown:

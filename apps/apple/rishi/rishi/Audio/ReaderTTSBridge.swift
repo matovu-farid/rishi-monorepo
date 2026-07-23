@@ -100,6 +100,9 @@ final class ReaderTTSBridge {
         await coordinator.registerPreemption(for: .tts) { [weak self] in
             await self?.pause()
         }
+        await coordinator.registerSuspension(for: .tts) { [weak self] in
+            await self?.pause()
+        }
         await coordinator.requestActiveMode(.tts)
     }
 
@@ -224,6 +227,5 @@ final class ReaderTTSBridge {
         return true
     }
 }
-
 
 

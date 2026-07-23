@@ -89,7 +89,9 @@ struct ReaderAudioChromeOverlay: View {
                         )
 
                         if SystemAudioRoutePickerVisibility.shouldShow(
-                            ttsActive: ttsState.status != .idle && ttsState.status != .stopped
+                            ttsActive: ttsState.status == .loading
+                                || ttsState.status == .playing
+                                || ttsState.status == .paused
                         ) {
                             SystemAudioRoutePicker()
                                 .padding(.bottom, RishiSpacing.s)

@@ -337,6 +337,22 @@ final class ReadAloudController {
         await coordinator.registerPreemption(for: .tts) { [weak self] in
             await self?.pauseForVoiceHandoff()
         }
+        await coordinator.registerSuspension(for: .tts) { [weak self] in
+            await self?.pauseForSystemAudioEvent()
+        }
+    }
+
+    /// System interruptions and output-route loss pause the active reader
+    /// without marking it as a voice handoff (which would request auto-resume).
+    private func pauseForSystemAudioEvent() async {
+        guard isActivelySpeaking else { return }
+        if let readiumSynthesizer {
+            if case .playing = readiumState {
+                readiumSynthesizer.pauseOrResume()
+            }
+        } else {
+            await bridge?.pause()
+        }
     }
 
     /// Claims the shared playback session before Readium starts delivering
