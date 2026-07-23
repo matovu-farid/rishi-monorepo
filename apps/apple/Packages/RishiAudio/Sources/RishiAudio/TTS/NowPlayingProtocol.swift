@@ -57,7 +57,7 @@ public final class MPNowPlayingInfoCenterAdapter: NowPlayingInfoSurface {
         if let author = metadata.author {
             info[MPMediaItemPropertyArtist] = author
         }
-        info[MPNowPlayingInfoPropertyMediaType] = MPMediaType.audiobook.rawValue
+        info[MPNowPlayingInfoPropertyMediaType] = MPMediaType.audioBook.rawValue
         #if canImport(UIKit)
         if let data = metadata.coverData, let image = UIImage(data: data) {
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
