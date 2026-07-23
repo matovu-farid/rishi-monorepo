@@ -8,6 +8,24 @@ import RishiLogging
 import RishiSearch
 import RishiVoice
 
+/// Monotonic timing for the user-visible voice startup path. These events let
+/// us compare connection changes on real devices without logging book text,
+/// audio, or provider identifiers.
+struct VoiceStartupTrace: Sendable {
+    private let startedAt: ContinuousClock.Instant
+
+    init(startedAt: ContinuousClock.Instant = .now) {
+        self.startedAt = startedAt
+    }
+
+    func mark(_ phase: String, data: [String: String] = [:]) {
+        var payload = data
+        payload["phase"] = phase
+        payload["elapsedMs"] = String(Int(startedAt.duration(to: .now) / .milliseconds(1)))
+        Log.event("voice.startup.phase", level: .info, data: payload)
+    }
+}
+
 @MainActor
 @Observable
 final class VoiceSessionPresenter {
@@ -178,6 +196,11 @@ final class VoiceSessionPresenter {
         guard !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
+        let startupTrace = VoiceStartupTrace()
+        startupTrace.mark("requested", data: [
+            "hasBook": String(bookId != nil),
+            "isParked": String(sessionRegistry.state == .parked),
+        ])
 
         if await resumeParkedSessionIfEligible(
             bookId: bookId,
@@ -224,14 +247,17 @@ final class VoiceSessionPresenter {
 
         let micDecision = await micGate.request()
         guard micDecision == .granted else {
+            startupTrace.mark("mic_permission_denied")
             state.recordError("Microphone permission denied")
             enterFailure(reason: .micDenied)
             return
         }
+        startupTrace.mark("mic_permission_granted")
 
         // Acquire audio session BEFORE fetching the key. If the key fetch
         // fails we already own the session and must release it cleanly.
         await coordinator.requestActiveMode(.voice)
+        startupTrace.mark("audio_mode_acquired")
         let preSessionActivation: (any VoiceActivationCoordinating)? =
             Self.isPreSessionAudioActivationEnabled ? activationCoordinator : nil
         if let preSessionActivation {
@@ -242,6 +268,7 @@ final class VoiceSessionPresenter {
             userId: userId,
             bookId: bookId
         )
+        startupTrace.mark("conversation_lookup_started")
 
         let adapter = clientFactory()
         let fetcher = keyFetcherFactory()
@@ -272,6 +299,7 @@ final class VoiceSessionPresenter {
         )
         self.session = session
         await sessionRegistry.register(session)
+        startupTrace.mark("transport_object_registered")
 
         // Install the single transcript stream continuation before connecting.
         // The lookup below can be slow, but the realtime event pump must not
@@ -286,6 +314,9 @@ final class VoiceSessionPresenter {
             outline: bookContext?.outline,
             activeParagraphText: bookContext?.activeParagraphText
         )
+        startupTrace.mark("transport_start_returned", data: [
+            "status": String(describing: state.status),
+        ])
 
         let conversation: Conversation
         do {
@@ -293,7 +324,9 @@ final class VoiceSessionPresenter {
             // keeps the WebRTC handshake on the critical path, not the local
             // conversation-store scan/upsert.
             conversation = try await conversationTask
+            startupTrace.mark("conversation_ready")
         } catch {
+            startupTrace.mark("conversation_lookup_failed")
             await sessionRegistry.close()
             if let currentSession = self.session, currentSession === session {
                 self.session = nil
@@ -347,6 +380,9 @@ final class VoiceSessionPresenter {
                 )
             }
         }
+        startupTrace.mark("startup_ready", data: [
+            "status": String(describing: state.status),
+        ])
 
         var createAttempt = 1
         while case .failed(.sessionStart(.alreadyActive)) = state.status,
