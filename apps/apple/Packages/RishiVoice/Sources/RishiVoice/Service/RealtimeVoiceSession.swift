@@ -167,23 +167,33 @@ public actor RealtimeVoiceSession {
         currentPage: Int? = nil,
         pageText: String? = nil,
         outline: BookOutlineDTO? = nil,
-        activeParagraphText: String? = nil
+        activeParagraphText: String? = nil,
+        preflighted: Bool = false
     ) async {
         await update(.requestingMic)
 
-        let decision = await micGate.request()
-        guard decision == .granted else {
-            await fail(reason: .micDenied, message: "Microphone permission denied")
+        if !preflighted {
+            let decision = await micGate.request()
+            guard decision == .granted else {
+                await fail(reason: .micDenied, message: "Microphone permission denied")
+                return
+            }
+        }
+        guard !isEnding else {
+            if preflighted {
+                await coordinator.releaseActiveMode(.voice)
+            }
             return
         }
-        guard !isEnding else { return }
 
         // Claim shared audio ownership. Do NOT register a preempt handler here —
         // the app presenter owns single-flight `requestEnd` (local teardown +
         // background ledger delivery). Registering `end()` here would overwrite
         // that handler during connect/register and skip POST …/end on preempt.
         // Package tests that need preempt must register explicitly before start.
-        await coordinator.requestActiveMode(.voice)
+        if !preflighted {
+            await coordinator.requestActiveMode(.voice)
+        }
         guard !isEnding else {
             await coordinator.releaseActiveMode(.voice)
             return

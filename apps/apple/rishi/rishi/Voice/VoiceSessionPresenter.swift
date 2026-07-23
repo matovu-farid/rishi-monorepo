@@ -312,7 +312,8 @@ final class VoiceSessionPresenter {
             currentPage: bookContext?.currentPage,
             pageText: bookContext?.pageText,
             outline: bookContext?.outline,
-            activeParagraphText: bookContext?.activeParagraphText
+            activeParagraphText: bookContext?.activeParagraphText,
+            preflighted: true
         )
         startupTrace.mark("transport_start_returned", data: [
             "status": String(describing: state.status),

@@ -28,6 +28,23 @@ struct RealtimeVoiceSessionTests {
         #expect(await fakes.coordinator.currentMode == .voice)
     }
 
+    @Test("Preflighted start skips duplicate microphone permission request and audio configuration")
+    func preflightedStartSkipsDuplicateSetup() async throws {
+        let fakes = makeSession(micDecision: .granted)
+
+        // Model the presenter having already completed the permission + audio
+        // session preflight before handing control to the lifecycle actor.
+        await fakes.coordinator.requestActiveMode(.voice)
+        let configureCallsAfterPreflight = fakes.configurator.configureCalls.count
+        await fakes.session.start(preflighted: true)
+
+        #expect(fakes.state.status == .live)
+        #expect(fakes.micGate.requestCount == 0)
+        #expect(fakes.configurator.configureCalls.count == configureCallsAfterPreflight)
+        #expect(fakes.client.connectCalls == ["k"])
+        _ = await fakes.session.end()
+    }
+
     @Test("Explicit language is forwarded into the ephemeral-key fetch")
     func explicitLanguageIsForwarded() async throws {
         let fakes = makeSession(micDecision: .granted)
@@ -383,8 +400,12 @@ private struct DelayedTrialSessionCoordinator: VoiceSessionCoordinating {
 /// Test fake for `MicPermissionGate` — returns the decision passed at init.
 final class FakeMicPermissionGate: MicPermissionGate, @unchecked Sendable {
     private let decision: MicPermissionDecision
+    private(set) var requestCount = 0
     init(decision: MicPermissionDecision) { self.decision = decision }
-    func request() async -> MicPermissionDecision { decision }
+    func request() async -> MicPermissionDecision {
+        requestCount += 1
+        return decision
+    }
 }
 
 private actor FakeActivationCoordinator: VoiceActivationCoordinating {
