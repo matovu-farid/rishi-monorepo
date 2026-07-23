@@ -254,6 +254,44 @@ struct RealtimeVoiceSessionTests {
         #expect(await activation.completeHandoffCount == 1)
     }
 
+    @Test("Trial startup exposes live transport before ledger registration completes")
+    func trialStartupDoesNotBlockOnCallRegistration() async throws {
+        let registrationGate = DelayedTrialRegistrationGate()
+        let state = VoiceSessionState()
+        let configurator = FakeAudioSessionConfigurator()
+        let coordinator = AudioSessionCoordinator(configurator: configurator)
+        let client = FakeRealtimeClient()
+        client.setProviderCallId("call-1")
+        let session = RealtimeVoiceSession(
+            micGate: FakeMicPermissionGate(decision: .granted),
+            coordinator: coordinator,
+            keyFetcher: StubEphemeralKeyFetcher(result: .success(.init(secret: "legacy", sessionId: "legacy"))),
+            client: client,
+            state: state,
+            sessionCoordinator: DelayedTrialSessionCoordinator(gate: registrationGate),
+            backoff: { _ in .zero },
+            maxReconnects: 3
+        )
+
+        let startTask = Task { await session.start() }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline,
+              state.status != .registeringCall,
+              state.status != .live {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        // The WebRTC transport is usable while the ledger's second HTTP call
+        // is still pending. This is the perceived-startup latency boundary.
+        #expect(state.status == .live)
+        #expect(await registrationGate.didEnter)
+
+        await registrationGate.release()
+        await startTask.value
+        #expect(state.status == .live)
+        _ = await session.end()
+    }
+
     // MARK: - Builders
 
     struct Fakes {
@@ -299,6 +337,46 @@ struct RealtimeVoiceSessionTests {
             fetcher: fetcher,
             micGate: micGate
         )
+    }
+}
+
+private actor DelayedTrialRegistrationGate {
+    private(set) var didEnter = false
+    private var isReleased = false
+
+    func enter() {
+        didEnter = true
+    }
+
+    func release() {
+        isReleased = true
+    }
+
+    func waitForRelease() async {
+        while !isReleased {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+private struct DelayedTrialSessionCoordinator: VoiceSessionCoordinating {
+    let gate: DelayedTrialRegistrationGate
+
+    func startSession(
+        language: String?,
+        bookContext: BookContextSnapshot?
+    ) async throws -> StartedVoiceSession {
+        StartedVoiceSession(
+            rishiSessionId: "rishi-session",
+            nonce: "nonce",
+            clientSecret: "trial-secret",
+            capIntervals: 10
+        )
+    }
+
+    func registerCall(rishiSessionId: String, callId: String, nonce: String) async throws {
+        await gate.enter()
+        await gate.waitForRelease()
     }
 }
 

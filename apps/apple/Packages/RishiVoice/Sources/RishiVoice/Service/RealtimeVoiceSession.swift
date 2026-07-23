@@ -33,7 +33,7 @@ import RishiSearch
 /// added by `2026-07-17-voice-session-flow-wiring.md` for the no-card
 /// credit trial / pricing launch):
 /// ```
-/// idle → requestingMic → creatingSession → connecting → registeringCall → live
+/// idle → requestingMic → creatingSession → connecting → live
 ///                                                                            ↓
 ///                                     live → reconnecting(N) → live   (WebRTC-level; unchanged mechanism)
 ///                                     live → ending → ended            (user-initiated end())
@@ -112,6 +112,9 @@ public actor RealtimeVoiceSession {
     /// the initial connect failed.
     private var controlSocket: (any ControlSocketConnecting)?
     private var controlMessageTask: Task<Void, Never>?
+    /// Ledger call-ID registration runs after transport readiness so the
+    /// second HTTP round trip does not block perceived startup.
+    private var registrationTask: Task<Void, Never>?
 
     public init(
         micGate: any MicPermissionGate,
@@ -273,10 +276,12 @@ public actor RealtimeVoiceSession {
     }
 
     /// The no-card-credit-trial flow: create a Rishi voice session
-    /// server-side, connect WebRTC with the returned client secret, register
-    /// the captured OpenAI call ID, then open the control WebSocket. Any
-    /// failure after WebRTC connects closes that connection immediately —
-    /// never leaves an untracked session — per the spec's "Voice flow" step 7.
+    /// server-side, connect WebRTC with the returned client secret, then make
+    /// the transport usable immediately. Call-ID registration and the control
+    /// WebSocket are launched in the background so their network round trips
+    /// do not delay perceived startup. Registration failure still closes the
+    /// connection immediately — never leaves an untracked session — per the
+    /// spec's "Voice flow" step 7.
     private func startTrialVoiceSession(
         using sessionCoordinator: any VoiceSessionCoordinating,
         language: String?,
@@ -329,7 +334,6 @@ public actor RealtimeVoiceSession {
             return
         }
 
-        await update(.registeringCall)
         guard let callId = await client.providerCallId else {
             await client.disconnect()
             prewarmTask?.cancel()
@@ -343,33 +347,73 @@ public actor RealtimeVoiceSession {
             return
         }
 
-        do {
-            try await sessionCoordinator.registerCall(
-                rishiSessionId: started.rishiSessionId,
-                callId: callId,
-                nonce: started.nonce
-            )
-        } catch {
-            await client.disconnect()
-            prewarmTask?.cancel()
-            await cancelActivation()
-            await coordinator.releaseActiveMode(.voice)
-            activeVoiceSession = nil
-            let failure = VoiceSessionRegistrationFailure.classify(error)
-            await fail(reason: .callRegistration(failure), message: Self.registrationMessage(failure))
-            return
-        }
-
         await completeActivationHandoffIfNeeded()
         await update(.live)
         spawnResponderIfNeeded(bookId: bookId)
         openControlSocket(rishiSessionId: started.rishiSessionId)
+
+        // The provider transport is ready at this point. Registration is
+        // still mandatory, but it is bookkeeping on a separate HTTP request;
+        // run it without holding the caller on the connection critical path.
+        registrationTask?.cancel()
+        registrationTask = Task { [weak self] in
+            await self?.registerTrialCall(
+                using: sessionCoordinator,
+                started: started,
+                callId: callId,
+                prewarmTask: prewarmTask
+            )
+        }
 
         Log.event("voice.session.live", level: .info, data: [
             "bookId": bookId?.uuidString ?? "<none>",
             "rishiSessionId": started.rishiSessionId,
         ])
         await reconnectController().startStatusObservation()
+    }
+
+    /// Completes the trial ledger handshake after local transport readiness.
+    /// A registration error is still fail-closed: the WebRTC connection and
+    /// audio ownership are torn down before surfacing the failure.
+    private func registerTrialCall(
+        using sessionCoordinator: any VoiceSessionCoordinating,
+        started: StartedVoiceSession,
+        callId: String,
+        prewarmTask: Task<Void, Never>?
+    ) async {
+        do {
+            try await sessionCoordinator.registerCall(
+                rishiSessionId: started.rishiSessionId,
+                callId: callId,
+                nonce: started.nonce
+            )
+            Log.event("voice.session.register_call.succeeded", level: .info, data: [
+                "rishiSessionId": started.rishiSessionId,
+            ])
+        } catch {
+            // Explicit End wins the race: its teardown and background ledger
+            // delivery already own the terminal transition.
+            guard !isEnding else { return }
+
+            isEnding = true
+            await reconnect?.cancel()
+            controlMessageTask?.cancel(); controlMessageTask = nil
+            responderTask?.cancel(); responderTask = nil
+            prewarmTask?.cancel()
+            await cancelActivation()
+            await client.disconnect()
+            await controlSocket?.disconnect()
+            await coordinator.releaseActiveMode(.voice)
+            activeVoiceSession = nil
+            controlSocket = nil
+
+            let failure = VoiceSessionRegistrationFailure.classify(error)
+            Log.event("voice.session.register_call.failed", level: .error, data: [
+                "rishiSessionId": started.rishiSessionId,
+                "error": String(describing: error),
+            ])
+            await fail(reason: .callRegistration(failure), message: Self.registrationMessage(failure))
+        }
     }
 
     /// Tears down local WebRTC / control / audio immediately without awaiting
@@ -386,6 +430,7 @@ public actor RealtimeVoiceSession {
         await update(.ending)
         await cancelActivation()
         await reconnect?.cancel()
+        registrationTask?.cancel(); registrationTask = nil
         controlMessageTask?.cancel(); controlMessageTask = nil
         responderTask?.cancel(); responderTask = nil
 
@@ -542,6 +587,7 @@ public actor RealtimeVoiceSession {
         isEnding = true
         Log.event("voice.session.control.terminal", level: .info, data: ["reason": String(describing: reason)])
         await reconnect?.cancel()
+        registrationTask?.cancel(); registrationTask = nil
         controlMessageTask?.cancel(); controlMessageTask = nil
         responderTask?.cancel(); responderTask = nil
         await client.disconnect()
@@ -624,6 +670,7 @@ public actor RealtimeVoiceSession {
         guard !isEnding else { return }
         isEnding = true
         await reconnect?.cancel()
+        registrationTask?.cancel(); registrationTask = nil
         controlMessageTask?.cancel()
         controlMessageTask = nil
         responderTask?.cancel()
