@@ -8,6 +8,9 @@ import Foundation
 public struct TTSSettings: Sendable, Codable, Equatable {
 
     public static let speedRange: ClosedRange<Double> = 0.5...2.0
+    /// Speeds exposed by the system media controls. Keep this list aligned
+    /// with the discrete choices offered by the reader's platform menus.
+    public static let speedPresets: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
     public static let `default` = TTSSettings(
         voice: "marin",
         model: TTSModelCatalog.defaultModel,

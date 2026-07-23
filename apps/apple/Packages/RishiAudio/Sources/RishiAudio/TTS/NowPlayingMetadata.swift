@@ -9,15 +9,21 @@ public struct NowPlayingMetadata: Sendable, Equatable {
     public let title: String
     public let author: String?
     public let coverData: Data?
+    public let playbackRate: Double
+    public let supportedPlaybackRates: [Double]
 
     public init(
         title: String,
         author: String? = nil,
-        coverData: Data? = nil
+        coverData: Data? = nil,
+        playbackRate: Double = 1.0,
+        supportedPlaybackRates: [Double] = TTSSettings.speedPresets
     ) {
         self.title = title
         self.author = author
         self.coverData = coverData
+        self.playbackRate = playbackRate
+        self.supportedPlaybackRates = supportedPlaybackRates
     }
 }
 
@@ -30,6 +36,12 @@ public enum RemoteCommand: Sendable, Equatable {
     case previousTrack
     case nextTrack
     case stop
+    case changePlaybackRate(Double)
+}
+
+public enum RemoteCommandResult: Sendable, Equatable {
+    case success
+    case commandFailed
 }
 
 /// Handler bundle the controller registers with the command surface. All
@@ -41,6 +53,7 @@ public struct RemoteCommandHandlers: Sendable {
     public let onPreviousTrack: @Sendable @MainActor () -> Void
     public let onNextTrack: @Sendable @MainActor () -> Void
     public let onStop: @Sendable @MainActor () -> Void
+    public let onChangePlaybackRate: @Sendable @MainActor (Double) -> RemoteCommandResult
 
     public init(
         onPlay: @Sendable @escaping @MainActor () -> Void,
@@ -48,7 +61,8 @@ public struct RemoteCommandHandlers: Sendable {
         onTogglePlayPause: @Sendable @escaping @MainActor () -> Void,
         onPreviousTrack: @Sendable @escaping @MainActor () -> Void,
         onNextTrack: @Sendable @escaping @MainActor () -> Void,
-        onStop: @Sendable @escaping @MainActor () -> Void
+        onStop: @Sendable @escaping @MainActor () -> Void,
+        onChangePlaybackRate: @Sendable @escaping @MainActor (Double) -> RemoteCommandResult
     ) {
         self.onPlay = onPlay
         self.onPause = onPause
@@ -56,5 +70,6 @@ public struct RemoteCommandHandlers: Sendable {
         self.onPreviousTrack = onPreviousTrack
         self.onNextTrack = onNextTrack
         self.onStop = onStop
+        self.onChangePlaybackRate = onChangePlaybackRate
     }
 }

@@ -156,6 +156,7 @@ final class ReadAloudController {
             title: vm.book.title,
             author: vm.book.author,
             book: vm.book,
+            playbackRate: settings.speed,
             generation: generation
         )
         // Attach metadata before the first utterance. The cover is loaded
@@ -381,6 +382,15 @@ final class ReadAloudController {
         )
     }
 
+    /// Applies a speed selected by a system media surface. Keep this guard in
+    /// the reader as well as in the command surface so invalid direct callers
+    /// cannot persist unsupported values.
+    func applyPlaybackRate(_ rate: Double) async {
+        guard TTSSettings.speedPresets.contains(where: { abs($0 - rate) < 0.0001 }) else { return }
+        guard abs(pickerInitial.speed - rate) >= 0.0001 else { return }
+        await applySettings(TTSSettings(voice: pickerInitial.voice, model: pickerInitial.model, speed: rate))
+    }
+
     func start(
         paragraphs: [String],
         startIndex: Int = 0,
@@ -447,6 +457,7 @@ final class ReadAloudController {
             author: metadata.author,
             book: book,
             coverData: metadata.coverData,
+            playbackRate: pickerInitial.speed,
             generation: generation
         )
         await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
@@ -533,10 +544,17 @@ final class ReadAloudController {
         author: String?,
         book: Book?,
         coverData: Data? = nil,
+        playbackRate: Double? = nil,
         generation: UInt64
     ) {
         guard isCurrentPlaybackGeneration(generation) else { return }
-        let metadata = NowPlayingMetadata(title: title, author: author, coverData: coverData)
+        let metadata = NowPlayingMetadata(
+            title: title,
+            author: author,
+            coverData: coverData,
+            playbackRate: playbackRate ?? 1.0,
+            supportedPlaybackRates: TTSSettings.speedPresets
+        )
         nowPlayingController?.attach(state: ttsState, controller: self, metadata: metadata)
 
         guard coverData == nil,
@@ -679,5 +697,9 @@ extension ReadAloudController: TTSPlaybackControlling {
 
     func nextTrack() async {
         await next()
+    }
+
+    func changePlaybackRate(to rate: Double) async {
+        await applyPlaybackRate(rate)
     }
 }

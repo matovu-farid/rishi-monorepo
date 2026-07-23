@@ -10,6 +10,7 @@ struct NowPlayingControllerTests {
         enum Call: Sendable, Equatable {
             case pause, resume, stop
             case previousTrack, nextTrack
+            case changePlaybackRate(Double)
         }
         private(set) var calls: [Call] = []
         func pause() async { calls.append(.pause) }
@@ -17,6 +18,7 @@ struct NowPlayingControllerTests {
         func stop() async { calls.append(.stop) }
         func previousTrack() async { calls.append(.previousTrack) }
         func nextTrack() async { calls.append(.nextTrack) }
+        func changePlaybackRate(to rate: Double) async { calls.append(.changePlaybackRate(rate)) }
     }
 
     @MainActor
@@ -115,6 +117,70 @@ struct NowPlayingControllerTests {
         try? await Task.sleep(nanoseconds: 100_000_000)
         let calls = await rec.calls
         #expect(calls.contains(.stop))
+        controller.detach()
+    }
+
+    @MainActor
+    @Test("Supported playback-rate remote command updates the reader speed")
+    func supportedPlaybackRateCommandTriggersChange() async {
+        let info = FakeNowPlayingInfoSurface()
+        let cmd = FakeRemoteCommandSurface()
+        let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+        let state = TTSPlaybackState()
+        let rec = RecordingController()
+        controller.attach(
+            state: state,
+            controller: rec,
+            metadata: .init(title: "x", playbackRate: 1.0, supportedPlaybackRates: [0.75, 1.0, 1.25, 1.5, 2.0])
+        )
+
+        let result = cmd.simulate(.changePlaybackRate(1.5))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(result == .success)
+        #expect(await rec.calls.contains(.changePlaybackRate(1.5)))
+        controller.detach()
+    }
+
+    @MainActor
+    @Test("Unsupported playback-rate remote command fails without changing reader speed")
+    func unsupportedPlaybackRateCommandFails() async {
+        let info = FakeNowPlayingInfoSurface()
+        let cmd = FakeRemoteCommandSurface()
+        let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+        let state = TTSPlaybackState()
+        let rec = RecordingController()
+        controller.attach(
+            state: state,
+            controller: rec,
+            metadata: .init(title: "x", playbackRate: 1.0, supportedPlaybackRates: [0.75, 1.0, 1.25, 1.5, 2.0])
+        )
+
+        let result = cmd.simulate(.changePlaybackRate(1.1))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(result == .commandFailed)
+        #expect(await rec.calls.contains(where: { if case .changePlaybackRate = $0 { return true }; return false }) == false)
+        controller.detach()
+    }
+
+    @MainActor
+    @Test("Playing publishes the selected playback rate")
+    func playingPublishesSelectedRate() async {
+        let info = FakeNowPlayingInfoSurface()
+        let cmd = FakeRemoteCommandSurface()
+        let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+        let state = TTSPlaybackState()
+        let rec = RecordingController()
+        controller.attach(
+            state: state,
+            controller: rec,
+            metadata: .init(title: "x", playbackRate: 1.5, supportedPlaybackRates: [0.75, 1.0, 1.25, 1.5, 2.0])
+        )
+        state.update(status: .playing)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        #expect(info.calls == [.metadata(.init(title: "x", playbackRate: 1.5, supportedPlaybackRates: [0.75, 1.0, 1.25, 1.5, 2.0])), .rate(1.5)])
         controller.detach()
     }
 

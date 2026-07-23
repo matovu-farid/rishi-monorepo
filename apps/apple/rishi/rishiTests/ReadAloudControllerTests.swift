@@ -131,6 +131,38 @@ struct ReadAloudControllerTests {
         await controller.stop()
     }
 
+    @Test("lock-screen playback-rate command persists a supported reader speed")
+    func lockScreenPlaybackRateUpdatesReaderSettings() async {
+        let info = FakeNowPlayingInfoSurface()
+        let commands = FakeRemoteCommandSurface()
+        let nowPlaying = NowPlayingController(infoSurface: info, commandSurface: commands)
+        let controller = makeController(nowPlayingController: nowPlaying)
+
+        await start(controller, paragraphs: ["one"])
+        #expect(controller.pickerInitial.speed == TTSSettings.default.speed)
+
+        #expect(commands.simulate(.changePlaybackRate(1.5)) == .success)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(controller.pickerInitial.speed == 1.5)
+        await controller.stop()
+    }
+
+    @Test("lock-screen playback-rate command rejects unsupported reader speed")
+    func lockScreenPlaybackRateRejectsUnsupportedSpeed() async {
+        let info = FakeNowPlayingInfoSurface()
+        let commands = FakeRemoteCommandSurface()
+        let nowPlaying = NowPlayingController(infoSurface: info, commandSurface: commands)
+        let controller = makeController(nowPlayingController: nowPlaying)
+
+        await start(controller, paragraphs: ["one"])
+        #expect(commands.simulate(.changePlaybackRate(1.1)) == .commandFailed)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(controller.pickerInitial.speed == TTSSettings.default.speed)
+        await controller.stop()
+    }
+
     @Test("explicit stop releases the TTS audio session once")
     func explicitStopReleasesTTSAudioSession() async {
         let configurator = FakeAudioSessionConfigurator()

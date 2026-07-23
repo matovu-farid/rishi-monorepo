@@ -11,6 +11,7 @@ public protocol TTSPlaybackControlling: Sendable {
     func stop() async
     func previousTrack() async
     func nextTrack() async
+    func changePlaybackRate(to rate: Double) async
 }
 
 /// Observes `TTSPlaybackState` and updates `MPNowPlayingInfoCenter` plus
@@ -31,6 +32,8 @@ public final class NowPlayingController {
     private var controller: (any TTSPlaybackControlling)?
     private var observationTask: Task<Void, Never>?
     private var lastStatus: TTSStatus?
+    private var playbackRate = 1.0
+    private var supportedPlaybackRates = TTSSettings.speedPresets
 
     public init(
         infoSurface: any NowPlayingInfoSurface,
@@ -49,6 +52,8 @@ public final class NowPlayingController {
         self.state = state
         self.controller = controller
         lastStatus = nil
+        playbackRate = metadata.playbackRate
+        supportedPlaybackRates = metadata.supportedPlaybackRates
         infoSurface.setMetadata(metadata)
         installRemoteHandlers(for: controller)
         startObserving(state: state)
@@ -99,6 +104,15 @@ public final class NowPlayingController {
             },
             onStop: {
                 Task { await controller.stop() }
+            },
+            onChangePlaybackRate: { [weak self] rate in
+                guard let self,
+                      self.supportedPlaybackRates.contains(where: { abs($0 - rate) < 0.0001 })
+                else { return .commandFailed }
+                self.playbackRate = rate
+                self.infoSurface.setPlaybackRate(self.lastStatus == .playing ? rate : 0.0)
+                Task { await controller.changePlaybackRate(to: rate) }
+                return .success
             }
         )
         commandSurface.register(handlers: handlers)
@@ -131,7 +145,7 @@ public final class NowPlayingController {
             lastStatus = status
             switch status {
             case .playing:
-                infoSurface.setPlaybackRate(1.0)
+                infoSurface.setPlaybackRate(playbackRate)
             case .paused:
                 infoSurface.setPlaybackRate(0.0)
             // A TTS status describes the current paragraph, not the reader

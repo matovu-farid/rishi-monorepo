@@ -98,6 +98,7 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
         center.previousTrackCommand.isEnabled = true
         center.nextTrackCommand.isEnabled = true
         center.stopCommand.isEnabled = true
+        center.changePlaybackRateCommand.isEnabled = true
         center.skipForwardCommand.isEnabled = false
         center.skipBackwardCommand.isEnabled = false
         center.changePlaybackPositionCommand.isEnabled = false
@@ -126,6 +127,17 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
             MainActor.assumeIsolated { handlers.onStop() }
             return .success
         }
+        center.changePlaybackRateCommand.addTarget { event in
+            guard let event = event as? MPChangePlaybackRateCommandEvent else {
+                return .commandFailed
+            }
+            return MainActor.assumeIsolated {
+                switch handlers.onChangePlaybackRate(event.playbackRate) {
+                case .success: return .success
+                case .commandFailed: return .commandFailed
+                }
+            }
+        }
     }
 
     private func removeAll() {
@@ -136,6 +148,7 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
         center.previousTrackCommand.removeTarget(nil)
         center.nextTrackCommand.removeTarget(nil)
         center.stopCommand.removeTarget(nil)
+        center.changePlaybackRateCommand.removeTarget(nil)
         center.skipForwardCommand.removeTarget(nil)
         center.skipBackwardCommand.removeTarget(nil)
         center.changePlaybackPositionCommand.removeTarget(nil)
@@ -211,19 +224,24 @@ public final class FakeRemoteCommandSurface: RemoteCommandSurface, @unchecked Se
 
     /// Test seam — invoke the registered handler for a given command.
     @MainActor
-    public func simulate(_ command: RemoteCommand) {
+    public func simulate(_ command: RemoteCommand) -> RemoteCommandResult {
         let handlers: RemoteCommandHandlers? = {
             lock.lock(); defer { lock.unlock() }
             return _handlers
         }()
-        guard let handlers else { return }
+        guard let handlers else { return .commandFailed }
         switch command {
         case .play: handlers.onPlay()
         case .pause: handlers.onPause()
         case .togglePlayPause: handlers.onTogglePlayPause()
         case .previousTrack: handlers.onPreviousTrack()
         case .nextTrack: handlers.onNextTrack()
-        case .stop: handlers.onStop()
+        case .stop:
+            handlers.onStop()
+            return .success
+        case .changePlaybackRate(let rate):
+            return handlers.onChangePlaybackRate(rate)
         }
+        return .success
     }
 }
