@@ -129,4 +129,24 @@ struct AudioSessionCoordinatorTests {
         #expect(fake.activeCalls.allSatisfy { $0.active == true }, "a switch must never deactivate the session")
         #expect(fake.configureCalls.count == 1)
     }
+
+    @Test("Output route loss suspends TTS until the user explicitly resumes")
+    func routeLossSuspendsTTS() async {
+        let fake = FakeAudioSessionConfigurator()
+        let coord = AudioSessionCoordinator(configurator: fake)
+        await coord.requestActiveMode(.tts)
+
+        fake.inject(route: .oldDeviceUnavailable)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(await coord.currentMode == .tts)
+        #expect(await coord.isSuspended)
+
+        // A route-loss event must not auto-reactivate the session. The user
+        // can press Play, which calls requestActiveMode(.tts) again.
+        #expect(fake.activeCalls.map(\.active) == [true])
+        await coord.requestActiveMode(.tts)
+        #expect(fake.activeCalls.map(\.active) == [true, true])
+        #expect(await coord.isSuspended == false)
+    }
 }

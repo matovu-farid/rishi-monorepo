@@ -35,6 +35,21 @@ public enum AudioInterruptionEvent: Sendable, Equatable {
     case endedNoResume
 }
 
+/// Significant output-route changes that can affect active narration.
+///
+/// The coordinator intentionally reacts only to `.oldDeviceUnavailable` for
+/// now: unplugging headphones/AirPods must pause narration, while a new route
+/// should not unexpectedly resume audio without an explicit user action.
+public enum AudioRouteChangeEvent: Sendable, Equatable {
+    case oldDeviceUnavailable
+    case newDeviceAvailable
+    case categoryChange
+    case override
+    case wakeFromSleep
+    case noSuitableRoute
+    case unknown
+}
+
 /// How `.allowBluetooth` should be realised for a given category.
 ///
 /// `.allowBluetooth` in our option set means "route to Bluetooth if available".
@@ -75,6 +90,10 @@ public protocol AudioSessionConfigurator: Sendable {
     /// One-shot interruption stream. Coordinator subscribes on init; closes
     /// when the configurator is deallocated.
     func interruptionStream() -> AsyncStream<AudioInterruptionEvent>
+
+    /// One-shot audio-route stream. Coordinator subscribes on init; closes
+    /// when the configurator is deallocated.
+    func routeChangeStream() -> AsyncStream<AudioRouteChangeEvent>
 }
 
 // MARK: - Production impl
@@ -90,14 +109,21 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
 
     private let session: AVAudioSession
     private let observerToken: NSObjectProtocol
+    private let routeObserverToken: NSObjectProtocol
     private let continuation: AsyncStream<AudioInterruptionEvent>.Continuation
     private let stream: AsyncStream<AudioInterruptionEvent>
+    private let routeContinuation: AsyncStream<AudioRouteChangeEvent>.Continuation
+    private let routeStream: AsyncStream<AudioRouteChangeEvent>
 
     public init(session: AVAudioSession = .sharedInstance()) {
         self.session = session
         var localContinuation: AsyncStream<AudioInterruptionEvent>.Continuation!
         self.stream = AsyncStream { localContinuation = $0 }
         self.continuation = localContinuation
+
+        var localRouteContinuation: AsyncStream<AudioRouteChangeEvent>.Continuation!
+        self.routeStream = AsyncStream { localRouteContinuation = $0 }
+        self.routeContinuation = localRouteContinuation
 
         self.observerToken = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -117,11 +143,38 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
                 break
             }
         }
+
+        self.routeObserverToken = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: session,
+            queue: nil
+        ) { [routeContinuation = localRouteContinuation!] notification in
+            guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
+            switch reason {
+            case .oldDeviceUnavailable:
+                routeContinuation.yield(.oldDeviceUnavailable)
+            case .newDeviceAvailable:
+                routeContinuation.yield(.newDeviceAvailable)
+            case .categoryChange:
+                routeContinuation.yield(.categoryChange)
+            case .override:
+                routeContinuation.yield(.override)
+            case .wakeFromSleep:
+                routeContinuation.yield(.wakeFromSleep)
+            case .noSuitableRouteForCategory:
+                routeContinuation.yield(.noSuitableRoute)
+            @unknown default:
+                routeContinuation.yield(.unknown)
+            }
+        }
     }
 
     deinit {
         NotificationCenter.default.removeObserver(observerToken)
+        NotificationCenter.default.removeObserver(routeObserverToken)
         continuation.finish()
+        routeContinuation.finish()
     }
 
     public func configure(
@@ -158,6 +211,8 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
     }
 
     public func interruptionStream() -> AsyncStream<AudioInterruptionEvent> { stream }
+
+    public func routeChangeStream() -> AsyncStream<AudioRouteChangeEvent> { routeStream }
 }
 #endif
 
@@ -183,11 +238,16 @@ public final class FakeAudioSessionConfigurator: AudioSessionConfigurator, @unch
     private var _activeCalls: [ActiveCall] = []
     private let continuation: AsyncStream<AudioInterruptionEvent>.Continuation
     private let stream: AsyncStream<AudioInterruptionEvent>
+    private let routeContinuation: AsyncStream<AudioRouteChangeEvent>.Continuation
+    private let routeStream: AsyncStream<AudioRouteChangeEvent>
 
     public init() {
         var local: AsyncStream<AudioInterruptionEvent>.Continuation!
         self.stream = AsyncStream { local = $0 }
         self.continuation = local
+        var localRoute: AsyncStream<AudioRouteChangeEvent>.Continuation!
+        self.routeStream = AsyncStream { localRoute = $0 }
+        self.routeContinuation = localRoute
     }
 
     public func configure(
@@ -208,9 +268,16 @@ public final class FakeAudioSessionConfigurator: AudioSessionConfigurator, @unch
 
     public func interruptionStream() -> AsyncStream<AudioInterruptionEvent> { stream }
 
+    public func routeChangeStream() -> AsyncStream<AudioRouteChangeEvent> { routeStream }
+
     /// Test seam — yield a synthetic interruption event into the stream.
     public func inject(_ event: AudioInterruptionEvent) {
         continuation.yield(event)
+    }
+
+    /// Test seam — yield a synthetic route event into the stream.
+    public func inject(route event: AudioRouteChangeEvent) {
+        routeContinuation.yield(event)
     }
 
     public var configureCalls: [ConfigureCall] {

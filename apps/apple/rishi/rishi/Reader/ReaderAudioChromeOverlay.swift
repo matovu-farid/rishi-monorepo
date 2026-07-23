@@ -64,28 +64,37 @@ struct ReaderAudioChromeOverlay: View {
             switch mode {
             case .tts:
                 if let readAloud {
-                    ReadAloudControlsView(
-                        state: ttsState,
-                        onPlayPause: {
-                            Task { await readAloud.togglePlayback() }
-                        },
-                        onStop: {
-                            Task { await readAloud.stop() }
-                        },
-                        onOpenVoiceChat: onOpenVoiceChat,
-                        onOpenPicker: {
-                            readAloud.showPicker = true
-                        },
-                        onPreviousParagraph: {
-                            Task { await readAloud.previous() }
-                        },
-                        onNextParagraph: {
-                            Task { await readAloud.next() }
-                        },
-                        onRepeatParagraph: {
-                            Task { await readAloud.repeatCurrent() }
+                    VStack(spacing: 0) {
+                        ReadAloudControlsView(
+                            state: ttsState,
+                            onPlayPause: {
+                                Task { await readAloud.togglePlayback() }
+                            },
+                            onStop: {
+                                Task { await readAloud.stop() }
+                            },
+                            onOpenVoiceChat: onOpenVoiceChat,
+                            onOpenPicker: {
+                                readAloud.showPicker = true
+                            },
+                            onPreviousParagraph: {
+                                Task { await readAloud.previous() }
+                            },
+                            onNextParagraph: {
+                                Task { await readAloud.next() }
+                            },
+                            onRepeatParagraph: {
+                                Task { await readAloud.repeatCurrent() }
+                            }
+                        )
+
+                        if SystemAudioRoutePickerVisibility.shouldShow(
+                            ttsActive: ttsState.status != .idle && ttsState.status != .stopped
+                        ) {
+                            SystemAudioRoutePicker()
+                                .padding(.bottom, RishiSpacing.s)
                         }
-                    )
+                    }
                 }
             case .voice:
                 VoiceControlsView(

@@ -17,6 +17,7 @@ public enum AudioSessionEvent: Sendable, Equatable {
     case beginVoice
     case endVoice
     case interrupted
+    case routeUnavailable
     case resume
     case endInterruptionNoResume
 }
@@ -66,6 +67,14 @@ public struct AudioSessionPolicy: Sendable {
             return [.deactivate(notifyOthers: true)]
 
         case .interrupted:
+            isSuspended = true
+            return []
+
+        case .routeUnavailable:
+            // Keep ownership so the reader can be resumed explicitly after a
+            // headphone/AirPods unplug. Do not auto-reactivate onto a new
+            // route, which can surprise users during a route transition.
+            guard mode != .idle else { return [] }
             isSuspended = true
             return []
 

@@ -17,6 +17,7 @@ public actor AudioSessionCoordinator {
     private let configurator: any AudioSessionConfigurator
     private var policy = AudioSessionPolicy()
     private var interruptionTask: Task<Void, Never>?
+    private var routeChangeTask: Task<Void, Never>?
 
     /// Per-mode "stop the owner" closures. The coordinator invokes the
     /// OUTGOING mode's closure before granting a different mode, so the
@@ -47,10 +48,12 @@ public actor AudioSessionCoordinator {
         // an actor-isolated method that subscribes to the interruption stream.
         // Outer Task only chains the actor await; no main-bound work.
         Task { await self.startInterruptionLoop() }
+        Task { await self.startRouteChangeLoop() }
     }
 
     deinit {
         interruptionTask?.cancel()
+        routeChangeTask?.cancel()
     }
 
     public var currentMode: ActiveMode { policy.mode }
@@ -126,6 +129,15 @@ public actor AudioSessionCoordinator {
         }
     }
 
+    private func startRouteChangeLoop() async {
+        let stream = configurator.routeChangeStream()
+        routeChangeTask = Task { [weak self] in
+            for await event in stream {
+                await self?.handleRouteChange(event)
+            }
+        }
+    }
+
     private func handleInterruption(_ event: AudioInterruptionEvent) async {
         switch event {
         case .began:
@@ -137,6 +149,18 @@ public actor AudioSessionCoordinator {
         case .endedNoResume:
             apply(policy.reduce(.endInterruptionNoResume))
             Log.event("audio.interruption", level: .info, data: ["event": "ended.noResume"])
+        }
+    }
+
+    private func handleRouteChange(_ event: AudioRouteChangeEvent) async {
+        switch event {
+        case .oldDeviceUnavailable:
+            apply(policy.reduce(.routeUnavailable))
+            Log.event("audio.route.changed", level: .info, data: ["event": "oldDeviceUnavailable"])
+        case .newDeviceAvailable, .categoryChange, .override, .wakeFromSleep, .noSuitableRoute, .unknown:
+            // A route becoming available must not implicitly resume narration.
+            // The active reader can explicitly request `.tts` to resume.
+            Log.event("audio.route.changed", level: .debug, data: ["event": String(describing: event)])
         }
     }
 }
