@@ -197,6 +197,26 @@ describe("buildRealtimeClientSecretsBody", () => {
     expect(body.session.model).toBe("gpt-realtime-mini")
   })
 
+  it("includes the complete audio session config for WebRTC startup", () => {
+    const body = buildRealtimeClientSecretsBody({ language: "en" })
+    const audio = body.session.audio
+
+    expect(body.session.tool_choice).toBe("auto")
+    expect(audio.input.format).toEqual({ type: "audio/pcm", rate: 24000 })
+    expect(audio.input.noise_reduction).toEqual({ type: "near_field" })
+    expect(audio.input.turn_detection).toEqual({
+      type: "server_vad",
+      prefix_padding_ms: 300,
+      silence_duration_ms: 700,
+      threshold: 0.7,
+    })
+    expect(audio.output).toEqual({
+      voice: "alloy",
+      speed: 1,
+      format: { type: "audio/pcm", rate: 24000 },
+    })
+  })
+
   it("requests expires_after anchored at created_at with a sensible TTL", () => {
     const body = buildRealtimeClientSecretsBody({ language: "en" })
     expect(body.expires_after.anchor).toBe("created_at")

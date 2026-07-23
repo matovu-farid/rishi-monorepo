@@ -101,11 +101,38 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
           parameters: BOOK_CONTEXT_TOOL_SPEC.parameters,
         },
       ],
+      // Keep the complete realtime session configuration on the ephemeral
+      // key. The iOS WebRTC client deliberately does not send a second
+      // `session.update` after the data channel opens: duplicating the full
+      // payload there adds another data-channel round trip before audio can
+      // start. These values mirror RealtimeSessionConfigBuilder on iOS.
+      tool_choice: "auto",
       audio: {
         input: {
+          format: {
+            type: "audio/pcm",
+            rate: 24000,
+          },
+          noise_reduction: {
+            type: "near_field",
+          },
           transcription: {
             model: "gpt-4o-mini-transcribe",
             language: input.language,
+          },
+          turn_detection: {
+            type: "server_vad",
+            prefix_padding_ms: 300,
+            silence_duration_ms: 700,
+            threshold: 0.7,
+          },
+        },
+        output: {
+          voice: "alloy",
+          speed: 1.0,
+          format: {
+            type: "audio/pcm",
+            rate: 24000,
           },
         },
       },
