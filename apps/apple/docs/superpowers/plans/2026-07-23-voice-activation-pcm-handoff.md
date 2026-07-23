@@ -75,6 +75,7 @@ The voice-activation handoff remains gated by the implementation audit above, bu
 - `perf(voice): unblock trial startup on registration` exposes the transport as soon as WebRTC is ready; call-ID registration remains fail-closed in the background.
 - `perf: mint complete realtime session config` moves the complete Realtime configuration to the ephemeral secret, eliminating the initial duplicate `session.update`.
 - `perf: remove realtime startup round trips` replaces readiness polling with buffered transport/session events.
+- `perf(voice): avoid initial session readiness stall` trusts the server-minted initial configuration after the data channel opens; reconnects still validate their refreshed snapshot.
 - `perf(voice): skip duplicate startup preflight` avoids repeating microphone permission and audio-session setup after the presenter has already completed them.
 - `perf(voice): overlap session admission and mint` overlaps the independent ledger admission and OpenAI secret mint after allowance freshness is established.
 - `perf(voice): prewarm realtime peer during session setup` constructs the disconnected WebRTC peer while the worker creates the session; no network negotiation or audio capture starts during prewarm.
