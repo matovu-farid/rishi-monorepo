@@ -84,82 +84,127 @@ const CreateVoiceSessionBodySchema = z
  * `{ language: "en" }`, matching that existing route's behavior.
  */
 voiceSessionsRoutes.post("/", requireAuth, async (c) => {
-  const userId = c.get("userId");
-  const rawBody = await c.req.json().catch(() => ({}));
-  const body = CreateVoiceSessionBodySchema.safeParse(rawBody).data ?? {};
+  const startupStartedAt = performance.now();
+  const emitPhase = (phase: string, phaseStartedAt: number): void => {
+    // Keep telemetry best-effort: logging must never change the request's
+    // behavior, and this payload intentionally contains no user/session IDs,
+    // credentials, book text, or other request data.
+    try {
+      const now = performance.now();
+      console.log(
+        JSON.stringify({
+          event: "voice_sessions.start.phase",
+          phase,
+          elapsedMs: Math.round(now - phaseStartedAt),
+          totalElapsedMs: Math.round(now - startupStartedAt),
+        }),
+      );
+    } catch {
+      // Ignore telemetry failures.
+    }
+  };
 
-  // Rehydrate the ledger DO mirror from D1 before allowance checks — same
-  // contract as `/api/billing/me` so post-migration caps apply immediately.
-  await rollAllowancePeriodsForward(c.env, userId);
-
-  const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
-
-  // Ledger admission and OpenAI key minting are independent after the
-  // allowance mirror has been refreshed. Start them together so setup time
-  // is bounded by the slower of the two remote calls instead of their sum.
-  // The small source tags preserve the route's existing error mapping when
-  // Promise.all rejects whichever operation fails first.
-  const sessionPromise = stub.createVoiceSession().catch((error: unknown) => {
-    throw { source: "ledger", error };
-  });
-  const mintPromise = mintRealtimeClientSecret(c.env.OPENAI_API_KEY, {
-    language: coerceLanguage(body.language),
-    bookId: body.bookId,
-    currentPage: body.currentPage,
-    pageText: body.pageText,
-    outline: body.outline,
-    activeParagraphText: body.activeParagraphText,
-  }).catch((error: unknown) => {
-    throw { source: "openai", error };
-  });
-
-  let session: { rishiSessionId: string; nonce: string; capIntervals: number } | undefined;
-  let minted: Awaited<ReturnType<typeof mintRealtimeClientSecret>> | undefined;
   try {
-    [session, minted] = await Promise.all([sessionPromise, mintPromise]);
-  } catch (err) {
-    const failure = err as { source?: string; error?: unknown };
-    if (failure.source === "ledger") {
-      return voiceSessionErrorResponse(c, failure.error);
+    const userId = c.get("userId");
+    const rawBody = await c.req.json().catch(() => ({}));
+    const body = CreateVoiceSessionBodySchema.safeParse(rawBody).data ?? {};
+
+    // Rehydrate the ledger DO mirror from D1 before allowance checks — same
+    // contract as `/api/billing/me` so post-migration caps apply immediately.
+    const allowanceStartedAt = performance.now();
+    try {
+      await rollAllowancePeriodsForward(c.env, userId);
+    } finally {
+      emitPhase("allowance_refresh", allowanceStartedAt);
     }
 
-    const mintErr = failure.source === "openai" ? failure.error : err;
-    // The ledger already committed this session as `pending_registration`
-    // with its grace-period alarm armed
-    // (2026-07-17-user-usage-ledger-voice-session.md's
-    // REGISTRATION_GRACE_MS = 10_000ms). If the app can't retry and never
-    // registers a call ID, that alarm reconciles the session as
-    // `registration_timeout` on its own — there is nothing to roll back
-    // here, and no compensating call into the ledger is needed.
-    console.error(
-      JSON.stringify({
-        event: "voice_sessions.mint_failed",
-        rishiSessionId: session?.rishiSessionId ?? null,
-        message: mintErr instanceof Error ? mintErr.message : String(mintErr),
-      }),
-    );
-    return c.json(
-      { error: "Failed to mint OpenAI realtime client secret", code: "OPENAI_MINT_FAILED" },
-      502,
-    );
-  }
+    const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
 
-  // Promise.all fulfills both values together on the success path. Keep this
-  // guard explicit so a future refactor cannot accidentally return a partial
-  // response if one operation is changed to resolve without a value.
-  if (!session || !minted) {
-    return c.json(
-      { error: "Failed to initialize realtime voice session", code: "VOICE_SESSION_INIT_FAILED" },
-      502,
+    // Ledger admission and OpenAI key minting are independent after the
+    // allowance mirror has been refreshed. Start them together so setup time
+    // is bounded by the slower of the two remote calls instead of their sum.
+    // The small source tags preserve the route's existing error mapping when
+    // Promise.all rejects whichever operation fails first.
+    const ledgerStartedAt = performance.now();
+    const sessionPromise = stub.createVoiceSession().then(
+      (session) => {
+        emitPhase("ledger_admission", ledgerStartedAt);
+        return session;
+      },
+      (error: unknown) => {
+        emitPhase("ledger_admission", ledgerStartedAt);
+        throw { source: "ledger", error };
+      },
     );
-  }
+    const mintStartedAt = performance.now();
+    const mintPromise = mintRealtimeClientSecret(c.env.OPENAI_API_KEY, {
+      language: coerceLanguage(body.language),
+      bookId: body.bookId,
+      currentPage: body.currentPage,
+      pageText: body.pageText,
+      outline: body.outline,
+      activeParagraphText: body.activeParagraphText,
+    }).then(
+      (minted) => {
+        emitPhase("openai_mint", mintStartedAt);
+        return minted;
+      },
+      (error: unknown) => {
+        emitPhase("openai_mint", mintStartedAt);
+        throw { source: "openai", error };
+      },
+    );
 
-  return c.json({
-    rishiSessionId: session.rishiSessionId,
-    nonce: session.nonce,
-    clientSecret: minted.clientSecret,
-    capIntervals: session.capIntervals,
-  });
+    let session: { rishiSessionId: string; nonce: string; capIntervals: number } | undefined;
+    let minted: Awaited<ReturnType<typeof mintRealtimeClientSecret>> | undefined;
+    try {
+      [session, minted] = await Promise.all([sessionPromise, mintPromise]);
+    } catch (err) {
+      const failure = err as { source?: string; error?: unknown };
+      if (failure.source === "ledger") {
+        return voiceSessionErrorResponse(c, failure.error);
+      }
+
+      const mintErr = failure.source === "openai" ? failure.error : err;
+      // The ledger already committed this session as `pending_registration`
+      // with its grace-period alarm armed
+      // (2026-07-17-user-usage-ledger-voice-session.md's
+      // REGISTRATION_GRACE_MS = 10_000ms). If the app can't retry and never
+      // registers a call ID, that alarm reconciles the session as
+      // `registration_timeout` on its own — there is nothing to roll back
+      // here, and no compensating call into the ledger is needed.
+      console.error(
+        JSON.stringify({
+          event: "voice_sessions.mint_failed",
+          rishiSessionId: session?.rishiSessionId ?? null,
+          message: mintErr instanceof Error ? mintErr.message : String(mintErr),
+        }),
+      );
+      return c.json(
+        { error: "Failed to mint OpenAI realtime client secret", code: "OPENAI_MINT_FAILED" },
+        502,
+      );
+    }
+
+    // Promise.all fulfills both values together on the success path. Keep this
+    // guard explicit so a future refactor cannot accidentally return a partial
+    // response if one operation is changed to resolve without a value.
+    if (!session || !minted) {
+      return c.json(
+        { error: "Failed to initialize realtime voice session", code: "VOICE_SESSION_INIT_FAILED" },
+        502,
+      );
+    }
+
+    return c.json({
+      rishiSessionId: session.rishiSessionId,
+      nonce: session.nonce,
+      clientSecret: minted.clientSecret,
+      capIntervals: session.capIntervals,
+    });
+  } finally {
+    emitPhase("total", startupStartedAt);
+  }
 });
 
 // ---------- POST /end-active (force-close live session) ----------
