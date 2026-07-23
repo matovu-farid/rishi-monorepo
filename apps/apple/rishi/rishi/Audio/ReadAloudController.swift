@@ -138,6 +138,7 @@ final class ReadAloudController {
 
         // Readium owns publication iteration. The custom tokenizer supplied
         // above makes each utterance a paragraph instead of a sentence.
+        await activateAudioSessionForReadiumStart()
         synthesizer.start(from: startLocator)
         nowPlayingController?.attach(
             state: ttsState,
@@ -322,6 +323,13 @@ final class ReadAloudController {
         await coordinator.registerPreemption(for: .tts) { [weak self] in
             await self?.pauseForVoiceHandoff()
         }
+    }
+
+    /// Claims the shared playback session before Readium starts delivering
+    /// speech. Unlike the legacy bridge, Readium bypasses `ReaderTTSBridge`,
+    /// so it must activate `.playback` / `.spokenAudio` itself.
+    func activateAudioSessionForReadiumStart() async {
+        await coordinator.requestActiveMode(.tts)
     }
 
     func previous() async {

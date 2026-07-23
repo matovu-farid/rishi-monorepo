@@ -15,14 +15,14 @@ struct ReadAloudControllerTests {
     private func makeController(
         script: FakeTTSEngine.Script = .holds,
         source: any TTSChunkSource = ControllerNoopChunkSource(),
-        nowPlayingController: NowPlayingController? = nil
+        nowPlayingController: NowPlayingController? = nil,
+        audioSessionConfigurator: FakeAudioSessionConfigurator = FakeAudioSessionConfigurator()
     ) -> ReadAloudController {
         let state = TTSPlaybackState()
         let engine = FakeTTSEngine(state: state, script: script)
         let settingsStore = InMemoryTTSSettingsStore()
         let prewarmer = TTSPrewarmer(source: source)
-        let configurer = FakeAudioSessionConfigurator()
-        let coordinator = AudioSessionCoordinator(configurator: configurer)
+        let coordinator = AudioSessionCoordinator(configurator: audioSessionConfigurator)
         let presence = rishi.TTSPresenceController(
             state: state,
             store: ControllerNoopPresenceStore()
@@ -68,6 +68,19 @@ struct ReadAloudControllerTests {
         #expect(controller.currentParagraph == nil)
 
         await controller.stop()
+    }
+
+    @Test("Readium narration start activates the playback spoken-audio session")
+    func readiumNarrationStartActivatesSpokenAudioSession() async {
+        let configurator = FakeAudioSessionConfigurator()
+        let controller = makeController(audioSessionConfigurator: configurator)
+
+        await controller.activateAudioSessionForReadiumStart()
+
+        #expect(configurator.configureCalls.count == 1)
+        #expect(configurator.configureCalls[0].category == .playback)
+        #expect(configurator.configureCalls[0].mode == .spokenAudio)
+        #expect(configurator.activeCalls.last?.active == true)
     }
 
     @Test("stop clears paragraphs, bridge, showControls, and currentParagraph")
