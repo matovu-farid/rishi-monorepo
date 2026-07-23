@@ -4,6 +4,7 @@ import ReadiumNavigator
 import ReadiumShared
 import RishiAudio
 import RishiCore
+import RishiLibrary
 import RishiLogging
 import RishiReader
 
@@ -17,6 +18,8 @@ final class ReadAloudController {
     private let ttsPrewarmer: TTSPrewarmer
     private let ttsPresence: TTSPresenceController
     private let userId: UserID
+    private let nowPlayingController: NowPlayingController?
+    private let bookFileStorage: BookFileStorage?
 
     private(set) var bridge: ReaderTTSBridge? = nil
     private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
@@ -52,7 +55,9 @@ final class ReadAloudController {
         ttsPrewarmer: TTSPrewarmer,
         ttsPresence: TTSPresenceController,
         coordidator: AudioSessionCoordinator,
-        userId: UserID
+        userId: UserID,
+        nowPlayingController: NowPlayingController? = nil,
+        bookFileStorage: BookFileStorage? = nil
     ) {
         self.ttsEngine = ttsEngine
         self.ttsState = ttsState
@@ -61,6 +66,8 @@ final class ReadAloudController {
         self.ttsPresence = ttsPresence
         self.userId = userId
         self.coordinator = coordidator
+        self.nowPlayingController = nowPlayingController
+        self.bookFileStorage = bookFileStorage
     }
 
     func startReader(vm: ReaderViewModel) async {
@@ -132,6 +139,15 @@ final class ReadAloudController {
         // Readium owns publication iteration. The custom tokenizer supplied
         // above makes each utterance a paragraph instead of a sentence.
         synthesizer.start(from: startLocator)
+        nowPlayingController?.attach(
+            state: ttsState,
+            controller: self,
+            metadata: await nowPlayingMetadata(
+                title: vm.book.title,
+                author: vm.book.author,
+                book: vm.book
+            )
+        )
     }
 
     func stop() async {
@@ -349,6 +365,7 @@ final class ReadAloudController {
         startIndex: Int = 0,
         bookID: String,
         metadata: NowPlayingMetadata,
+        book: Book? = nil,
         onPassageChange: @escaping (Int?) -> Void,
         onParagraphsExhausted: @escaping () async -> [String] = { [] },
         onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
@@ -359,11 +376,13 @@ final class ReadAloudController {
         if let existing = bridge {
             await existing.stop()
         }
+        nowPlayingController?.detach()
 
         let wrappedOnParagraphsExhausted: () async -> [String] = { [weak self] in
             let nextParagraphs = await onParagraphsExhausted()
             if nextParagraphs.isEmpty {
                 self?.isPageEntryPrefetchEligible = true
+                self?.nowPlayingController?.detach()
             } else {
                 self?.isPageEntryPrefetchEligible = false
             }
@@ -399,6 +418,16 @@ final class ReadAloudController {
         showControls = true
         await registerTTSPreemption()
         await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
+        nowPlayingController?.attach(
+            state: ttsState,
+            controller: self,
+            metadata: await nowPlayingMetadata(
+                title: metadata.title,
+                author: metadata.author,
+                book: book,
+                coverData: metadata.coverData
+            )
+        )
     }
 
     var canPrefetchPageEntry: Bool {
@@ -434,6 +463,7 @@ final class ReadAloudController {
     }
 
     private func stopCurrentPlayback() async {
+        nowPlayingController?.detach()
         Log.event("tts.nav.stop", data: [
             "hadSynthesizer": readiumSynthesizer != nil ? "1" : "0",
             "lastSeq": String(max(0, utteranceSeq - 1)),
@@ -455,6 +485,27 @@ final class ReadAloudController {
         #endif
         ttsState.update(status: .stopped)
     }
+
+    private func nowPlayingMetadata(
+        title: String,
+        author: String?,
+        book: Book?,
+        coverData: Data? = nil
+    ) async -> NowPlayingMetadata {
+        guard coverData == nil,
+              let book,
+              let bookFileStorage
+        else {
+            return NowPlayingMetadata(title: title, author: author, coverData: coverData)
+        }
+
+        let coverURL = bookFileStorage.cachedCoverURLIfFresh(for: book)
+        let cachedCoverData: Data? = await Task.detached {
+            guard let coverURL else { return nil }
+            return try? Data(contentsOf: coverURL)
+        }.value
+        return NowPlayingMetadata(title: title, author: author, coverData: cachedCoverData)
+    }
 }
 
 extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
@@ -467,6 +518,7 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         readiumState = state
         switch state {
         case .stopped:
+            nowPlayingController?.detach()
             isPageEntryPrefetchEligible = true
             followCreditRemaining = 0
             #if DEBUG
@@ -523,7 +575,28 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         didFailWithError error: PublicationSpeechSynthesizer.Error
     ) {
         guard readiumSynthesizer === synthesizer else { return }
+        nowPlayingController?.detach()
         ttsState.error = String(describing: error)
         ttsState.update(status: .error)
+    }
+}
+
+extension ReadAloudController: TTSPlaybackControlling {
+    func pause() async {
+        guard ttsState.status == .playing || isActivelySpeaking else { return }
+        await togglePlayback()
+    }
+
+    func resume() async {
+        guard ttsState.status == .paused else { return }
+        await togglePlayback()
+    }
+
+    func previousTrack() async {
+        await previous()
+    }
+
+    func nextTrack() async {
+        await next()
     }
 }

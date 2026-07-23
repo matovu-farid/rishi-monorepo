@@ -14,7 +14,8 @@ struct ReadAloudControllerTests {
 
     private func makeController(
         script: FakeTTSEngine.Script = .holds,
-        source: any TTSChunkSource = ControllerNoopChunkSource()
+        source: any TTSChunkSource = ControllerNoopChunkSource(),
+        nowPlayingController: NowPlayingController? = nil
     ) -> ReadAloudController {
         let state = TTSPlaybackState()
         let engine = FakeTTSEngine(state: state, script: script)
@@ -34,7 +35,8 @@ struct ReadAloudControllerTests {
             ttsPrewarmer: prewarmer,
             ttsPresence: presence,
             coordidator: coordinator,
-            userId: userId
+            userId: userId,
+            nowPlayingController: nowPlayingController
         )
     }
 
@@ -82,6 +84,39 @@ struct ReadAloudControllerTests {
         #expect(controller.showControls == false)
         #expect(controller.showPicker == false)
         #expect(controller.currentParagraph == nil)
+    }
+
+    @Test("legacy session attaches lock-screen controls and stop detaches them")
+    func legacySessionAttachesAndDetachesNowPlaying() async {
+        let info = FakeNowPlayingInfoSurface()
+        let commands = FakeRemoteCommandSurface()
+        let nowPlaying = NowPlayingController(infoSurface: info, commandSurface: commands)
+        let controller = makeController(nowPlayingController: nowPlaying)
+
+        await start(controller, paragraphs: ["one"])
+
+        #expect(commands.calls == [.register])
+        #expect(info.calls.contains(.metadata(testMetadata)))
+
+        await controller.stop()
+
+        #expect(commands.calls == [.register, .unregister])
+        #expect(info.calls.contains(.clear))
+    }
+
+    @Test("lock-screen stop command stops the reader session")
+    func lockScreenStopStopsReaderSession() async {
+        let info = FakeNowPlayingInfoSurface()
+        let commands = FakeRemoteCommandSurface()
+        let nowPlaying = NowPlayingController(infoSurface: info, commandSurface: commands)
+        let controller = makeController(nowPlayingController: nowPlaying)
+
+        await start(controller, paragraphs: ["one"])
+        commands.simulate(.stop)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(controller.bridge == nil)
+        #expect(commands.calls == [.register, .unregister])
     }
 
     @Test("empty paragraph list does not create a bridge")

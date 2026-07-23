@@ -83,7 +83,9 @@ struct ReaderDestination: View {
                             ttsPrewarmer: services.ttsPrewarmer,
                             ttsPresence: services.ttsPresenceController,
                             coordidator: services.audioCoordinator,
-                            userId: userId
+                            userId: userId,
+                            nowPlayingController: services.nowPlayingController,
+                            bookFileStorage: services.bookFileStorage
                         )
                     }
                     await readAloud?.startReader(vm: vm)
@@ -283,7 +285,9 @@ struct ReaderDestination: View {
             ttsPrewarmer: services.ttsPrewarmer,
             ttsPresence: services.ttsPresenceController,
             coordidator: services.audioCoordinator,
-            userId: userId
+            userId: userId,
+            nowPlayingController: services.nowPlayingController,
+            bookFileStorage: services.bookFileStorage
         )
         readAloud = controller
         return controller
