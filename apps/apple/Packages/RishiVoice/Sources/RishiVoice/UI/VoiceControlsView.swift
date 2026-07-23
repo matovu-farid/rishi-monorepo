@@ -78,9 +78,9 @@ public struct VoiceControlsView: View {
 
     private var fullControlsRow: some View {
         HStack(spacing: 0) {
-            leadingControls.frame(width: 104, alignment: .leading)
+            leadingControls.frame(width: 104, alignment: .trailing)
             centerSlot
-            trailingControls.frame(width: 104, alignment: .trailing)
+            trailingControls.frame(width: 104, alignment: .leading)
         }
         .frame(minWidth: 264)
         .overlay { waveform }
