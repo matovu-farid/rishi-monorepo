@@ -53,13 +53,30 @@ struct ReaderVoiceEntryLanguageTests {
     private final class FakeClient: RealtimeClientAPI, @unchecked Sendable {
         private let lock = NSLock()
         private var status: RealtimeConnectionStatus = .disconnected
+        private var _deferMicCaptureValues: [Bool] = []
+
+        var deferMicCaptureValues: [Bool] { lock.withLock { _deferMicCaptureValues } }
 
         func connect(
             ephemeralKey: String,
             bookContext: BookContextSnapshot?,
-            language: String?
+            language: String?,
+            deferMicCapture: Bool
         ) async throws {
-            lock.withLock { status = .connected }
+            lock.withLock {
+                _deferMicCaptureValues.append(deferMicCapture)
+                status = .connected
+            }
+        }
+
+        func setMicCaptureEnabled(_ enabled: Bool) async {}
+        func setAssistantOutputEnabled(_ enabled: Bool) async {}
+        func cancelCurrentResponse() async {}
+        func injectBufferedInputAudio(_ pcm16le24kMono: Data) async throws -> HandoffAcceptance {
+            .accepted(path: .path0A)
+        }
+        func injectBufferedInputText(_ text: String) async throws -> HandoffAcceptance {
+            .accepted(path: .path0C)
         }
 
         func disconnect() async {
@@ -105,7 +122,8 @@ struct ReaderVoiceEntryLanguageTests {
             dirtyHook: StubDirtyHook(),
             micGate: FakeMicPermissionGate(decision: .granted),
             clientFactory: { fakeClient },
-            keyFetcherFactory: { keyFetcher }
+            keyFetcherFactory: { keyFetcher },
+            sessionCoordinatorFactory: { nil }
         )
         let entry = ReaderVoiceEntry(
             voicePresenter: presenter,
@@ -132,6 +150,7 @@ struct ReaderVoiceEntryLanguageTests {
 
         #expect(keyFetcher.lastLanguage == VoiceLanguageOption.french.rawValue)
         #expect(presenter.currentLanguage == VoiceLanguageOption.french.rawValue)
+        #expect(fakeClient.deferMicCaptureValues == [false])
 
         await presenter.end()
     }

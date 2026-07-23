@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { requireAuth } from "../middleware";
+import { rollAllowancePeriodsForward } from "../billing/allowance-period-rollover";
 import { coerceLanguage, mintRealtimeClientSecret } from "../realtime/client-secrets";
 import { voiceSessionErrorResponse } from "./voice-session-errors";
 
@@ -87,6 +88,10 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
   const rawBody = await c.req.json().catch(() => ({}));
   const body = CreateVoiceSessionBodySchema.safeParse(rawBody).data ?? {};
 
+  // Rehydrate the ledger DO mirror from D1 before allowance checks — same
+  // contract as `/api/billing/me` so post-migration caps apply immediately.
+  await rollAllowancePeriodsForward(c.env, userId);
+
   const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
 
   let session: { rishiSessionId: string; nonce: string; capIntervals: number };
@@ -131,6 +136,23 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
       { error: "Failed to mint OpenAI realtime client secret", code: "OPENAI_MINT_FAILED" },
       502,
     );
+  }
+});
+
+// ---------- POST /end-active (force-close live session) ----------
+
+/**
+ * Ends whichever voice session the ledger considers live for this user.
+ * Must be registered before `/:id/end` so `end-active` is not captured as an id.
+ */
+voiceSessionsRoutes.post("/end-active", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
+  try {
+    const result = await stub.endActiveVoiceSession();
+    return c.json(result);
+  } catch (err) {
+    return voiceSessionErrorResponse(c, err);
   }
 });
 

@@ -71,8 +71,16 @@ struct rishiApp: App {
                 
         }
         .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
-            Task { await refreshEntitlementSnapshot() }
+            switch newPhase {
+            case .background:
+                Task { @MainActor in
+                    await deps.services?.voicePresenter.requestEnd()
+                }
+            case .active:
+                Task { await refreshEntitlementSnapshot() }
+            default:
+                break
+            }
         }
         .commands {
             RishiMenuCommands(
@@ -160,6 +168,12 @@ struct rishiApp: App {
             didFailToRegisterForRemoteNotificationsWithError error: Error
         ) {
 
+        }
+
+        func applicationWillTerminate(_ application: UIApplication) {
+            Task { @MainActor in
+                await dependencies?.services?.voicePresenter.requestEnd()
+            }
         }
 
         func application(

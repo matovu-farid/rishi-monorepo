@@ -139,6 +139,12 @@ private extension WebRTCConnector {
 		#if !os(macOS)
 		do {
 			let audioSession = AVAudioSession.sharedInstance()
+			// Rishi's AudioSessionCoordinator already configures voice chat
+			// before WebRTC connects. Re-applying category/mode mid-activation
+			// (while AVAudioEngine may still be recording) destabilizes ICE.
+			if audioSession.category == .playAndRecord, audioSession.mode == .videoChat {
+				return
+			}
 			#if os(tvOS)
 			try audioSession.setCategory(.playAndRecord, options: [])
 			#else

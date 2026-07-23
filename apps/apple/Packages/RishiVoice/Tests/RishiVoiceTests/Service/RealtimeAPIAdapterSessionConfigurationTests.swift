@@ -29,7 +29,9 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
 
         #expect(session.instructions.contains("You are a voice assistant inside a book reader."))
         #expect(session.instructions.contains("Respond in English."))
-        #expect(session.instructions.contains("Use the bookContext tool"))
+        #expect(session.instructions.contains("quietly check the book"))
+        #expect(session.instructions.contains("Never mention tools"))
+        #expect(!session.instructions.contains("Use the bookContext tool"))
         #expect(session.instructions.contains("The Book"))
         #expect(session.instructions.contains("Ada Lovelace"))
         #expect(session.instructions.contains("Current page: 12"))
@@ -66,7 +68,7 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
         ) {
             await feeder.next()
         }
-        #expect(session.instructions.contains("bookContext"))
+        #expect(session.instructions.contains("quietly check the book"))
         #expect(session.tools?.count == 1)
     }
 

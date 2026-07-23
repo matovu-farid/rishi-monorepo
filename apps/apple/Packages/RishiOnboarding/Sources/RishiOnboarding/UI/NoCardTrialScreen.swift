@@ -38,7 +38,7 @@ public struct NoCardTrialScreen: View {
                     )
                     bullet(
                         icon: "bolt.fill",
-                        text: "100 free credits to start — they never expire"
+                        text: "300 free credits to start — they never expire"
                     )
                     bullet(
                         icon: "waveform",

@@ -18,7 +18,7 @@
 // OnboardingFlowView          — `UI/OnboardingFlowView.swift`. The full first-run experience:
 //                                intro pages -> Sign in with Apple -> mic -> voice language -> done.
 // NoCardTrialScreen             — `UI/NoCardTrialScreen.swift`. One-time,
-//                                per-account "100 free credits, no card"
+//                                per-account "300 free credits, no card"
 //                                explainer shown after first sign-in.
 
 // MARK: - Coordinators / Flows

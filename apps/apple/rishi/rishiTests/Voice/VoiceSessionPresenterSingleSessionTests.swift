@@ -96,6 +96,62 @@ struct VoiceSessionPresenterSingleSessionTests {
         func messageDidUpdate(_ id: MessageID) async {}
     }
 
+    private struct InstantKeyFetcher: EphemeralKeyFetching {
+        func fetch(
+            language: String?,
+            bookContext: BookContextSnapshot?
+        ) async throws -> EphemeralKey {
+            EphemeralKey(secret: "secret", sessionId: "session")
+        }
+    }
+
+    private final class RecordingRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _connectCount = 0
+        private var status: RealtimeConnectionStatus = .disconnected
+
+        var connectCount: Int { lock.withLock { _connectCount } }
+
+        func connect(
+            ephemeralKey: String,
+            bookContext: BookContextSnapshot?,
+            language: String?,
+            deferMicCapture: Bool
+        ) async throws {
+            lock.withLock {
+                _connectCount += 1
+                status = .connected
+            }
+        }
+
+        func setMicCaptureEnabled(_ enabled: Bool) async {}
+        func setAssistantOutputEnabled(_ enabled: Bool) async {}
+        func cancelCurrentResponse() async {}
+        func injectBufferedInputAudio(_ pcm16le24kMono: Data) async throws -> HandoffAcceptance {
+            .accepted(path: .path0A)
+        }
+        func injectBufferedInputText(_ text: String) async throws -> HandoffAcceptance {
+            .accepted(path: .path0C)
+        }
+        func disconnect() async {
+            lock.withLock { status = .disconnected }
+        }
+        func currentStatus() async -> RealtimeConnectionStatus {
+            lock.withLock { status }
+        }
+        var providerCallId: String? { nil }
+        func errorStream() -> AsyncStream<RealtimeClientError> {
+            AsyncStream { $0.finish() }
+        }
+        func transcriptStream() -> AsyncStream<RealtimeTranscriptEvent> {
+            AsyncStream { $0.finish() }
+        }
+        func toolCallStream() -> AsyncStream<RealtimeToolCallEvent> {
+            AsyncStream { $0.finish() }
+        }
+        func sendToolResult(callId: String, payload: String) async throws {}
+    }
+
     private func makePresenter(store: BlockingConversationStore) -> VoiceSessionPresenter {
         let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
         let worker = WorkerClient(
@@ -109,7 +165,10 @@ struct VoiceSessionPresenterSingleSessionTests {
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: store),
             userIdProvider: { userId },
-            dirtyHook: StubDirtyHook()
+            dirtyHook: StubDirtyHook(),
+            clientFactory: { RecordingRealtimeClient() },
+            keyFetcherFactory: { InstantKeyFetcher() },
+            sessionCoordinatorFactory: { nil }
         )
     }
 
@@ -135,5 +194,41 @@ struct VoiceSessionPresenterSingleSessionTests {
         
         taskA.cancel()
         _ = await taskA.value
+    }
+
+    @Test("voice transport connects before conversation lookup finishes")
+    func transportStartsWhileConversationLookupIsBlocked() async {
+        let store = BlockingConversationStore()
+        let client = RecordingRealtimeClient()
+        let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
+        let worker = WorkerClient(
+            baseURL: URL(string: "https://example.invalid")!,
+            tokenProvider: StubTokenProvider()
+        )
+        let userId: UserID = UUID()
+        let presenter = VoiceSessionPresenter(
+            coordinator: coordinator,
+            workerClient: worker,
+            messageStore: StubMessageStore(),
+            conversationLookup: ConversationLookup(store: store),
+            userIdProvider: { userId },
+            dirtyHook: StubDirtyHook(),
+            clientFactory: { client },
+            keyFetcherFactory: { InstantKeyFetcher() },
+            sessionCoordinatorFactory: { nil }
+        )
+
+        let startTask = Task { await presenter.start(bookId: UUID()) }
+        await store.waitUntilEntered()
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, client.connectCount == 0 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(client.connectCount == 1)
+        #expect(presenter.state.status == .live)
+
+        startTask.cancel()
+        _ = await startTask.value
     }
 }

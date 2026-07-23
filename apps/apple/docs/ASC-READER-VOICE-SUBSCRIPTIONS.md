@@ -90,21 +90,21 @@ Internal / review context only. Apple will reject these if pasted into Descripti
 
 **Voice (monthly or annual billing)**  
 - 12 hours AI narration per month  
-- 180 minutes Voice Chat per month  
+- 540 minutes Voice Chat per month  
 - Books remain fully readable without using allowance  
 
 **Reader (monthly or annual billing)**  
 - 6 hours AI narration per month  
-- 90 minutes Voice Chat per month  
+- 270 minutes Voice Chat per month  
 - Books remain fully readable without using allowance  
 
 Annual products: same monthly allowances; billed yearly.
 
 ### Optional App Review notes
 
-- Voice Monthly: `Auto-renewable. 12h AI narration + 180m Voice Chat/mo. ID org.fidexa.rishi.voice.monthly.`  
+- Voice Monthly: `Auto-renewable. 12h AI narration + 540m Voice Chat/mo. ID org.fidexa.rishi.voice.monthly.`  
 - Voice Annual: `Annual billing; same monthly Voice allowances. ID org.fidexa.rishi.voice.annual.`  
-- Reader Monthly: `Auto-renewable. 6h AI narration + 90m Voice Chat/mo. ID org.fidexa.rishi.reader.monthly.`  
+- Reader Monthly: `Auto-renewable. 6h AI narration + 270m Voice Chat/mo. ID org.fidexa.rishi.reader.monthly.`  
 - Reader Annual: `Annual billing; same monthly Reader allowances. ID org.fidexa.rishi.reader.annual.`
 
 ---

@@ -40,8 +40,8 @@ export const APPLE_PRODUCT_PLAN_MAP: Record<string, ApplePlanMapping> = {
 
 /**
  * Full monthly allowance-period totals per plan (design doc's paid-plan
- * product policy table): Reader gets 6h narration / 90m Voice Chat; Voice
- * gets 12h narration / 180m Voice Chat. Units are seconds, matching
+ * product policy table): Reader gets 6h narration / 270m Voice Chat; Voice
+ * gets 12h narration / 540m Voice Chat. Units are seconds, matching
  * `allowancePeriod.narrationSecondsTotal` / `.voiceChatSecondsTotal`
  * (workers/worker/src/db/schema.ts).
  */
@@ -49,6 +49,6 @@ export const PLAN_ALLOWANCES: Record<
   ApplePlan,
   { narrationSecondsTotal: number; voiceChatSecondsTotal: number }
 > = {
-  reader: { narrationSecondsTotal: 6 * 60 * 60, voiceChatSecondsTotal: 90 * 60 },
-  voice: { narrationSecondsTotal: 12 * 60 * 60, voiceChatSecondsTotal: 180 * 60 },
+  reader: { narrationSecondsTotal: 6 * 60 * 60, voiceChatSecondsTotal: 270 * 60 },
+  voice: { narrationSecondsTotal: 12 * 60 * 60, voiceChatSecondsTotal: 540 * 60 },
 };

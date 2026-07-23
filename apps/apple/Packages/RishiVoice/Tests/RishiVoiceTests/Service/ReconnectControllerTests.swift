@@ -56,6 +56,7 @@ struct ReconnectControllerTests {
             maxReconnects: maxReconnects,
             disconnectConfirmations: 3,
             confirmationInterval: .zero,
+            observationGracePeriod: .zero,
             callbacks: callbacks
         )
     }

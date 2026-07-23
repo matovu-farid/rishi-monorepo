@@ -146,7 +146,7 @@ struct ReaderDestination: View {
             syncBinding = nil
 
             Task {
-                await services.voicePresenter.requestEnd()
+                await services.voicePresenter.parkSession()
                 await readAloud?.stop()
             }
         }
@@ -192,7 +192,7 @@ struct ReaderDestination: View {
                     },
                     onEndVoice: {
                         Task {
-                            await services.voicePresenter.requestEnd()
+                            await services.voicePresenter.dismissVoiceChrome()
                             await readAloud?.resumeAfterVoiceIfNeeded()
                         }
                     },

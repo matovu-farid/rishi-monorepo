@@ -33,6 +33,10 @@ Broken into four diagrams by lifecycle phase:
 
 Permissions, ephemeral key fetch, and embedder prewarm run in parallel to hide the ~500 ms CoreML cold-load behind the network round-trip. Only then does the WebRTC peer connection get established.
 
+**Activation phase (2026-07-23, experimental — blocked):** The intended flow starts `VoiceActivationCoordinator` immediately after claiming `.voice`, records locally during `deferMicCapture: true`, then replays early speech before enabling the VoIP unit. The audited implementation currently loses speech on first-use Speech permission and on the Energy VAD fallback; PCM replay acceptance/fallback is also unverified. Do not rely on this path until the [implementation audit](superpowers/specs/2026-07-23-voice-activation-pcm-handoff-design.md#implementation-audit--2026-07-23) is remediated.
+
+**Never enable the VoIP audio unit while the activation recorder is running.** `AVAudioEngine` + `LKRTCAudioSession` dual capture drops ICE (~1.5 s after `.live` once reconnect observation arms). See [Reconnecting loop](#reconnecting-loop).
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -62,7 +66,7 @@ sequenceDiagram
 
     Sess->>+SDK: connect(ephemeralKey:)
     SDK->>+API: WebRTC SDP offer/answer
-    API-->>-SDK: peer up, mic streaming
+    API-->>-SDK: peer up, mic capture deferred
     SDK-->>-Sess: connected
 
     Sess->>Sess: spawn responderTask
@@ -177,7 +181,9 @@ sequenceDiagram
 
 Teardown order is load-bearing: `responderTask` is cancelled *before* `client.disconnect()` so it can't attempt `sendToolResult` on a closed data channel. The audio session is released last.
 
-**Optimistic End (intentional hangup):** the cover dismisses and local WebRTC/control/audio tear down immediately without awaiting ledger hangup. `VoiceSessionPresenter` then retries `POST …/end` in the background (2–3 attempts, short backoff). HTTP success and already-terminal / `NO_ACTIVE_VOICE_SESSION` count as success. If all attempts fail, an acknowledge-only alert is shown (no “Try again” that starts a new session). Registered realtime sessions are **not** auto-orphaned on create — delivery matters.
+**End parks the session for quick resume:** the cover dismisses immediately, the current response is cancelled, microphone capture is muted, assistant output is gated, and reconnect observation is stopped. The `VoiceSessionRegistry` retains the session object and starts a three-minute expiry timer. Reopening voice before expiry unmutes the existing connection; expiry performs the full local teardown and then delivers `POST …/end`.
+
+**Background/termination closes immediately:** `scenePhase == .background` and the best-effort termination callback route through `VoiceSessionPresenter.requestEnd()`, which closes the transport and releases the audio mode without the three-minute grace period. The registry persists the Rishi session ID until server end is confirmed. Startup recovery retries that ID so a crash/force-quit cannot leave a server ledger row active indefinitely.
 
 ```mermaid
 sequenceDiagram
@@ -194,19 +200,27 @@ sequenceDiagram
     User->>+View: tap "End session"
     View->>+Pres: requestEnd()
     Pres->>Pres: isPresenting = false (dismiss cover)
-    Pres->>+Sess: end() (local only)
-    Sess->>Sess: cancel responderTask
-    Note right of Sess: cancel BEFORE disconnect<br/>so in-flight tool results<br/>don't race
-    Sess->>+SDK: disconnect()
-    SDK->>API: close WebRTC peer
-    SDK-->>-Sess: closed
-    Sess->>+Audio: releaseActiveMode(.voice)
-    Audio-->>-Sess: AVAudioSession deactivated
-    Sess-->>-Pres: rishiSessionId (if any)
+    Pres->>+Sess: parkForBackground()
+    Sess->>+SDK: cancel response
+    Sess->>SDK: mute mic + gate assistant output
+    Sess-->>-Pres: parked session retained
     Pres-->>-View: cover already dismissed
-    Note over Pres,Ledger: background delivery (retries)
-    Pres->>+Ledger: POST .../end (client_ended)
-    Ledger-->>-Pres: ok (or already terminal)
+    Note over Pres,Ledger: registry starts 3-minute expiry timer
+    alt user reopens before expiry
+        View->>Pres: start()
+        Pres->>Sess: resumeFromBackground()
+        Sess->>SDK: unmute mic + re-enable output
+    else expiry/background/termination
+        Pres->>+Sess: end()
+        Sess->>Sess: cancel responder/control/reconnect tasks
+        Sess->>+SDK: disconnect()
+        SDK->>API: close WebRTC peer
+        SDK-->>-Sess: closed
+        Sess->>+Audio: releaseActiveMode(.voice)
+        Audio-->>-Sess: AVAudioSession deactivated
+        Pres->>+Ledger: POST .../end (client_ended)
+        Ledger-->>-Pres: ok (or already terminal)
+    end
 ```
 
 ---
@@ -238,14 +252,49 @@ A timed-out session is terminal. The next `POST /api/voice-sessions` gets a **ne
 
 | Path | Behavior |
 | --- | --- |
-| User taps End | Cover dismisses + local teardown immediately; presenter retries `POST …/end` in background. Failure → dismiss-only alert (auto-retry already ran). Registered realtime is not auto-orphaned on create. |
+| User taps End | Cover dismisses, cancels response, mutes both directions, and parks the session for three minutes. Resume reuses it; expiry fully closes it and ends the ledger row. |
+| App backgrounds/terminates | Immediate full close; no grace timer. The registry persists the server ID until end confirmation. |
+| Crash/force quit | No cleanup code can run at crash time; the next bootstrap retries the persisted server end. |
 | Idle ≥ 5 min | Server terminates; client receives `session_ended` / terminal snapshot with `inactivity_timeout` and shows “Voice chat ended due to inactivity.” |
+
+---
+
+## Reconnecting loop
+
+The UI shows **Reconnecting** when `ReconnectController` sees a sustained `.disconnected` status from the Realtime SDK and runs the 1s/2s/4s backoff ladder (max 3 attempts). Log signature:
+
+```
+event: voice.session.live
+event: voice.control.connecting
+event: voice.session.disconnect.transient
+ICE Connection State changed to: 6
+event: voice.adapter.connecting   (repeated)
+event: voice.session.failed reason=networkLost
+```
+
+### Known triggers (and how we avoid them)
+
+| Trigger | Symptom in logs | Avoidance |
+| --- | --- | --- |
+| **Dual capture during connect** | `disconnect.transient` ~1.5 s after `session.live`, ICE → 6, **no** `server_error` | With `deferMicCapture`, **skip** `enableAudioUnit()` in `connect()`. First init only in `setMicCaptureEnabled(true)` after activation recorder stops + 250 ms route settle. |
+| **WebRTC re-configures AVAudioSession** | Same ICE pattern during/after connect | `WebRTCConnector.configureAudioSession()` no-ops when category/mode already `.playAndRecord`/`.videoChat` (coordinator owns session). |
+| **False-positive disconnect poll** | Transient blip right after `.live` | `ReconnectController` waits **1.5 s** (`observationGracePeriod`) before arming the 10 Hz status poll. |
+| **Invalid session.update wire format** | `voice.adapter.server_error`, e.g. `Unknown parameter: session.tools[0].server_description` | Function tools encode `description`, not `server_description` (`Tool.swift`). |
+| **Activation PCM replay** | Rejected or unacknowledged data-channel event | Transport acceptance and 0A → 0B → text fallback are unverified; do not rely on PCM replay until the activation audit is remediated. |
+| **Reconnecting before data channel open** | Echo / double voice, endless reconnect | `connect()` waits until SDK status is `.connected` before returning (channel must be open). |
+| **Redundant VoIP re-init on reconnect ladder** | Repeated `voice.adapter.connecting`, ladder exhausts | `WebRTCAudioUnitController.enableAudioUnit()` is idempotent when `isAudioEnabled` is already true. |
+
+### Debugging
+
+- Symbolic breakpoint: `UIViewAlertForUnsatisfiableConstraints` — unrelated to voice reconnect (Apple Sign In / nav bar layout noise).
+- Voice reconnect: breakpoint on log `voice.session.disconnect.transient` or `ReconnectController.handleTransientDisconnect`.
+- If ICE 6 appears **without** a preceding server error, suspect audio unit / route churn, not API rejection.
 
 ---
 
 ## Design notes
 
-- **No on-device STT or TTS.** Both happen server-side in the OpenAI Realtime API. The SDK owns mic capture and speaker playback; raw PCM frames never surface to `RishiVoice`.
+- **No on-device STT or TTS for live turns.** Both happen server-side in the OpenAI Realtime API. The SDK owns normal live mic capture and speaker playback. The experimental pre-connect activation recorder is the exception: it produces local PCM, but its handoff is currently blocked by the activation audit.
 - **RAG is a tool callback, not a pre-prompt step.** The LLM decides when to call `bookContext(query)`; on-device search only runs on demand. This keeps cold-start cheap and lets the model issue multiple queries per turn.
 - **Embedder prewarm is parallelized** with the ephemeral key fetch to hide the ~500 ms CoreML cold-load behind the network round-trip.
 - **Single consumer of `transcriptStream()`:** `VoiceTranscriptBridge` persists finals, updates live UI state, and pings `{type:"client_activity"}` for inactivity. Do not attach a second reader.

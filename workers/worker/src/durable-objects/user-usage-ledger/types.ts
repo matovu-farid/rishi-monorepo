@@ -1,7 +1,9 @@
 // Trial rules per docs/superpowers/specs/2026-07-17-no-card-credit-trial-design.md:
-// each account gets 100 non-expiring credits at signup; a non-cached TTS
+// each account gets 300 non-expiring credits at signup; a non-cached TTS
 // generation costs exactly 1 credit regardless of text length.
-export const TRIAL_INITIAL_CREDITS = 100;
+export const TRIAL_INITIAL_CREDITS = 300;
+/** Pre–3× voice allowance bump; used to idempotently upgrade existing trial rows. */
+export const TRIAL_LEGACY_INITIAL_CREDITS = 100;
 export const TRIAL_TTS_COST_CREDITS = 1;
 
 // How long a `"tts"` reservation may sit `status: "pending"` before the

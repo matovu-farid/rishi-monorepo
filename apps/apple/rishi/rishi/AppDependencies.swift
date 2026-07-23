@@ -76,6 +76,7 @@ final class AppDependencies {
             )
             let built = await Self.makeServices(userIdBox: self.userIdBox)
             self.services = built
+            await built.voiceSessionRegistry.recoverPersistedSession()
             Self.signposter.endInterval("cold-launch.bootstrap", state)
         }
         bootstrapTask = task
@@ -140,6 +141,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let chatService: RishiChatService
 
     let voicePresenter: VoiceSessionPresenter
+    let voiceSessionRegistry: VoiceSessionRegistry
 
     let bookSearch: any BookSearch
 

@@ -25,6 +25,14 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     private var _connectShouldThrow: Error?
 
     private var _failAllConnectsWith: Error?
+    private var _connectDeferMicCapture: [Bool] = []
+    private var _micCaptureEnabledCalls: [Bool] = []
+    private var _assistantOutputEnabledCalls: [Bool] = []
+    private var _cancelCurrentResponseCalls = 0
+    private var _injectedAudio: [Data] = []
+    private var _injectedText: [String] = []
+    private var _injectAudioAcceptance: HandoffAcceptance = .accepted(path: .path0A)
+    private var _injectTextAcceptance: HandoffAcceptance = .accepted(path: .path0C)
 
     private var errorContinuation: AsyncStream<RealtimeClientError>.Continuation?
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
@@ -54,6 +62,43 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     /// call order.
     public var connectLanguages: [String?] {
         lock.withLock { _connectLanguages }
+    }
+
+    /// `deferMicCapture` flags passed to `connect`, in call order.
+    public var connectDeferMicCapture: [Bool] {
+        lock.withLock { _connectDeferMicCapture }
+    }
+
+    /// `setMicCaptureEnabled` calls in order.
+    public var micCaptureEnabledCalls: [Bool] {
+        lock.withLock { _micCaptureEnabledCalls }
+    }
+
+    /// PCM payloads passed to `injectBufferedInputAudio`, in order.
+    public var injectedAudio: [Data] {
+        lock.withLock { _injectedAudio }
+    }
+
+    /// Text payloads passed to `injectBufferedInputText`, in order.
+    public var injectedText: [String] {
+        lock.withLock { _injectedText }
+    }
+
+    /// Configurable acceptance for inject calls in tests.
+    public func setInjectAudioAcceptance(_ acceptance: HandoffAcceptance) {
+        lock.withLock { _injectAudioAcceptance = acceptance }
+    }
+
+    public func setInjectTextAcceptance(_ acceptance: HandoffAcceptance) {
+        lock.withLock { _injectTextAcceptance = acceptance }
+    }
+
+    public var assistantOutputEnabledCalls: [Bool] {
+        lock.withLock { _assistantOutputEnabledCalls }
+    }
+
+    public var cancelCurrentResponseCalls: Int {
+        lock.withLock { _cancelCurrentResponseCalls }
     }
 
     /// Number of times `disconnect()` was called.
@@ -152,7 +197,8 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     public func connect(
         ephemeralKey: String,
         bookContext: BookContextSnapshot?,
-        language: String?
+        language: String?,
+        deferMicCapture: Bool
     ) async throws {
         let throwError: Error? = lock.withLock {
             // One-shot failure wins over fail-all, then is cleared.
@@ -161,10 +207,51 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
             _connectCalls.append(ephemeralKey)
             _connectBookContexts.append(bookContext)
             _connectLanguages.append(language)
+            _connectDeferMicCapture.append(deferMicCapture)
             return oneShot ?? _failAllConnectsWith
         }
         if let throwError { throw throwError }
         lock.withLock { _status = .connected }
+    }
+
+    public func setMicCaptureEnabled(_ enabled: Bool) async {
+        lock.withLock { _micCaptureEnabledCalls.append(enabled) }
+    }
+
+    public func setAssistantOutputEnabled(_ enabled: Bool) async {
+        lock.withLock { _assistantOutputEnabledCalls.append(enabled) }
+    }
+
+    public func cancelCurrentResponse() async {
+        lock.withLock { _cancelCurrentResponseCalls += 1 }
+    }
+
+    public func injectBufferedInputAudio(_ pcm16le24kMono: Data) async throws -> HandoffAcceptance {
+        let (isConnected, acceptance) = lock.withLock {
+            _injectedAudio.append(pcm16le24kMono)
+            return (_status == .connected, _injectAudioAcceptance)
+        }
+        guard isConnected else {
+            throw RealtimeClientError(
+                code: "not_connected",
+                message: "FakeRealtimeClient: not connected"
+            )
+        }
+        return acceptance
+    }
+
+    public func injectBufferedInputText(_ text: String) async throws -> HandoffAcceptance {
+        let (isConnected, acceptance) = lock.withLock {
+            _injectedText.append(text)
+            return (_status == .connected, _injectTextAcceptance)
+        }
+        guard isConnected else {
+            throw RealtimeClientError(
+                code: "not_connected",
+                message: "FakeRealtimeClient: not connected"
+            )
+        }
+        return acceptance
     }
 
     public func disconnect() async {
@@ -176,6 +263,10 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
             _disconnectCalls += 1
             _status = .disconnected
             _providerCallId = nil
+            _connectDeferMicCapture = []
+            _micCaptureEnabledCalls = []
+            _injectedAudio = []
+            _injectedText = []
             let e = errorContinuation; errorContinuation = nil
             let t = transcriptContinuation; transcriptContinuation = nil
             let tc = toolCallContinuation; toolCallContinuation = nil

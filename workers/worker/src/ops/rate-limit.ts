@@ -116,7 +116,7 @@ export async function checkRateLimit(
  * telemetry.ts) shows real usage distributions.
  */
 export const RATE_LIMITS = {
-  // ── Trial grant: the one-time 100-credit grant on first login ──────────
+  // ── Trial grant: the one-time 300-credit grant on first login ──────────
   // A legitimate user grants exactly once, ever, ever. 3/account/24h gives
   // headroom for a retried/racy first request (e.g. an app relaunch mid-
   // signup double-firing the grant call) without opening a repeat-grant
@@ -143,7 +143,7 @@ export const RATE_LIMITS = {
 
   // ── Voice Chat session starts: POST /api/voice-sessions ─────────────────
   // Only one active session per account at a time (ledger-enforced), and a
-  // session is capped at 20-25 real minutes. 20/account/hour allows
+  // session is capped at 60-75 real minutes. 20/account/hour allows
   // several legitimate retries (e.g. the design doc's registration
   // grace-period failure case: "app must close if registration fails...
   // offers retry") without allowing a start-storm against the ledger DO.
@@ -157,13 +157,13 @@ export const RATE_LIMITS = {
   // fundamentally a replay/retry guard, not a real usage limit.
   // `callIdRegistrationSession` is keyed by the Rishi session ID itself
   // (not account/IP — see rateLimitSubjectKey's "session" subjectType),
-  // windowed to the longest possible session lifetime (20min = 1200s) with
+  // windowed to the longest possible session lifetime (60min = 3600s) with
   // a small max: 5 attempts is far more than the 1 a healthy client needs,
   // but stops a buggy/malicious retry loop from hammering the ledger DO for
   // an entire session's duration. The account/IP variants below add
   // defense-in-depth against a client that opens MANY sessions purely to
   // spam registration attempts across all of them.
-  callIdRegistrationSession: { windowSeconds: 1_200, max: 5 },
+  callIdRegistrationSession: { windowSeconds: 3_600, max: 5 },
   callIdRegistrationAccount: { windowSeconds: 3_600, max: 20 },
   callIdRegistrationIp: { windowSeconds: 3_600, max: 60 },
 } as const satisfies Record<string, { windowSeconds: number; max: number }>;

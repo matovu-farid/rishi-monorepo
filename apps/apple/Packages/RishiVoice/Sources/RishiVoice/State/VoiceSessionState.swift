@@ -43,7 +43,9 @@ public final class VoiceSessionState {
             activityPhase = .listening
         case .idle, .requestingMic, .fetchingKey, .creatingSession, .connecting, .registeringCall:
             activityPhase = .connecting
-        case .ending, .ended, .failed:
+        case .failed:
+            activityPhase = .connecting
+        case .ending, .ended:
             break
         }
     }

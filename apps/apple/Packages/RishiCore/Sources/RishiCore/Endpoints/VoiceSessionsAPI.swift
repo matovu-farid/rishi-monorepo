@@ -111,6 +111,24 @@ public struct RegisterVoiceCallEndpoint: WorkerEndpointWithBody {
     }
 }
 
+// MARK: - POST /api/voice-sessions/end-active
+
+/// Force-ends whichever voice session the ledger considers live for this user.
+/// Used before create when local teardown may have left a registered row active.
+public struct EndActiveVoiceSessionEndpoint: WorkerEndpoint {
+    public typealias Response = EndActiveVoiceSessionResponse
+
+    public let method: HTTPMethod = .POST
+    public let path: String = "/api/voice-sessions/end-active"
+
+    public init() {}
+
+    public struct EndActiveVoiceSessionResponse: Decodable, Sendable, Equatable {
+        public let ok: Bool
+        public let rishiSessionId: String?
+    }
+}
+
 // MARK: - POST /api/voice-sessions/:id/end
 
 /// Client hangup for a Rishi voice session. Called on intentional End so the

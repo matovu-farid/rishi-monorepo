@@ -42,6 +42,9 @@ actor ReconnectController {
     private let maxReconnects: Int
     private let disconnectConfirmations: Int
     private let confirmationInterval: Duration
+    /// Ignore `.disconnected` samples immediately after arming — handoff and
+    /// audio-route settling can briefly flap the data channel without a real drop.
+    private let observationGracePeriod: Duration
     private let callbacks: Callbacks
 
     private var statusObservationTask: Task<Void, Never>?
@@ -56,6 +59,7 @@ actor ReconnectController {
         maxReconnects: Int,
         disconnectConfirmations: Int,
         confirmationInterval: Duration,
+        observationGracePeriod: Duration = .milliseconds(1500),
         callbacks: Callbacks
     ) {
         self.client = client
@@ -66,6 +70,7 @@ actor ReconnectController {
         self.maxReconnects = maxReconnects
         self.disconnectConfirmations = disconnectConfirmations
         self.confirmationInterval = confirmationInterval
+        self.observationGracePeriod = observationGracePeriod
         self.callbacks = callbacks
     }
 
@@ -78,7 +83,9 @@ actor ReconnectController {
         // status stream today (Spike B confirmed status is a property).
         statusObservationTask = Task { [weak self] in
             guard let self else { return }
+            try? await Task.sleep(for: self.observationGracePeriod)
             while !Task.isCancelled {
+                if await self.callbacks.isEnding() { return }
                 let status = await self.client.currentStatus()
                 if status == .disconnected, await self.confirmDisconnect() {
                     await self.handleTransientDisconnect()

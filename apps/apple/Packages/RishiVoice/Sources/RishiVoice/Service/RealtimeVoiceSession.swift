@@ -88,16 +88,25 @@ public actor RealtimeVoiceSession {
     /// Responder consume() loop spawned at start when bookId is non-nil.
     private var responderTask: Task<Void, Never>?
     private var isEnding: Bool = false
+    /// UI hidden but session kept alive (reader navigation). Suppresses
+    /// reconnect status churn while the chrome is not visible.
+    private var isParked: Bool = false
     /// Current book snapshot used to seed the realtime session and reconnects.
     private var currentBookContext: BookContextSnapshot?
     /// Current voice language used for prompt + transcription + reconnects.
     private var currentLanguage: String?
+
+    /// Optional activation coordinator for pre-connect PCM capture + handoff.
+    private let activation: (any VoiceActivationCoordinating)?
 
     /// Set once `startTrialVoiceSession` successfully creates a Rishi voice
     /// session. Cleared on every teardown path (start failure, `end()`, or
     /// a control-WS terminal signal) so a stale id/nonce never leaks into a
     /// later session.
     private var activeVoiceSession: StartedVoiceSession?
+    /// Retains the last ledger id after local teardown so the presenter can
+    /// deliver `POST …/end` when `activeVoiceSession` was already cleared.
+    private var lastRishiSessionId: String?
     /// The control-WebSocket connection for the active trial voice session.
     /// Nil in the legacy flow, when `controlSocketFactory` is nil, or when
     /// the initial connect failed.
@@ -114,6 +123,7 @@ public actor RealtimeVoiceSession {
         controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
         responderFactory: BookContextResponderFactory? = nil,
         embedderPrewarm: (@Sendable () async -> Void)? = nil,
+        activation: (any VoiceActivationCoordinating)? = nil,
         backoff: @escaping @Sendable (Int) -> Duration = { attempt in
             // Spike B pattern: 1s, 2s, 4s exponential backoff.
             switch attempt {
@@ -135,6 +145,7 @@ public actor RealtimeVoiceSession {
         self.controlSocketFactory = controlSocketFactory
         self.responderFactory = responderFactory
         self.embedderPrewarm = embedderPrewarm
+        self.activation = activation
         self.backoff = backoff
         self.maxReconnects = maxReconnects
         self.disconnectConfirmations = disconnectConfirmations
@@ -162,6 +173,7 @@ public actor RealtimeVoiceSession {
             await fail(reason: .micDenied, message: "Microphone permission denied")
             return
         }
+        guard !isEnding else { return }
 
         // Claim shared audio ownership. Do NOT register a preempt handler here —
         // the app presenter owns single-flight `requestEnd` (local teardown +
@@ -169,6 +181,10 @@ public actor RealtimeVoiceSession {
         // that handler during connect/register and skip POST …/end on preempt.
         // Package tests that need preempt must register explicitly before start.
         await coordinator.requestActiveMode(.voice)
+        guard !isEnding else {
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
 
         let snapshot: BookContextSnapshot? = bookId.map { id in
             BookContextSnapshot(
@@ -227,20 +243,32 @@ public actor RealtimeVoiceSession {
             await fail(reason: .keyFetch(failure), message: Self.keyFetchMessage(failure))
             return
         }
+        guard !isEnding else {
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
 
         await update(.connecting)
         do {
-            try await client.connect(ephemeralKey: key.secret, bookContext: snapshot, language: language)
+            try await client.connect(
+                ephemeralKey: key.secret,
+                bookContext: snapshot,
+                language: language,
+                deferMicCapture: activation != nil
+            )
         } catch {
             prewarmTask?.cancel()
+            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             await fail(reason: .connect, message: String(describing: error))
             return
         }
 
+        await completeActivationHandoffIfNeeded()
         await update(.live)
-        spawnResponderIfNeeded(bookId: bookId)
         Log.event("voice.session.live", level: .info, data: ["bookId": bookId?.uuidString ?? "<none>"])
+        spawnResponderIfNeeded(bookId: bookId)
         await reconnectController().startStatusObservation()
     }
 
@@ -268,26 +296,44 @@ public actor RealtimeVoiceSession {
             await fail(reason: .sessionStart(failure), message: Self.sessionStartMessage(failure))
             return
         }
+        guard !isEnding else {
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
         activeVoiceSession = started
+        lastRishiSessionId = started.rishiSessionId
 
         await update(.connecting)
         do {
-            try await client.connect(ephemeralKey: started.clientSecret, bookContext: snapshot, language: language)
+            try await client.connect(
+                ephemeralKey: started.clientSecret,
+                bookContext: snapshot,
+                language: language,
+                deferMicCapture: activation != nil
+            )
         } catch {
             prewarmTask?.cancel()
+            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             await fail(reason: .connect, message: String(describing: error))
             return
         }
+        guard !isEnding else {
+            await client.disconnect()
+            prewarmTask?.cancel()
+            await cancelActivation()
+            await coordinator.releaseActiveMode(.voice)
+            activeVoiceSession = nil
+            return
+        }
 
         await update(.registeringCall)
         guard let callId = await client.providerCallId else {
-            // Missing-Location-header case per the spec's "Voice flow" step
-            // 7: fail closed, close the just-opened WebRTC connection, never
-            // leave an untracked call running against a registered session.
             await client.disconnect()
             prewarmTask?.cancel()
+            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             await fail(
@@ -306,6 +352,7 @@ public actor RealtimeVoiceSession {
         } catch {
             await client.disconnect()
             prewarmTask?.cancel()
+            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             let failure = VoiceSessionRegistrationFailure.classify(error)
@@ -313,6 +360,7 @@ public actor RealtimeVoiceSession {
             return
         }
 
+        await completeActivationHandoffIfNeeded()
         await update(.live)
         spawnResponderIfNeeded(bookId: bookId)
         openControlSocket(rishiSessionId: started.rishiSessionId)
@@ -325,17 +373,18 @@ public actor RealtimeVoiceSession {
     }
 
     /// Tears down local WebRTC / control / audio immediately without awaiting
-    /// ledger `POST …/end`. Returns the Rishi session id (if any) so the
-    /// presenter can deliver hangup in the background. Re-entrant: a second
-    /// call while ending is a no-op and returns `nil` (single-flight delivery
-    /// belongs to the first caller).
+    /// ledger `POST …/end`. Returns the Rishi session id (if any) so the app
+    /// lifecycle registry can deliver hangup in the background. Re-entrant: a
+    /// second call while ending is a no-op and returns `nil` (single-flight
+    /// delivery belongs to the first caller).
     @discardableResult
     public func end() async -> String? {
         guard !isEnding else { return nil }
         isEnding = true
-        let sessionId = activeVoiceSession?.rishiSessionId
+        let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
 
         await update(.ending)
+        await cancelActivation()
         await reconnect?.cancel()
         controlMessageTask?.cancel(); controlMessageTask = nil
         responderTask?.cancel(); responderTask = nil
@@ -349,13 +398,56 @@ public actor RealtimeVoiceSession {
         currentLanguage = nil
         activeVoiceSession = nil
         controlSocket = nil
+        isParked = false
         return sessionId
+    }
+
+    /// Hide the reader chrome while keeping the WebRTC + ledger session alive.
+    public func parkForBackground() async {
+        guard !isParked else { return }
+        isParked = true
+        await reconnect?.cancel()
+        await client.cancelCurrentResponse()
+        await client.setMicCaptureEnabled(false)
+        await client.setAssistantOutputEnabled(false)
+    }
+
+    /// Show the reader chrome again after ``parkForBackground()``.
+    public func resumeFromBackground() async {
+        guard isParked else { return }
+        isParked = false
+        await client.setMicCaptureEnabled(true)
+        await client.setAssistantOutputEnabled(true)
+        let connection = await client.currentStatus()
+        if connection == .connected {
+            await update(.live)
+            await reconnectController().startStatusObservation()
+        }
+    }
+
+    /// Refreshes book context used by reconnects after a parked resume.
+    public func updateReaderContext(
+        language: String?,
+        bookContext: BookContextSnapshot?
+    ) async {
+        currentLanguage = language
+        currentBookContext = bookContext
     }
 
     /// Best-effort inactivity ping for the control WebSocket. Called from
     /// `VoiceTranscriptBridge` on every user/assistant transcript event.
     public func notifyVoiceActivity() async {
         await controlSocket?.sendClientActivity()
+    }
+
+    /// Rishi ledger session id when the trial flow has created a server row.
+    public var rishiSessionId: String? {
+        activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
+    }
+
+    /// Clears a retained ledger id after the server confirms hangup.
+    public func acknowledgeServerEnd() {
+        lastRishiSessionId = nil
     }
 
     // MARK: - Control WebSocket (trial-voice-session flow only)
@@ -474,12 +566,15 @@ public actor RealtimeVoiceSession {
     private func reconnectController() -> ReconnectController {
         if let reconnect { return reconnect }
         let callbacks = ReconnectController.Callbacks(
-            isEnding: { [weak self] in await self?.readIsEnding() ?? true },
+            isEnding: { [weak self] in await self?.readIsEndingOrParked() ?? true },
             onReconnecting: { [weak self] attempt in
-                await self?.update(.reconnecting(attempt: attempt))
+                guard let self else { return }
+                if await self.readIsParked() { return }
+                await self.update(.reconnecting(attempt: attempt))
             },
             onReconnected: { [weak self] _ in
                 guard let self else { return }
+                if await self.readIsParked() { return }
                 await self.update(.live)
                 await self.reconnectController().startStatusObservation()
             },
@@ -489,7 +584,7 @@ public actor RealtimeVoiceSession {
         )
         let controller = ReconnectController(
             client: client,
-            keyFetcher: keyFetcher,
+            keyFetcher: reconnectKeyFetcher(),
             bookContext: currentBookContext,
             language: currentLanguage,
             backoff: backoff,
@@ -502,10 +597,25 @@ public actor RealtimeVoiceSession {
         return controller
     }
 
+    /// Trial flow reconnect must reuse the session's client secret; the legacy
+    /// `/api/realtime/client_secrets` path returns 404 once a Rishi session exists.
+    private func reconnectKeyFetcher() -> any EphemeralKeyFetching {
+        guard sessionCoordinator != nil else { return keyFetcher }
+        return TrialReconnectKeyFetcher { [weak self] in
+            await self?.activeVoiceSession?.clientSecret
+        }
+    }
+
     /// Probe for the `isEnding` race guard, read on the session actor so the
     /// `ReconnectController` (a separate actor) never touches the FSM flag
     /// directly. Returns `true` if the session is gone (treat as ending).
-    private func readIsEnding() -> Bool { isEnding }
+    /// Reconnect work is abandoned while parked just like it is during
+    /// explicit teardown. This probe is shared by status confirmation and
+    /// every backoff-ladder attempt, preventing an in-flight reconnect from
+    /// racing a background park into a fresh connection.
+    private func readIsEndingOrParked() -> Bool { isEnding || isParked }
+
+    private func readIsParked() -> Bool { isParked }
 
     /// Full teardown when the WebRTC reconnect ladder is exhausted. Still
     /// awaits ledger `endSession` here (no optimistic UI dismiss on this path)
@@ -519,10 +629,11 @@ public actor RealtimeVoiceSession {
         responderTask?.cancel()
         responderTask = nil
 
-        let sessionId = activeVoiceSession?.rishiSessionId
+        let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
         if let sessionId, let sessionCoordinator {
             do {
                 try await sessionCoordinator.endSession(rishiSessionId: sessionId)
+                lastRishiSessionId = nil
             } catch {
                 Log.event("voice.session.end_session.failed", level: .warning, data: [
                     "rishiSessionId": sessionId,
@@ -584,7 +695,7 @@ public actor RealtimeVoiceSession {
         case .alreadyActive:
             return "You already have a voice session running. Close it before starting another."
         case .insufficientCredits:
-            return "You've used all 100 trial voice credits. Upgrade to keep using voice chat."
+            return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
         case .mintFailed:
             return "The voice service couldn't start your session. Try again in a moment."
         case .unauthorized:
@@ -622,7 +733,7 @@ public actor RealtimeVoiceSession {
         case .voiceSessionTimeCap:
             return "This voice session reached its time limit."
         case .trialCreditsExhausted:
-            return "You've used all 100 trial voice credits. Upgrade to keep using voice chat."
+            return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
         case .planVoiceAllowanceExhausted:
             return "You've used your plan's Voice Chat time for this period."
         case .registrationTimeout:
@@ -651,9 +762,87 @@ public actor RealtimeVoiceSession {
             "reason": String(describing: reason),
             "message": message,
         ])
+        await cancelActivation()
         await MainActor.run {
             state.apply(status: .failed(reason: reason))
             state.recordError(message)
         }
+    }
+
+    private struct ActivationHandoffTimeout: Error {}
+
+    private static let handoffWallClockLimit: Duration = .seconds(4)
+
+    /// Blocks until activation PCM handoff finishes and live mic is armed.
+    /// Must complete before `.live` and reconnect observation — reconnect
+    /// `connect()` without `deferMicCapture` races dual capture if the activation
+    /// recorder is still running.
+    private func completeActivationHandoffIfNeeded() async {
+        guard let activation else { return }
+        Log.event("voice.activation.handoff.started", level: .info)
+
+        let outcome: HandoffOutcome
+        do {
+            outcome = try await withThrowingTaskGroup(of: HandoffOutcome.self) { group in
+                group.addTask {
+                    try await activation.completeHandoff(client: self.client)
+                }
+                group.addTask {
+                    try await Task.sleep(for: Self.handoffWallClockLimit)
+                    throw ActivationHandoffTimeout()
+                }
+                guard let first = try await group.next() else {
+                    throw ActivationHandoffTimeout()
+                }
+                group.cancelAll()
+                return first
+            }
+        } catch {
+            Log.event("voice.activation.handoff.timeout", level: .warning, data: [
+                "error": String(describing: error),
+            ])
+            await cancelActivation()
+            await client.setMicCaptureEnabled(true)
+            await client.setAssistantOutputEnabled(true)
+            Log.event("voice.activation.handoff.completed", level: .info, data: ["result": "timeout_fallback"])
+            return
+        }
+
+        switch outcome {
+        case .recoveredLiveMic(let notice):
+            await MainActor.run { state.recordError(notice) }
+        case .unavailable(let reason):
+            Log.event("voice.activation.handoff.unavailable", level: .warning, data: ["reason": reason])
+            await client.setMicCaptureEnabled(true)
+            await client.setAssistantOutputEnabled(true)
+        case .interrupted:
+            Log.event("voice.activation.handoff.interrupted", level: .info)
+            await client.setMicCaptureEnabled(true)
+            await client.setAssistantOutputEnabled(true)
+        case .liveMicOnly, .accepted:
+            break
+        }
+        Log.event("voice.activation.handoff.completed", level: .info, data: [
+            "result": String(describing: outcome),
+        ])
+    }
+
+    private func cancelActivation() async {
+        await activation?.cancel()
+    }
+}
+
+/// Reconnect credential source for the trial voice-session flow.
+private struct TrialReconnectKeyFetcher: EphemeralKeyFetching {
+    let secretProvider: @Sendable () async -> String?
+
+    func fetch(language: String?, bookContext: BookContextSnapshot?) async throws -> EphemeralKey {
+        guard let secret = await secretProvider() else {
+            throw RishiError.network(
+                code: "trial_reconnect_no_secret",
+                message: "No trial client secret available for WebRTC reconnect"
+            )
+        }
+        return EphemeralKey(secret: secret, sessionId: "trial-reconnect")
     }
 }

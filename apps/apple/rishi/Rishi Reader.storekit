@@ -133,7 +133,7 @@
           "introductoryOffers": [],
           "localizations": [
             {
-              "description": "12h AI narration, 180 min Voice Chat monthly.",
+              "description": "12h AI narration, 540 min Voice Chat monthly.",
               "displayName": "Rishi Voice Monthly",
               "locale": "en_US"
             }
@@ -164,7 +164,7 @@
           "introductoryOffers": [],
           "localizations": [
             {
-              "description": "12h AI narration, 180 min Voice Chat. Billed yearly.",
+              "description": "12h AI narration, 540 min Voice Chat. Billed yearly.",
               "displayName": "Rishi Voice Annual",
               "locale": "en_US"
             }
@@ -195,7 +195,7 @@
           "introductoryOffers": [],
           "localizations": [
             {
-              "description": "6h AI narration, 90 min Voice Chat monthly.",
+              "description": "6h AI narration, 270 min Voice Chat monthly.",
               "displayName": "Rishi Reader Monthly",
               "locale": "en_US"
             }
@@ -226,7 +226,7 @@
           "introductoryOffers": [],
           "localizations": [
             {
-              "description": "6h AI narration, 90 min Voice Chat. Billed yearly.",
+              "description": "6h AI narration, 270 min Voice Chat. Billed yearly.",
               "displayName": "Rishi Reader Annual",
               "locale": "en_US"
             }

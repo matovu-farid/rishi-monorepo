@@ -471,7 +471,7 @@ export const trialGrant = sqliteTable("trial_grant", {
   userId: text("user_id")
     .primaryKey()
     .references(() => user.id, { onDelete: "cascade" }),
-  initialCredits: integer("initial_credits").notNull().default(100),
+  initialCredits: integer("initial_credits").notNull().default(300),
   usedCredits: integer("used_credits").notNull().default(0),
   grantedAt: integer("granted_at", { mode: "timestamp_ms" }).notNull(),
 });

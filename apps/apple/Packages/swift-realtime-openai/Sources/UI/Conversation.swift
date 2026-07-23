@@ -176,6 +176,16 @@ public final class Conversation: @unchecked Sendable {
 		try send(event: .createResponse(using: response))
 	}
 
+	/// Send a complete user audio turn (PCM16 LE 24 kHz mono) and request a response.
+	public func sendUserAudio(_ pcm16le24kMono: Data, response: Response.Config? = nil) throws {
+		try send(event: .createConversationItem(.message(Item.Message(
+			id: String(randomLength: 32),
+			role: .user,
+			content: [.inputAudio(.init(audio: pcm16le24kMono))]
+		))))
+		try send(event: .createResponse(using: response))
+	}
+
 	/// Send the response of a function call.
 	public func send(result output: Item.FunctionCallOutput) throws {
 		try send(event: .createConversationItem(.functionCallOutput(output)))

@@ -2,6 +2,7 @@ import Foundation
 import RishiCore
 import UI
 import RealtimeAPI
+import Core
 import RishiLogging
 
 typealias SDKConversation = UI.Conversation
@@ -63,6 +64,17 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     private let toolDispatcher = RealtimeToolCallDispatcher()
     private let pump = RealtimeEventPump()
 
+    /// When false, handoff is in progress and assistant output should stay gated
+    /// until live mic cutover (VoIP unit remains off until `setMicCaptureEnabled`).
+    private var assistantOutputEnabled = true
+
+    /// Bytes per 100 ms chunk at 24 kHz mono PCM16 (inject Path 0B fallback).
+    private static let pcmAppendChunkBytes = 4_800
+    /// OpenAI rejects `input_audio_buffer.commit` below 100 ms of PCM16 @ 24 kHz.
+    private static let minInputAudioBufferCommitBytes = 4_800
+    /// Path 0A (`conversation.item.create` + audio) — prefer under this size.
+    private static let maxSendUserAudioBytes = 256 * 1024
+
     /// See the `_providerCallId` doc comment above for the full contract.
     public var providerCallId: String? {
         lock.withLock { _providerCallId }
@@ -118,7 +130,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// confirm that the expected book-aware config landed.
     static func waitUntilConfiguredSession(
         timeout: Duration = .seconds(5),
-        pollInterval: Duration = .milliseconds(50),
+        pollInterval: Duration = .milliseconds(15),
         sessionSnapshot: @escaping @Sendable () async -> SDKSession?
     ) async throws -> SDKSession {
         let clock = ContinuousClock()
@@ -152,7 +164,8 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     public func connect(
         ephemeralKey: String,
         bookContext: BookContextSnapshot? = nil,
-        language: String? = nil
+        language: String? = nil,
+        deferMicCapture: Bool = false
     ) async throws {
         // Single-peer invariant: opening a new peer always closes the old one
         // first. On RECONNECT the session re-calls `connect()` WITHOUT a
@@ -218,13 +231,133 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             "instructionsHasBookContext": String(sessionSnapshot.instructions.contains("bookContext")),
         ])
 
-        // Permit WebRTC to (re)initialize the VoIP audio unit now that the peer
-        // is connected. In manual mode this is what actually starts mic capture
-        // + playout — and it re-runs on EVERY connect, fixing dead-audio on
-        // session 2+. The AVAudioSession is already active here (the session
-        // calls coordinator.requestActiveMode(.voice) before client.connect()).
-        audioUnit.enableAudioUnit()
+        // Activation handoff: keep the VoIP unit OFF until local AVAudioEngine
+        // has stopped — dual capture (engine + LKRTCAudioSession) drops ICE.
+        // Non-deferred connect (incl. reconnect) initializes audio here.
+        if deferMicCapture {
+            await MainActor.run { convo.muted = true }
+            assistantOutputEnabled = false
+        } else {
+            audioUnit.enableAudioUnit()
+            assistantOutputEnabled = true
+        }
         startPumps(for: convo)
+    }
+
+    public func setAssistantOutputEnabled(_ enabled: Bool) async {
+        assistantOutputEnabled = enabled
+        audioUnit.setAudioEnabled(enabled)
+    }
+
+    public func setMicCaptureEnabled(_ enabled: Bool) async {
+        let convo: SDKConversation? = lock.withLock { conversation }
+        guard let convo else { return }
+
+        if !enabled {
+            await MainActor.run { convo.muted = true }
+            return
+        }
+
+        // First VoIP init happens here for activation handoff — after the
+        // activation recorder has stopped and the input route has settled.
+        audioUnit.enableAudioUnit()
+        await MainActor.run { convo.muted = false }
+        assistantOutputEnabled = true
+    }
+
+    public func cancelCurrentResponse() async {
+        let convo: SDKConversation? = lock.withLock { conversation }
+        guard let convo else { return }
+
+        await MainActor.run {
+            guard case .connected = convo.status else { return }
+            try? convo.send(event: .cancelResponse())
+        }
+    }
+
+    public func injectBufferedInputAudio(_ pcm16le24kMono: Data) async throws -> HandoffAcceptance {
+        guard !pcm16le24kMono.isEmpty else { return .noSpeech }
+        let convo: SDKConversation? = lock.withLock { conversation }
+        guard let convo else {
+            throw RealtimeClientError(
+                code: "not_connected",
+                message: "Cannot inject audio: not connected"
+            )
+        }
+
+        if pcm16le24kMono.count <= Self.maxSendUserAudioBytes {
+            try await MainActor.run {
+                try Self.sendPath0A(pcm16le24kMono, on: convo)
+            }
+            return .accepted(path: .path0A)
+        }
+
+        if pcm16le24kMono.count >= Self.minInputAudioBufferCommitBytes {
+            return try await injectPath0B(pcm16le24kMono, on: convo)
+        }
+
+        return .rejected(path: .path0A, code: "inject_audio_too_small")
+    }
+
+    public func injectBufferedInputText(_ text: String) async throws -> HandoffAcceptance {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .noSpeech }
+        let convo: SDKConversation? = lock.withLock { conversation }
+        guard let convo else {
+            throw RealtimeClientError(
+                code: "not_connected",
+                message: "Cannot inject text: not connected"
+            )
+        }
+        try await MainActor.run {
+            try convo.send(from: .user, text: trimmed)
+        }
+        return .accepted(path: .path0C)
+    }
+
+    @MainActor
+    private static func sendPath0A(_ pcm16le24kMono: Data, on convo: SDKConversation) throws {
+        let itemId = "act_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        try convo.send(event: .createConversationItem(after: nil, .message(Item.Message(
+            id: itemId,
+            role: .user,
+            content: [.inputAudio(.init(audio: pcm16le24kMono))]
+        ))))
+        try convo.send(event: .createResponse(using: nil))
+    }
+
+    private func injectPath0B(
+        _ pcm16le24kMono: Data,
+        on convo: SDKConversation
+    ) async throws -> HandoffAcceptance {
+        try await MainActor.run {
+            try Self.injectViaAudioBuffer(pcm16le24kMono, on: convo)
+        }
+        return .accepted(path: .path0B)
+    }
+
+    /// Path 0B: stream PCM into the server input buffer, then commit + respond.
+    @MainActor
+    private static func injectViaAudioBuffer(_ pcm16le24kMono: Data, on convo: SDKConversation) throws {
+        guard pcm16le24kMono.count >= minInputAudioBufferCommitBytes else {
+            throw RealtimeClientError(
+                code: "inject_audio_too_small",
+                message: "Cannot commit input audio buffer shorter than 100ms"
+            )
+        }
+        try convo.send(event: .clearInputAudioBuffer())
+        var offset = pcm16le24kMono.startIndex
+        while offset < pcm16le24kMono.endIndex {
+            let end = pcm16le24kMono.index(
+                offset,
+                offsetBy: pcmAppendChunkBytes,
+                limitedBy: pcm16le24kMono.endIndex
+            ) ?? pcm16le24kMono.endIndex
+            try convo.send(audioDelta: Data(pcm16le24kMono[offset..<end]), commit: false)
+            offset = end
+        }
+        try convo.send(event: .commitInputAudioBuffer())
+        try convo.send(event: .createResponse(using: nil))
     }
 
     /// Polls `isConnected` until it returns true or `timeout` elapses, throwing
@@ -233,7 +366,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// exercise the wait without a live WebRTC peer.
     static func waitUntilConnected(
         timeout: Duration = .seconds(15),
-        pollInterval: Duration = .milliseconds(100),
+        pollInterval: Duration = .milliseconds(25),
         isConnected: @Sendable () async -> Bool
     ) async throws {
         let clock = ContinuousClock()

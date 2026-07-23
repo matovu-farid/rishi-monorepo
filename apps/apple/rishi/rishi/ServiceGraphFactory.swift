@@ -312,6 +312,15 @@ enum ServiceGraphFactory {
             await embedderForPrewarm.prewarm()
         }
 
+        let voiceSessionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+        let voiceSessionRegistry = await MainActor.run {
+            VoiceSessionRegistry(
+                endServerSession: { id in
+                    try await voiceSessionCoordinator.endSession(rishiSessionId: id)
+                }
+            )
+        }
+
         let voicePresenter = await MainActor.run {
 
             return VoiceSessionPresenter(
@@ -322,10 +331,11 @@ enum ServiceGraphFactory {
                 messageStore: messageStore,
                 conversationLookup: conversationLookup,
                 userIdProvider: { [userIdBox] in userIdBox.value },
-                
                 dirtyHook: voiceDirtyAdapter,
                 bookSearch: bookSearch,
-                embedderPrewarm: embedderPrewarm
+                embedderPrewarm: embedderPrewarm,
+                sessionCoordinatorFactory: { voiceSessionCoordinator },
+                sessionRegistry: voiceSessionRegistry,
             )
         }
 
@@ -416,6 +426,7 @@ enum ServiceGraphFactory {
             voiceDirtyAdapter: voiceDirtyAdapter,
             chatService: chatService,
             voicePresenter: voicePresenter,
+            voiceSessionRegistry: voiceSessionRegistry,
             bookSearch: bookSearch,
             indexingHook: indexingHook,
             entitlementService: entitlementService,

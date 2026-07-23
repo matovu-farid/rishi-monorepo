@@ -158,10 +158,9 @@ extension Tool {
 	}
 
 	public func encode(to encoder: any Encoder) throws {
-		var container = encoder.container(keyedBy: CodingKeys.self)
-
 		switch self {
 			case let .mcp(mcp):
+				var container = encoder.container(keyedBy: CodingKeys.self)
 				try container.encode("mcp", forKey: .type)
 				try container.encode(mcp.label, forKey: .label)
 				try container.encodeIfPresent(mcp.url, forKey: .url)
@@ -172,6 +171,10 @@ extension Tool {
 				try container.encodeIfPresent(mcp.requireApproval, forKey: .requireApproval)
 				try container.encodeIfPresent(mcp.description, forKey: .description)
 			case let .function(function):
+				enum FunctionCodingKeys: String, CodingKey {
+					case type, name, description, parameters
+				}
+				var container = encoder.container(keyedBy: FunctionCodingKeys.self)
 				try container.encode("function", forKey: .type)
 				try container.encode(function.name, forKey: .name)
 				try container.encodeIfPresent(function.description, forKey: .description)

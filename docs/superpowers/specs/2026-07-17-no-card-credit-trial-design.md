@@ -6,11 +6,11 @@ Let a newly signed-up user try voice chat and text-to-speech without adding a pa
 
 ## Product rules
 
-- Each account receives 100 trial credits after signup. Credits do not expire.
-- The onboarding explains that the trial requires no credit card, shows the 100-credit allowance, and does not redirect an unsubscribed user to a paywall.
+- Each account receives 300 trial credits after signup. Credits do not expire.
+- The onboarding explains that the trial requires no credit card, shows the 300-credit allowance, and does not redirect an unsubscribed user to a paywall.
 - TTS consumes one credit only after a non-cached generation succeeds. Invalid, failed, and cache-hit requests consume no credit.
-- Trial Voice Chat consumes two credits for each completed 30-second interval of an active voice session. This weights the costlier Realtime feature and makes a 100-credit trial capable of at most 25 total voice minutes.
-- Trial Voice Chat has no separate minutes pool. It has a 40-interval maximum per session (20 minutes at the 30-second cadence); each interval costs two trial credits.
+- Trial Voice Chat consumes two credits for each completed 30-second interval of an active voice session. This weights the costlier Realtime feature and makes a 300-credit trial capable of at most 75 total voice minutes.
+- Trial Voice Chat has no separate minutes pool. It has a 120-interval maximum per session (60 minutes at the 30-second cadence); each interval costs two trial credits.
 - A request is permitted only while the account has the relevant trial allowance or paid-plan allowance. When the trial is exhausted, the app presents subscription options.
 - App Store and Stripe subscriptions remain payment entitlements. The credit trial is an app-owned backend entitlement; StoreKit cannot enforce it.
 
@@ -28,12 +28,12 @@ The implementation must use Drizzle for application database schema and mutation
 
 ## Paid-plan product policy
 
-Paid plans use human-readable narration and Voice Chat time allowances, not credits. Their included allowances reset every monthly allowance period (including each of the twelve periods in an annual subscription), have no overages, and do not roll over. The trial's 100 starter credits remain a distinct, non-expiring onboarding entitlement.
+Paid plans use human-readable narration and Voice Chat time allowances, not credits. Their included allowances reset every monthly allowance period (including each of the twelve periods in an annual subscription), have no overages, and do not roll over. The trial's 300 starter credits remain a distinct, non-expiring onboarding entitlement.
 
 | Plan | Monthly price | Annual price | Natural AI narration | Voice Chat | Per-session Voice Chat cap |
 | --- | --- | --- | --- | --- | --- |
-| Rishi Reader | $7.99/month | $76.99/year | 6 hours/month | 90 minutes/month | 10 minutes |
-| Rishi Voice | $14.99/month | $143.99/year | 12 hours/month | 180 minutes/month | 20 minutes |
+| Rishi Reader | $7.99/month | $76.99/year | 6 hours/month | 270 minutes/month | 30 minutes |
+| Rishi Voice | $14.99/month | $143.99/year | 12 hours/month | 540 minutes/month | 60 minutes |
 
 The annual prices are approximately 20% below twelve monthly payments and should be presented as “Save about 20% with annual.” Annual billing does not bank or front-load usage: both paid plans retain the same monthly narration and Voice Chat reset, with no rollover or overages.
 
@@ -52,7 +52,7 @@ This preserves the product promise that unsuccessful work costs nothing while st
 
 ## Voice flow
 
-1. The app asks the backend to start a voice session. The ledger confirms that at least two trial credits or the applicable paid-plan allowance is available, creates a Rishi session ID and signed registration nonce, and records the plan-specific session cap: 40 trial intervals (20 minutes), 10 Reader minutes, or 20 Voice minutes.
+1. The app asks the backend to start a voice session. The ledger confirms that at least two trial credits or the applicable paid-plan allowance is available, creates a Rishi session ID and signed registration nonce, and records the plan-specific session cap: 120 trial intervals (60 minutes), 30 Reader minutes, or 60 Voice minutes.
 2. The backend issues the existing OpenAI client secret. The app establishes WebRTC directly with OpenAI.
 3. The OpenAI WebRTC call response includes the provider call ID in its `Location` header. The vendored Swift connector must retain this value, expose it to Rishi, and immediately register it with the authenticated backend using the Rishi session ID and its one-time nonce.
 4. The ledger accepts the call ID once for its active session, accepts the authenticated hibernatable WebSocket control connection, and schedules the first 30-second charge.

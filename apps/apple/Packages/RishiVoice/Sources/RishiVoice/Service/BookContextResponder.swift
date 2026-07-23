@@ -29,7 +29,7 @@ public actor BookContextResponder {
     /// Sentinel returned to the LLM when the per-book index isn't ready.
     /// VERBATIM string — keep in sync with Electron's `buildRealtimeAgent.ts`
     /// and the CONTEXT.md decision for Phase 25.
-    public static let coldStartSentinel = "Book context is still being indexed — please ask me to continue in a moment, or proceed without the lookup."
+    public static let coldStartSentinel = "I’m still preparing this book. Please try that question again in a moment, or I can answer without checking the book."
 
     /// Tool name the Responder recognizes. MUST match `BOOK_CONTEXT_TOOL_SPEC.name`
     /// in `packages/shared/src/voice-chat/build-realtime-agent.ts`.
@@ -38,11 +38,11 @@ public actor BookContextResponder {
     /// Returned to the LLM when the on-device lookup exceeds `timeoutSeconds`.
     /// Instructs the model to tell the user the lookup failed rather than
     /// waiting on a tool result that may never arrive.
-    public static let lookupTimedOutMessage = "The book lookup took too long and was cancelled. Tell the user you weren't able to retrieve anything from the book right now, then answer from what you already know if you can."
+    public static let lookupTimedOutMessage = "I couldn’t check the book in time. I’ll answer from what I already know if I can."
 
     /// Returned to the LLM when the lookup fails for any reason other than a
     /// not-yet-ready index (search threw, bad arguments, encode failure).
-    public static let lookupFailedMessage = "The book lookup failed. Tell the user you weren't able to retrieve anything from the book right now, then answer from what you already know if you can."
+    public static let lookupFailedMessage = "I couldn’t check the book right now. I’ll answer from what I already know if I can."
 
     private let client: any RealtimeClientAPI
     private let search: any BookSearch

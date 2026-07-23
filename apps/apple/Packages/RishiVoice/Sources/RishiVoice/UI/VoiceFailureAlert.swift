@@ -135,7 +135,7 @@ public struct VoiceFailureAlert: Equatable, Sendable {
             case .alreadyActive:
                 return "You already have a voice session running. Close it before starting another."
             case .insufficientCredits:
-                return "You've used all 100 trial voice credits. Upgrade to keep using voice chat."
+                return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
             case .mintFailed:
                 return "The voice service couldn't start your session. Try again in a moment."
             case .unauthorized:
@@ -184,7 +184,7 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         case .voiceSessionTimeCap:
             return "This voice session reached its time limit."
         case .trialCreditsExhausted:
-            return "You've used all 100 trial voice credits. Upgrade to keep using voice chat."
+            return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
         case .planVoiceAllowanceExhausted:
             return "You've used your plan's Voice Chat time for this period."
         case .registrationTimeout:

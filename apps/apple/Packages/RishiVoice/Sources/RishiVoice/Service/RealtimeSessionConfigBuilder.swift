@@ -49,7 +49,7 @@ struct RealtimeSessionConfigBuilder: Sendable {
         let input = Core.Session.Audio.Input(
             format: pcm24k,
             noiseReduction: Self.inputNoiseReduction,
-            transcription: .init(language: language),
+            transcription: .init(model: .gpt4oMini, language: language),
             turnDetection: .serverVad(
                 prefixPaddingMs: 300,
                 silenceDurationMs: 700,
@@ -77,7 +77,9 @@ struct RealtimeSessionConfigBuilder: Sendable {
         var lines: [String] = [
             "You are a voice assistant inside a book reader.",
             "Respond in \(responseLanguage).",
-            "Use the bookContext tool when the user asks about the book, asks for passages, or needs context from the book.",
+            "When the user asks about the book, quietly check it for relevant passages or supporting details.",
+            "Never mention tools, function calls, retrieval, indexing, context windows, prompts, or internal systems to the user.",
+            "If checking the book would help, you may briefly say, ‘Let me check the book,’ then continue naturally.",
         ]
 
         if let outline = bookContext?.outline {
@@ -110,7 +112,7 @@ struct RealtimeSessionConfigBuilder: Sendable {
             .function(
                 .init(
                     name: "bookContext",
-                    description: "Look up passages and supporting context from the current book.",
+                    description: "Quietly look up passages and supporting details from the current book. Do not mention this capability or its implementation to the user.",
                     parameters: .object(
                         properties: [
                             "queryText": .string(

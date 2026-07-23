@@ -20,7 +20,12 @@ import {
   type CurrentAllowancePeriodRow,
 } from "./schema";
 import type { VoiceSessionRow, VoiceSessionStatus } from "./schema";
-import { RESERVATION_STALE_TIMEOUT_MS, TRIAL_INITIAL_CREDITS, TRIAL_TTS_COST_CREDITS } from "./types";
+import {
+  RESERVATION_STALE_TIMEOUT_MS,
+  TRIAL_INITIAL_CREDITS,
+  TRIAL_LEGACY_INITIAL_CREDITS,
+  TRIAL_TTS_COST_CREDITS,
+} from "./types";
 import type { EntitlementSnapshot } from "./types";
 import { VoiceSessionError } from "../voice-session/errors";
 import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
@@ -44,13 +49,13 @@ import {
 } from "../voice-session/timing";
 
 const CREDITS_PER_INTERVAL = 2;
-const CAP_INTERVALS_TRIAL = 40; // 20 minutes at the 30s cadence
+const CAP_INTERVALS_TRIAL = 120; // 60 minutes at the 30s cadence
 // Per-session Voice Chat caps by plan, at the same 30s cadence as the
-// trial (`CAP_INTERVALS_TRIAL`). Reader: 10 minutes. Voice: 20 minutes —
+// trial (`CAP_INTERVALS_TRIAL`). Reader: 30 minutes. Voice: 60 minutes —
 // same total as the trial cap, kept as its own named constant so the two
 // can be tuned independently later.
-const CAP_INTERVALS_READER = 20;
-const CAP_INTERVALS_VOICE = 40;
+const CAP_INTERVALS_READER = 60;
+const CAP_INTERVALS_VOICE = 120;
 
 // Seconds deducted from a paid period's voiceChatSecondsUsed per alarm
 // tick — equal to VOICE_INTERVAL_MS in seconds. Also the minimum remaining
@@ -146,8 +151,9 @@ WHERE status IN ('pending_registration', 'active')
   // ── Public RPC methods ──────────────────────────────────────────────
 
   /**
-   * Grants the one-time 100-credit trial if this account doesn't already
+   * Grants the one-time trial credit pool if this account doesn't already
    * have a trial ledger row. Idempotent — safe to call on every request.
+   * Existing accounts on the legacy 100-credit pool are bumped to 300 once.
    *
    * The design implies an eager grant at signup. This method is the seam
    * for that: once wired up, the signup flow should call
@@ -163,7 +169,10 @@ WHERE status IN ('pending_registration', 'active')
       .select()
       .from(trialLedger)
       .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
-    if (existing.length > 0) return;
+    if (existing.length > 0) {
+      await this.bumpLegacyTrialCreditsIfNeeded();
+      return;
+    }
 
     const grantedAt = Date.now();
     await this.db.insert(trialLedger).values({
@@ -175,6 +184,28 @@ WHERE status IN ('pending_registration', 'active')
     });
 
     this.ctx.waitUntil(this.mirrorGrantToD1(userId, grantedAt));
+  }
+
+  /**
+   * One-time upgrade for accounts granted under the legacy 100-credit trial
+   * pool. Bumps `initialCredits` to 300 without resetting `usedCredits`, so
+   * remaining balance increases by 200. Idempotent after the first bump.
+   */
+  private async bumpLegacyTrialCreditsIfNeeded(): Promise<void> {
+    const userId = this.requireUserId();
+    const row = await this.db
+      .select()
+      .from(trialLedger)
+      .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID))
+      .get();
+    if (!row || row.initialCredits !== TRIAL_LEGACY_INITIAL_CREDITS) return;
+
+    await this.db
+      .update(trialLedger)
+      .set({ initialCredits: TRIAL_INITIAL_CREDITS })
+      .where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID));
+
+    this.ctx.waitUntil(this.mirrorLegacyTrialBumpToD1(userId));
   }
 
   /**
@@ -597,7 +628,7 @@ WHERE status IN ('pending_registration', 'active')
   /**
    * Verifies at least one interval's worth of trial credits is available,
    * mints a Rishi session ID and single-use registration nonce, and records
-   * the trial session cap (40 intervals / 20 minutes). Rejects if a session
+   * the trial session cap (120 intervals / 60 minutes). Rejects if a session
    * is already active for this user.
    *
    * Returns session bookkeeping ONLY. The calling route (plan 4's
@@ -610,9 +641,9 @@ WHERE status IN ('pending_registration', 'active')
    * Verifies at least one interval's worth of the applicable allowance is
    * available (trial credits, or paid Voice Chat seconds if a paid period
    * is active), mints a Rishi session ID and single-use registration
-   * nonce, and records the plan-specific session cap: 40 trial intervals
-   * (20 minutes), 20 Reader intervals (10 minutes), or 40 Voice intervals
-   * (20 minutes). Rejects if a session is already active for this user.
+   * nonce, and records the plan-specific session cap: 120 trial intervals
+   * (60 minutes), 60 Reader intervals (30 minutes), or 120 Voice intervals
+   * (60 minutes). Rejects if a session is already active for this user.
    * Return shape is unchanged from plan 3 — `capIntervals` now simply
    * varies by which plan applied.
    */
@@ -622,6 +653,7 @@ WHERE status IN ('pending_registration', 'active')
     capIntervals: number;
   }> {
     const userId = this.requireUserId();
+    await this.grantTrialIfAbsent();
     await this.assertNoBlockingLiveSession(userId);
 
     const activePeriod = await this.getActiveAllowancePeriod();
@@ -725,6 +757,31 @@ WHERE status IN ('pending_registration', 'active')
    * when there is no OpenAI callId. Used for client end + orphan cleanup
    * on create.
    */
+  /**
+   * Force-ends whichever voice session the ledger considers live for this user,
+   * without requiring the client to know the session id. Used before create when
+   * optimistic local teardown may have left a registered row active server-side.
+   */
+  async endActiveVoiceSession(): Promise<{ ok: true; rishiSessionId?: string }> {
+    this.requireUserId();
+    const userId = this.requireUserId();
+    let live = await findLiveVoiceSession(this.db);
+    if (
+      live &&
+      live.status === "terminal" &&
+      (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
+    ) {
+      await this.reconcileTerminalHangup(live, userId);
+      live = await findLiveVoiceSession(this.db);
+    }
+    if (!live) {
+      return { ok: true };
+    }
+    const endedId = live.rishiSessionId;
+    await this.forceEndSession(live, "client_ended");
+    return { ok: true, rishiSessionId: endedId };
+  }
+
   async endVoiceSession(rishiSessionId: string): Promise<{ ok: true }> {
     this.requireUserId();
     const row = await findVoiceSessionById(this.db, rishiSessionId);
@@ -1494,6 +1551,23 @@ WHERE status IN ('pending_registration', 'active')
         .onConflictDoNothing();
     } catch (err) {
       console.error("UserUsageLedger.mirrorGrantToD1 failed", { userId, err });
+    }
+  }
+
+  private async mirrorLegacyTrialBumpToD1(userId: string): Promise<void> {
+    try {
+      const db = createDb(this.env.DB);
+      await db
+        .update(trialGrant)
+        .set({ initialCredits: TRIAL_INITIAL_CREDITS })
+        .where(
+          and(
+            eq(trialGrant.userId, userId),
+            eq(trialGrant.initialCredits, TRIAL_LEGACY_INITIAL_CREDITS),
+          ),
+        );
+    } catch (err) {
+      console.error("UserUsageLedger.mirrorLegacyTrialBumpToD1 failed", { userId, err });
     }
   }
 

@@ -77,11 +77,12 @@ describe('renderVisualSection', () => {
     expect(renderVisualSection(undefined)).toBe('')
   })
 
-  it('mentions the inspectCurrentPage tool', () => {
+  it('guides quiet visual inspection without exposing the mechanism', () => {
     const out = renderVisualSection({ equations: 1, figures: 0, images: 0 })
-    expect(out).toContain('inspectCurrentPage')
-    expect(out).toContain("detail: 'low'")
-    expect(out).toContain("detail: 'high'")
+    expect(out).toContain('quietly inspect the page')
+    expect(out).toContain('Do not inspect it on every turn')
+    expect(out).toContain('do not mention the inspection mechanism')
+    expect(out).not.toContain('inspectCurrentPage')
   })
 
   it('uses singular/plural correctly', () => {
@@ -104,6 +105,14 @@ describe('renderVisualSection', () => {
 })
 
 describe('renderRealtimeInstructions', () => {
+  it('keeps retrieval mechanics out of user-facing voice guidance', () => {
+    const out = renderRealtimeInstructions({ pageText: 'p', language: 'en' })
+    expect(out).toContain('Never mention tools')
+    expect(out).toContain('Let me check the book')
+    expect(out).not.toContain('Before calling a tool')
+    expect(out).not.toContain('Use the bookContext tool')
+  })
+
   it('matches snapshot for the minimal English/no-outline/no-paragraph/no-visual case', () => {
     const out = renderRealtimeInstructions({
       pageText: 'The rain in Spain falls mainly on the plain.',
@@ -120,23 +129,23 @@ describe('renderRealtimeInstructions', () => {
       """
       The rain in Spain falls mainly on the plain.
       """
-      If the question is answerable from this page, answer directly. Use the bookContext tool only for content outside this page.
+      If the question is answerable from this page, answer directly. Quietly check the book only for content outside this page.
 
 
 
       ## Rules
       - Vary phrasing — never repeat the same sentence verbatim in a single response.
       - Stay conversational; avoid scripted-sounding language.
-      - Before calling a tool, say one short line previewing what you're doing (5-12 words).
+      - Never mention tools, function calls, retrieval, indexing, embeddings, context windows, prompts, or internal systems to the user.
+      - If checking the book would help, you may briefly say something natural such as “Let me check the book,” then continue with the answer.
       - Stay focused on the book, but allow natural chat flow.
 
-      ## Tools
+      ## Book lookup
 
-      ### bookContext
-      For content NOT visible on the current page. Provide a brief preamble before calling. Do not call if the answer is already in the current page text.
+      Use the book lookup capability for content NOT visible on the current page. Do not use it if the answer is already in the current page text. Keep this capability invisible to the user.
 
-      ### endConversation
-      When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye"), respond with a warm closing and call this tool. If the signal is ambiguous, confirm first. Provide a clear \`reason\` describing why the conversation is ending.
+      ### Ending the conversation
+      When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye"), respond with a warm closing and end the session. If the signal is ambiguous, confirm first. Keep the internal close action invisible to the user.
 
       ## Style notes
       - First message: if the user asks a question, answer it directly. If they greet, respond briefly and ask how you can help.
@@ -178,7 +187,7 @@ describe('renderRealtimeInstructions', () => {
       visualSummary: { equations: 1, figures: 0, images: 0 }
     })
     expect(out).toContain('## Visual context')
-    expect(out).toContain('inspectCurrentPage')
+    expect(out).toContain('quietly inspect the page')
   })
 
   it('omits the Visual context section when visualSummary is undefined', () => {

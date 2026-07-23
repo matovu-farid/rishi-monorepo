@@ -38,11 +38,18 @@ public protocol VoiceSessionCoordinating: Sendable {
     /// `POST /api/voice-sessions/:id/end` — client hangup so the ledger does
     /// not stay `active` after intentional End / local teardown.
     func endSession(rishiSessionId: String) async throws
+
+    /// `POST /api/voice-sessions/end-active` — force-close whichever session
+    /// the server considers live. Returns the ended id when one existed.
+    func endActiveSessionIfAny() async throws -> String?
 }
 
 extension VoiceSessionCoordinating {
     /// Default no-op so Realtime-only test doubles compile until updated.
     public func endSession(rishiSessionId: String) async throws {}
+
+    /// Default no-op — production client overrides.
+    public func endActiveSessionIfAny() async throws -> String? { nil }
 }
 
 /// Production `VoiceSessionCoordinating`, backed by the existing
@@ -98,6 +105,26 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
         }
     }
 
+    public func endActiveSessionIfAny() async throws -> String? {
+        let endpoint = EndActiveVoiceSessionEndpoint()
+        do {
+            let response = try await workerClient.send(endpoint)
+            if let id = response.rishiSessionId {
+                Log.event("voice.session.end_active.succeeded", level: .info, data: [
+                    "rishiSessionId": id,
+                ])
+            } else {
+                Log.event("voice.session.end_active.none", level: .info)
+            }
+            return response.rishiSessionId
+        } catch {
+            Log.event("voice.session.end_active.failed", level: .warning, data: [
+                "error": String(describing: error),
+            ])
+            throw error
+        }
+    }
+
     public func endSession(rishiSessionId: String) async throws {
         let endpoint = EndVoiceSessionEndpoint(rishiSessionId: rishiSessionId)
         do {
@@ -125,7 +152,7 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
 
     /// `NO_ACTIVE_VOICE_SESSION` means the ledger has nothing live to end
     /// (missing row or already reconciled). Treat as successful hangup.
-    private static func isAlreadyTerminalEndError(_ error: any Error) -> Bool {
+    public static func isAlreadyTerminalEndError(_ error: any Error) -> Bool {
         guard let rishiError = error as? RishiError else { return false }
         if case .network(let code, _) = rishiError {
             return code == WorkerErrorCode.noActiveVoiceSession

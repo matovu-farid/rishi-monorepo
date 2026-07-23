@@ -168,6 +168,37 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.state.status == .live)
     }
 
+    @Test("parkForBackground cancels reconnect observation and mutes transport")
+    func parkCancelsReconnectObservationAndMutesTransport() async throws {
+        let fakes = makeSession(micDecision: .granted)
+        await fakes.session.start()
+        await fakes.session.parkForBackground()
+        fakes.client.setStatus(.disconnected)
+
+        // The reconnect observer is cancelled while parked, so a sustained
+        // disconnect must not create a new WebRTC connection.
+        try? await Task.sleep(for: .milliseconds(1800))
+        #expect(fakes.client.connectCalls.count == 1)
+        #expect(fakes.state.status == .live)
+        #expect(fakes.client.cancelCurrentResponseCalls == 1)
+        #expect(fakes.client.micCaptureEnabledCalls == [false])
+        #expect(fakes.client.assistantOutputEnabledCalls == [false])
+    }
+
+    @Test("resumeFromBackground restores live when transport is connected")
+    func resumeFromBackgroundRestoresLive() async throws {
+        let fakes = makeSession(micDecision: .granted)
+        await fakes.session.start()
+        await fakes.session.parkForBackground()
+        fakes.client.setStatus(.connected)
+        await fakes.session.resumeFromBackground()
+        #expect(fakes.state.status == .live)
+        #expect(fakes.state.activityPhase == .listening)
+        #expect(fakes.client.connectCalls.count == 1)
+        #expect(fakes.client.micCaptureEnabledCalls == [false, true])
+        #expect(fakes.client.assistantOutputEnabledCalls == [false, true])
+    }
+
     @Test("Reconnect: 3 consecutive failures → .failed(.networkLost); audio mode released")
     func reconnectExhausted() async throws {
         struct StubFail: Error {}
@@ -212,6 +243,17 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.client.connectCalls == ["k"])
     }
 
+    @Test("Activation handoff defers mic on connect and enables mic before live")
+    func activationHandoffOrdering() async throws {
+        let activation = FakeActivationCoordinator()
+        let fakes = makeSession(micDecision: .granted, activation: activation)
+        await fakes.session.start()
+        #expect(fakes.state.status == .live)
+        #expect(fakes.client.connectDeferMicCapture == [true])
+        #expect(fakes.client.micCaptureEnabledCalls == [true])
+        #expect(await activation.completeHandoffCount == 1)
+    }
+
     // MARK: - Builders
 
     struct Fakes {
@@ -227,7 +269,8 @@ struct RealtimeVoiceSessionTests {
     @MainActor
     private func makeSession(
         micDecision: MicPermissionDecision,
-        keyFetchResult: Result<EphemeralKey, Error> = .success(.init(secret: "k", sessionId: "s"))
+        keyFetchResult: Result<EphemeralKey, Error> = .success(.init(secret: "k", sessionId: "s")),
+        activation: (any VoiceActivationCoordinating)? = nil
     ) -> Fakes {
         let state = VoiceSessionState()
         let configurator = FakeAudioSessionConfigurator()
@@ -242,6 +285,7 @@ struct RealtimeVoiceSessionTests {
             keyFetcher: fetcher,
             client: client,
             state: state,
+            activation: activation,
             backoff: { _ in .zero },     // tests don't wait
             maxReconnects: 3,
             confirmationInterval: .zero  // confirm drops without real delay
@@ -263,4 +307,18 @@ final class FakeMicPermissionGate: MicPermissionGate, @unchecked Sendable {
     private let decision: MicPermissionDecision
     init(decision: MicPermissionDecision) { self.decision = decision }
     func request() async -> MicPermissionDecision { decision }
+}
+
+private actor FakeActivationCoordinator: VoiceActivationCoordinating {
+    private(set) var completeHandoffCount = 0
+    var currentActivationID: ActivationID? { nil }
+
+    func beginActivation() async {}
+    func completeHandoff(client: any RealtimeClientAPI) async throws -> HandoffOutcome {
+        completeHandoffCount += 1
+        await client.setMicCaptureEnabled(true)
+        await client.setAssistantOutputEnabled(true)
+        return .liveMicOnly
+    }
+    func cancel() async {}
 }

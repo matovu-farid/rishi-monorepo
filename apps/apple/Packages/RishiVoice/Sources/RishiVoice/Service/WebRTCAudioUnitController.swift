@@ -18,8 +18,9 @@ import LiveKitWebRTC
 ///
 /// Stateless (the state lives in the process-global `LKRTCAudioSession`
 /// singleton), so it is trivially `Sendable`. The adapter holds one instance
-/// and calls `enableManualModeOnce()` + `enableAudioUnit()` on connect and
-/// `disableAudioUnit()` on full disconnect — exactly the prior call sites.
+/// and calls `enableManualModeOnce()` on connect, `enableAudioUnit()` on
+/// connect (non-deferred) or at activation handoff, and `disableAudioUnit()`
+/// on full disconnect — exactly the prior call sites.
 struct WebRTCAudioUnitController: Sendable {
 
     /// One-time, process-global enable of WebRTC's MANUAL audio mode.
@@ -51,14 +52,26 @@ struct WebRTCAudioUnitController: Sendable {
     }
 
     /// Permit WebRTC to (re)initialize the VoIP audio unit. In manual mode this
-    /// is what actually starts mic capture + playout — and it re-runs on EVERY
-    /// connect, fixing the dead-audio on session 2+ where the auto-mode unit had
-    /// been torn down and never re-created.
+    /// is what actually starts mic capture + playout. Idempotent when already
+    /// enabled — reconnect reuses the live unit instead of re-init mid-ladder.
     func enableAudioUnit() {
         #if !os(macOS) || targetEnvironment(macCatalyst)
-        LKRTCAudioSession.sharedInstance().isAudioEnabled = true
+        let rtcSession = LKRTCAudioSession.sharedInstance()
+        guard !rtcSession.isAudioEnabled else { return }
+        rtcSession.isAudioEnabled = true
         Log.event("voice.audio.unit.enabled", level: .info, data: ["enabled": "true"])
         #endif
+    }
+
+    /// Apply an output gate while keeping the adapter's intent explicit. The
+    /// manual audio unit owns WebRTC playout (and its coupled I/O lifecycle),
+    /// so parking disables it and resume re-enables it.
+    func setAudioEnabled(_ enabled: Bool) {
+        if enabled {
+            enableAudioUnit()
+        } else {
+            disableAudioUnit()
+        }
     }
 
     /// Stop + uninitialize WebRTC's VoIP audio unit on FULL session end so the

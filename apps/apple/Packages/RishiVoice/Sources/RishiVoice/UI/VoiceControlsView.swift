@@ -88,6 +88,9 @@ public struct VoiceControlsView: View {
         if case .reconnecting = state.status {
             return .reconnecting
         }
+        if case .failed = state.status {
+            return .connecting
+        }
         if isConnectingStatus {
             return .connecting
         }
@@ -104,6 +107,9 @@ public struct VoiceControlsView: View {
     }
 
     private var statusLabel: String {
+        if case .failed = state.status {
+            return state.lastError ?? "Couldn't connect"
+        }
         if state.isFinalInterval {
             return "Ending soon"
         }

@@ -45,6 +45,8 @@ final class VoiceSessionPresenter {
     private let sessionCoordinatorFactory: @MainActor () -> (any VoiceSessionCoordinating)?
     private let controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)
 
+    let sessionRegistry: VoiceSessionRegistry
+
     private var bridgeTask: Task<Void, Never>?
 
     /// Single-flight for End (button, cover swipe, audio preemption). Cleared
@@ -55,6 +57,15 @@ final class VoiceSessionPresenter {
     /// Background `POST …/end` retries after optimistic dismiss. Not cancelled
     /// on a subsequent `start` — delivery for the prior session id still matters.
     private var endDeliveryTask: Task<Void, Never>?
+
+    /// Session id whose background end delivery completed successfully. Keep
+    /// the persisted id until the next create succeeds, but do not send a
+    /// second concurrent end for the same id during that start.
+    private var recentlyDeliveredEndSessionId: String?
+
+    /// Prevents repeated taps/lifecycle callbacks from creating overlapping
+    /// server sessions while the first start is suspended on network work.
+    private var isStarting = false
 
     /// Feature flag for the no-card-credit-trial voice-session flow (session
     /// create → WebRTC connect → call-ID registration → control WebSocket).
@@ -73,6 +84,25 @@ final class VoiceSessionPresenter {
     private static let endDeliveryMaxAttempts = 3
     /// Backoff between end-delivery attempts: 400ms, 800ms.
     private static let endDeliveryBackoffMs = 400
+    /// Pause after a successful ledger end before creating a new session — the
+    /// worker may still hold the active-session lock briefly after HTTP 200.
+    private static let serverSettleAfterEndMs = 600
+    /// Retries when POST /voice-sessions returns VOICE_SESSION_ALREADY_ACTIVE.
+    private static let alreadyActiveCreateMaxAttempts = 3
+    private static let alreadyActiveRetryBackoffMs = 600
+
+    /// Ledger row id that still needs `POST …/end` before a new session can
+    /// be created. Survives `clearFailure()` so Try again can unblock the server.
+    private var staleRishiSessionId: String?
+
+    /// Owns local PCM capture + VAD during session bootstrap; reused across sessions.
+    private let activationCoordinator = VoiceActivationCoordinator()
+
+    /// Temporarily disable pre-session recorder/VAD capture while keeping the
+    /// realtime session connection and registry lifecycle intact. When this is
+    /// re-enabled, the existing coordinator can be passed back into
+    /// `RealtimeVoiceSession` to restore the PCM handoff path.
+    nonisolated private static let isPreSessionAudioActivationEnabled = false
 
     init(
         coordinator: AudioSessionCoordinator,
@@ -97,7 +127,8 @@ final class VoiceSessionPresenter {
         clientFactory: (@MainActor () -> any RealtimeClientAPI)? = nil,
         keyFetcherFactory: (@MainActor () -> any EphemeralKeyFetching)? = nil,
         sessionCoordinatorFactory: (@MainActor () -> (any VoiceSessionCoordinating)?)? = nil,
-        controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil
+        controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
+        sessionRegistry: VoiceSessionRegistry? = nil
     ) {
         self.state = VoiceSessionState()
         self.coordinator = coordinator
@@ -115,9 +146,10 @@ final class VoiceSessionPresenter {
             keyFetcherFactory ?? {
                 EphemeralKeyFetcher(workerClient: workerClient)
             }
-        self.sessionCoordinatorFactory = sessionCoordinatorFactory ?? {
+        let effectiveSessionCoordinatorFactory: @MainActor () -> (any VoiceSessionCoordinating)? = sessionCoordinatorFactory ?? {
             Self.isTrialVoiceSessionFlowEnabled ? VoiceSessionAPIClient(workerClient: workerClient) : nil
         }
+        self.sessionCoordinatorFactory = effectiveSessionCoordinatorFactory
         self.controlSocketFactory = controlSocketFactory ?? { rishiSessionId, onTerminal in
             guard Self.isTrialVoiceSessionFlowEnabled else { return nil }
             return ControlWebSocketClient(
@@ -127,6 +159,12 @@ final class VoiceSessionPresenter {
                 onTerminal: onTerminal
             )
         }
+        self.sessionRegistry = sessionRegistry ?? VoiceSessionRegistry(
+            endServerSession: { id in
+                guard let coordinator = effectiveSessionCoordinatorFactory() else { return }
+                try await coordinator.endSession(rishiSessionId: id)
+            }
+        )
     }
     func getSession()->RealtimeVoiceSession? { self.session}
 
@@ -136,6 +174,32 @@ final class VoiceSessionPresenter {
         initialQuote: String? = nil,
         bookContext: BookContextSnapshot? = nil
     ) async {
+
+        guard !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+
+        if await resumeParkedSessionIfEligible(
+            bookId: bookId,
+            language: language,
+            initialQuote: initialQuote,
+            bookContext: bookContext
+        ) {
+            return
+        }
+
+        restoreStaleSessionIdFromPersistenceOrSession()
+
+        if let id = await session?.rishiSessionId {
+            noteRishiSessionId(id)
+        }
+
+        if session != nil, !isPresenting {
+            await requestEnd()
+        }
+
+        await awaitPendingEndDelivery()
+        await endStaleServerSessionIfNeeded()
 
         guard !isPresenting else { return }
         isPresenting = true
@@ -157,28 +221,27 @@ final class VoiceSessionPresenter {
         await coordinator.registerPreemption(for: .voice) { [weak self] in
             await self?.requestEnd()
         }
+
+        let micDecision = await micGate.request()
+        guard micDecision == .granted else {
+            state.recordError("Microphone permission denied")
+            enterFailure(reason: .micDenied)
+            return
+        }
+
         // Acquire audio session BEFORE fetching the key. If the key fetch
         // fails we already own the session and must release it cleanly.
         await coordinator.requestActiveMode(.voice)
-
-        let conversation: Conversation
-        do {
-            conversation = try await conversationLookup.findOrCreate(
-                userId: userId,
-                bookId: bookId
-            )
-        } catch {
-            Log.event(
-                "voice.presenter.lookup.failed",
-                level: .error,
-                data: [
-                    "error": String(describing: error)
-                ]
-            )
-            state.recordError(String(describing: error))
-            enterFailure(reason: .unknown(String(describing: error)))
-            return
+        let preSessionActivation: (any VoiceActivationCoordinating)? =
+            Self.isPreSessionAudioActivationEnabled ? activationCoordinator : nil
+        if let preSessionActivation {
+            await preSessionActivation.beginActivation()
         }
+
+        async let conversationTask = conversationLookup.findOrCreate(
+            userId: userId,
+            bookId: bookId
+        )
 
         let adapter = clientFactory()
         let fetcher = keyFetcherFactory()
@@ -204,31 +267,16 @@ final class VoiceSessionPresenter {
             sessionCoordinator: sessionCoordinatorFactory(),
             controlSocketFactory: controlSocketFactory,
             responderFactory: responderFactory,
-            embedderPrewarm: embedderPrewarm
+            embedderPrewarm: embedderPrewarm,
+            activation: preSessionActivation
         )
         self.session = session
+        await sessionRegistry.register(session)
 
-        // transcriptStream() is single-consumer — ping activity from the
-        // bridge (sole consumer) rather than a parallel stream reader.
-        let bridge = VoiceTranscriptBridge(
-            messageStore: messageStore,
-            dirtyHook: dirtyHook,
-            onActivity: {
-                await session.notifyVoiceActivity()
-            }
-        )
-
-        let conversationId = conversation.id
-        let presenterState = state
-        bridgeTask?.cancel()
-
-        bridgeTask = Task {
-            await bridge.consume(
-                stream: adapter.transcriptStream(),
-                conversationId: conversationId,
-                state: presenterState
-            )
-        }
+        // Install the single transcript stream continuation before connecting.
+        // The lookup below can be slow, but the realtime event pump must not
+        // start without a continuation or early transcript events are dropped.
+        let transcriptStream = adapter.transcriptStream()
 
         await session.start(
             language: language,
@@ -239,9 +287,143 @@ final class VoiceSessionPresenter {
             activeParagraphText: bookContext?.activeParagraphText
         )
 
+        let conversation: Conversation
+        do {
+            // Session setup and conversation lookup run concurrently. This
+            // keeps the WebRTC handshake on the critical path, not the local
+            // conversation-store scan/upsert.
+            conversation = try await conversationTask
+        } catch {
+            await sessionRegistry.close()
+            if let currentSession = self.session, currentSession === session {
+                self.session = nil
+                bridgeTask?.cancel()
+                bridgeTask = nil
+            }
+            guard !Task.isCancelled else { return }
+            await activationCoordinator.cancel()
+            Log.event(
+                "voice.presenter.lookup.failed",
+                level: .error,
+                data: [
+                    "error": String(describing: error)
+                ]
+            )
+            state.recordError(String(describing: error))
+            enterFailure(reason: .unknown(String(describing: error)))
+            return
+        }
+
+        // End/cancel may have closed this session while lookup was pending.
+        // Do not attach a transcript bridge to a newer or already-ended
+        // session.
+        guard let currentSession = self.session,
+              currentSession === session,
+              isPresenting else { return }
+
+        if case .failed = state.status {
+            // Keep the existing failure/retry handling below. A failed
+            // transport does not need a transcript bridge.
+        } else {
+            // transcriptStream() is single-consumer — ping activity from the
+            // bridge (sole consumer) rather than a parallel stream reader.
+            let bridge = VoiceTranscriptBridge(
+                messageStore: messageStore,
+                dirtyHook: dirtyHook,
+                onActivity: {
+                    await session.notifyVoiceActivity()
+                }
+            )
+
+            let conversationId = conversation.id
+            let presenterState = state
+            bridgeTask?.cancel()
+
+            bridgeTask = Task {
+                await bridge.consume(
+                    stream: transcriptStream,
+                    conversationId: conversationId,
+                    state: presenterState
+                )
+            }
+        }
+
+        var createAttempt = 1
+        while case .failed(.sessionStart(.alreadyActive)) = state.status,
+              createAttempt < Self.alreadyActiveCreateMaxAttempts {
+            createAttempt += 1
+            Log.event("voice.presenter.create.retry", level: .info, data: [
+                "attempt": String(createAttempt),
+            ])
+            await resolveServerAlreadyActiveConflict()
+            state.reset()
+            await session.start(
+                language: language,
+                bookId: bookId,
+                currentPage: bookContext?.currentPage,
+                pageText: bookContext?.pageText,
+                outline: bookContext?.outline,
+                activeParagraphText: bookContext?.activeParagraphText
+            )
+        }
+
+        if case .failed = state.status {
+            // Keep persisted ledger id for a follow-up end + retry.
+        } else {
+            clearPersistedServerSessionId()
+        }
+
+        if let id = await session.rishiSessionId {
+            noteRishiSessionId(id)
+            sessionRegistry.recordServerSessionID(id)
+        }
+
         if case .failed(let reason) = state.status {
+            if let id = await session.rishiSessionId {
+                noteRishiSessionId(id)
+            }
             enterFailure(reason: reason)
         }
+    }
+
+    /// Park the live session when the user dismisses voice chrome so a quick
+    /// reopen reuses WebRTC + the ledger row instead of create/end races.
+    func dismissVoiceChrome() async {
+        await parkSession()
+    }
+
+    /// Hides the reader chrome while keeping the live session object (WebRTC,
+    /// control socket, ledger row) for a short grace period so a quick return
+    /// does not pay reconnect / create-session costs.
+    func parkSession() async {
+        guard session != nil || isPresenting else { return }
+        isPresenting = false
+        await sessionRegistry.park()
+    }
+
+    private func resumeParkedSessionIfEligible(
+        bookId: BookID?,
+        language: String,
+        initialQuote: String?,
+        bookContext: BookContextSnapshot?
+    ) async -> Bool {
+        guard let session, !isPresenting else { return false }
+        guard sessionRegistry.state == .parked else { return false }
+        if case .failed = state.status { return false }
+        if case .ended = state.status { return false }
+
+        isPresenting = true
+        failure = nil
+        pendingFailure = nil
+        currentBookId = bookId
+        pendingInitialQuote = initialQuote
+        currentBookContext = bookContext
+        currentLanguage = language
+
+        state.reset()
+        await session.updateReaderContext(language: language, bookContext: bookContext)
+        await sessionRegistry.resume()
+        return true
     }
 
     /// Optimistic End: dismiss the cover immediately, tear down local
@@ -255,11 +437,12 @@ final class VoiceSessionPresenter {
         guard !isRequestingEnd else { return }
         isRequestingEnd = true
 
+        await activationCoordinator.cancel()
+
         // Dismiss first — before local teardown / delivery.
         isPresenting = false
 
-        let coordinatorForDelivery = sessionCoordinatorFactory()
-        let rishiSessionId = await session?.end()
+        await sessionRegistry.close()
 
         bridgeTask?.cancel()
         bridgeTask = nil
@@ -272,14 +455,8 @@ final class VoiceSessionPresenter {
         // Release the End flight before background delivery so a new session
         // can start and End without waiting on hangup retries.
         isRequestingEnd = false
-
-        guard let rishiSessionId, let coordinatorForDelivery else { return }
-
         endDeliveryTask = Task { [weak self] in
-            await self?.deliverEnd(
-                rishiSessionId: rishiSessionId,
-                using: coordinatorForDelivery
-            )
+            await self?.sessionRegistry.waitForServerEnd()
         }
     }
 
@@ -297,21 +474,15 @@ final class VoiceSessionPresenter {
         rishiSessionId: String,
         using coordinator: any VoiceSessionCoordinating
     ) async {
-        for attempt in 1...Self.endDeliveryMaxAttempts {
-            do {
-                try await coordinator.endSession(rishiSessionId: rishiSessionId)
-                return
-            } catch {
-                Log.event("voice.presenter.end_delivery.failed", level: .warning, data: [
-                    "rishiSessionId": rishiSessionId,
-                    "attempt": String(attempt),
-                    "error": String(describing: error),
-                ])
-                if attempt < Self.endDeliveryMaxAttempts {
-                    let delayMs = Self.endDeliveryBackoffMs * attempt
-                    try? await Task.sleep(for: .milliseconds(delayMs))
-                }
-            }
+        let cleared = await deliverEndWithRetries(
+            rishiSessionId: rishiSessionId,
+            using: coordinator
+        )
+        if cleared {
+            // Keep staleRishiSessionId until a new session create succeeds so
+            // a quick reopen can re-end if the server lock is still clearing.
+            recentlyDeliveredEndSessionId = rishiSessionId
+            return
         }
 
         if isPresenting {
@@ -324,19 +495,155 @@ final class VoiceSessionPresenter {
         enterFailure(reason: .sessionEndFailed)
     }
 
+    /// Ends a stale ledger row before starting a new session. Blocks until
+    /// hangup succeeds or retries are exhausted — prevents immediate
+    /// `VOICE_SESSION_ALREADY_ACTIVE` on Try again.
+    private func endStaleServerSessionIfNeeded() async {
+        if let coordinator = sessionCoordinatorFactory() {
+            do {
+                if let endedId = try await coordinator.endActiveSessionIfAny() {
+                    noteRishiSessionId(endedId)
+                    try? await Task.sleep(for: .milliseconds(Self.serverSettleAfterEndMs))
+                }
+            } catch {
+                Log.event("voice.presenter.end_active.failed", level: .warning, data: [
+                    "error": String(describing: error),
+                ])
+            }
+        }
+
+        restoreStaleSessionIdFromPersistenceOrSession()
+        guard let rishiSessionId = staleRishiSessionId else { return }
+        if recentlyDeliveredEndSessionId == rishiSessionId {
+            try? await Task.sleep(for: .milliseconds(Self.serverSettleAfterEndMs))
+            return
+        }
+        guard let coordinator = sessionCoordinatorFactory() else { return }
+        let cleared = await deliverEndWithRetries(
+            rishiSessionId: rishiSessionId,
+            using: coordinator
+        )
+        if cleared {
+            recentlyDeliveredEndSessionId = rishiSessionId
+            try? await Task.sleep(for: .milliseconds(Self.serverSettleAfterEndMs))
+        }
+    }
+
+    /// An optimistic End owns the only delivery attempt for its session. A
+    /// subsequent Start must wait for that attempt before running stale-session
+    /// cleanup or creating a new ledger row; otherwise both paths POST /end
+    /// concurrently and create can observe VOICE_SESSION_ALREADY_ACTIVE.
+    private func awaitPendingEndDelivery() async {
+        guard let task = endDeliveryTask else { return }
+        await task.value
+        endDeliveryTask = nil
+    }
+
+    /// Re-POST end for the persisted ledger id, then wait for server settle.
+    private func resolveServerAlreadyActiveConflict() async {
+        if let coordinator = sessionCoordinatorFactory() {
+            do {
+                if let endedId = try await coordinator.endActiveSessionIfAny() {
+                    noteRishiSessionId(endedId)
+                }
+            } catch {
+                Log.event("voice.presenter.end_active.failed", level: .warning, data: [
+                    "error": String(describing: error),
+                ])
+            }
+            try? await Task.sleep(for: .milliseconds(Self.serverSettleAfterEndMs))
+        }
+
+        restoreStaleSessionIdFromPersistenceOrSession()
+        guard let rishiSessionId = staleRishiSessionId,
+              let coordinator = sessionCoordinatorFactory() else {
+            try? await Task.sleep(for: .milliseconds(Self.alreadyActiveRetryBackoffMs))
+            return
+        }
+        _ = await deliverEndWithRetries(
+            rishiSessionId: rishiSessionId,
+            using: coordinator
+        )
+        try? await Task.sleep(for: .milliseconds(Self.serverSettleAfterEndMs))
+    }
+
+    private func restoreStaleSessionIdFromPersistenceOrSession() {
+        if staleRishiSessionId == nil {
+            staleRishiSessionId = sessionRegistry.persistedServerSessionID
+        }
+    }
+
+    private func noteRishiSessionId(_ id: String) {
+        staleRishiSessionId = id
+        sessionRegistry.recordServerSessionID(id)
+    }
+
+    private func clearPersistedServerSessionId() {
+        staleRishiSessionId = nil
+        recentlyDeliveredEndSessionId = nil
+        sessionRegistry.persistedServerSessionID = nil
+        if let session {
+            Task { await session.acknowledgeServerEnd() }
+        }
+    }
+
+    @discardableResult
+    private func deliverEndWithRetries(
+        rishiSessionId: String,
+        using coordinator: any VoiceSessionCoordinating
+    ) async -> Bool {
+        for attempt in 1...Self.endDeliveryMaxAttempts {
+            do {
+                try await coordinator.endSession(rishiSessionId: rishiSessionId)
+                Log.event("voice.presenter.end_delivery.succeeded", level: .info, data: [
+                    "rishiSessionId": rishiSessionId,
+                ])
+                return true
+            } catch {
+                if VoiceSessionAPIClient.isAlreadyTerminalEndError(error) {
+                    return true
+                }
+                Log.event("voice.presenter.end_delivery.failed", level: .warning, data: [
+                    "rishiSessionId": rishiSessionId,
+                    "attempt": String(attempt),
+                    "error": String(describing: error),
+                ])
+                if attempt < Self.endDeliveryMaxAttempts {
+                    let delayMs = Self.endDeliveryBackoffMs * attempt
+                    try? await Task.sleep(for: .milliseconds(delayMs))
+                }
+            }
+        }
+        return false
+    }
+
     func retry() async {
+        if let id = await session?.rishiSessionId {
+            noteRishiSessionId(id)
+        }
         let bookId = currentBookId
         let quote = pendingInitialQuote
         let context = currentBookContext
         let language = currentLanguage
         clearFailure()
+        await endStaleServerSessionIfNeeded()
         await start(bookId: bookId, language: language, initialQuote: quote, bookContext: context)
     }
     
 
     func clearFailure() {
+        let sessionToCapture = session
+        restoreStaleSessionIdFromPersistenceOrSession()
+        if let sessionToCapture {
+            Task { @MainActor in
+                if let id = await sessionToCapture.rishiSessionId {
+                    noteRishiSessionId(id)
+                }
+            }
+        }
         failure = nil
         pendingFailure = nil
+        Task { await activationCoordinator.cancel() }
         bridgeTask?.cancel()
         bridgeTask = nil
         session = nil
@@ -350,6 +657,15 @@ final class VoiceSessionPresenter {
     }
 
     func enterFailure(reason: VoiceSessionFailureReason) {
+        let sessionToCapture = session
+        restoreStaleSessionIdFromPersistenceOrSession()
+        if let sessionToCapture {
+            Task { @MainActor in
+                if let id = await sessionToCapture.rishiSessionId {
+                    noteRishiSessionId(id)
+                }
+            }
+        }
         guard failure == nil, pendingFailure == nil else { return }
         state.apply(status: .failed(reason: reason))
         let alert = VoiceFailureAlert(reason: reason, message: state.lastError)

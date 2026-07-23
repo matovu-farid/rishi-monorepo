@@ -85,9 +85,15 @@ final class RealtimeEventPump: @unchecked Sendable {
         errorPump = Task {
             let errors = await MainActor.run { convo.errors }
             for await error in errors {
+                Log.event("voice.adapter.server_error", level: .error, data: [
+                    "type": error.type,
+                    "code": error.code ?? "",
+                    "param": error.param ?? "",
+                    "message": error.message,
+                ])
                 let mapped = RealtimeClientError(
-                    code: "server_error",
-                    message: String(describing: error)
+                    code: error.code ?? "server_error",
+                    message: error.message
                 )
                 errorContinuation()?.yield(mapped)
                 if Task.isCancelled { return }

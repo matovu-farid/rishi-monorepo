@@ -6,9 +6,9 @@ import Foundation
 /// carries remaining seconds, not the period total.
 enum PlanAllowance {
     static let readerNarrationSeconds = 6 * 60 * 60
-    static let readerVoiceChatSeconds = 90 * 60
+    static let readerVoiceChatSeconds = 270 * 60
     static let voiceNarrationSeconds = 12 * 60 * 60
-    static let voiceVoiceChatSeconds = 180 * 60
+    static let voiceVoiceChatSeconds = 540 * 60
 }
 
 /// Documented warning thresholds. See Task 4 rationale in

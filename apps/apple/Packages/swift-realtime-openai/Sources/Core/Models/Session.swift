@@ -353,7 +353,9 @@ extension Session {
 		try container.encode(instructions, forKey: .instructions)
 		try container.encodeIfPresent(maxResponseOutputTokens, forKey: .maxResponseOutputTokens)
 		try container.encodeIfPresent(modalities, forKey: .modalities)
-		try container.encode(model, forKey: .model)
+		// Realtime session.update must not include `model` — it is fixed at call
+		// creation (POST /v1/realtime/calls?model=…). Sending it causes
+		// invalid_request_error on some API versions.
 		try container.encodeIfPresent(prompt, forKey: .prompt)
 		try container.encodeIfPresent(temperature, forKey: .temperature)
 		try container.encodeIfPresent(toolChoice, forKey: .toolChoice)

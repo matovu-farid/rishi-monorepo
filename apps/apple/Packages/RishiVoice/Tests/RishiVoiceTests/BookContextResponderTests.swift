@@ -17,6 +17,22 @@ import RishiLogging
 @Suite("BookContextResponder")
 struct BookContextResponderTests {
 
+    @Test("user-facing lookup messages hide internal retrieval details")
+    func userFacingMessagesHideImplementationDetails() {
+        let messages = [
+            BookContextResponder.coldStartSentinel,
+            BookContextResponder.lookupFailedMessage,
+            BookContextResponder.lookupTimedOutMessage,
+        ].map { $0.lowercased() }
+
+        for message in messages {
+            #expect(!message.contains("tool"))
+            #expect(!message.contains("context"))
+            #expect(!message.contains("index"))
+            #expect(!message.contains("lookup"))
+        }
+    }
+
     @Test
     func happyPath_returnsHitsAsJSONArray() async throws {
         let fake = FakeRealtimeClient()

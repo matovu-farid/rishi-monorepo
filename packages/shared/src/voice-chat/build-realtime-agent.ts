@@ -39,7 +39,7 @@ export function renderOutlineSection(outline: BookOutline | undefined): string {
   return `## Book Outline
 **Title:** ${outline.title}
 ${authorLine}${chapterLines}
-Use this outline to orient the user across the book. If they ask about a specific chapter that isn't on their current page, you may use the bookContext tool to retrieve relevant passages from that chapter.
+Use this outline to orient the user across the book. If they ask about a specific chapter that isn't on their current page, quietly check the book for relevant passages from that chapter.
 
 `
 }
@@ -70,7 +70,7 @@ export function renderVisualSection(summary: VisualSummary | undefined): string 
   return `## Visual context
 The current page contains ${description}.
 
-You have a tool \`inspectCurrentPage({ detail: 'low' | 'high' })\` that returns a screenshot of what the user is looking at right now. Use \`detail: 'low'\` (default) for general layout questions. Use \`detail: 'high'\` only if you need to read small text inside the image (equations, captions, axis labels). Do not call it on every turn — only when the user's question requires visual context.
+When the user's question requires visual detail, quietly inspect the page. Use a lower-detail inspection for general layout questions and a higher-detail inspection only when reading small text such as equations, captions, or axis labels. Do not inspect it on every turn, and do not mention the inspection mechanism to the user.
 
 `
 }
@@ -99,23 +99,23 @@ ${renderLanguageSection(language)}${renderOutlineSection(outline)}${renderVisual
 """
 ${pageText || '(No page text available)'}
 """
-If the question is answerable from this page, answer directly. Use the bookContext tool only for content outside this page.
+If the question is answerable from this page, answer directly. Quietly check the book only for content outside this page.
 
 ${renderActiveParagraphSection(activeParagraphText)}
 
 ## Rules
 - Vary phrasing — never repeat the same sentence verbatim in a single response.
 - Stay conversational; avoid scripted-sounding language.
-- Before calling a tool, say one short line previewing what you're doing (5-12 words).
+- Never mention tools, function calls, retrieval, indexing, embeddings, context windows, prompts, or internal systems to the user.
+- If checking the book would help, you may briefly say something natural such as “Let me check the book,” then continue with the answer.
 - Stay focused on the book, but allow natural chat flow.
 
-## Tools
+## Book lookup
 
-### bookContext
-For content NOT visible on the current page. Provide a brief preamble before calling. Do not call if the answer is already in the current page text.
+Use the book lookup capability for content NOT visible on the current page. Do not use it if the answer is already in the current page text. Keep this capability invisible to the user.
 
-### endConversation
-When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye"), respond with a warm closing and call this tool. If the signal is ambiguous, confirm first. Provide a clear \`reason\` describing why the conversation is ending.
+### Ending the conversation
+When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye"), respond with a warm closing and end the session. If the signal is ambiguous, confirm first. Keep the internal close action invisible to the user.
 
 ## Style notes
 - First message: if the user asks a question, answer it directly. If they greet, respond briefly and ask how you can help.
@@ -132,7 +132,7 @@ When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye
 export const BOOK_CONTEXT_TOOL_SPEC = {
   name: 'bookContext',
   description:
-    'Retrieve information from OTHER parts of the book beyond the current page. Only use this when the user asks about content NOT visible on their current page. Do NOT call this tool if the answer is already in the current page content provided in your instructions.',
+    'Quietly retrieve information from other parts of the book beyond the current page. Only use this when the user asks about content not visible on their current page. Do not mention this capability, its name, or its implementation to the user.',
   parameters: {
     type: 'object' as const,
     properties: {
