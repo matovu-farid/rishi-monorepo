@@ -83,6 +83,35 @@ struct ReadAloudControllerTests {
         #expect(configurator.activeCalls.last?.active == true)
     }
 
+    @Test("output route loss pauses an active legacy reader session")
+    func routeLossPausesLegacyReader() async {
+        let configurator = FakeAudioSessionConfigurator()
+        let state = TTSPlaybackState()
+        let engine = FakeTTSEngine(state: state, script: .holds)
+        let controller = ReadAloudController(
+            ttsEngine: engine,
+            ttsState: state,
+            ttsSettingsStore: InMemoryTTSSettingsStore(),
+            ttsPrewarmer: TTSPrewarmer(source: ControllerNoopChunkSource()),
+            ttsPresence: rishi.TTSPresenceController(
+                state: state,
+                store: ControllerNoopPresenceStore()
+            ),
+            coordidator: AudioSessionCoordinator(configurator: configurator),
+            userId: UserID()
+        )
+
+        await start(controller, paragraphs: ["one"])
+        #expect(state.status == .playing)
+
+        configurator.inject(route: .oldDeviceUnavailable)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(engine.calls.contains(.pause))
+        #expect(state.status == .paused)
+        await controller.stop()
+    }
+
     @Test("stop clears paragraphs, bridge, showControls, and currentParagraph")
     func stopClearsState() async {
         let controller = makeController()

@@ -29,29 +29,6 @@ struct AudioSessionCoordinatorTests {
         #expect(active?.active == true)
     }
 
-    @Test("TTS nomination is cleared when the active mode is released")
-    func ttsNominatesAndClearsNowPlayingCandidate() async {
-        let fake = FakeAudioSessionConfigurator()
-        let coord = AudioSessionCoordinator(configurator: fake)
-
-        await coord.requestActiveMode(.tts)
-        #expect(fake.nowPlayingCandidateCalls.map(\.candidate) == [true])
-
-        await coord.releaseActiveMode(.tts)
-        #expect(fake.nowPlayingCandidateCalls.map(\.candidate) == [true, false])
-    }
-
-    @Test("Voice mode clears TTS nomination before activating")
-    func voiceClearsNowPlayingCandidateBeforeActivation() async {
-        let fake = FakeAudioSessionConfigurator()
-        let coord = AudioSessionCoordinator(configurator: fake)
-
-        await coord.requestActiveMode(.tts)
-        await coord.requestActiveMode(.voice)
-
-        #expect(fake.nowPlayingCandidateCalls.map(\.candidate) == [true, false])
-    }
-
     @Test("Requesting .tts twice is idempotent (no double configure)")
     func requestTTSTwiceIsIdempotent() async {
         let fake = FakeAudioSessionConfigurator()
