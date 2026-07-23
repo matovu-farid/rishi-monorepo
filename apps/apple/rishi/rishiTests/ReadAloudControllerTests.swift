@@ -117,6 +117,44 @@ struct ReadAloudControllerTests {
         #expect(info.calls.contains(.clear))
     }
 
+    @Test("starting narration publishes Now Playing before the session can be stopped")
+    func legacyStartPublishesNowPlayingImmediately() async {
+        let info = FakeNowPlayingInfoSurface()
+        let commands = FakeRemoteCommandSurface()
+        let nowPlaying = NowPlayingController(infoSurface: info, commandSurface: commands)
+        let controller = makeController(nowPlayingController: nowPlaying)
+
+        await start(controller, paragraphs: ["one"])
+
+        #expect(info.calls.first == .metadata(testMetadata))
+        #expect(commands.calls == [.register])
+        await controller.stop()
+    }
+
+    @Test("explicit stop releases the TTS audio session once")
+    func explicitStopReleasesTTSAudioSession() async {
+        let configurator = FakeAudioSessionConfigurator()
+        let state = TTSPlaybackState()
+        let controller = ReadAloudController(
+            ttsEngine: FakeTTSEngine(state: state, script: .holds),
+            ttsState: state,
+            ttsSettingsStore: InMemoryTTSSettingsStore(),
+            ttsPrewarmer: TTSPrewarmer(source: ControllerNoopChunkSource()),
+            ttsPresence: rishi.TTSPresenceController(
+                state: state,
+                store: ControllerNoopPresenceStore()
+            ),
+            coordidator: AudioSessionCoordinator(configurator: configurator),
+            userId: UserID()
+        )
+
+        await start(controller, paragraphs: ["one"])
+        await controller.stop()
+        await controller.stop()
+
+        #expect(configurator.activeCalls.map(\.active) == [true, false])
+    }
+
     @Test("lock-screen stop command stops the reader session")
     func lockScreenStopStopsReaderSession() async {
         let info = FakeNowPlayingInfoSurface()

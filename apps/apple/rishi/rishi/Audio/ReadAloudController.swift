@@ -23,6 +23,7 @@ final class ReadAloudController {
 
     private(set) var bridge: ReaderTTSBridge? = nil
     private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
+    private var readiumSynthesizerGeneration: UInt64?
     private(set) var readiumState: PublicationSpeechSynthesizer.State = .stopped
     private var readiumPublication: Publication?
     private var readiumPrefetcher: ReadiumTTSPrefetchCoordinator?
@@ -42,6 +43,10 @@ final class ReadAloudController {
     /// At most one credit-consuming page-follow per spoken utterance.
     private var followCreditRemaining = 0
     private var navigationIntentGeneration: UInt64 = 0
+    /// Invalidates work suspended while a playback session is starting. This
+    /// prevents a cancelled/replaced start from attaching Now Playing controls
+    /// or starting a synthesizer after one of its prerequisite awaits returns.
+    private var playbackGeneration: UInt64 = 0
     private(set) var wantsAutoResumeAfterVoice = false
     /// Test seam: force `isActivelySpeaking` without a live synthesizer.
     #if DEBUG
@@ -72,14 +77,17 @@ final class ReadAloudController {
 
     func startReader(vm: ReaderViewModel) async {
         guard let publication = vm.publication else { return }
+        let generation = beginPlaybackGeneration()
 
         // Invalidate page-entry prefetch immediately while the new playback
         // session is being installed. The await below must not leave the old
         // stopped session eligible during this transition.
         isPageEntryPrefetchEligible = false
         await stopCurrentPlayback()
+        guard isCurrentPlaybackGeneration(generation) else { return }
 
         let settings = await ttsSettingsStore.load(userId: userId)
+        guard isCurrentPlaybackGeneration(generation) else { return }
         pickerInitial = settings
 
         guard let synthesizer = PublicationSpeechSynthesizer(
@@ -105,6 +113,7 @@ final class ReadAloudController {
         }
 
         readiumSynthesizer = synthesizer
+        readiumSynthesizerGeneration = generation
         hasStartedReadAloudSession = true
         readiumPublication = publication
         readiumPrefetcher = ReadiumTTSPrefetchCoordinator(prewarmer: ttsPrewarmer)
@@ -121,6 +130,7 @@ final class ReadAloudController {
         showControls = true
 
         await registerTTSPreemption()
+        guard isCurrentPlaybackGeneration(generation) else { return }
         await ttsPresence.beginSession(
             bookID: vm.book.id.uuidString,
             title: vm.book.title,
@@ -129,29 +139,32 @@ final class ReadAloudController {
             model: settings.model,
             speed: settings.speed
         )
+        guard isCurrentPlaybackGeneration(generation) else { return }
 
         // Readium's locationDidChange callback can lag behind the visible
         // page during an animated EPUB turn. Query the navigator-backed live
         // locator immediately before starting so playback cannot rewind to
         // the last callback's page.
         let startLocator = await vm.currentVisibleLocatorForReadAloud()
+        guard isCurrentPlaybackGeneration(generation) else { return }
 
         // Readium owns publication iteration. The custom tokenizer supplied
         // above makes each utterance a paragraph instead of a sentence.
         await activateAudioSessionForReadiumStart()
-        synthesizer.start(from: startLocator)
-        nowPlayingController?.attach(
-            state: ttsState,
-            controller: self,
-            metadata: await nowPlayingMetadata(
-                title: vm.book.title,
-                author: vm.book.author,
-                book: vm.book
-            )
+        guard isCurrentPlaybackGeneration(generation) else { return }
+        attachNowPlayingImmediately(
+            title: vm.book.title,
+            author: vm.book.author,
+            book: vm.book,
+            generation: generation
         )
+        // Attach metadata before the first utterance. The cover is loaded
+        // best-effort in a separate task so local disk I/O cannot delay speech.
+        synthesizer.start(from: startLocator)
     }
 
     func stop() async {
+        invalidatePlaybackGeneration()
         isPageEntryPrefetchEligible = true
         followCreditRemaining = 0
         #if DEBUG
@@ -379,12 +392,11 @@ final class ReadAloudController {
         onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
     ) async {
         guard !paragraphs.isEmpty else { return }
+        let generation = beginPlaybackGeneration()
 
         isPageEntryPrefetchEligible = false
-        if let existing = bridge {
-            await existing.stop()
-        }
-        nowPlayingController?.detach()
+        await stopCurrentPlayback()
+        guard isCurrentPlaybackGeneration(generation) else { return }
 
         let wrappedOnParagraphsExhausted: () async -> [String] = { [weak self] in
             let nextParagraphs = await onParagraphsExhausted()
@@ -415,6 +427,7 @@ final class ReadAloudController {
         self.paragraphs = paragraphs
         currentParagraph = nil
         pickerInitial = await ttsSettingsStore.load(userId: userId)
+        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
         await ttsPresence.beginSession(
             bookID: bookID,
             title: metadata.title,
@@ -423,19 +436,21 @@ final class ReadAloudController {
             model: pickerInitial.model,
             speed: pickerInitial.speed
         )
+        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
         showControls = true
         await registerTTSPreemption()
-        await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
-        nowPlayingController?.attach(
-            state: ttsState,
-            controller: self,
-            metadata: await nowPlayingMetadata(
-                title: metadata.title,
-                author: metadata.author,
-                book: book,
-                coverData: metadata.coverData
-            )
+        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
+        // Publish the system card before narration begins. Any cover stored on
+        // disk is upgraded asynchronously after playback has started.
+        attachNowPlayingImmediately(
+            title: metadata.title,
+            author: metadata.author,
+            book: book,
+            coverData: metadata.coverData,
+            generation: generation
         )
+        await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
+        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
     }
 
     var canPrefetchPageEntry: Bool {
@@ -486,34 +501,72 @@ final class ReadAloudController {
         }
         readiumSynthesizer?.stop()
         readiumSynthesizer = nil
+        readiumSynthesizerGeneration = nil
         readiumState = .stopped
         followCreditRemaining = 0
         #if DEBUG
         testSpeakingOverride = false
         #endif
         ttsState.update(status: .stopped)
+        // The controller owns the Readium lifecycle, so it releases the
+        // coordinator only when a session actually stops—not between passages.
+        await coordinator.releaseActiveMode(.tts)
     }
 
-    private func nowPlayingMetadata(
+    private func beginPlaybackGeneration() -> UInt64 {
+        playbackGeneration &+= 1
+        return playbackGeneration
+    }
+
+    private func invalidatePlaybackGeneration() {
+        playbackGeneration &+= 1
+    }
+
+    private func isCurrentPlaybackGeneration(_ generation: UInt64) -> Bool {
+        playbackGeneration == generation
+    }
+
+    /// Attaches the immediately available metadata. Cover art comes from disk
+    /// on a detached task and may update the card later, never delaying speech.
+    private func attachNowPlayingImmediately(
         title: String,
         author: String?,
         book: Book?,
-        coverData: Data? = nil
-    ) async -> NowPlayingMetadata {
+        coverData: Data? = nil,
+        generation: UInt64
+    ) {
+        guard isCurrentPlaybackGeneration(generation) else { return }
+        let metadata = NowPlayingMetadata(title: title, author: author, coverData: coverData)
+        nowPlayingController?.attach(state: ttsState, controller: self, metadata: metadata)
+
         guard coverData == nil,
               let book,
               let bookFileStorage
-        else {
-            return NowPlayingMetadata(title: title, author: author, coverData: coverData)
-        }
+        else { return }
 
         let coverURL = bookFileStorage.cachedCoverURLIfFresh(for: book)
-        let cachedCoverData: Data? = await Task.detached {
-            guard let coverURL else { return nil }
-            return try? Data(contentsOf: coverURL)
-        }.value
-        return NowPlayingMetadata(title: title, author: author, coverData: cachedCoverData)
+        Task { [weak self, title, author] in
+            let cachedCoverData: Data? = await Task.detached {
+                guard let coverURL else { return nil }
+                return try? Data(contentsOf: coverURL)
+            }.value
+            guard let self,
+                  self.isCurrentPlaybackGeneration(generation),
+                  let cachedCoverData
+            else { return }
+            // NowPlayingController intentionally has an attach-only API. A
+            // short reattach preserves its handler ownership while refreshing
+            // the metadata with best-effort artwork.
+            self.nowPlayingController?.detach()
+            guard self.isCurrentPlaybackGeneration(generation) else { return }
+            self.nowPlayingController?.attach(
+                state: self.ttsState,
+                controller: self,
+                metadata: NowPlayingMetadata(title: title, author: author, coverData: cachedCoverData)
+            )
+        }
     }
+
 }
 
 extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
@@ -522,10 +575,14 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         stateDidChange state: PublicationSpeechSynthesizer.State
     ) {
         guard readiumSynthesizer === synthesizer else { return }
+        guard let generation = readiumSynthesizerGeneration,
+              isCurrentPlaybackGeneration(generation)
+        else { return }
 
         readiumState = state
         switch state {
         case .stopped:
+            invalidatePlaybackGeneration()
             nowPlayingController?.detach()
             isPageEntryPrefetchEligible = true
             followCreditRemaining = 0
@@ -535,6 +592,12 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
             currentParagraph = nil
             currentLocator = nil
             ttsState.update(status: .stopped)
+            // A Readium `.stopped` transition is terminal for its publication
+            // synthesizer. Release the shared audio owner here, rather than
+            // reacting to per-paragraph engine status changes.
+            Task { [coordinator] in
+                await coordinator.releaseActiveMode(.tts)
+            }
         case let .paused(utterance):
             isPageEntryPrefetchEligible = true
             currentLocator = utterance.locator
@@ -583,9 +646,19 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         didFailWithError error: PublicationSpeechSynthesizer.Error
     ) {
         guard readiumSynthesizer === synthesizer else { return }
+        guard let generation = readiumSynthesizerGeneration,
+              isCurrentPlaybackGeneration(generation)
+        else { return }
+        invalidatePlaybackGeneration()
         nowPlayingController?.detach()
+        readiumSynthesizer = nil
+        readiumSynthesizerGeneration = nil
+        readiumState = .stopped
         ttsState.error = String(describing: error)
         ttsState.update(status: .error)
+        Task { [coordinator] in
+            await coordinator.releaseActiveMode(.tts)
+        }
     }
 }
 
