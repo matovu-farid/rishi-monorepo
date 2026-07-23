@@ -94,30 +94,36 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
 
   const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
 
-  let session: { rishiSessionId: string; nonce: string; capIntervals: number };
+  // Ledger admission and OpenAI key minting are independent after the
+  // allowance mirror has been refreshed. Start them together so setup time
+  // is bounded by the slower of the two remote calls instead of their sum.
+  // The small source tags preserve the route's existing error mapping when
+  // Promise.all rejects whichever operation fails first.
+  const sessionPromise = stub.createVoiceSession().catch((error: unknown) => {
+    throw { source: "ledger", error };
+  });
+  const mintPromise = mintRealtimeClientSecret(c.env.OPENAI_API_KEY, {
+    language: coerceLanguage(body.language),
+    bookId: body.bookId,
+    currentPage: body.currentPage,
+    pageText: body.pageText,
+    outline: body.outline,
+    activeParagraphText: body.activeParagraphText,
+  }).catch((error: unknown) => {
+    throw { source: "openai", error };
+  });
+
+  let session: { rishiSessionId: string; nonce: string; capIntervals: number } | undefined;
+  let minted: Awaited<ReturnType<typeof mintRealtimeClientSecret>> | undefined;
   try {
-    session = await stub.createVoiceSession();
+    [session, minted] = await Promise.all([sessionPromise, mintPromise]);
   } catch (err) {
-    return voiceSessionErrorResponse(c, err);
-  }
+    const failure = err as { source?: string; error?: unknown };
+    if (failure.source === "ledger") {
+      return voiceSessionErrorResponse(c, failure.error);
+    }
 
-  try {
-    const minted = await mintRealtimeClientSecret(c.env.OPENAI_API_KEY, {
-      language: coerceLanguage(body.language),
-      bookId: body.bookId,
-      currentPage: body.currentPage,
-      pageText: body.pageText,
-      outline: body.outline,
-      activeParagraphText: body.activeParagraphText,
-    });
-
-    return c.json({
-      rishiSessionId: session.rishiSessionId,
-      nonce: session.nonce,
-      clientSecret: minted.clientSecret,
-      capIntervals: session.capIntervals,
-    });
-  } catch (mintErr) {
+    const mintErr = failure.source === "openai" ? failure.error : err;
     // The ledger already committed this session as `pending_registration`
     // with its grace-period alarm armed
     // (2026-07-17-user-usage-ledger-voice-session.md's
@@ -128,7 +134,7 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
     console.error(
       JSON.stringify({
         event: "voice_sessions.mint_failed",
-        rishiSessionId: session.rishiSessionId,
+        rishiSessionId: session?.rishiSessionId ?? null,
         message: mintErr instanceof Error ? mintErr.message : String(mintErr),
       }),
     );
@@ -137,6 +143,23 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
       502,
     );
   }
+
+  // Promise.all fulfills both values together on the success path. Keep this
+  // guard explicit so a future refactor cannot accidentally return a partial
+  // response if one operation is changed to resolve without a value.
+  if (!session || !minted) {
+    return c.json(
+      { error: "Failed to initialize realtime voice session", code: "VOICE_SESSION_INIT_FAILED" },
+      502,
+    );
+  }
+
+  return c.json({
+    rishiSessionId: session.rishiSessionId,
+    nonce: session.nonce,
+    clientSecret: minted.clientSecret,
+    capIntervals: session.capIntervals,
+  });
 });
 
 // ---------- POST /end-active (force-close live session) ----------
