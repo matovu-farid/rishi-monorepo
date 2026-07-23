@@ -153,8 +153,29 @@ struct NowPlayingControllerTests {
     }
 
     @MainActor
-    @Test("Terminal TTS states detach and unregister remote handlers")
-    func terminalStatesDetachAndUnregisterHandlers() async {
+    @Test("Initial idle and stopped states retain metadata and remote handlers")
+    func initialTerminalStatesRetainMediaSession() async {
+        for initialStatus in [TTSStatus.idle, .stopped] {
+            let info = FakeNowPlayingInfoSurface()
+            let cmd = FakeRemoteCommandSurface()
+            let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+            let state = TTSPlaybackState()
+            let rec = RecordingController()
+            let metadata = NowPlayingMetadata(title: "x")
+
+            controller.attach(state: state, controller: rec, metadata: metadata)
+            state.update(status: initialStatus)
+            try? await Task.sleep(nanoseconds: 100_000_000)
+
+            #expect(info.calls == [.metadata(metadata)])
+            #expect(cmd.calls == [.register])
+            controller.detach()
+        }
+    }
+
+    @MainActor
+    @Test("Paragraph terminal TTS states retain media session after playback becomes active")
+    func terminalStatesRetainMediaSessionAfterPlayback() async {
         for status in [TTSStatus.stopped, .idle, .error] {
             let info = FakeNowPlayingInfoSurface()
             let cmd = FakeRemoteCommandSurface()
@@ -162,9 +183,12 @@ struct NowPlayingControllerTests {
             let state = TTSPlaybackState()
             let rec = RecordingController()
             controller.attach(state: state, controller: rec, metadata: .init(title: "x"))
+            state.update(status: .playing)
+            try? await Task.sleep(nanoseconds: 100_000_000)
             state.update(status: status)
             try? await Task.sleep(nanoseconds: 100_000_000)
-            #expect(cmd.calls == [.register, .unregister])
+            #expect(cmd.calls == [.register])
+            #expect(info.calls == [.metadata(.init(title: "x")), .rate(1.0)])
             controller.detach()
             #expect(cmd.calls == [.register, .unregister])
         }

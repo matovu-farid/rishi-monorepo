@@ -134,8 +134,12 @@ public final class NowPlayingController {
                 infoSurface.setPlaybackRate(1.0)
             case .paused:
                 infoSurface.setPlaybackRate(0.0)
+            // A TTS status describes the current paragraph, not the reader
+            // session. In particular, the engine emits `.stopped` between
+            // paragraphs. The lifecycle owner explicitly calls `detach()`
+            // when the read-aloud session actually ends.
             case .stopped, .idle, .error:
-                detach()
+                break
             case .loading:
                 break
             }
