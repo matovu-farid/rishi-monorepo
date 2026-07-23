@@ -9,15 +9,14 @@ struct NowPlayingControllerTests {
     actor RecordingController: TTSPlaybackControlling {
         enum Call: Sendable, Equatable {
             case pause, resume, stop
-            case skip(TimeInterval)
-            case scrub(TimeInterval)
+            case previousTrack, nextTrack
         }
         private(set) var calls: [Call] = []
         func pause() async { calls.append(.pause) }
         func resume() async { calls.append(.resume) }
         func stop() async { calls.append(.stop) }
-        func skip(seconds: TimeInterval) async { calls.append(.skip(seconds)) }
-        func scrub(toSeconds seconds: TimeInterval) async { calls.append(.scrub(seconds)) }
+        func previousTrack() async { calls.append(.previousTrack) }
+        func nextTrack() async { calls.append(.nextTrack) }
     }
 
     @MainActor
@@ -72,34 +71,50 @@ struct NowPlayingControllerTests {
     }
 
     @MainActor
-    @Test("Skip forward fires controller.skip(+seconds)")
-    func skipForwardFiresSkip() async {
+    @Test("Previous-track remote command triggers controller.previousTrack()")
+    func previousTrackCommandTriggersPrevious() async {
         let info = FakeNowPlayingInfoSurface()
         let cmd = FakeRemoteCommandSurface()
         let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
         let state = TTSPlaybackState()
         let rec = RecordingController()
         controller.attach(state: state, controller: rec, metadata: .init(title: "x"))
-        cmd.simulate(.skipForward(seconds: 15))
+        cmd.simulate(.previousTrack)
         try? await Task.sleep(nanoseconds: 100_000_000)
         let calls = await rec.calls
-        #expect(calls.contains(.skip(15)))
+        #expect(calls.contains(.previousTrack))
         controller.detach()
     }
 
     @MainActor
-    @Test("Scrub fires controller.scrub(toSeconds:)")
-    func scrubFiresScrub() async {
+    @Test("Next-track remote command triggers controller.nextTrack()")
+    func nextTrackCommandTriggersNext() async {
         let info = FakeNowPlayingInfoSurface()
         let cmd = FakeRemoteCommandSurface()
         let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
         let state = TTSPlaybackState()
         let rec = RecordingController()
         controller.attach(state: state, controller: rec, metadata: .init(title: "x"))
-        cmd.simulate(.scrub(toSeconds: 42))
+        cmd.simulate(.nextTrack)
         try? await Task.sleep(nanoseconds: 100_000_000)
         let calls = await rec.calls
-        #expect(calls.contains(.scrub(42)))
+        #expect(calls.contains(.nextTrack))
+        controller.detach()
+    }
+
+    @MainActor
+    @Test("Stop remote command triggers controller.stop()")
+    func stopCommandTriggersStop() async {
+        let info = FakeNowPlayingInfoSurface()
+        let cmd = FakeRemoteCommandSurface()
+        let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+        let state = TTSPlaybackState()
+        let rec = RecordingController()
+        controller.attach(state: state, controller: rec, metadata: .init(title: "x"))
+        cmd.simulate(.stop)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let calls = await rec.calls
+        #expect(calls.contains(.stop))
         controller.detach()
     }
 
@@ -119,6 +134,57 @@ struct NowPlayingControllerTests {
         }
         #expect(rates.contains(1.0))
         controller.detach()
+    }
+
+    @MainActor
+    @Test("Playing publishes metadata and rate without elapsed progress")
+    func playingDoesNotPublishElapsedProgress() async {
+        let info = FakeNowPlayingInfoSurface()
+        let cmd = FakeRemoteCommandSurface()
+        let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+        let state = TTSPlaybackState()
+        let rec = RecordingController()
+        let metadata = NowPlayingMetadata(title: "x")
+        controller.attach(state: state, controller: rec, metadata: metadata)
+        state.update(status: .playing)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        #expect(info.calls == [.metadata(metadata), .rate(1.0)])
+        controller.detach()
+    }
+
+    @MainActor
+    @Test("Terminal TTS states detach and unregister remote handlers")
+    func terminalStatesDetachAndUnregisterHandlers() async {
+        for status in [TTSStatus.stopped, .idle, .error] {
+            let info = FakeNowPlayingInfoSurface()
+            let cmd = FakeRemoteCommandSurface()
+            let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+            let state = TTSPlaybackState()
+            let rec = RecordingController()
+            controller.attach(state: state, controller: rec, metadata: .init(title: "x"))
+            state.update(status: status)
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            #expect(cmd.calls == [.register, .unregister])
+            controller.detach()
+            #expect(cmd.calls == [.register, .unregister])
+        }
+    }
+
+    @MainActor
+    @Test("Repeated attach and detach do not register duplicate handlers")
+    func attachAndDetachAreIdempotent() async {
+        let info = FakeNowPlayingInfoSurface()
+        let cmd = FakeRemoteCommandSurface()
+        let controller = NowPlayingController(infoSurface: info, commandSurface: cmd)
+        let state = TTSPlaybackState()
+        let rec = RecordingController()
+        let metadata = NowPlayingMetadata(title: "x")
+        controller.attach(state: state, controller: rec, metadata: metadata)
+        controller.attach(state: state, controller: rec, metadata: metadata)
+        #expect(cmd.calls == [.register])
+        controller.detach()
+        controller.detach()
+        #expect(cmd.calls == [.register, .unregister])
     }
 
     @MainActor

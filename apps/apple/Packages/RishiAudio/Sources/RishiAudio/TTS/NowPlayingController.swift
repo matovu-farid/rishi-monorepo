@@ -9,23 +9,9 @@ public protocol TTSPlaybackControlling: Sendable {
     func pause() async
     func resume() async
     func stop() async
-    func skip(seconds: TimeInterval) async
-    func scrub(toSeconds seconds: TimeInterval) async
+    func previousTrack() async
+    func nextTrack() async
 }
-
-#if canImport(AVFAudio)
-extension TTSEngine: TTSPlaybackControlling {
-    /// Phase 8 v1: sentence-level navigation lives in the reader VM
-    /// extension (plan 08-06). Lock-screen surfaces the command but the
-    /// engine no-ops it for now.
-    public func skip(seconds: TimeInterval) async {
-        _ = seconds
-    }
-    public func scrub(toSeconds seconds: TimeInterval) async {
-        _ = seconds
-    }
-}
-#endif
 
 /// Observes `TTSPlaybackState` and updates `MPNowPlayingInfoCenter` plus
 /// handles `MPRemoteCommandCenter` input. Lives on the main actor because
@@ -33,7 +19,7 @@ extension TTSEngine: TTSPlaybackControlling {
 ///
 /// Lifecycle:
 ///   - `attach(state:controller:metadata:)` once per session — sets
-///     metadata, installs handlers, starts observing status/elapsed.
+///     metadata, installs handlers, starts observing status.
 ///   - `detach()` — cancels observation, unregisters handlers, clears
 ///     the info surface.
 @MainActor
@@ -45,7 +31,6 @@ public final class NowPlayingController {
     private var controller: (any TTSPlaybackControlling)?
     private var observationTask: Task<Void, Never>?
     private var lastStatus: TTSStatus?
-    private var lastElapsed: TimeInterval?
 
     public init(
         infoSurface: any NowPlayingInfoSurface,
@@ -60,16 +45,17 @@ public final class NowPlayingController {
         controller: any TTSPlaybackControlling,
         metadata: NowPlayingMetadata
     ) {
+        guard self.state == nil, self.controller == nil, observationTask == nil else { return }
         self.state = state
         self.controller = controller
         lastStatus = nil
-        lastElapsed = nil
         infoSurface.setMetadata(metadata)
         installRemoteHandlers(for: controller)
         startObserving(state: state)
     }
 
     public func detach() {
+        guard state != nil || controller != nil || observationTask != nil else { return }
         observationTask?.cancel()
         observationTask = nil
         commandSurface.unregister()
@@ -105,17 +91,14 @@ public final class NowPlayingController {
                     }
                 }
             },
-            // KEEP: actor hop only.
-            onSkipForward: { seconds in
-                Task { await controller.skip(seconds: seconds) }
+            onPreviousTrack: {
+                Task { await controller.previousTrack() }
             },
-            // KEEP: actor hop only.
-            onSkipBackward: { seconds in
-                Task { await controller.skip(seconds: -seconds) }
+            onNextTrack: {
+                Task { await controller.nextTrack() }
             },
-            // KEEP: actor hop only.
-            onScrub: { seconds in
-                Task { await controller.scrub(toSeconds: seconds) }
+            onStop: {
+                Task { await controller.stop() }
             }
         )
         commandSurface.register(handlers: handlers)
@@ -137,34 +120,25 @@ public final class NowPlayingController {
             while !Task.isCancelled {
                 guard let self else { return }
                 let status = state.status
-                let elapsed = state.elapsed
-                self.apply(status: status, elapsed: elapsed)
+                self.apply(status: status)
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
         }
     }
 
-    private func apply(status: TTSStatus, elapsed: TimeInterval) {
+    private func apply(status: TTSStatus) {
         if status != lastStatus {
             lastStatus = status
             switch status {
             case .playing:
                 infoSurface.setPlaybackRate(1.0)
-                infoSurface.setElapsed(elapsed)
-                lastElapsed = elapsed
             case .paused:
                 infoSurface.setPlaybackRate(0.0)
-                infoSurface.setElapsed(elapsed)
-                lastElapsed = elapsed
             case .stopped, .idle, .error:
-                infoSurface.clear()
-                lastElapsed = nil
+                detach()
             case .loading:
                 break
             }
-        } else if status == .playing, elapsed != lastElapsed {
-            infoSurface.setElapsed(elapsed)
-            lastElapsed = elapsed
         }
     }
 }

@@ -4,18 +4,17 @@ import RishiLogging
 // MARK: - Protocols
 
 /// Abstract surface for `MPNowPlayingInfoCenter` — the controller writes
-/// metadata + playback rate + elapsed time through this seam so tests can
+/// metadata and playback rate through this seam so tests can
 /// swap in a `FakeNowPlayingInfoSurface` and assert call order without
 /// touching MediaPlayer.
 public protocol NowPlayingInfoSurface: Sendable {
     @MainActor func setMetadata(_ metadata: NowPlayingMetadata)
     @MainActor func setPlaybackRate(_ rate: Double)
-    @MainActor func setElapsed(_ elapsed: TimeInterval)
     @MainActor func clear()
 }
 
 /// Abstract surface for `MPRemoteCommandCenter` — the controller registers
-/// `RemoteCommandHandlers` (play/pause/skip/scrub closures) on attach and
+/// `RemoteCommandHandlers` (play/pause/previous/next/stop closures) on attach and
 /// unregisters on detach. Production impl wires the closures to
 /// `addTarget(_:handler:)` on each command; the Fake records the call
 /// order and exposes a `simulate(_:)` test seam.
@@ -48,10 +47,6 @@ public final class MPNowPlayingInfoCenterAdapter: NowPlayingInfoSurface {
         applyRate(rate)
     }
 
-    public func setElapsed(_ elapsed: TimeInterval) {
-        applyElapsed(elapsed)
-    }
-
     public func clear() {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
@@ -62,9 +57,7 @@ public final class MPNowPlayingInfoCenterAdapter: NowPlayingInfoSurface {
         if let author = metadata.author {
             info[MPMediaItemPropertyArtist] = author
         }
-        if let duration = metadata.durationEstimate {
-            info[MPMediaItemPropertyPlaybackDuration] = duration
-        }
+        info[MPNowPlayingInfoPropertyMediaType] = MPMediaType.audiobook.rawValue
         #if canImport(UIKit)
         if let data = metadata.coverData, let image = UIImage(data: data) {
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
@@ -79,11 +72,6 @@ public final class MPNowPlayingInfoCenterAdapter: NowPlayingInfoSurface {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
-    private func applyElapsed(_ elapsed: TimeInterval) {
-        var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-    }
 }
 
 /// Wraps `MPRemoteCommandCenter.shared()`. `addTarget(_:handler:)` on each
@@ -103,14 +91,16 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
 
     private func applyHandlers(_ handlers: RemoteCommandHandlers) {
         let center = MPRemoteCommandCenter.shared()
+        removeAll()
         center.playCommand.isEnabled = true
         center.pauseCommand.isEnabled = true
         center.togglePlayPauseCommand.isEnabled = true
-        center.skipForwardCommand.isEnabled = true
-        center.skipForwardCommand.preferredIntervals = [15]
-        center.skipBackwardCommand.isEnabled = true
-        center.skipBackwardCommand.preferredIntervals = [15]
-        center.changePlaybackPositionCommand.isEnabled = true
+        center.previousTrackCommand.isEnabled = true
+        center.nextTrackCommand.isEnabled = true
+        center.stopCommand.isEnabled = true
+        center.skipForwardCommand.isEnabled = false
+        center.skipBackwardCommand.isEnabled = false
+        center.changePlaybackPositionCommand.isEnabled = false
 
         center.playCommand.addTarget { _ in
             MainActor.assumeIsolated { handlers.onPlay() }
@@ -124,21 +114,16 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
             MainActor.assumeIsolated { handlers.onTogglePlayPause() }
             return .success
         }
-        center.skipForwardCommand.addTarget { event in
-            let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? 15
-            MainActor.assumeIsolated { handlers.onSkipForward(interval) }
+        center.previousTrackCommand.addTarget { _ in
+            MainActor.assumeIsolated { handlers.onPreviousTrack() }
             return .success
         }
-        center.skipBackwardCommand.addTarget { event in
-            let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? 15
-            MainActor.assumeIsolated { handlers.onSkipBackward(interval) }
+        center.nextTrackCommand.addTarget { _ in
+            MainActor.assumeIsolated { handlers.onNextTrack() }
             return .success
         }
-        center.changePlaybackPositionCommand.addTarget { event in
-            guard let pos = (event as? MPChangePlaybackPositionCommandEvent)?.positionTime else {
-                return .commandFailed
-            }
-            MainActor.assumeIsolated { handlers.onScrub(pos) }
+        center.stopCommand.addTarget { _ in
+            MainActor.assumeIsolated { handlers.onStop() }
             return .success
         }
     }
@@ -148,6 +133,9 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
         center.playCommand.removeTarget(nil)
         center.pauseCommand.removeTarget(nil)
         center.togglePlayPauseCommand.removeTarget(nil)
+        center.previousTrackCommand.removeTarget(nil)
+        center.nextTrackCommand.removeTarget(nil)
+        center.stopCommand.removeTarget(nil)
         center.skipForwardCommand.removeTarget(nil)
         center.skipBackwardCommand.removeTarget(nil)
         center.changePlaybackPositionCommand.removeTarget(nil)
@@ -164,7 +152,6 @@ public final class FakeNowPlayingInfoSurface: NowPlayingInfoSurface, @unchecked 
     public enum Call: Sendable, Equatable {
         case metadata(NowPlayingMetadata)
         case rate(Double)
-        case elapsed(TimeInterval)
         case clear
     }
 
@@ -185,10 +172,6 @@ public final class FakeNowPlayingInfoSurface: NowPlayingInfoSurface, @unchecked 
     public func setPlaybackRate(_ rate: Double) {
         lock.lock(); defer { lock.unlock() }
         _calls.append(.rate(rate))
-    }
-    public func setElapsed(_ elapsed: TimeInterval) {
-        lock.lock(); defer { lock.unlock() }
-        _calls.append(.elapsed(elapsed))
     }
     public func clear() {
         lock.lock(); defer { lock.unlock() }
@@ -238,9 +221,9 @@ public final class FakeRemoteCommandSurface: RemoteCommandSurface, @unchecked Se
         case .play: handlers.onPlay()
         case .pause: handlers.onPause()
         case .togglePlayPause: handlers.onTogglePlayPause()
-        case .skipForward(let s): handlers.onSkipForward(s)
-        case .skipBackward(let s): handlers.onSkipBackward(s)
-        case .scrub(let s): handlers.onScrub(s)
+        case .previousTrack: handlers.onPreviousTrack()
+        case .nextTrack: handlers.onNextTrack()
+        case .stop: handlers.onStop()
         }
     }
 }

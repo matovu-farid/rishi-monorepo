@@ -9,18 +9,15 @@ public struct NowPlayingMetadata: Sendable, Equatable {
     public let title: String
     public let author: String?
     public let coverData: Data?
-    public let durationEstimate: TimeInterval?
 
     public init(
         title: String,
         author: String? = nil,
-        coverData: Data? = nil,
-        durationEstimate: TimeInterval? = nil
+        coverData: Data? = nil
     ) {
         self.title = title
         self.author = author
         self.coverData = coverData
-        self.durationEstimate = durationEstimate
     }
 }
 
@@ -30,9 +27,9 @@ public enum RemoteCommand: Sendable, Equatable {
     case play
     case pause
     case togglePlayPause
-    case skipForward(seconds: TimeInterval)
-    case skipBackward(seconds: TimeInterval)
-    case scrub(toSeconds: TimeInterval)
+    case previousTrack
+    case nextTrack
+    case stop
 }
 
 /// Handler bundle the controller registers with the command surface. All
@@ -41,23 +38,23 @@ public struct RemoteCommandHandlers: Sendable {
     public let onPlay: @Sendable @MainActor () -> Void
     public let onPause: @Sendable @MainActor () -> Void
     public let onTogglePlayPause: @Sendable @MainActor () -> Void
-    public let onSkipForward: @Sendable @MainActor (TimeInterval) -> Void
-    public let onSkipBackward: @Sendable @MainActor (TimeInterval) -> Void
-    public let onScrub: @Sendable @MainActor (TimeInterval) -> Void
+    public let onPreviousTrack: @Sendable @MainActor () -> Void
+    public let onNextTrack: @Sendable @MainActor () -> Void
+    public let onStop: @Sendable @MainActor () -> Void
 
     public init(
         onPlay: @Sendable @escaping @MainActor () -> Void,
         onPause: @Sendable @escaping @MainActor () -> Void,
         onTogglePlayPause: @Sendable @escaping @MainActor () -> Void,
-        onSkipForward: @Sendable @escaping @MainActor (TimeInterval) -> Void,
-        onSkipBackward: @Sendable @escaping @MainActor (TimeInterval) -> Void,
-        onScrub: @Sendable @escaping @MainActor (TimeInterval) -> Void
+        onPreviousTrack: @Sendable @escaping @MainActor () -> Void,
+        onNextTrack: @Sendable @escaping @MainActor () -> Void,
+        onStop: @Sendable @escaping @MainActor () -> Void
     ) {
         self.onPlay = onPlay
         self.onPause = onPause
         self.onTogglePlayPause = onTogglePlayPause
-        self.onSkipForward = onSkipForward
-        self.onSkipBackward = onSkipBackward
-        self.onScrub = onScrub
+        self.onPreviousTrack = onPreviousTrack
+        self.onNextTrack = onNextTrack
+        self.onStop = onStop
     }
 }
