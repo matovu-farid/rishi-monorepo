@@ -132,7 +132,7 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
                 return .commandFailed
             }
             return MainActor.assumeIsolated {
-                switch handlers.onChangePlaybackRate(event.playbackRate) {
+                switch handlers.onChangePlaybackRate(Double(event.playbackRate)) {
                 case .success: return .success
                 case .commandFailed: return .commandFailed
                 }

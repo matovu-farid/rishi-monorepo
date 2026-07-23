@@ -6,7 +6,7 @@ import SwiftUI
 /// device list.
 struct SystemAudioRoutePicker: View {
     var body: some View {
-        #if canImport(UIKit) && canImport(MediaPlayer)
+        #if canImport(UIKit) && canImport(AVKit)
             SystemAudioRoutePickerRepresentable()
                 .frame(height: 32)
                 .accessibilityIdentifier("tts-audio-route-picker")
@@ -23,24 +23,20 @@ enum SystemAudioRoutePickerVisibility {
     }
 }
 
-#if canImport(UIKit) && canImport(MediaPlayer)
-import MediaPlayer
+#if canImport(UIKit) && canImport(AVKit)
+import AVKit
 import UIKit
 
 private struct SystemAudioRoutePickerRepresentable: UIViewRepresentable {
-    func makeUIView(context: Context) -> MPVolumeView {
-        let view = MPVolumeView(frame: .zero)
-        view.showsVolumeSlider = false
-        view.showsRouteButton = true
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView(frame: .zero)
         view.backgroundColor = .clear
         return view
     }
 
-    func updateUIView(_ view: MPVolumeView, context: Context) {
-        // Keep the route button visible even when the system updates the
-        // available output routes while the reader remains on screen.
-        view.showsVolumeSlider = false
-        view.showsRouteButton = true
+    func updateUIView(_ view: AVRoutePickerView, context: Context) {
+        // Keep the system-owned route picker available as routes change.
+        view.backgroundColor = .clear
     }
 }
 #endif
