@@ -17,6 +17,7 @@ public final class Conversation: @unchecked Sendable {
 	private var task: Task<Void, Error>!
 	private let sessionUpdateCallback: SessionUpdateCallback?
 	private let errorStream: AsyncStream<ServerError>.Continuation
+	private let sessionStream: AsyncStream<Session>.Continuation
 
 	/// Whether to print debug information to the console.
 	public var debug: Bool
@@ -33,6 +34,17 @@ public final class Conversation: @unchecked Sendable {
 
 	/// A stream of errors that occur during the conversation.
 	public let errors: AsyncStream<ServerError>
+
+	/// Status transitions emitted by the underlying realtime transport. The
+	/// stream is buffered so a consumer can subscribe after `connect()` has
+	/// returned without missing the data-channel-open event.
+	public var statusUpdates: AsyncStream<RealtimeAPI.Status> { client.statusUpdates }
+
+	/// Session snapshots emitted whenever the server creates or updates the
+	/// realtime session. The stream is buffered so configuration that arrives
+	/// during the SDP/data-channel handshake remains observable to late
+	/// consumers.
+	public let sessionUpdates: AsyncStream<Session>
 
 	/// The current session for this conversation.
 	public private(set) var session: Session?
@@ -65,6 +77,7 @@ public final class Conversation: @unchecked Sendable {
 		client = try! WebRTCConnector.create()
 		self.sessionUpdateCallback = sessionUpdateCallback
 		(errors, errorStream) = AsyncStream.makeStream(of: ServerError.self)
+		(sessionUpdates, sessionStream) = AsyncStream.makeStream(of: Session.self)
 
 		task = Task.detached { [weak self] in
 			guard let self else { return }
@@ -85,6 +98,7 @@ public final class Conversation: @unchecked Sendable {
 	deinit {
 		client.disconnect()
 		errorStream.finish()
+		sessionStream.finish()
 	}
 
 	/// Connects the underlying WebRTC peer and returns the OpenAI-assigned
@@ -124,8 +138,10 @@ public final class Conversation: @unchecked Sendable {
 
 	/// Wait for the connection to be established
 	public func waitForConnection() async {
-		while status != .connected {
-			try? await Task.sleep(for: .milliseconds(500))
+		guard status != .connected else { return }
+		for await nextStatus in statusUpdates {
+			if nextStatus == .connected { return }
+			if nextStatus == .disconnected { return }
 		}
 	}
 
@@ -207,11 +223,13 @@ private extension Conversation {
 			case let .error(_, error):
 				errorStream.yield(error)
 				print("Received error: \(error)")
-			case let .sessionCreated(_, session):
-				self.session = session
-				if let sessionUpdateCallback { try updateSession(withChanges: sessionUpdateCallback) }
-			case let .sessionUpdated(_, session):
-				self.session = session
+		case let .sessionCreated(_, session):
+			self.session = session
+			sessionStream.yield(session)
+			if let sessionUpdateCallback { try updateSession(withChanges: sessionUpdateCallback) }
+		case let .sessionUpdated(_, session):
+			self.session = session
+			sessionStream.yield(session)
 			case let .conversationItemCreated(_, item, _):
 				entries.append(item)
 			case let .conversationItemDeleted(_, itemId):

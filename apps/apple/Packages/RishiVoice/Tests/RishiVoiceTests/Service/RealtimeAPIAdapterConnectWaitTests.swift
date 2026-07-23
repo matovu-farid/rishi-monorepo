@@ -1,5 +1,7 @@
 import Testing
 import Foundation
+import Core
+import RishiCore
 @testable import RishiVoice
 
 /// Regression: the OpenAI Realtime SDK's `Conversation.connect()` returns after
@@ -53,5 +55,21 @@ struct RealtimeAPIAdapterConnectWaitTests {
                 pollInterval: .milliseconds(10)
             ) { false }
         }
+    }
+
+    @Test("event-driven wait returns on the data-channel status event")
+    func returnsOnStatusEvent() async throws {
+        let (updates, continuation) = AsyncStream.makeStream(of: RealtimeAPI.Status.self)
+        let producer = Task {
+            try? await Task.sleep(for: .milliseconds(5))
+            continuation.yield(.connected)
+            continuation.finish()
+        }
+        defer { producer.cancel(); continuation.finish() }
+
+        try await RealtimeAPIAdapter.waitUntilConnected(
+            timeout: .seconds(1),
+            statusUpdates: updates
+        )
     }
 }

@@ -127,7 +127,9 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     }
 
     /// Wait for the realtime session to become visible on the conversation and
-    /// confirm that the expected book-aware config landed.
+    /// confirm that the expected book tool config landed. The prompt text is
+    /// rendered by the Worker and can legitimately differ between clients;
+    /// the tool definition is the stable readiness contract.
     static func waitUntilConfiguredSession(
         timeout: Duration = .seconds(5),
         pollInterval: Duration = .milliseconds(15),
@@ -155,6 +157,41 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         )
     }
 
+    /// Event-driven counterpart to the legacy snapshot polling seam. The SDK
+    /// buffers session updates, so this remains race-free even when the
+    /// session-created/session-updated events arrive during `connect()`.
+    static func waitUntilConfiguredSession(
+        timeout: Duration = .seconds(5),
+        sessionUpdates: AsyncStream<SDKSession>
+    ) async throws -> SDKSession {
+        try await withThrowingTaskGroup(of: SDKSession.self) { group in
+            group.addTask {
+                for await session in sessionUpdates {
+                    if sessionHasBookContext(session) { return session }
+                }
+                throw RealtimeClientError(
+                    code: "session_not_ready",
+                    message: "Realtime session updates ended before configuration was observed"
+                )
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw RealtimeClientError(
+                    code: "session_not_ready",
+                    message: "Realtime session never exposed the configured book tool and instructions"
+                )
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw RealtimeClientError(
+                    code: "session_not_ready",
+                    message: "Realtime session readiness task ended without a result"
+                )
+            }
+            return result
+        }
+    }
+
     internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
         toolDispatcher.isArgumentsReady(fc: fc)
     }
@@ -178,13 +215,39 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // Ensure WebRTC manual-audio mode is on exactly once (process-global,
         // idempotent), BEFORE any WebRTC audio init.
         audioUnit.enableManualModeOnce()
+        // A reconnect may carry a newer page/paragraph snapshot than the
+        // ephemeral key was minted with. The first connection can trust the
+        // server-minted configuration (and avoid `session.update`); only a
+        // reconnect needs to re-apply the latest client context.
+        let isReconnect = lock.withLock { conversation != nil }
         await teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info)
+        // The ephemeral client secret is minted with the complete session
+        // configuration (prompt, tools, VAD, and audio formats) by the
+        // Worker. Passing a session-update callback here would send the same
+        // configuration again after `session.created`, forcing an additional
+        // data-channel round trip before audio can flow. Keep the server's
+        // configuration authoritative for the initial connection; reconnects
+        // re-apply the latest page context above, while `sessionUpdates` below
+        // validates that the resulting configuration arrived.
         let convo = await MainActor.run { () -> SDKConversation in
-            SDKConversation(debug: false) { [self] session in
-                session = makeConfiguredSession(bookContext: bookContext, language: language)
+            if isReconnect {
+                return SDKConversation(debug: false) { [self] session in
+                    session = makeConfiguredSession(bookContext: bookContext, language: language)
+                }
             }
+            return SDKConversation(debug: false)
         }
+        Log.event(
+            isReconnect ? "voice.adapter.session.update.reconnect" : "voice.adapter.session.update.server_minted",
+            level: .info
+        )
+        // Capture the SDK's buffered readiness streams before beginning the
+        // handshake. The data channel and session events can arrive before
+        // `Conversation.connect()` returns, so subscribing afterward would
+        // reintroduce a race and force us back to polling snapshots.
+        let statusUpdates = await MainActor.run { convo.statusUpdates }
+        let sessionUpdates = await MainActor.run { convo.sessionUpdates }
         lock.withLock { self.conversation = convo }
         let capturedProviderCallId = try await convo.connect(
             ephemeralKey: ephemeralKey,
@@ -208,18 +271,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // it as a lost connection, and reconnect — spawning a second overlapping
         // peer (the "two voices" echo) in an endless loop. Wait for the channel
         // to actually open so "connected" is honest.
-        try await Self.waitUntilConnected { [convo] in
-            await MainActor.run {
-                if case .connected = convo.status { return true }
-                return false
-            }
-        }
+        try await Self.waitUntilConnected(statusUpdates: statusUpdates)
         Log.event("voice.adapter.connected", level: .info)
 
         Log.event("voice.adapter.session.wait", level: .info)
-        let sessionSnapshot = try await Self.waitUntilConfiguredSession { [convo] in
-            await MainActor.run { convo.session }
-        }
+        let sessionSnapshot = try await Self.waitUntilConfiguredSession(sessionUpdates: sessionUpdates)
         let entryCount = await MainActor.run { convo.entries.count }
         Log.event("voice.adapter.session.snapshot", level: .info, data: [
             "hasSession": String(true),
@@ -382,6 +438,41 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         )
     }
 
+    /// Event-driven data-channel readiness wait. The connector emits the
+    /// transition at the exact delegate callback, avoiding the old 25 ms
+    /// polling loop and its extra actor hops.
+    static func waitUntilConnected(
+        timeout: Duration = .seconds(15),
+        statusUpdates: AsyncStream<RealtimeAPI.Status>
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for await status in statusUpdates {
+                    if status == .connected { return }
+                    if status == .disconnected {
+                        throw RealtimeClientError(
+                            code: "connect_closed",
+                            message: "WebRTC data channel closed before it became ready"
+                        )
+                    }
+                }
+                throw RealtimeClientError(
+                    code: "connect_closed",
+                    message: "WebRTC status updates ended before the data channel opened"
+                )
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw RealtimeClientError(
+                    code: "connect_timeout",
+                    message: "WebRTC data channel did not open within \(timeout)"
+                )
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
+
     /// Cancels the active pumps and tears down the current `Conversation`,
     /// closing the WebRTC peer. Does NOT touch the stream continuations, so a
     /// reconnect can keep the same transcript/tool/error streams alive.
@@ -512,7 +603,6 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     private static func sessionHasBookContext(_ session: SDKSession) -> Bool {
         session.toolChoice == .auto
-            && session.instructions.contains("bookContext")
             && session.tools?.contains { tool in
                 guard case let .function(function) = tool else { return false }
                 return function.name == "bookContext"

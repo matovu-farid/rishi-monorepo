@@ -29,7 +29,7 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
 
         #expect(session.instructions.contains("You are a voice assistant inside a book reader."))
         #expect(session.instructions.contains("Respond in English."))
-        #expect(session.instructions.contains("quietly check the book"))
+        #expect(session.instructions.contains("quietly check it for relevant passages"))
         #expect(session.instructions.contains("Never mention tools"))
         #expect(!session.instructions.contains("Use the bookContext tool"))
         #expect(session.instructions.contains("The Book"))
@@ -68,7 +68,7 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
         ) {
             await feeder.next()
         }
-        #expect(session.instructions.contains("quietly check the book"))
+        #expect(session.instructions.contains("quietly check it for relevant passages"))
         #expect(session.tools?.count == 1)
     }
 
@@ -80,6 +80,51 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
                 pollInterval: .milliseconds(10)
             ) { nil }
         }
+    }
+
+    @Test("event-driven session wait returns on the configured snapshot")
+    func waitUntilConfiguredSessionReturnsFromStream() async throws {
+        let adapter = RealtimeAPIAdapter()
+        let readySession = adapter.makeConfiguredSession(bookContext: BookContextSnapshot(
+            bookId: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            currentPage: 1,
+            pageText: "Page",
+            outline: nil,
+            activeParagraphText: nil
+        ))
+        let (updates, continuation) = AsyncStream.makeStream(of: type(of: readySession))
+        let producer = Task {
+            try? await Task.sleep(for: .milliseconds(5))
+            continuation.yield(readySession)
+            continuation.finish()
+        }
+        defer { producer.cancel(); continuation.finish() }
+
+        let session = try await RealtimeAPIAdapter.waitUntilConfiguredSession(
+            timeout: .seconds(1),
+            sessionUpdates: updates
+        )
+        #expect(session.tools?.count == 1)
+    }
+
+    @Test("server-minted prompt is accepted without client session update")
+    func serverConfiguredSessionDoesNotRequireLocalPromptText() async throws {
+        var serverSession = RealtimeAPIAdapter().makeConfiguredSession(bookContext: nil)
+        // The Worker uses the shared prompt renderer. It intentionally does
+        // not include the literal Swift tool name in its instructions; the
+        // tool definition is the authoritative readiness signal.
+        serverSession.instructions = "## Role\nYou are the user's personal teacher.\n## Book lookup"
+
+        let (updates, continuation) = AsyncStream.makeStream(of: type(of: serverSession))
+        continuation.yield(serverSession)
+        continuation.finish()
+
+        let session = try await RealtimeAPIAdapter.waitUntilConfiguredSession(
+            timeout: .seconds(1),
+            sessionUpdates: updates
+        )
+        #expect(session.instructions.contains("Book lookup"))
+        #expect(session.tools?.count == 1)
     }
 }
 
