@@ -73,21 +73,26 @@ public struct VoiceControlsView: View {
     }
 
     private var controlsRow: some View {
-        ZStack {
-            VoiceWaveformView(phase: displayPhase)
-                .frame(width: 56, height: 40)
+        HStack(spacing: 0) {
+            iconButton(
+                systemName: "speaker.wave.2.fill",
+                foregroundStyle: RishiColor.accent,
+                accessibilityIdentifier: Self.openReadAloudAccessibilityIdentifier,
+                accessibilityLabel: "Read Aloud",
+                action: onOpenReadAloud
+            )
+
+            Spacer(minLength: 0)
+
+            // Keep a reserved center slot so the trailing controls cannot
+            // overlap the waveform when the optional text-chat button is shown.
+            Color.clear
+                .frame(width: 56, height: Self.iconButtonSize)
+                .accessibilityHidden(true)
+
+            Spacer(minLength: 0)
 
             HStack(spacing: RishiSpacing.s) {
-                iconButton(
-                    systemName: "speaker.wave.2.fill",
-                    foregroundStyle: RishiColor.accent,
-                    accessibilityIdentifier: Self.openReadAloudAccessibilityIdentifier,
-                    accessibilityLabel: "Read Aloud",
-                    action: onOpenReadAloud
-                )
-
-                Spacer(minLength: 0)
-
                 iconButton(
                     systemName: "phone.down.fill",
                     foregroundStyle: RishiColor.danger,
@@ -106,6 +111,10 @@ public struct VoiceControlsView: View {
                     )
                 }
             }
+        }
+        .overlay {
+            VoiceWaveformView(phase: displayPhase)
+                .frame(width: 56, height: 40)
         }
         .frame(maxWidth: .infinity)
     }
