@@ -73,17 +73,13 @@ public struct VoiceControlsView: View {
     }
 
     private var controlsRow: some View {
-        fullControlsRow
-    }
-
-    private var fullControlsRow: some View {
-        HStack(spacing: 0) {
-            leadingControls.frame(width: 104, alignment: .trailing)
-            centerSlot
-            trailingControls.frame(width: 104, alignment: .leading)
+        HStack(spacing: RishiSpacing.m) {
+            leadingControls
+            waveform
+            trailingControls
         }
-        .frame(minWidth: 264)
-        .overlay { waveform }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, RishiSpacing.xl)
     }
 
     private var leadingControls: some View {
@@ -116,12 +112,6 @@ public struct VoiceControlsView: View {
                 )
             }
         }
-    }
-
-    private var centerSlot: some View {
-        Color.clear
-            .frame(width: 56, height: Self.iconButtonSize)
-            .accessibilityHidden(true)
     }
 
     private var waveform: some View {
