@@ -43,6 +43,11 @@ struct VoiceControlsViewTests {
         #expect(VoiceControlsView.openTextChatAccessibilityIdentifier == "voice.openTextChat")
     }
 
+    @Test("VoiceControlsView uses a stable icon-button hit target")
+    func iconButtonHitTarget() {
+        #expect(VoiceControlsView.iconButtonSize == 48)
+    }
+
     @Test("VoiceControlsView constructs across connecting statuses")
     func connectingStatuses() {
         let statuses: [VoiceSessionStatus] = [

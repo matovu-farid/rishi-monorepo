@@ -8,9 +8,12 @@ public struct VoiceControlsView: View {
     nonisolated public static let openReadAloudAccessibilityIdentifier = "voice-open-read-aloud"
     nonisolated public static let endAccessibilityIdentifier = "voice-end"
     nonisolated public static let openTextChatAccessibilityIdentifier = "voice.openTextChat"
+    nonisolated public static let iconButtonSize: CGFloat = 48
 
     @Bindable private var state: VoiceSessionState
     @State private var buttonHapticTick = 0
+    @State private var transientStatus: String?
+    @State private var transientStatusGeneration = 0
 
     private let onEnd: () -> Void
     private let onOpenReadAloud: () -> Void
@@ -29,59 +32,72 @@ public struct VoiceControlsView: View {
     }
 
     public var body: some View {
-        HStack(spacing: RishiSpacing.s) {
-            Spacer(minLength: 0)
-
-            Button(action: performButtonAction(onOpenReadAloud)) {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(RishiTypography.titleM)
-                    .foregroundStyle(RishiColor.accent)
-                    .frame(width: 40, height: 40)
-            }
-            .accessibilityIdentifier(Self.openReadAloudAccessibilityIdentifier)
-            .accessibilityLabel("Read Aloud")
-
-            centerCluster
-
-            Button(action: performButtonAction(onEnd)) {
-                Image(systemName: "phone.down.fill")
-                    .font(RishiTypography.titleM)
-                    .foregroundStyle(RishiColor.danger)
-                    .frame(width: 40, height: 40)
-            }
-            .accessibilityIdentifier(Self.endAccessibilityIdentifier)
-            .accessibilityLabel("End voice session")
-
-            if let onOpenTextChat {
-                Button(action: performButtonAction(onOpenTextChat)) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(RishiTypography.titleM)
-                        .foregroundStyle(RishiColor.accent)
-                        .frame(width: 40, height: 40)
+        controlsRow
+            .overlay(alignment: .top) {
+                if let statusText = persistentStatus ?? transientStatus {
+                    Text(statusText)
+                        .font(RishiTypography.caption)
+                        .foregroundStyle(statusColor)
+                        .lineLimit(1)
+                        .padding(.horizontal, RishiSpacing.m)
+                        .padding(.vertical, RishiSpacing.xs)
+                        .background(.thinMaterial, in: Capsule())
+                        .accessibilityLabel("Voice session status: \(statusText)")
+                        .transition(.opacity)
+                        .offset(y: -RishiSpacing.xl)
                 }
-                .accessibilityIdentifier(Self.openTextChatAccessibilityIdentifier)
-                .accessibilityLabel("Open text chat")
             }
-
-            Spacer(minLength: 0)
-        }
-        .padding(RishiSpacing.l)
-        .sensoryFeedback(.impact(weight: .light), trigger: buttonHapticTick)
-        .accessibilityElement(children: .contain)
+            .padding(RishiSpacing.l)
+            .sensoryFeedback(.impact(weight: .light), trigger: buttonHapticTick)
+            .accessibilityElement(children: .contain)
+            .onAppear(perform: updateStatusPresentation)
+            .onChange(of: state.status) { _, _ in
+                updateStatusPresentation()
+            }
+            .onChange(of: state.activityPhase) { _, _ in
+                updateStatusPresentation()
+            }
+            .onChange(of: state.isFinalInterval) { _, _ in
+                updateStatusPresentation()
+            }
     }
 
-    private var centerCluster: some View {
-        VStack(spacing: RishiSpacing.xs) {
+    private var controlsRow: some View {
+        ZStack {
             VoiceWaveformView(phase: displayPhase)
                 .frame(width: 56, height: 40)
 
-            Text(statusLabel)
-                .font(RishiTypography.caption)
-                .foregroundStyle(statusColor)
-                .lineLimit(1)
-                .accessibilityLabel("Voice session status: \(statusLabel)")
+            HStack(spacing: RishiSpacing.s) {
+                iconButton(
+                    systemName: "speaker.wave.2.fill",
+                    foregroundStyle: RishiColor.accent,
+                    accessibilityIdentifier: Self.openReadAloudAccessibilityIdentifier,
+                    accessibilityLabel: "Read Aloud",
+                    action: onOpenReadAloud
+                )
+
+                Spacer(minLength: 0)
+
+                iconButton(
+                    systemName: "phone.down.fill",
+                    foregroundStyle: RishiColor.danger,
+                    accessibilityIdentifier: Self.endAccessibilityIdentifier,
+                    accessibilityLabel: "End voice session",
+                    action: onEnd
+                )
+
+                if let onOpenTextChat {
+                    iconButton(
+                        systemName: "bubble.left.and.bubble.right",
+                        foregroundStyle: RishiColor.accent,
+                        accessibilityIdentifier: Self.openTextChatAccessibilityIdentifier,
+                        accessibilityLabel: "Open text chat",
+                        action: onOpenTextChat
+                    )
+                }
+            }
         }
-        .frame(minWidth: 88)
+        .frame(maxWidth: .infinity)
     }
 
     private var displayPhase: VoiceActivityPhase {
@@ -106,27 +122,71 @@ public struct VoiceControlsView: View {
         }
     }
 
-    private var statusLabel: String {
+    private var persistentStatus: String? {
         if case .failed = state.status {
             return state.lastError ?? "Couldn't connect"
         }
         if state.isFinalInterval {
             return "Ending soon"
         }
-        switch displayPhase {
-        case .connecting:
+        return nil
+    }
+
+    private var transientStatusLabel: String? {
+        guard persistentStatus == nil else { return nil }
+        switch state.status {
+        case .idle, .requestingMic, .fetchingKey, .creatingSession, .connecting, .registeringCall:
             return "Connecting…"
-        case .listening:
-            return "Listening…"
-        case .speaking:
-            return "Speaking…"
+        case .live:
+            switch displayPhase {
+            case .connecting: return "Connecting…"
+            case .listening: return "Listening…"
+            case .speaking: return "Speaking…"
+            case .reconnecting: return "Reconnecting…"
+            }
         case .reconnecting:
             return "Reconnecting…"
+        case .ending, .ended, .failed:
+            return nil
         }
     }
 
     private var statusColor: Color {
-        state.isFinalInterval ? RishiColor.danger : RishiColor.textSecondary
+        state.isFinalInterval || state.status.isFailure ? RishiColor.danger : RishiColor.textSecondary
+    }
+
+    private func iconButton(
+        systemName: String,
+        foregroundStyle: Color,
+        accessibilityIdentifier: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: performButtonAction(action)) {
+            Image(systemName: systemName)
+                .font(RishiTypography.titleM)
+                .foregroundStyle(foregroundStyle)
+                .frame(width: Self.iconButtonSize, height: Self.iconButtonSize)
+                .contentShape(Rectangle())
+        }
+        .frame(width: Self.iconButtonSize, height: Self.iconButtonSize)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func updateStatusPresentation() {
+        transientStatusGeneration &+= 1
+        transientStatus = transientStatusLabel
+
+        guard transientStatus != nil else { return }
+        let generation = transientStatusGeneration
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled, transientStatusGeneration == generation else { return }
+            withAnimation {
+                transientStatus = nil
+            }
+        }
     }
 
     private func performButtonAction(_ action: @escaping () -> Void) -> () -> Void {
@@ -134,5 +194,12 @@ public struct VoiceControlsView: View {
             buttonHapticTick &+= 1
             action()
         }
+    }
+}
+
+private extension VoiceSessionStatus {
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
     }
 }
