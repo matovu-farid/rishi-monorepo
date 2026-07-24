@@ -281,7 +281,8 @@ public actor RealtimeVoiceSession {
             prewarmTask?.cancel()
             await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
-            await fail(reason: .connect, message: String(describing: error))
+            Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
+            await fail(reason: .connect)
             return
         }
 
@@ -325,6 +326,7 @@ public actor RealtimeVoiceSession {
         }
         activeVoiceSession = started
         lastRishiSessionId = started.rishiSessionId
+        Log.event("voice.session.realtime_model", level: .info, data: ["present": "true"])
 
         await update(.connecting)
         do {
@@ -339,7 +341,8 @@ public actor RealtimeVoiceSession {
             await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
-            await fail(reason: .connect, message: String(describing: error))
+            Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
+            await fail(reason: .connect)
             return
         }
         guard !isEnding else {
@@ -821,15 +824,14 @@ public actor RealtimeVoiceSession {
         await push(status: status)
     }
 
-    private func fail(reason: VoiceSessionFailureReason, message: String) async {
-        Log.event("voice.session.failed", level: .error, data: [
-            "reason": String(describing: reason),
-            "message": message,
-        ])
+    private func fail(reason: VoiceSessionFailureReason, message: String? = nil) async {
+        var data = ["reason": String(describing: reason)]
+        if let message { data["message"] = message }
+        Log.event("voice.session.failed", level: .error, data: data)
         await cancelActivation()
         await MainActor.run {
             state.apply(status: .failed(reason: reason))
-            state.recordError(message)
+            if let message { state.recordError(message) }
         }
     }
 

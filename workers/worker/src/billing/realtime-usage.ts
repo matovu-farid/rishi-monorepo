@@ -1,4 +1,5 @@
 import type { OpenAiUsage } from "@rishi/shared/billing/cost";
+import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
 
 /**
  * Per-report cap. Roughly $15 worth of realtime audio at gpt-realtime-mini
@@ -7,8 +8,6 @@ import type { OpenAiUsage } from "@rishi/shared/billing/cost";
  * malicious; we 400 and ask them to split.
  */
 export const REALTIME_MAX_TOKENS_PER_REPORT = 500_000;
-
-const REALTIME_MODEL = "gpt-realtime-mini";
 
 type ParseResult =
   | { ok: true; usage: OpenAiUsage }
@@ -51,7 +50,7 @@ export function parseRealtimeUsageBody(raw: unknown): ParseResult {
       ok: true,
       usage: {
         type: "realtime",
-        model: REALTIME_MODEL,
+        model: REALTIME_VOICE_MODEL,
         audioInputTokens: r.audioInputTokens,
         audioOutputTokens: r.audioOutputTokens,
         textInputTokens: textIn,

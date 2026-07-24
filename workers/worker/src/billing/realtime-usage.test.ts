@@ -3,6 +3,7 @@ import {
   parseRealtimeUsageBody,
   REALTIME_MAX_TOKENS_PER_REPORT,
 } from "./realtime-usage";
+import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
 
 describe("parseRealtimeUsageBody", () => {
   test("accepts a valid audio-only report", () => {
@@ -14,7 +15,7 @@ describe("parseRealtimeUsageBody", () => {
     if (result.ok) {
       expect(result.usage).toEqual({
         type: "realtime",
-        model: "gpt-realtime-mini",
+        model: REALTIME_VOICE_MODEL,
         audioInputTokens: 1000,
         audioOutputTokens: 500,
         textInputTokens: 0,

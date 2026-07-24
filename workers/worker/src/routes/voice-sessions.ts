@@ -7,6 +7,7 @@ import { requireAuth } from "../middleware";
 import { rollAllowancePeriodsForward } from "../billing/allowance-period-rollover";
 import { coerceLanguage, mintRealtimeClientSecret } from "../realtime/client-secrets";
 import { voiceSessionErrorResponse } from "./voice-session-errors";
+import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
 
 /**
  * Control WebSocket for an in-progress voice session. See
@@ -201,6 +202,7 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
       nonce: session.nonce,
       clientSecret: minted.clientSecret,
       capIntervals: session.capIntervals,
+      realtimeModel: REALTIME_VOICE_MODEL,
     });
   } finally {
     emitPhase("total", startupStartedAt);

@@ -387,7 +387,8 @@ private struct DelayedTrialSessionCoordinator: VoiceSessionCoordinating {
             rishiSessionId: "rishi-session",
             nonce: "nonce",
             clientSecret: "trial-secret",
-            capIntervals: 10
+            capIntervals: 10,
+            realtimeModel: "gpt-realtime-2.1-mini"
         )
     }
 

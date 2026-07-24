@@ -101,7 +101,8 @@ struct VoiceSessionPresenterParkTests {
                 rishiSessionId: "rishi-test",
                 nonce: "nonce",
                 clientSecret: "secret",
-                capIntervals: 10
+                capIntervals: 10,
+                realtimeModel: "gpt-realtime-2.1-mini"
             )
         }
 
@@ -149,7 +150,8 @@ struct VoiceSessionPresenterParkTests {
                 rishiSessionId: "rishi-test",
                 nonce: "nonce",
                 clientSecret: "secret",
-                capIntervals: 10
+                capIntervals: 10,
+                realtimeModel: "gpt-realtime-2.1-mini"
             )
         }
 

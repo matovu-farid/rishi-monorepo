@@ -1,5 +1,6 @@
 // OpenAI public pricing — fetched 2026-06-03 from https://developers.openai.com/api/docs/pricing
 import type { RateCard } from "./cost";
+import { REALTIME_VOICE_MODEL } from "../realtime/model";
 
 export const DEFAULT_RATES: RateCard = {
   chat: {
@@ -47,6 +48,12 @@ export const DEFAULT_RATES: RateCard = {
       textOutputPer1M: 16.0,
     },
     "gpt-realtime-mini": {
+      audioInputPer1M: 10.0,
+      audioOutputPer1M: 20.0,
+      textInputPer1M: 0.6,
+      textOutputPer1M: 2.4,
+    },
+    [REALTIME_VOICE_MODEL]: {
       audioInputPer1M: 10.0,
       audioOutputPer1M: 20.0,
       textInputPer1M: 0.6,

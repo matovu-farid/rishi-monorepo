@@ -74,6 +74,7 @@ public struct CreateVoiceSessionEndpoint: WorkerEndpointWithBody {
         public let nonce: String
         public let clientSecret: String
         public let capIntervals: Int
+        public let realtimeModel: String
     }
 }
 

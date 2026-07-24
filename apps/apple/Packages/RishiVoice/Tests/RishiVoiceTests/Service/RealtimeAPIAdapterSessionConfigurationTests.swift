@@ -38,7 +38,7 @@ struct RealtimeAPIAdapterSessionConfigurationTests {
         #expect(session.audio.input.transcription?.language == "en")
         #expect(session.tools?.count == 1)
         #expect(session.toolChoice == .auto)
-        #expect(session.model == .gptRealtimeMini)
+        #expect(session.model == nil)
 
         let tool = try! #require(session.tools?.first)
         guard case let .function(function) = tool else {

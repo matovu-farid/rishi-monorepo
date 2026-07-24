@@ -10,12 +10,14 @@ public struct StartedVoiceSession: Sendable, Equatable {
     public let nonce: String
     public let clientSecret: String
     public let capIntervals: Int
+    public let realtimeModel: String
 
-    public init(rishiSessionId: String, nonce: String, clientSecret: String, capIntervals: Int) {
+    public init(rishiSessionId: String, nonce: String, clientSecret: String, capIntervals: Int, realtimeModel: String) {
         self.rishiSessionId = rishiSessionId
         self.nonce = nonce
         self.clientSecret = clientSecret
         self.capIntervals = capIntervals
+        self.realtimeModel = realtimeModel
     }
 }
 
@@ -79,7 +81,8 @@ public actor VoiceSessionAPIClient: VoiceSessionCoordinating {
                 rishiSessionId: response.rishiSessionId,
                 nonce: response.nonce,
                 clientSecret: response.clientSecret,
-                capIntervals: response.capIntervals
+                capIntervals: response.capIntervals,
+                realtimeModel: response.realtimeModel
             )
         } catch {
             Log.event("voice.session.create.failed", level: .error, data: [

@@ -299,7 +299,7 @@ public struct Session: Codable, Equatable, Hashable, Sendable {
 	public var modalities: [Modality]?
 
 	/// The Realtime model used for this session.
-	public var model: Model
+	public var model: Model?
 
 	/// Reference to a prompt template and its variables.
 	public var prompt: Prompt?
@@ -315,7 +315,7 @@ public struct Session: Codable, Equatable, Hashable, Sendable {
 	/// Tools available to the model.
 	public var tools: [Tool]?
 
-	public init(id: String? = nil, audio: Audio, instructions: String, maxResponseOutputTokens: MaxResponseOutputTokens? = nil, modalities: [Modality]? = nil, model: Model, prompt: Prompt? = nil, temperature: Double? = nil, toolChoice: Tool.Choice? = nil, tools: [Tool]? = nil) {
+	public init(id: String? = nil, audio: Audio, instructions: String, maxResponseOutputTokens: MaxResponseOutputTokens? = nil, modalities: [Modality]? = nil, model: Model? = nil, prompt: Prompt? = nil, temperature: Double? = nil, toolChoice: Tool.Choice? = nil, tools: [Tool]? = nil) {
 		self.id = id
 		self.tools = tools
 		self.model = model
@@ -374,7 +374,7 @@ extension Session {
 		self.instructions = try container.decode(String.self, forKey: .instructions)
 		self.maxResponseOutputTokens = try container.decodeIfPresent(MaxResponseOutputTokens.self, forKey: .maxResponseOutputTokens)
 		self.modalities = try container.decodeIfPresent([Modality].self, forKey: .modalities)
-		self.model = try container.decode(Model.self, forKey: .model)
+		self.model = try container.decodeIfPresent(Model.self, forKey: .model)
 		self.prompt = try container.decodeIfPresent(Prompt.self, forKey: .prompt)
 		self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
 		self.toolChoice = try container.decodeIfPresent(Tool.Choice.self, forKey: .toolChoice)

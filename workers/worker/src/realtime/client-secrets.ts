@@ -5,6 +5,7 @@ import {
   BOOK_CONTEXT_TOOL_SPEC,
   renderRealtimeInstructions,
 } from "@rishi/shared/voice-chat/build-realtime-agent";
+import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
 export const ALLOWED_REALTIME_LANGUAGES = [
@@ -91,7 +92,7 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
     },
     session: {
       type: "realtime",
-      model: "gpt-realtime-mini",
+      model: REALTIME_VOICE_MODEL,
       instructions,
       tools: [
         {

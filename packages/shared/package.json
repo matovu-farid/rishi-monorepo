@@ -69,7 +69,8 @@
     "./billing/realtime-usage-client": "./src/billing/realtime-usage-client.ts",
     "./billing/errors": "./src/billing/errors.ts",
     "./billing/interceptor": "./src/billing/interceptor.ts",
-    "./billing/status": "./src/billing/status.ts"
+    "./billing/status": "./src/billing/status.ts",
+    "./realtime/model": "./src/realtime/model.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^1.0.0-rc",

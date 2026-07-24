@@ -115,7 +115,7 @@ public final class Conversation: @unchecked Sendable {
 	/// connection request from an ephemeral key. Returns the same captured
 	/// provider call ID as `connect(using:)`.
 	@discardableResult
-	public func connect(ephemeralKey: String, model: Model = .gptRealtime) async throws -> String? {
+	public func connect(ephemeralKey: String, model: Model? = nil) async throws -> String? {
 		do {
 			return try await connect(using: .webRTCConnectionRequest(ephemeralKey: ephemeralKey, model: model))
 		} catch let error as WebRTCConnector.WebRTCError {

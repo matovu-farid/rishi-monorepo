@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { DEFAULT_RATES } from "./default-rates";
+import { REALTIME_VOICE_MODEL } from "../realtime/model";
 
 const isPositiveFinite = (n: unknown): boolean =>
   typeof n === "number" && Number.isFinite(n) && n > 0;
@@ -31,5 +32,18 @@ describe("DEFAULT_RATES structure", () => {
     expect(isPositiveFinite(rate.audioOutputPer1M)).toBe(true);
     expect(isPositiveFinite(rate.textInputPer1M)).toBe(true);
     expect(isPositiveFinite(rate.textOutputPer1M)).toBe(true);
+  });
+
+  test("realtime mini aliases preserve historical and canonical keys at the same rates", () => {
+    expect(REALTIME_VOICE_MODEL).toBe("gpt-realtime-2.1-mini");
+    expect(DEFAULT_RATES.realtime["gpt-realtime-mini"]).toEqual({
+      audioInputPer1M: 10,
+      audioOutputPer1M: 20,
+      textInputPer1M: 0.6,
+      textOutputPer1M: 2.4,
+    });
+    expect(DEFAULT_RATES.realtime[REALTIME_VOICE_MODEL]).toEqual(
+      DEFAULT_RATES.realtime["gpt-realtime-mini"],
+    );
   });
 });

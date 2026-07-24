@@ -72,6 +72,7 @@ vi.mock("./billing/sub-gate", () => ({
 }))
 
 import { app, buildRealtimeClientSecretsBody } from "./index"
+import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model"
 
 const env = {
   BETTER_AUTH_SECRET: "test-secret",
@@ -194,7 +195,7 @@ describe("buildRealtimeClientSecretsBody", () => {
   it("uses session.type='realtime' and a known realtime model", () => {
     const body = buildRealtimeClientSecretsBody({ language: "en" })
     expect(body.session.type).toBe("realtime")
-    expect(body.session.model).toBe("gpt-realtime-mini")
+    expect(body.session.model).toBe(REALTIME_VOICE_MODEL)
   })
 
   it("includes the complete audio session config for WebRTC startup", () => {
