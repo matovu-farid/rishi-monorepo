@@ -5,6 +5,74 @@ import Testing
 
 @Suite("Custom TTS tokenizer")
 struct CustomTTSTokenizerTests {
+    @Test("packs PDF sentences under the character capacity")
+    func packsSentencesUnderCapacity() throws {
+        let content = makeTextContent("First sentence. Second sentence.")
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            "First sentence. Second sentence.",
+        ])
+    }
+
+    @Test("flushes before a sentence that would exceed the capacity")
+    func flushesBeforeSentenceExceedsCapacity() throws {
+        let first = String(repeating: "a", count: 198) + "."
+        let second = String(repeating: "b", count: 198) + "."
+        let third = "Final sentence."
+        let content = makeTextContent("\(first) \(second) \(third)")
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            "\(first) \(second)",
+            third,
+        ])
+    }
+
+    @Test("keeps an oversized sentence as a standalone chunk")
+    func keepsOversizedSentenceStandalone() throws {
+        let oversized = String(repeating: "x", count: 400) + "."
+        let content = makeTextContent("\(oversized) Short sentence.")
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            oversized,
+            "Short sentence.",
+        ])
+    }
+
+    @Test("preserves multiline text and the first sentence locator highlight")
+    func preservesPackedLocatorHighlight() throws {
+        let first = "First sentence continues across\nvisual lines."
+        let second = "Second sentence."
+        let content = makeTextContent("\(first) \(second)")
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+        let packed = try #require(textContent.segments.first)
+
+        #expect(packed.text == "\(first) \(second)")
+        #expect(packed.locator.text.highlight == packed.text)
+    }
+
     @Test("uses paragraph granularity by default")
     func defaultsToParagraphGranularity() throws {
         let content = makeTextContent(
@@ -19,8 +87,8 @@ struct CustomTTSTokenizerTests {
         ])
     }
 
-    @Test("supports sentence granularity")
-    func splitsSentencesWhenRequested() throws {
+    @Test("packs sentences when sentence granularity is requested")
+    func packsSentencesWhenRequested() throws {
         let content = makeTextContent(
             "First sentence. Second sentence."
         )
@@ -32,8 +100,7 @@ struct CustomTTSTokenizerTests {
         let textContent = try #require(tokenized.first as? TextContentElement)
 
         #expect(textContent.segments.map(\.text) == [
-            "First sentence.",
-            "Second sentence.",
+            "First sentence. Second sentence.",
         ])
     }
 
@@ -50,8 +117,7 @@ struct CustomTTSTokenizerTests {
         let textContent = try #require(tokenized.first as? TextContentElement)
 
         #expect(textContent.segments.map(\.text) == [
-            "This sentence continues across\nvisual lines without ending.",
-            "Next sentence.",
+            "This sentence continues across\nvisual lines without ending. Next sentence.",
         ])
         #expect(textContent.segments[0].locator.text.highlight == textContent.segments[0].text)
     }

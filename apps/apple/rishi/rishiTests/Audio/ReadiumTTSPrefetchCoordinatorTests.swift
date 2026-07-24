@@ -71,6 +71,52 @@ struct ReadiumTTSPrefetchCoordinatorTests {
         #expect(requests.map(\.text) == ["after"])
     }
 
+    @Test("preserves packed PDF sentence text as one prefetch request")
+    func preservesPackedPDFChunkText() {
+        let packedChunk = "First sentence crosses the visual line. Second sentence stays in the same buffer."
+
+        let requests = ReadiumTTSPrefetchRequestBuilder.makeRequests(
+            paragraphs: ["current", packedChunk, "following"],
+            after: "current",
+            settings: .default,
+            limit: 2
+        )
+
+        #expect(requests.map(\.text) == [packedChunk, "following"])
+    }
+
+    @Test("keeps each packed PDF chunk atomic when prefetching multiple chunks")
+    func keepsPackedPDFChunksAtomic() {
+        let firstChunk = "First sentence. Second sentence."
+        let secondChunk = "Third sentence. Fourth sentence."
+
+        let requests = ReadiumTTSPrefetchRequestBuilder.makeRequests(
+            paragraphs: ["current", firstChunk, secondChunk],
+            after: "current",
+            settings: .default,
+            limit: 2
+        )
+
+        #expect(requests.count == 2)
+        #expect(requests[0].text == firstChunk)
+        #expect(requests[1].text == secondChunk)
+    }
+
+    @Test("does not split a 400-character packed PDF chunk")
+    func doesNotSplit400CharacterPackedPDFChunk() {
+        let packedChunk = String(repeating: "x", count: 399) + "."
+
+        let requests = ReadiumTTSPrefetchRequestBuilder.makeRequests(
+            paragraphs: ["current", packedChunk],
+            after: "current",
+            settings: .default,
+            limit: 1
+        )
+
+        #expect(packedChunk.count == 400)
+        #expect(requests.map(\.text) == [packedChunk])
+    }
+
     @Test("uses paragraph granularity by default")
     func prefetchDefaultsToParagraphGranularity() {
         let coordinator = ReadiumTTSPrefetchCoordinator(

@@ -7,6 +7,8 @@ import ReadiumShared
 /// context Readium uses for highlighting and navigation. PDF playback may
 /// opt into sentence units.
 public enum CustomTTSTokenizer {
+    private static let pdfSentenceChunkCapacity = 400
+
     public enum Granularity: Sendable, Equatable {
         case paragraph
         case sentence
@@ -19,7 +21,7 @@ public enum CustomTTSTokenizer {
         defaultLanguage: Language?,
         granularity: Granularity = .paragraph
     ) -> ContentTokenizer {
-        makeTextContentTokenizer(
+        let tokenizer = makeTextContentTokenizer(
             defaultLanguage: defaultLanguage,
             contextSnippetLength: 50,
             textTokenizerFactory: { language in
@@ -29,6 +31,60 @@ public enum CustomTTSTokenizer {
                 return Self.makeLineBreakTolerantSentenceTokenizer(language: language)
             }
         )
+
+        guard granularity == .sentence else {
+            return tokenizer
+        }
+
+        return { content in
+            let tokenized = try tokenizer(content)
+            return tokenized.map { element in
+                guard var textContent = element as? TextContentElement else {
+                    return element
+                }
+
+                textContent.segments = Self.packPDFSentences(textContent.segments)
+                return textContent
+            }
+        }
+    }
+
+    /// Groups complete PDF sentences into paragraph-sized chunks without
+    /// changing the sentence tokenizer or the EPUB paragraph path.
+    private static func packPDFSentences(
+        _ sentences: [TextContentElement.Segment]
+    ) -> [TextContentElement.Segment] {
+        var chunks: [TextContentElement.Segment] = []
+        var current: TextContentElement.Segment?
+
+        for sentence in sentences {
+            guard var chunk = current else {
+                current = sentence
+                continue
+            }
+
+            let packedText = "\(chunk.text) \(sentence.text)"
+            guard packedText.count <= pdfSentenceChunkCapacity else {
+                chunks.append(chunk)
+                current = sentence
+                continue
+            }
+
+            chunk.text = packedText
+            chunk.locator = chunk.locator.copy(text: {
+                $0.highlight = packedText
+                // Keep the locator's surrounding context aligned with the
+                // complete packed range while retaining the first sentence's
+                // href and position as the authoritative anchor.
+                $0.after = sentence.locator.text.after
+            })
+            current = chunk
+        }
+
+        if let current {
+            chunks.append(current)
+        }
+        return chunks
     }
 
     /// PDF text extraction retains visual line breaks inside a page. Natural
