@@ -17,6 +17,7 @@
 // ReadAloudControlsView       — `UI/ReadAloudControlsView.swift`. The Read-aloud control bar
 //                                (play/pause, skip, voice picker, speed slider).
 // VoiceAndSpeedPicker         — `UI/VoiceAndSpeedPicker.swift`. Sheet picking a voice + speed.
+// SystemAudioRoutePicker      — `UI/SystemAudioRoutePicker.swift`. System AirPlay / output picker.
 
 // MARK: - TTS engine
 //

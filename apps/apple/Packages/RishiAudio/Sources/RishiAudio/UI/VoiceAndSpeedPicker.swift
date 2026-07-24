@@ -69,6 +69,12 @@ public struct VoiceAndSpeedPicker: View {
                 .accessibilityIdentifier("tts-speed-slider")
                 .accessibilityLabel("Reading speed")
 
+            Text("Audio Output")
+                .font(RishiTypography.titleM)
+                .foregroundStyle(RishiColor.textPrimary)
+
+            SystemAudioRoutePicker()
+
             Spacer()
 
             Button {
