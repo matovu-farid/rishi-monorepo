@@ -339,7 +339,7 @@ enum ServiceGraphFactory {
         let entitlementSnapshotStore = await MainActor.run {
             EntitlementSnapshotStore(service: entitlementService)
         }
-        let _ = await MainActor.run {
+        let manageSubscriptionPresenter = await MainActor.run {
             ManageSubscriptionPresenter()
         }
 
@@ -438,6 +438,7 @@ enum ServiceGraphFactory {
             entitlementService: entitlementService,
             entitlementSnapshotStore: entitlementSnapshotStore,
             entitlementRefreshCoordinator: entitlementRefreshCoordinator,
+            manageSubscriptionPresenter: manageSubscriptionPresenter,
             entitlementReconciler: reconciler,
             readerAppEntitlementFlag: entitlementFlag,
             restoreService: restoreService,

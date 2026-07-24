@@ -150,7 +150,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let entitlementService: EntitlementService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
-    //   let manageSubscriptionPresenter: ManageSubscriptionPresenter
+    let manageSubscriptionPresenter: ManageSubscriptionPresenter
     //    let storeKitProductService: StoreKitProductService
     //    let purchaseService: PurchaseService
     //   let transactionListener: TransactionListener

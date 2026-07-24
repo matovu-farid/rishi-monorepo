@@ -2,7 +2,7 @@ import Foundation
 import RishiAudio
 import SwiftUI
 
-#if os(iOS) && canImport(ActivityKit)
+#if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
     @preconcurrency import ActivityKit
 #endif
 
@@ -26,7 +26,7 @@ final class TTSPresenceController {
     private var lastSnapshot: TTSPresenceSnapshot?
     private var observationTask: Task<Void, Never>?
 
-    #if os(iOS) && canImport(ActivityKit)
+    #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
         private var activity: Activity<TTSPresenceAttributes>?
     #endif
 
@@ -58,7 +58,7 @@ final class TTSPresenceController {
                 ofKind: TTSPresenceEnvironment.widgetKind
             )
         #endif
-        #if os(iOS) && canImport(ActivityKit)
+        #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
             await updateLiveActivity(with: initialSnapshot)
         #endif
         observationTask?.cancel()
@@ -97,7 +97,7 @@ final class TTSPresenceController {
                 ofKind: TTSPresenceEnvironment.widgetKind
             )
         #endif
-        #if os(iOS) && canImport(ActivityKit)
+        #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
             if let activity {
                 await activity.end(
                     ActivityContent(
@@ -123,7 +123,7 @@ final class TTSPresenceController {
                 ofKind: TTSPresenceEnvironment.widgetKind
             )
         #endif
-        #if os(iOS) && canImport(ActivityKit)
+        #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
             await updateLiveActivity(with: snapshot)
         #endif
     }
@@ -147,7 +147,7 @@ final class TTSPresenceController {
         )
     }
 
-    #if os(iOS) && canImport(ActivityKit)
+    #if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
         private func updateLiveActivity(with snapshot: TTSPresenceSnapshot)
             async
         {

@@ -1,6 +1,6 @@
 import Foundation
 
-#if canImport(ActivityKit)
+#if !targetEnvironment(macCatalyst) && canImport(ActivityKit)
 import ActivityKit
 #endif
 
@@ -171,7 +171,7 @@ public final class UserDefaultsTTSPresenceStore: TTSPresenceStore, @unchecked Se
     }
 }
 
-#if os(iOS) && canImport(ActivityKit)
+#if os(iOS) && !targetEnvironment(macCatalyst) && canImport(ActivityKit)
 /// ActivityKit payload used by the Live Activity and Dynamic Island.
 public struct TTSPresenceAttributes: ActivityAttributes, Sendable {
     public struct ContentState: Codable, Hashable, Sendable {

@@ -1,5 +1,7 @@
 import Foundation
+#if !targetEnvironment(macCatalyst)
 @preconcurrency import ActivityKit
+#endif
 import SwiftUI
 import WidgetKit
 
@@ -76,6 +78,7 @@ private final class UserDefaultsTTSPresenceStore {
     }
 }
 
+#if !targetEnvironment(macCatalyst)
 @available(iOS 16.1, *)
 private struct TTSPresenceAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
@@ -84,14 +87,17 @@ private struct TTSPresenceAttributes: ActivityAttributes {
 
     let sessionID: String
 }
+#endif
 
 @main
 struct TTSPresenceWidgetBundle: WidgetBundle {
     var body: some Widget {
         TTSPresenceWidget()
+#if !targetEnvironment(macCatalyst)
         if #available(iOS 16.1, *) {
             TTSPresenceLiveActivityWidget()
         }
+#endif
     }
 }
 
@@ -209,6 +215,7 @@ private struct TTSPresenceWidgetView: View {
     }
 }
 
+#if !targetEnvironment(macCatalyst)
 @available(iOS 16.1, *)
 struct TTSPresenceLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
@@ -279,3 +286,4 @@ private struct LiveActivityView: View {
         .activitySystemActionForegroundColor(.accentColor)
     }
 }
+#endif
