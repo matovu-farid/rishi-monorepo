@@ -183,8 +183,8 @@ struct LibraryTabView: View {
                 )
             }
         }) { _ in
-            if services.groupID != nil {
-                SubscriptionsView()
+            if let groupID = services.groupID {
+                SubscriptionsView(groupID: groupID.value)
             } else {
                 NavigationStack {
                     ContentUnavailableView(

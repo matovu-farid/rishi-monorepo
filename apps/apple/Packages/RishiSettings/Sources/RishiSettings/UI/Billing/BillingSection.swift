@@ -3,13 +3,14 @@ import RishiUIKit
 import RishiBilling
 import RishiCore
 
-/// Settings section embedding RishiBilling's `ManageSubscriptionRow`.
-///
-/// `ManageSubscriptionRow` gates itself on
-/// `ReaderAppEntitlementFlag.Resolver` and (Phase 13) drives the in-app
-/// `AppStore.showManageSubscriptions(in:)` sheet via a
-/// `ManageSubscriptionPresenter` read from the SwiftUI environment. The
-/// section just provides Form chrome — no closures required.
+enum BillingSubscriptionAction: Equatable {
+    case neutral
+    case subscribe
+    case manage
+}
+
+/// Settings section embedding the appropriate subscription action for the
+/// server-resolved entitlement snapshot.
 @available(iOS 18.4, *)
 public struct BillingSection: View {
 
@@ -23,14 +24,24 @@ public struct BillingSection: View {
     /// When true, shows a loading allowance row instead of snapshot content.
     public let allowanceLoading: Bool
 
+    /// Opens the app-owned subscriptions sheet for a non-paid account.
+    public let onSubscribe: (() -> Void)?
+
     public init(
         entitlement: ReaderAppEntitlementFlag.Resolver = .production,
         entitlementSnapshot: EntitlementSnapshot? = nil,
-        allowanceLoading: Bool = false
+        allowanceLoading: Bool = false,
+        onSubscribe: (() -> Void)? = nil
     ) {
         self.entitlement = entitlement
         self.entitlementSnapshot = entitlementSnapshot
         self.allowanceLoading = allowanceLoading
+        self.onSubscribe = onSubscribe
+    }
+
+    var subscriptionAction: BillingSubscriptionAction {
+        guard !allowanceLoading else { return .neutral }
+        return entitlementSnapshot?.isPaidActive == true ? .manage : .subscribe
     }
 
     public var body: some View {
@@ -40,7 +51,18 @@ public struct BillingSection: View {
             } else if let entitlementSnapshot {
                 RemainingAllowanceView(snapshot: entitlementSnapshot)
             }
-            ManageSubscriptionRow()
+            switch subscriptionAction {
+            case .neutral:
+                EmptyView()
+            case .subscribe:
+                if let onSubscribe {
+                    Button("Subscribe", action: onSubscribe)
+                } else {
+                    EmptyView()
+                }
+            case .manage:
+                ManageSubscriptionRow()
+            }
         } header: {
             Text("Subscription")
                 .font(RishiTypography.titleM)
@@ -52,7 +74,16 @@ public struct BillingSection: View {
 #Preview("Entitlement Granted") {
     Form {
         if #available(iOS 18.4, *) {
-            BillingSection(entitlement: .init(isGranted: true))
+            BillingSection(
+                entitlementSnapshot: .readerActive(
+                    .init(
+                        periodEndMs: 1_735_689_600_000,
+                        remainingNarrationSeconds: 3_600,
+                        remainingVoiceChatSeconds: 3_600
+                    )
+                ),
+                onSubscribe: {}
+            )
         } else {
             // Fallback on earlier versions
         }
@@ -63,7 +94,10 @@ public struct BillingSection: View {
 #Preview("Entitlement Pending") {
     Form {
         if #available(iOS 18.4, *) {
-            BillingSection(entitlement: .init(isGranted: false))
+            BillingSection(
+                allowanceLoading: true,
+                onSubscribe: {}
+            )
         } else {
             // Fallback on earlier versions
         }

@@ -13,6 +13,10 @@ public enum TTSResponseMode: String, Codable, Sendable, Equatable {
 /// chunk frames with stable ids. The client turns those frames into ordered
 /// `TTSChunk` values for caching and playback.
 ///
+/// The worker owns the OpenAI model for this route. The model is intentionally
+/// absent from this body so stale or provider-specific client settings cannot
+/// select the upstream model.
+///
 /// Phase 8 (TTS / Read Aloud) is the primary caller — the byte stream is
 /// reassembled into ordered TTS chunks and fed into `AVAudioEngine` via
 /// `AudioFileStreamOpen` for low-latency playback.
@@ -21,20 +25,17 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
     public struct Body: Encodable, Sendable, Equatable {
         public let text: String
         public let voice: String
-        public let model: String
         public let speed: Double
         public let responseMode: TTSResponseMode
 
         public init(
             text: String,
             voice: String,
-            model: String = "eleven_v3",
             speed: Double = 1.0,
             responseMode: TTSResponseMode = .events
         ) {
             self.text = text
             self.voice = voice
-            self.model = model
             self.speed = speed
             self.responseMode = responseMode
         }
@@ -42,7 +43,6 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
         enum CodingKeys: String, CodingKey {
             case text
             case voice
-            case model
             case speed
             case responseMode = "response_mode"
         }

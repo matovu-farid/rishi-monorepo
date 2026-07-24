@@ -9,10 +9,9 @@ import RishiCore
 public struct VoiceAndSpeedPicker: View {
 
     @State private var voice: String
-    @State private var model: String
     @State private var speed: Double
+    private let model: String
     private let voiceChoices: [TTSVoiceChoice]
-    private let modelChoices: [TTSVoiceChoice]
     let userId: UserID
     let store: any TTSSettingsStore
     let onDismiss: (TTSSettings) -> Void
@@ -26,10 +25,9 @@ public struct VoiceAndSpeedPicker: View {
     ) {
         let normalized = catalog.normalized(initial)
         self._voice = State(initialValue: normalized.voice)
-        self._model = State(initialValue: normalized.model)
         self._speed = State(initialValue: initial.speed)
+        self.model = initial.model
         self.voiceChoices = catalog.voiceChoices
-        self.modelChoices = catalog.modelChoices
         self.userId = userId
         self.store = store
         self.onDismiss = onDismiss
@@ -49,18 +47,6 @@ public struct VoiceAndSpeedPicker: View {
             .pickerStyle(.menu)
             .accessibilityIdentifier("tts-voice-picker")
 
-            Text("Model")
-                .font(RishiTypography.titleM)
-                .foregroundStyle(RishiColor.textPrimary)
-
-            Picker("Model", selection: $model) {
-                ForEach(modelChoices) { choice in
-                    Text(choice.name).tag(choice.id)
-                }
-            }
-            .pickerStyle(.menu)
-            .accessibilityIdentifier("tts-model-picker")
-
             Text(speedLabel)
                 .font(RishiTypography.body)
                 .foregroundStyle(RishiColor.textPrimary)
@@ -68,12 +54,6 @@ public struct VoiceAndSpeedPicker: View {
             Slider(value: $speed, in: TTSSettings.speedRange, step: 0.25)
                 .accessibilityIdentifier("tts-speed-slider")
                 .accessibilityLabel("Reading speed")
-
-            Text("Audio Output")
-                .font(RishiTypography.titleM)
-                .foregroundStyle(RishiColor.textPrimary)
-
-            SystemAudioRoutePicker()
 
             Spacer()
 

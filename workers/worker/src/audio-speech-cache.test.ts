@@ -30,7 +30,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *   - Cache key is sensitive to voice: alloy and cedar differ.
  *   - Cross-runner symmetry: a pinned canonical string produces a known hex
  *     that the companion iOS test in 22-02 must reproduce byte-for-byte.
- *   - Model bump: miss path calls gpt-4o-mini-tts and meters that model slug.
+ *   - Model ownership: miss path calls gpt-4o-mini-tts and meters that model
+ *     slug regardless of any client model field.
  */
 
 // ─── Cross-runner symmetry constants ─────────────────────────────────────────

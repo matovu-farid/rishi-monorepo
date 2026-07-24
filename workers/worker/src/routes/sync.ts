@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq, gt, and, max, asc, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 
-import { requireAuth } from "../index";
+import { requireAuth } from "../middleware";
 import { createDb } from "../db/drizzle";
 import {
   books,

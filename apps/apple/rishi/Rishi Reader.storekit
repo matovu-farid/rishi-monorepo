@@ -104,7 +104,7 @@
       ]
     },
     {
-      "id": "rishi-reader-voice-group",
+      "id": "22247412",
       "localizations": [
         {
           "description": "Rishi Reader and Rishi Voice subscriptions",
@@ -141,7 +141,7 @@
           "productID": "org.fidexa.rishi.voice.monthly",
           "recurringSubscriptionPeriod": "P1M",
           "referenceName": "Rishi Voice Monthly",
-          "subscriptionGroupID": "rishi-reader-voice-group",
+          "subscriptionGroupID": "22247412",
           "type": "RecurringSubscription",
           "winbackOffers": []
         },
@@ -172,7 +172,7 @@
           "productID": "org.fidexa.rishi.voice.annual",
           "recurringSubscriptionPeriod": "P1Y",
           "referenceName": "Rishi Voice Annual",
-          "subscriptionGroupID": "rishi-reader-voice-group",
+          "subscriptionGroupID": "22247412",
           "type": "RecurringSubscription",
           "winbackOffers": []
         },
@@ -203,7 +203,7 @@
           "productID": "org.fidexa.rishi.reader.monthly",
           "recurringSubscriptionPeriod": "P1M",
           "referenceName": "Rishi Reader Monthly",
-          "subscriptionGroupID": "rishi-reader-voice-group",
+          "subscriptionGroupID": "22247412",
           "type": "RecurringSubscription",
           "winbackOffers": []
         },
@@ -234,7 +234,7 @@
           "productID": "org.fidexa.rishi.reader.annual",
           "recurringSubscriptionPeriod": "P1Y",
           "referenceName": "Rishi Reader Annual",
-          "subscriptionGroupID": "rishi-reader-voice-group",
+          "subscriptionGroupID": "22247412",
           "type": "RecurringSubscription",
           "winbackOffers": []
         }

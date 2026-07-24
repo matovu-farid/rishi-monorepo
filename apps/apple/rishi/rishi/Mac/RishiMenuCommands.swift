@@ -171,12 +171,6 @@ private struct AudioMenuItems: View {
                 }
             }
             .pickerStyle(.inline)
-            Picker("Model", selection: prefs?.model ?? .constant(TTSModelCatalog.defaultModel)) {
-                ForEach(TTSModelCatalog.all, id: \.self) { model in
-                    Text(TTSModelCatalog.displayName(for: model)).tag(model)
-                }
-            }
-            .pickerStyle(.inline)
             Picker("Speed", selection: prefs?.speed ?? .constant(1.0)) {
                 ForEach(Self.speedSteps, id: \.self) { step in
                     Text(Self.speedLabel(step)).tag(step)

@@ -65,6 +65,9 @@ public struct SettingsScreen: View {
     /// When true, `BillingSection` shows a loading allowance row.
     public let allowanceLoading: Bool
 
+    /// Opens the app-owned subscriptions sheet for a non-paid account.
+    public let onSubscribe: (() -> Void)?
+
     @State private var showDeleteConfirm = false
     @State private var deleteModel: DeleteAccountModel?
 
@@ -91,6 +94,7 @@ public struct SettingsScreen: View {
         billingEntitlement: ReaderAppEntitlementFlag.Resolver = .production,
         entitlementSnapshot: EntitlementSnapshot? = nil,
         allowanceLoading: Bool = false,
+        onSubscribe: (() -> Void)? = nil,
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
@@ -112,6 +116,7 @@ public struct SettingsScreen: View {
         self.billingEntitlement = billingEntitlement
         self.entitlementSnapshot = entitlementSnapshot
         self.allowanceLoading = allowanceLoading
+        self.onSubscribe = onSubscribe
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
@@ -138,16 +143,11 @@ public struct SettingsScreen: View {
                         showDeleteConfirm = true
                     }
                 )
-                // Phase 13: BillingSection no longer takes an `onManage`
-                // closure — `ManageSubscriptionRow` reads
-                // environment and drives the in-app Manage Subscriptions
-                // sheet directly. The `onManageSubscription` parameter
-                // remains in `SettingsScreen`'s init for source compat
-                // until plan 13-05 / 13-06 cleans up the call chain.
                 BillingSection(
                     entitlement: billingEntitlement,
                     entitlementSnapshot: entitlementSnapshot,
-                    allowanceLoading: allowanceLoading
+                    allowanceLoading: allowanceLoading,
+                    onSubscribe: onSubscribe
                 )
                 ReaderDefaultsSection(
                     defaultTheme: $readerTheme,
@@ -240,6 +240,14 @@ private struct SettingsScreenPreviewHost: View {
             telemetryStore: InMemoryTelemetryStore(initial: true),
             footerDetectionStore: InMemoryFooterDetectionStore(initial: true),
             billingEntitlement: .init(isGranted: true),
+            entitlementSnapshot: .readerActive(
+                .init(
+                    periodEndMs: 1_735_689_600_000,
+                    remainingNarrationSeconds: 3_600,
+                    remainingVoiceChatSeconds: 3_600
+                )
+            ),
+            onSubscribe: {},
             onSignOut: {},
             onDelete: {},
             onDeleted: {},

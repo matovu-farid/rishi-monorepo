@@ -17,7 +17,7 @@ public extension TTSChunkSource {
     }
 }
 
-/// Production adapter — wraps the existing WorkerClient + OpenAI-backed speech
+/// Production adapter — wraps the existing WorkerClient + worker-owned speech
 /// endpoint in SSE event mode and turns ordered chunk frames into `TTSChunk`.
 public struct WorkerTTSChunkSource: TTSChunkSource {
     private let client: WorkerClient
@@ -31,21 +31,15 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
             body: .init(
                 text: request.text,
                 voice: request.voice,
-                model: request.model,
                 speed: request.speed,
                 responseMode: .events
             )
         )
         let upstream = await client.stream(endpoint)
-        let requestKey = TTSCacheKey.compute(
-            text: request.text,
-            voice: request.voice,
-            model: request.model,
-            speed: request.speed
-        )
         return AsyncThrowingStream { continuation in
             let parser = TTSStreamEventParser()
             let task = Task {
+                var workerRequestKey: String?
                 do {
                     for try await bytes in upstream {
                         if Task.isCancelled {
@@ -57,14 +51,15 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
                                 continuation.finish()
                                 return
                             }
-                            let chunk = TTSChunk.make(
-                                request: request,
+                            workerRequestKey = workerRequestKey ?? frame.requestID
+                            let chunk = TTSChunk(
+                                requestKey: frame.requestID,
                                 sequenceIndex: frame.index,
                                 data: frame.audio
                             )
-                            if frame.requestID != requestKey {
+                            if frame.requestID != workerRequestKey {
                                 Log.event("tts.sse.request_id_mismatch", level: .error, data: [
-                                    "expected": requestKey,
+                                    "expected": workerRequestKey ?? "unknown",
                                     "got": frame.requestID,
                                 ])
                             }
@@ -78,14 +73,15 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
                         }
                     }
                     for frame in await parser.finalize() {
-                        let chunk = TTSChunk.make(
-                            request: request,
+                        workerRequestKey = workerRequestKey ?? frame.requestID
+                        let chunk = TTSChunk(
+                            requestKey: frame.requestID,
                             sequenceIndex: frame.index,
                             data: frame.audio
                         )
-                        if frame.requestID != requestKey {
+                        if frame.requestID != workerRequestKey {
                             Log.event("tts.sse.request_id_mismatch", level: .error, data: [
-                                "expected": requestKey,
+                                "expected": workerRequestKey ?? "unknown",
                                 "got": frame.requestID,
                             ])
                         }
@@ -200,7 +196,6 @@ public actor TTSStreamer {
                 do {
                     Log.event("tts.stream.start", level: .info, data: [
                         "voice": request.voice,
-                        "model": request.model,
                         "speed": String(format: "%.2f", request.speed),
                         "textLen": String(request.text.count),
                     ])
@@ -216,7 +211,6 @@ public actor TTSStreamer {
                     guard yieldedChunk else {
                         Log.event("tts.stream.empty_response", level: .error, data: [
                             "voice": request.voice,
-                            "model": request.model,
                             "textLen": String(request.text.count),
                         ])
                         continuation.finish(throwing: TTSStreamerError.emptyResponse)

@@ -165,6 +165,24 @@ vi.mock("@rishi/shared/schema", () => ({
   subscription: {},
 }))
 
+vi.mock("../db/schema", () => ({
+  books: BOOK_COLS,
+  highlights: HIGHLIGHT_COLS,
+  conversations: CONV_COLS,
+  messages: MSG_COLS,
+  devices: {},
+  bookmarks: BOOKMARK_COLS,
+  user: {},
+  session: {},
+  account: {},
+  verification: {},
+  passkey: {},
+  syncMeta: {},
+  appleSubscriptions: {},
+  appleNotificationsLog: {},
+  subscription: {},
+}))
+
 // ─── Mock drizzle-orm predicates ─────────────────────────────────────────────
 type ColRef = { __table: string; __col: string }
 type Pred =
@@ -314,7 +332,7 @@ vi.mock("../db/drizzle", () => {
   return { createDb }
 })
 
-// ─── Auth state + ../auth + ../index mocks ───────────────────────────────────
+// ─── Auth state + middleware mock ───────────────────────────────────────────
 const { authState } = vi.hoisted(() => ({
   authState: { userId: "user_alice" as string | null },
 }))
@@ -334,7 +352,7 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-vi.mock("../index", async () => {
+vi.mock("../middleware", async () => {
   return {
     requireAuth: async (
       c: { set: (k: string, v: unknown) => void; json: (b: unknown, s: number) => Response },

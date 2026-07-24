@@ -18,7 +18,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *   2. Old shape rejection: { input, voice } (no `text`) -> 400 envelope.
  *   3. Speed forwarded: speed=1.5 reaches the OpenAI speech.create call.
  *   4. Voice fallback updated: invalid voice falls back to "marin".
- *   5. Model bump: the worker calls gpt-4o-mini-tts.
+ *   5. Model ownership: the worker calls gpt-4o-mini-tts even when a legacy
+ *      client includes a different model value.
  */
 
 // ─── Capture the args passed to openai.audio.speech.create ──────────────────
@@ -329,6 +330,18 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
     expect(speechCalls[0]).toMatchObject({
       model: "gpt-4o-mini-tts",
     })
+  })
+
+  it("ignores a client-supplied model because the worker owns the model", async () => {
+    const res = await callSpeech({
+      text: "hi",
+      voice: "alloy",
+      model: "eleven_v3",
+      speed: 1.0,
+    })
+    expect(res.status).toBe(200)
+    expect(speechCalls).toHaveLength(1)
+    expect(speechCalls[0]).toMatchObject({ model: "gpt-4o-mini-tts" })
   })
 
   it("invalid voice falls back to 'marin' (preferred default voice)", async () => {

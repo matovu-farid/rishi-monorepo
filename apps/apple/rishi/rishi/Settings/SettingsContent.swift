@@ -19,6 +19,7 @@ struct SettingsContent: View {
 
     @State private var initialAudio: TTSSettings = .default
     @State private var audioLoaded = false
+    @State private var showSubscriptions = false
 
     var body: some View {
         Group {
@@ -54,6 +55,7 @@ struct SettingsContent: View {
                     footerDetectionStore: services.footerDetectionStore,
                     entitlementSnapshot: entitlementStore.resolvedSnapshot,
                     allowanceLoading: entitlementStore.isLoading,
+                    onSubscribe: { showSubscriptions = true },
                     onSignOut: {
                         await MainActor.run {
                             onDismiss()
@@ -85,6 +87,30 @@ struct SettingsContent: View {
 
             initialAudio = await services.ttsSettingsStore.load(userId: user.id)
             audioLoaded = true
+        }
+        .sheet(isPresented: $showSubscriptions, onDismiss: {
+            Task {
+                await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+                    reason: .foreground
+                )
+            }
+        }) {
+            if let groupID = services.groupID {
+                SubscriptionsView(groupID: groupID.value)
+            } else {
+                NavigationStack {
+                    ContentUnavailableView(
+                        "Plans unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("Could not load subscription plans. Try again later.")
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showSubscriptions = false }
+                        }
+                    }
+                }
+            }
         }
     }
 }

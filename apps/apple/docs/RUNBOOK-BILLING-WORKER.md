@@ -277,6 +277,16 @@ Note on local D1 inconsistency: an earlier Phase-14 raw `wrangler d1 execute` st
 
 The canonical "did the route mount?" smoke is an unauthenticated POST. Both routes MUST return HTTP 401 with the `Unauthorized` envelope — proves `requireAuth` is wired AND the route is reachable.
 
+For position pushes, use:
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/sync/push \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+Expected response: `401 Unauthorized`. A `404` means the deployed Worker is missing the `/api/sync/push` route; redeploy the current Worker artifact and rerun this check.
+
 ```bash
 curl -sw '\n%{http_code}' -X POST https://api.fidexa.org/api/sync/conversations \
   -H 'Content-Type: application/json' \

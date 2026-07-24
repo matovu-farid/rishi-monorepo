@@ -17,7 +17,6 @@ struct ReaderPrefsMenuModel {
     var pdfViewMode: Binding<PDFViewModeSetting>
     var fontFamily: Binding<ReaderFontFamily>
     var voice: Binding<String>
-    var model: Binding<String>
     var speed: Binding<Double>
     var autoSync: Binding<Bool>
     var onSyncNow: () -> Void

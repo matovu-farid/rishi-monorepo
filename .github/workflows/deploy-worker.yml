@@ -49,3 +49,30 @@ jobs:
         run: bunx wrangler deploy --minify
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Smoke test sync routes
+        run: |
+          check_status() {
+            method="$1"
+            path="$2"
+            if [ "$method" = "POST" ]; then
+              status="$(curl -sS -o /dev/null -w '%{http_code}' \
+                -X "$method" "https://api.fidexa.org$path" \
+                -H 'Content-Type: application/json' \
+                -d '{}')"
+            else
+              status="$(curl -sS -o /dev/null -w '%{http_code}' \
+                -X "$method" "https://api.fidexa.org$path")"
+            fi
+
+            if [ "$status" != "401" ]; then
+              echo "Expected $method $path to return 401 without auth; got $status"
+              exit 1
+            fi
+          }
+
+          check_status POST /api/sync/push
+          check_status POST /api/sync/upload-url
+          check_status POST /api/sync/download-url
+          check_status GET /api/sync/changes
+          check_status GET /api/sync/conversations

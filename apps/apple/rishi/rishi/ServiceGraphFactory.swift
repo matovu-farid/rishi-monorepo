@@ -66,11 +66,7 @@ enum ServiceGraphFactory {
                 voiceChoices: speechOptions.voices.map {
                     TTSVoiceChoice(id: $0.id, name: $0.name)
                 },
-                modelChoices: speechOptions.models.map {
-                    TTSVoiceChoice(id: $0.id, name: $0.name)
-                },
-                defaultVoiceID: speechOptions.defaultVoiceID,
-                defaultModelID: speechOptions.defaultModelID
+                defaultVoiceID: speechOptions.defaultVoiceID
             )
         }
 

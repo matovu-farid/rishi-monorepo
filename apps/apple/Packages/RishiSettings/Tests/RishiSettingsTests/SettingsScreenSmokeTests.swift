@@ -17,14 +17,82 @@ struct SettingsScreenSmokeTests {
         // Phase 13: BillingSection no longer takes onManage; the inner
         // ManageSubscriptionRow reads ManageSubscriptionPresenter from
         // the SwiftUI environment.
-        let s = BillingSection(entitlement: .init(isGranted: true))
+        let s = BillingSection(entitlement: .init(isGranted: true), onSubscribe: {})
         _ = s
     }
 
     @Test("BillingSection constructs (entitlement NOT granted — failure-mode)")
     func billingSectionConstructsNotGranted() {
-        let s = BillingSection(entitlement: .init(isGranted: false))
+        let s = BillingSection(entitlement: .init(isGranted: false), onSubscribe: {})
         _ = s
+    }
+
+    @Test("BillingSection uses Manage for paid server snapshots")
+    func billingSectionUsesManageForPaidSnapshots() {
+        let period = EntitlementSnapshot.PaidPeriod(
+            periodEndMs: 1_735_689_600_000,
+            remainingNarrationSeconds: 60,
+            remainingVoiceChatSeconds: 60
+        )
+
+        #expect(
+            BillingSection(entitlementSnapshot: .readerActive(period), onSubscribe: {})
+                .subscriptionAction == .manage
+        )
+        #expect(
+            BillingSection(entitlementSnapshot: .voiceActive(period), onSubscribe: {})
+                .subscriptionAction == .manage
+        )
+    }
+
+    @Test("BillingSection uses Subscribe for non-paid resolved snapshots")
+    func billingSectionUsesSubscribeForNonPaidSnapshots() {
+        let snapshots: [EntitlementSnapshot] = [
+            .trialActive(remainingCredits: 1),
+            .trialExhausted,
+            .subscriptionExpired,
+        ]
+
+        for snapshot in snapshots {
+            #expect(
+                BillingSection(entitlementSnapshot: snapshot, onSubscribe: {})
+                    .subscriptionAction == .subscribe
+            )
+        }
+        #expect(
+            BillingSection(entitlementSnapshot: nil, onSubscribe: {})
+                .subscriptionAction == .subscribe
+        )
+    }
+
+    @Test("BillingSection keeps subscription action neutral while loading")
+    func billingSectionKeepsActionNeutralWhileLoading() {
+        let period = EntitlementSnapshot.PaidPeriod(
+            periodEndMs: 1_735_689_600_000,
+            remainingNarrationSeconds: 60,
+            remainingVoiceChatSeconds: 60
+        )
+
+        #expect(
+            BillingSection(
+                entitlementSnapshot: .readerActive(period),
+                allowanceLoading: true,
+                onSubscribe: {}
+            ).subscriptionAction == .neutral
+        )
+        #expect(
+            BillingSection(
+                entitlementSnapshot: nil,
+                allowanceLoading: true,
+                onSubscribe: {}
+            ).subscriptionAction == .neutral
+        )
+    }
+
+    @Test("BillingSection accepts the Subscribe closure")
+    func billingSectionAcceptsSubscribeClosure() {
+        let section = BillingSection(onSubscribe: {})
+        _ = section
     }
 
     @Test("AboutSection renders version string from Bundle.main")
@@ -101,6 +169,7 @@ struct SettingsScreenSmokeTests {
             telemetryStore: InMemoryTelemetryStore(),
             footerDetectionStore: InMemoryFooterDetectionStore(initial: true),
             billingEntitlement: .init(isGranted: true),
+            onSubscribe: {},
             onSignOut: {},
             onDelete: {},
             onDeleted: {},

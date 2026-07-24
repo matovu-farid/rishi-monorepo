@@ -2,7 +2,7 @@ import SwiftUI
 import RishiUIKit
 import RishiCore
 
-/// SET-01 Account section. Shows the signed-in user's email + display name,
+/// SET-01 Account section. Shows the signed-in user's email,
 /// a Sign Out button, and a destructive "Delete Account" row. Tapping the row
 /// calls `onShowDeleteFlow`, which the parent screen wires to a native
 /// destructive confirmation `.alert`.
@@ -37,18 +37,6 @@ struct AccountSection: View {
                     .font(RishiTypography.caption)
                     .foregroundStyle(RishiColor.textSecondary)
                     .accessibilityIdentifier("settings-account-email")
-            }
-            if let displayName = user.name, !displayName.isEmpty {
-                HStack {
-                    Text("Name")
-                        .font(RishiTypography.body)
-                        .foregroundStyle(RishiColor.textPrimary)
-                    Spacer()
-                    Text(displayName)
-                        .font(RishiTypography.caption)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .accessibilityIdentifier("settings-account-name")
-                }
             }
             Button("Sign Out") {
                 // KEEP: onSignOut is supplied by the host; the underlying

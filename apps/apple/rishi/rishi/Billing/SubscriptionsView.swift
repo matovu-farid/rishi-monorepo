@@ -5,12 +5,17 @@ import RishiBilling
 import RishiUIKit
 
 public struct SubscriptionsView: View {
+    private let groupID: String
     @State private var hasSession: Bool?
     @State private var tokenError = false
     /// Preloaded `appAccountToken` — only non-nil after a confirmed session.
     /// Used so `.inAppPurchaseOptions` never returns `[]` (which would allow
     /// a purchase without account binding; that API is non-throwing).
     @State private var appAccountToken: UUID?
+
+    public init(groupID: String) {
+        self.groupID = groupID
+    }
 
     public var body: some View {
         NavigationStack {
@@ -47,7 +52,7 @@ public struct SubscriptionsView: View {
                 description: Text("Sign in to purchase a plan so your subscription can be linked to your account.")
             )
         } else if hasSession == true, let token = appAccountToken {
-            SubscriptionStoreView(productIDs: RishiProductID.paywallDisplayOrder) {
+            SubscriptionStoreView(groupID: groupID) {
                 VStack {
                     Image("rishi")
                         .resizable()

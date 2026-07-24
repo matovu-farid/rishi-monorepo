@@ -39,4 +39,12 @@ struct VoiceAndSpeedPickerTests {
         let t = TTSSettings(voice: "echo", model: "eleven_v3", speed: 0.1)
         #expect(t.speed == 0.5)
     }
+
+    @Test("Catalog normalization preserves the stored model without a model picker")
+    func catalogNormalizationPreservesModel() {
+        let settings = TTSSettings(voice: "echo", model: "provider-model", speed: 1.0)
+        let normalized = TTSPickerCatalog.fallback.normalized(settings)
+
+        #expect(normalized.model == settings.model)
+    }
 }

@@ -166,6 +166,7 @@ struct EndpointCodableTests {
         let json = String(data: try JSONEncoder().encode(e.body), encoding: .utf8) ?? ""
         #expect(json.contains("\"text\""))
         #expect(json.contains("\"voice\""))
+        #expect(!json.contains("\"model\""))
         #expect(json.contains("\"speed\""))
         #expect(json.contains("\"response_mode\""))
     }
