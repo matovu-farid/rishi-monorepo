@@ -665,8 +665,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = rishi/rishi.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -675,6 +676,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Rishi can save book covers to your Photo Library.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Rishi uses on-device speech recognition to detect when you start speaking during voice chat setup.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -688,7 +690,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -709,8 +711,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = rishi/rishi.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -719,6 +722,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Rishi can save book covers to your Photo Library.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Rishi uses on-device speech recognition to detect when you start speaking during voice chat setup.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -732,7 +736,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
