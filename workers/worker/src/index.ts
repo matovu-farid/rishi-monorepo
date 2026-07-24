@@ -612,11 +612,10 @@ app.get(
 );
 
 app.get("/api/groupID", async (c) => {
-  // Reader/Voice subscription group (local StoreKit id: rishi-reader-voice-group).
-  // Replace with the App Store Connect numeric group ID once ASC products ship.
+  // Reader/Voice App Store Connect subscription group ID.
   // Legacy Pro group was "22149819".
   return c.json({
-    value: "rishi-reader-voice-group",
+    value: "22247412",
   });
 });
 // ─── Apple IAP routes (Phase 14) ──────────────────────────────────────────────
