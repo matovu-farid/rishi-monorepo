@@ -315,8 +315,8 @@ struct ReaderViewModelTests {
         #expect(extracted == expected)
     }
 
-    @Test("firstParagraphForPageEntryPrefetch extracts PDF page text via PDFReadAloudParagraphs")
-    func firstParagraphForPageEntryPrefetchUsesPDFPage() async throws {
+    @Test("firstParagraphForPageEntryPrefetch extracts the first PDF sentence")
+    func firstParagraphForPageEntryPrefetchUsesFirstPDFSentence() async throws {
         let url = try #require(Bundle.module.url(forResource: "sample", withExtension: "pdf"))
         let store = InMemoryPositionStore()
         let book = Book(
@@ -341,12 +341,66 @@ struct ReaderViewModelTests {
             locations: Locator.Locations(page: 1)
         )
         let extracted = await vm.firstParagraphForPageEntryPrefetch(at: locator)
-        let expected = PDFReadAloudParagraphs.paragraphs(
-            from: try #require(PDFDocument(url: url)?.page(at: 0))
-        ).first
+        let passages = await vm.paragraphsForUserNavigationIntent(at: locator)
 
         #expect(extracted != nil)
-        #expect(extracted == expected)
+        #expect(passages.count > 1)
+        #expect(extracted == passages.first)
+    }
+
+    @Test("PDF user navigation returns sentence-level passages")
+    func pdfUserNavigationUsesSentencePassages() async throws {
+        let url = try #require(Bundle.module.url(forResource: "sample", withExtension: "pdf"))
+        let vm = ReaderViewModel(
+            book: Book(
+                userId: UUID(),
+                title: "Sample",
+                formatType: .pdf,
+                fileURL: "Books/x/sample.pdf"
+            ),
+            userId: UUID(),
+            documentURL: url,
+            positionStore: InMemoryPositionStore(),
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let locator = Locator(
+            href: try #require(RelativeURL(path: "publication.pdf")),
+            mediaType: .pdf,
+            locations: Locator.Locations(page: 1)
+        )
+        let passages = await vm.paragraphsForUserNavigationIntent(at: locator)
+
+        #expect(passages.count > 1)
+        #expect(passages.allSatisfy { $0.contains(where: { $0.isLetter || $0.isNumber }) })
+    }
+
+    @Test("PDF page-entry and navigation helpers safely fall back when content is unavailable")
+    func pdfHelpersReturnSafeFallbackForUnavailableContent() async throws {
+        let url = try #require(Bundle.module.url(forResource: "sample", withExtension: "pdf"))
+        let vm = ReaderViewModel(
+            book: Book(
+                userId: UUID(),
+                title: "Sample",
+                formatType: .pdf,
+                fileURL: "Books/x/sample.pdf"
+            ),
+            userId: UUID(),
+            documentURL: url,
+            positionStore: InMemoryPositionStore(),
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let unavailableLocator = Locator(
+            href: try #require(RelativeURL(path: "missing.pdf")),
+            mediaType: .pdf,
+            locations: Locator.Locations(page: 1)
+        )
+
+        #expect(await vm.firstParagraphForPageEntryPrefetch(at: unavailableLocator) == nil)
+        #expect(await vm.paragraphsForUserNavigationIntent(at: unavailableLocator).isEmpty)
     }
 
     @Test("didChangeLocation default (no flag) fires onUserNavigation AND writes position")

@@ -89,6 +89,10 @@ final class ReadAloudController {
         let settings = await ttsSettingsStore.load(userId: userId)
         guard isCurrentPlaybackGeneration(generation) else { return }
         pickerInitial = settings
+        let tokenizerGranularity: CustomTTSTokenizer.Granularity =
+            vm.book.formatType == .pdf || publication.manifest.conforms(to: .pdf)
+            ? .sentence
+            : .paragraph
 
         guard let synthesizer = PublicationSpeechSynthesizer(
             publication: publication,
@@ -105,7 +109,10 @@ final class ReadAloudController {
                 )
             },
             tokenizerFactory: { language in
-                CustomTTSTokenizer.tokenize(defaultLanguage: language)
+                return CustomTTSTokenizer.tokenize(
+                    defaultLanguage: language,
+                    granularity: tokenizerGranularity
+                )
             },
             delegate: self
         ) else {
@@ -116,7 +123,10 @@ final class ReadAloudController {
         readiumSynthesizerGeneration = generation
         hasStartedReadAloudSession = true
         readiumPublication = publication
-        readiumPrefetcher = ReadiumTTSPrefetchCoordinator(prewarmer: ttsPrewarmer)
+        readiumPrefetcher = ReadiumTTSPrefetchCoordinator(
+            prewarmer: ttsPrewarmer,
+            granularity: tokenizerGranularity
+        )
         readiumState = .stopped
         currentParagraph = nil
         currentLocator = nil
@@ -149,7 +159,8 @@ final class ReadAloudController {
         guard isCurrentPlaybackGeneration(generation) else { return }
 
         // Readium owns publication iteration. The custom tokenizer supplied
-        // above makes each utterance a paragraph instead of a sentence.
+        // above keeps EPUB utterances paragraph-scoped and uses sentence
+        // utterances for PDF playback.
         await activateAudioSessionForReadiumStart()
         guard isCurrentPlaybackGeneration(generation) else { return }
         attachNowPlayingImmediately(

@@ -10,7 +10,6 @@ import Observation
 @preconcurrency import ReadiumShared
 import RishiCore
 import RishiLogging
-import PDFKit
 
 /// @Observable view-model for the EPUB reader. Mirrors the shape of
 /// `PDFReaderViewModel` (Phase 5):
@@ -288,19 +287,19 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// synchronously on the main actor before the detached extraction begins,
     /// so the background task never reads mutable view-model state.
     ///
-    /// EPUB and PDF both use this API (unified reader). PDF locators carry a
-    /// 1-based `locations.page` and are extracted via ``PDFReadAloudParagraphs``;
-    /// EPUB uses HTML chunking through ``EPUBReadAloudCursor``.
+    /// EPUB and PDF both use this API (unified reader). PDF content is read
+    /// from Readium's publication content and tokenized into sentences;
+    /// EPUB uses HTML paragraph chunking through ``EPUBReadAloudCursor``.
     @MainActor
     public func firstParagraphForPageEntryPrefetch(at locator: Locator) async -> String? {
         if book.formatType == .pdf
             || publication?.manifest.conforms(to: .pdf) == true
         {
-            let url = documentURL
-            let page1Based = locator.locations.page
-            return await Task.detached(priority: .userInitiated) {
-                Self.firstPDFParagraph(documentURL: url, page1Based: page1Based)
-            }.value
+            guard let publication else { return nil }
+            return await Self.pdfSentences(
+                publication: publication,
+                locator: locator
+            ).first
         }
 
         guard let publication else { return nil }
@@ -317,7 +316,8 @@ public final class ReaderViewModel: @unchecked Sendable {
 
     /// Destination paragraph candidates for Read Aloud user-navigation intent.
     ///
-    /// - PDF: single first paragraph (or empty), same extract as prefetch.
+    /// - PDF: sentence-level passages from the same Readium content and
+    ///   tokenizer path as playback.
     /// - EPUB: nearby window around progression start (`start-1...start+1`) so a
     ///   page-crossing swipe whose progression jumped one chunk ahead can still
     ///   match the spoken paragraph.
@@ -326,10 +326,11 @@ public final class ReaderViewModel: @unchecked Sendable {
         if book.formatType == .pdf
             || publication?.manifest.conforms(to: .pdf) == true
         {
-            if let first = await firstParagraphForPageEntryPrefetch(at: locator) {
-                return [first]
-            }
-            return []
+            guard let publication else { return [] }
+            return await Self.pdfSentences(
+                publication: publication,
+                locator: locator
+            )
         }
 
         guard let publication else { return [] }
@@ -344,18 +345,69 @@ public final class ReaderViewModel: @unchecked Sendable {
         }.value
     }
 
-    /// 1-based Readium PDF page → first layout-aware paragraph on that page.
-    nonisolated private static func firstPDFParagraph(
-        documentURL: URL,
-        page1Based: Int?
-    ) -> String? {
-        guard let page1Based, page1Based > 0,
-              let document = PDFDocument(url: documentURL),
-              let page = document.page(at: page1Based - 1)
-        else {
+    /// Returns the sentence passages exposed by Readium for a PDF locator.
+    /// Keeping page-entry warmup and user-navigation matching on this path is
+    /// important: it makes both consumers agree with the active speech
+    /// synthesizer on utterance boundaries and locator text.
+    nonisolated private static func pdfSentences(
+        publication: Publication,
+        locator: Locator
+    ) async -> [String] {
+        guard let content = publication.content(from: locator) else { return [] }
+
+        let tokenizer = CustomTTSTokenizer.tokenize(
+            defaultLanguage: publication.metadata.language,
+            granularity: .sentence
+        )
+        var sentences: [String] = []
+        let targetPage = locator.locations.page
+
+        do {
+            for await element in content.sequence() {
+                guard !Task.isCancelled else { return sentences }
+                if let targetPage,
+                   let elementPage = element.locator.locations.page,
+                   elementPage != targetPage
+                {
+                    // `content(from:)` continues through the resource. PDF
+                    // navigation/page-entry helpers must stop at the current
+                    // page so a later page cannot become a false match.
+                    if !sentences.isEmpty { return sentences }
+                    continue
+                }
+                for token in try tokenizer(element) {
+                    switch token {
+                    case let textElement as TextContentElement:
+                        for segment in textElement.segments {
+                            if let text = readablePDFText(segment.text) {
+                                sentences.append(text)
+                            }
+                        }
+                    case let textualElement as TextualContentElement:
+                        if let text = readablePDFText(textualElement.text) {
+                            sentences.append(text)
+                        }
+                    default:
+                        continue
+                    }
+                }
+            }
+        } catch {
+            return []
+        }
+
+        return sentences
+    }
+
+    private nonisolated static func readablePDFText(_ text: String?) -> String? {
+        guard let text else { return nil }
+        guard text.contains(where: { $0.isLetter || $0.isNumber }) else {
             return nil
         }
-        return PDFReadAloudParagraphs.paragraphs(from: page).first
+        // Keep the exact tokenizer output. PublicationSpeechSynthesizer uses
+        // this same segment text for the utterance and cache key; whitespace
+        // normalization here would create avoidable cache misses.
+        return text
     }
 
     /// Paragraphs for read-aloud, starting at the CURRENT page rather than the

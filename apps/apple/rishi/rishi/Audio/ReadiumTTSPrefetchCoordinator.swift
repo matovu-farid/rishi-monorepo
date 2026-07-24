@@ -5,26 +5,57 @@ import RishiAudio
 import RishiCore
 import RishiReader
 
-/// Builds the requests immediately after the paragraph currently being spoken.
+/// Builds the requests immediately after the token currently being spoken.
 /// Keeping this separate makes the prefetch window deterministic and testable.
 enum ReadiumTTSPrefetchRequestBuilder {
+    struct Candidate {
+        let text: String
+        let locator: Locator?
+
+        nonisolated init(text: String, locator: Locator? = nil) {
+            self.text = text
+            self.locator = locator
+        }
+    }
+
     /// Matches `workers/worker` `TTS_MAX_CHARS_PER_REQUEST` and CustomTTSEngine.
     static let maxCharsPerRequest = 4000
 
     static func makeRequests(
         paragraphs: [String],
         after currentParagraph: String,
+        currentIndex: Int? = nil,
         settings: TTSSettings,
         limit: Int
     ) -> [TTSStreamRequest] {
-        guard limit > 0, !paragraphs.isEmpty else { return [] }
+        makeRequests(
+            candidates: paragraphs.map { Candidate(text: $0) },
+            after: currentParagraph,
+            currentIndex: currentIndex,
+            settings: settings,
+            limit: limit
+        )
+    }
 
-        let startIndex = paragraphs.firstIndex(of: currentParagraph).map { $0 + 1 } ?? 0
+    static func makeRequests(
+        candidates: [Candidate],
+        after currentParagraph: String,
+        currentLocator: Locator? = nil,
+        currentIndex: Int? = nil,
+        settings: TTSSettings,
+        limit: Int
+    ) -> [TTSStreamRequest] {
+        guard limit > 0, !candidates.isEmpty else { return [] }
+
+        let currentTokenIndex = currentLocator.flatMap { locator in
+            candidates.firstIndex { $0.locator == locator }
+        } ?? currentIndex ?? candidates.firstIndex { $0.text == currentParagraph }
+        let startIndex = currentTokenIndex.map { $0 + 1 } ?? 0
         var requests: [TTSStreamRequest] = []
-        for paragraph in paragraphs.dropFirst(startIndex) {
-            let pieces = paragraph.count <= maxCharsPerRequest
-                ? [paragraph]
-                : ParagraphChunker.chunk(paragraph, maxChars: maxCharsPerRequest)
+        for candidate in candidates.dropFirst(startIndex) {
+            let pieces = candidate.text.count <= maxCharsPerRequest
+                ? [candidate.text]
+                : ParagraphChunker.chunk(candidate.text, maxChars: maxCharsPerRequest)
             for piece in pieces where !piece.isEmpty {
                 requests.append(
                     TTSStreamRequest(
@@ -41,18 +72,27 @@ enum ReadiumTTSPrefetchRequestBuilder {
     }
 }
 
-/// Discovers future Readium paragraphs and asks the shared prewarmer to fill
+/// Discovers future Readium tokens and asks the shared prewarmer to fill
 /// the existing TTS cache. The synthesizer remains unaware of this work and
 /// continues to request audio through its normal engine path.
 @MainActor
 final class ReadiumTTSPrefetchCoordinator {
+    static let defaultGranularity: CustomTTSTokenizer.Granularity = .paragraph
+
     private let prewarmer: TTSPrewarmer
     private let readAheadCount: Int
+    let granularity: CustomTTSTokenizer.Granularity
     private var discoveryTask: Task<Void, Never>?
+    private var generation: UInt = 0
 
-    init(prewarmer: TTSPrewarmer, readAheadCount: Int = 5) {
+    init(
+        prewarmer: TTSPrewarmer,
+        readAheadCount: Int = 5,
+        granularity: CustomTTSTokenizer.Granularity = .paragraph
+    ) {
         self.prewarmer = prewarmer
         self.readAheadCount = readAheadCount
+        self.granularity = granularity
     }
 
     func update(
@@ -60,27 +100,41 @@ final class ReadiumTTSPrefetchCoordinator {
         utterance: PublicationSpeechSynthesizer.Utterance,
         settings: TTSSettings
     ) {
-        discoveryTask?.cancel()
+        let previousDiscoveryTask = discoveryTask
+        previousDiscoveryTask?.cancel()
+        generation &+= 1
+        let generation = self.generation
 
         let prewarmer = self.prewarmer
         let readAheadCount = self.readAheadCount
+        let granularity = self.granularity
         discoveryTask = Task { [weak self] in
             guard let self else { return }
 
             do {
-                let paragraphs = try await self.paragraphs(
+                // Serialize replacement with the previous scan. This also
+                // ensures any requests it launched are cleared before the
+                // new utterance starts warming the cache.
+                await previousDiscoveryTask?.value
+                await prewarmer.cancelAll()
+                guard !Task.isCancelled, self.generation == generation else { return }
+
+                let candidates = try await self.candidates(
                     in: publication,
-                    startingAt: utterance.locator
+                    startingAt: utterance.locator,
+                    granularity: granularity
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.generation == generation else { return }
 
                 let requests = ReadiumTTSPrefetchRequestBuilder.makeRequests(
-                    paragraphs: paragraphs,
+                    candidates: candidates,
                     after: utterance.text,
+                    currentLocator: utterance.locator,
+                    currentIndex: 0,
                     settings: settings,
                     limit: readAheadCount
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.generation == generation else { return }
                 await prewarmer.warm(requests: requests)
             } catch is CancellationError {
                 // Navigation, pause/stop, or a settings change superseded the scan.
@@ -92,39 +146,48 @@ final class ReadiumTTSPrefetchCoordinator {
 
     /// Cancels discovery and any requests currently draining into the cache.
     func stop() async {
+        generation &+= 1
         discoveryTask?.cancel()
+        await discoveryTask?.value
         discoveryTask = nil
         await prewarmer.cancelAll()
     }
 
-    nonisolated private func paragraphs(
+    nonisolated private func candidates(
         in publication: Publication,
-        startingAt locator: Locator
-    ) async throws -> [String] {
+        startingAt locator: Locator,
+        granularity: CustomTTSTokenizer.Granularity
+    ) async throws -> [ReadiumTTSPrefetchRequestBuilder.Candidate] {
         guard let content = publication.content(from: locator) else { return [] }
         let tokenizer = CustomTTSTokenizer.tokenize(
-            defaultLanguage: publication.metadata.language
+            defaultLanguage: publication.metadata.language,
+            granularity: granularity
         )
 
-        var paragraphs: [String] = []
+        var candidates: [ReadiumTTSPrefetchRequestBuilder.Candidate] = []
         for await element in content.sequence() {
             guard !Task.isCancelled else { break }
             for token in try tokenizer(element) {
                 switch token {
                 case let textElement as TextContentElement:
-                    paragraphs.append(contentsOf: textElement.segments.compactMap { segment in
-                        Self.readableText(segment.text)
+                    candidates.append(contentsOf: textElement.segments.compactMap { segment in
+                        Self.readableText(segment.text).map {
+                            ReadiumTTSPrefetchRequestBuilder.Candidate(
+                                text: $0,
+                                locator: segment.locator
+                            )
+                        }
                     })
                 case let textualElement as TextualContentElement:
                     if let text = Self.readableText(textualElement.text) {
-                        paragraphs.append(text)
+                        candidates.append(.init(text: text))
                     }
                 default:
                     continue
                 }
             }
         }
-        return paragraphs
+        return candidates
     }
 
     nonisolated private static func readableText(_ text: String?) -> String? {

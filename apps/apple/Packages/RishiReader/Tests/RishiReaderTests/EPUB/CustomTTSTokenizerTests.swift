@@ -5,6 +5,72 @@ import Testing
 
 @Suite("Custom TTS tokenizer")
 struct CustomTTSTokenizerTests {
+    @Test("uses paragraph granularity by default")
+    func defaultsToParagraphGranularity() throws {
+        let content = makeTextContent(
+            "First sentence. Second sentence."
+        )
+
+        let tokenized = try CustomTTSTokenizer.tokenize(defaultLanguage: Language("en"))(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            "First sentence. Second sentence.",
+        ])
+    }
+
+    @Test("supports sentence granularity")
+    func splitsSentencesWhenRequested() throws {
+        let content = makeTextContent(
+            "First sentence. Second sentence."
+        )
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            "First sentence.",
+            "Second sentence.",
+        ])
+    }
+
+    @Test("keeps a sentence together across PDF line breaks")
+    func keepsSentenceAcrossLineBreaks() throws {
+        let content = makeTextContent(
+            "This sentence continues across\nvisual lines without ending. Next sentence."
+        )
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            "This sentence continues across\nvisual lines without ending.",
+            "Next sentence.",
+        ])
+        #expect(textContent.segments[0].locator.text.highlight == textContent.segments[0].text)
+    }
+
+    @Test("keeps CRLF PDF line breaks inside a sentence")
+    func keepsCRLFSentenceTogether() throws {
+        let content = makeTextContent("A sentence split across\r\nlines remains whole.")
+
+        let tokenized = try CustomTTSTokenizer.tokenize(
+            defaultLanguage: Language("en"),
+            granularity: .sentence
+        )(content)
+        let textContent = try #require(tokenized.first as? TextContentElement)
+
+        #expect(textContent.segments.map(\.text) == [
+            "A sentence split across\r\nlines remains whole.",
+        ])
+    }
+
     @Test("splits text content into paragraphs, not sentences")
     func splitsParagraphsNotSentences() throws {
         let content = makeTextContent(
