@@ -39,7 +39,12 @@ public struct LibraryRootView: View {
 
     private let externalPath: Binding<NavigationPath>?
 
-    @State private var showDocumentPicker = false
+    @State private var internalDocumentPickerPresented = false
+    private let externalDocumentPickerPresented: Binding<Bool>?
+
+    private var documentPickerPresented: Binding<Bool> {
+        externalDocumentPickerPresented ?? $internalDocumentPickerPresented
+    }
 
     public init(
       
@@ -47,7 +52,8 @@ public struct LibraryRootView: View {
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
-            nil
+            nil,
+        documentPickerPresented: Binding<Bool>? = nil
     ) {
  
         self.importCoordinator = importCoordinator
@@ -55,6 +61,7 @@ public struct LibraryRootView: View {
         self.onShowSettings = onShowSettings
         self.onImported = onImported
         self.externalPath = nil
+        self.externalDocumentPickerPresented = documentPickerPresented
     }
 
     public init(
@@ -64,7 +71,8 @@ public struct LibraryRootView: View {
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
-            nil
+            nil,
+        documentPickerPresented: Binding<Bool>? = nil
     ) {
        
         self.importCoordinator = importCoordinator
@@ -72,10 +80,11 @@ public struct LibraryRootView: View {
         self.onShowSettings = onShowSettings
         self.onImported = onImported
         self.externalPath = path
+        self.externalDocumentPickerPresented = documentPickerPresented
     }
 
     public var body: some View {
-   
+        @Bindable var vm = vm
         return libraryContent(vm: vm)
        
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
@@ -87,7 +96,7 @@ public struct LibraryRootView: View {
         }
 
         .fileImporter(
-            isPresented: $showDocumentPicker,
+            isPresented: documentPickerPresented,
             allowedContentTypes: [.epub, .pdf],
             allowsMultipleSelection: true
         ) { result in
@@ -105,13 +114,13 @@ public struct LibraryRootView: View {
                 )
             }
         }
-//        .alert(item: vm.importError) { failure in
-//            Alert(
-//                title: Text("Import Failed"),
-//                message: Text(failure.message),
-//                dismissButton: .default(Text("OK"))
-//            )
-//        }
+        .alert(item: $vm.importError) { failure in
+            Alert(
+                title: Text("Import Failed"),
+                message: Text(failure.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
         .task {
 
             let state = librarySignposter.beginInterval("library.first-paint")
@@ -127,7 +136,7 @@ public struct LibraryRootView: View {
             )
         ) { _ in
             #if canImport(UIKit)
-                showDocumentPicker = true
+                documentPickerPresented.wrappedValue = true
             #endif
         }
         .onReceive(
@@ -163,7 +172,7 @@ public struct LibraryRootView: View {
             ToolbarItem(placement: .primaryAction) {
 
                     Button {
-                        showDocumentPicker = true
+                        documentPickerPresented.wrappedValue = true
                     } label: {
                         Label("Import", systemImage: "plus")
                     }

@@ -343,12 +343,6 @@ enum ServiceGraphFactory {
         let entitlementSnapshotStore = await MainActor.run {
             EntitlementSnapshotStore(service: entitlementService)
         }
-        // Live SubscriptionStoreView path uses CustomerEntitlements →
-        // syncEntitlement (not PurchaseService). Wire snapshot refresh so
-        // gates/Settings update as soon as entitlement-sync succeeds.
-        EntitlementSyncHooks.onSynced = { [entitlementService] in
-            _ = await entitlementService.refreshSnapshot()
-        }
         let _ = await MainActor.run {
             ManageSubscriptionPresenter()
         }
@@ -370,6 +364,17 @@ enum ServiceGraphFactory {
             ReaderAppEntitlementFlag(reconciler: reconciler)
         }
         let restoreService = RestoreService(reconciler: reconciler)
+        let entitlementRefreshCoordinator = EntitlementRefreshCoordinator(
+            entitlementService: entitlementService,
+            launchRefresh: restoreService,
+            signedInUserIdProvider: { try? Keychain.load(.userId) }
+        )
+        // Live SubscriptionStoreView path uses CustomerEntitlements →
+        // syncEntitlement (not PurchaseService). Wire snapshot refresh so
+        // gates/Settings update as soon as entitlement-sync succeeds.
+        EntitlementSyncHooks.onSynced = { [entitlementRefreshCoordinator] in
+            await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
+        }
         signposter.endInterval("storekit.ready", storekitState)
 
         let telemetryStore = await MainActor.run {
@@ -383,6 +388,11 @@ enum ServiceGraphFactory {
         }
 
         let readerDefaults = await MainActor.run { AppReaderDefaults() }
+
+        if let userId = try? Keychain.load(.userId) {
+            await entitlementService.bindToUser(userId: userId)
+            await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .launch)
+        }
 
         return BootstrappedServices(
             keychain: keychain,
@@ -431,6 +441,7 @@ enum ServiceGraphFactory {
             indexingHook: indexingHook,
             entitlementService: entitlementService,
             entitlementSnapshotStore: entitlementSnapshotStore,
+            entitlementRefreshCoordinator: entitlementRefreshCoordinator,
             entitlementReconciler: reconciler,
             readerAppEntitlementFlag: entitlementFlag,
             restoreService: restoreService,

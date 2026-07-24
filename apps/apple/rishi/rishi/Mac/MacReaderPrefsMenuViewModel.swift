@@ -172,7 +172,6 @@ extension MacReaderPrefsMenuViewModel {
         let store = services.ttsSettingsStore
         let syncEngine = services.syncEngine
         let presenter = services.manageSubscriptionPresenter
-        let auth = services.authService
         let userId = user.id
         self.init(
             theme: Binding(get: { defaults.theme }, set: { defaults.theme = $0 }),
@@ -192,7 +191,6 @@ extension MacReaderPrefsMenuViewModel {
             
             
             signOut: {
-                try? await auth.signOut()
                 onSignedOut()
             },
             

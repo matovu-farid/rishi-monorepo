@@ -11,7 +11,6 @@ let package = Package(
         .package(path: "../RishiCore"),
         .package(path: "../RishiUIKit"),
         .package(path: "../RishiLogging"),
-        .package(path: "../RishiAuth"),
         .package(path: "../RishiLibrary"),
         .package(path: "../RishiTesting"),
     ],
@@ -22,7 +21,6 @@ let package = Package(
                 "RishiCore",
                 "RishiUIKit",
                 "RishiLogging",
-                "RishiAuth",
                 "RishiLibrary",
             ]
         ),

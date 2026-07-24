@@ -1,14 +1,12 @@
 import Foundation
 
-/// RishiOnboarding — Feature-layer package owning the first-run flow:
-/// welcome → sign-in (reuses Phase-3 SIWA + Google flows via AuthService)
-/// → import or sample book (reuses Phase-4 SampleBookInstaller) → first
-/// reader hint. ONB-02: mic primer and voice language chooser shown before
-/// entering the app.
+/// RishiOnboarding — Feature-layer package owning the first-run flow shown
+/// before authentication:
+/// welcome → mic primer → voice language chooser → first reader hint.
+/// Book setup is presented later from the authenticated library.
 ///
-/// Depends DOWN on RishiCore (User, AuthService), RishiUIKit (tokens),
-/// RishiAuth (RishiAuthService), RishiLibrary (SampleBookInstaller),
-/// RishiLogging.
+/// Depends DOWN on RishiCore (User), RishiUIKit (tokens),
+/// RishiLibrary (shared book models/installers), and RishiLogging.
 ///
 /// Does NOT depend on RishiVoice / RishiSync — the primers are stand-alone
 /// rationale screens that DEFER the actual permission request to the app

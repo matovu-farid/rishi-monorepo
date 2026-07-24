@@ -20,17 +20,24 @@ public struct BillingSection: View {
     /// `SettingsContent.swift`'s `SettingsScreen(...)` call site.
     public let entitlementSnapshot: EntitlementSnapshot?
 
+    /// When true, shows a loading allowance row instead of snapshot content.
+    public let allowanceLoading: Bool
+
     public init(
         entitlement: ReaderAppEntitlementFlag.Resolver = .production,
-        entitlementSnapshot: EntitlementSnapshot? = nil
+        entitlementSnapshot: EntitlementSnapshot? = nil,
+        allowanceLoading: Bool = false
     ) {
         self.entitlement = entitlement
         self.entitlementSnapshot = entitlementSnapshot
+        self.allowanceLoading = allowanceLoading
     }
 
     public var body: some View {
         Section {
-            if let entitlementSnapshot {
+            if allowanceLoading {
+                RemainingAllowanceView(isLoading: true)
+            } else if let entitlementSnapshot {
                 RemainingAllowanceView(snapshot: entitlementSnapshot)
             }
             ManageSubscriptionRow()

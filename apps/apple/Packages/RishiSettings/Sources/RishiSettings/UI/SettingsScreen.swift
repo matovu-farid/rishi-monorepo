@@ -62,6 +62,9 @@ public struct SettingsScreen: View {
     /// in previews/tests.
     public let entitlementSnapshot: EntitlementSnapshot?
 
+    /// When true, `BillingSection` shows a loading allowance row.
+    public let allowanceLoading: Bool
+
     @State private var showDeleteConfirm = false
     @State private var deleteModel: DeleteAccountModel?
 
@@ -87,6 +90,7 @@ public struct SettingsScreen: View {
         footerDetectionStore: any FooterDetectionStore,
         billingEntitlement: ReaderAppEntitlementFlag.Resolver = .production,
         entitlementSnapshot: EntitlementSnapshot? = nil,
+        allowanceLoading: Bool = false,
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
@@ -107,6 +111,7 @@ public struct SettingsScreen: View {
         self.footerDetectionStore = footerDetectionStore
         self.billingEntitlement = billingEntitlement
         self.entitlementSnapshot = entitlementSnapshot
+        self.allowanceLoading = allowanceLoading
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
@@ -139,7 +144,11 @@ public struct SettingsScreen: View {
                 // sheet directly. The `onManageSubscription` parameter
                 // remains in `SettingsScreen`'s init for source compat
                 // until plan 13-05 / 13-06 cleans up the call chain.
-                BillingSection(entitlement: billingEntitlement, entitlementSnapshot: entitlementSnapshot)
+                BillingSection(
+                    entitlement: billingEntitlement,
+                    entitlementSnapshot: entitlementSnapshot,
+                    allowanceLoading: allowanceLoading
+                )
                 ReaderDefaultsSection(
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily

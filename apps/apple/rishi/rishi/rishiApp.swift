@@ -49,7 +49,7 @@ struct rishiApp: App {
 
                 .task {
                     await deps.bootstrap()
-                    await refreshEntitlementSnapshot()
+                    await refreshEntitlementSnapshot(reason: .launch)
                 }
                 .task {
                     // Configure and load your tips at app launch.
@@ -77,7 +77,7 @@ struct rishiApp: App {
                     await deps.services?.voicePresenter.requestEnd()
                 }
             case .active:
-                Task { await refreshEntitlementSnapshot() }
+                Task { await refreshEntitlementSnapshot(reason: .foreground) }
             default:
                 break
             }
@@ -102,11 +102,11 @@ struct rishiApp: App {
     /// StoreKit on-device reconcile + entitlement-sync fire from this same
     /// hook (storekit-four-products plan deferred the scenePhase observer
     /// here to avoid a second lifecycle observer).
-    private func refreshEntitlementSnapshot() async {
-        guard (try? Keychain.load(.userId)) != nil else { return }
+    private func refreshEntitlementSnapshot(
+        reason: EntitlementRefreshCoordinator.RefreshReason
+    ) async {
         guard deps.services != nil else { return }
-        await deps.entitlementService.refreshSnapshot()
-        await deps.restoreService.refreshOnDeviceEntitlementAtLaunch()
+        await deps.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason)
     }
 }
 

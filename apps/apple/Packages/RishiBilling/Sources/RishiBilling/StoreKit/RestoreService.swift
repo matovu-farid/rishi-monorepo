@@ -187,4 +187,4 @@ public actor RestoreService {
 // editing the actor declaration line. PaywallViewModel + tests can take
 // `any RestoreProtocol`; production passes the concrete actor.
 @available(iOS 18.4, macOS 15.4, *)
-extension RestoreService: RestoreProtocol {}
+extension RestoreService: RestoreProtocol, EntitlementLaunchRefresh {}

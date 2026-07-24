@@ -3,8 +3,7 @@ import Observation
 import RishiLogging
 
 /// First-run flow state machine driving the sequence:
-/// welcome → signIn → sampleOrImport → micPrimer → voiceLanguagePrimer →
-/// firstReaderHint → completed.
+/// welcome → micPrimer → voiceLanguagePrimer → firstReaderHint → completed.
 ///
 /// Each stage's user-facing button is wired to a closure in 11-06. The
 /// coordinator only owns the stage transitions and the persisted flag updates
@@ -19,8 +18,6 @@ public final class OnboardingCoordinator {
 
     public enum Stage: String, Sendable, Equatable {
         case welcome
-        case signIn
-        case sampleOrImport
         case micPrimer
         case voiceLanguagePrimer
         case firstReaderHint
@@ -43,10 +40,6 @@ public final class OnboardingCoordinator {
         let next: Stage
         switch currentStage {
         case .welcome:
-            next = .signIn
-        case .signIn:
-            next = .sampleOrImport
-        case .sampleOrImport:
             // If we've already shown the mic primer once, skip past it.
             if await state.primerShownMic() {
                 next = .voiceLanguagePrimer
@@ -73,9 +66,7 @@ public final class OnboardingCoordinator {
         let prev: Stage
         switch currentStage {
         case .welcome:              prev = .welcome
-        case .signIn:               prev = .welcome
-        case .sampleOrImport:       prev = .signIn
-        case .micPrimer:            prev = .sampleOrImport
+        case .micPrimer:            prev = .welcome
         case .voiceLanguagePrimer:   prev = .micPrimer
         case .firstReaderHint:      prev = .voiceLanguagePrimer
         case .completed:            prev = .firstReaderHint

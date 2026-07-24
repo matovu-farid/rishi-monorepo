@@ -10,8 +10,8 @@ import RishiLogging
 /// any further `refresh()` result.
 ///
 /// Cache: `UserDefaults` under `"billing.entitlement.level"`. String rawValue
-/// so missing / corrupt reads fall back to `.free` (safe default — never
-/// silently grant Pro to a free user).
+/// so missing / corrupt reads fall back to `.unsubscribed` (safe default —
+/// never silently grant Pro to a free user).
 @available(iOS 18.4, macOS 15.4, *)
 public actor EntitlementService {
 
@@ -22,39 +22,22 @@ public actor EntitlementService {
     public nonisolated let currentLevel: AsyncStream<EntitlementLevel>
     private let continuation: AsyncStream<EntitlementLevel>.Continuation
 
+    /// Continuous stream of entitlement resolution. Starts `.unresolved`
+    /// until ``bindToUser(userId:)`` hydrates cache or ``refreshSnapshot()``
+    /// succeeds.
+    public nonisolated let currentResolution: AsyncStream<EntitlementSnapshotResolution>
+    private let resolutionContinuation: AsyncStream<EntitlementSnapshotResolution>.Continuation
+
     private let workerClient: WorkerClient
     private let defaults: UserDefaults
     private var latest: EntitlementLevel
+    private var latestResolution: EntitlementSnapshotResolution = .unresolved
+    private var boundUserId: String?
 
-    /// UserDefaults key used for the cache. Stable contract — Plan 11-06
-    /// references this key when wiring app launch hydration.
+    /// UserDefaults key used for the binary level cache.
     public static let defaultsKey = "billing.entitlement.level"
 
-    // MARK: - Server-owned entitlement snapshot (GET /api/billing/me)
-    //
-    // Added 2026-07-17 alongside the above. This is a SEPARATE, PARALLEL
-    // entitlement model — `EntitlementLevel` (binary, on-device-StoreKit-
-    // adjacent) and `EntitlementSnapshot` (the Worker's 5-state trial/paid/
-    // expired union) answer different questions and are deliberately not
-    // merged. See docs/superpowers/plans/2026-07-17-entitlement-snapshot-
-    // client.md's "Design decisions" #1.
-
-    /// Continuous stream of the server's entitlement snapshot. Unlike
-    /// ``currentLevel``, this is NOT persisted to `UserDefaults` — there is
-    /// no safe "last known" value that isn't itself stale, and the Worker's
-    /// `Cache-Control: private, max-age=30, must-revalidate` header already
-    /// governs staleness server-side. The first subscriber sees
-    /// ``EntitlementSnapshot/trialExhausted`` (see ``latestSnapshot``'s doc
-    /// comment) until the first ``refreshSnapshot()`` completes.
-    public nonisolated let currentSnapshot: AsyncStream<EntitlementSnapshot>
-    private let snapshotContinuation: AsyncStream<EntitlementSnapshot>.Continuation
-
-    /// Safe placeholder until the first successful ``refreshSnapshot()``.
-    /// `.trialExhausted` is chosen deliberately: it blocks AI-feature
-    /// affordances (never show a Voice Chat / narration entry point before
-    /// the server has actually confirmed an allowance) without blocking
-    /// core reading, which per spec is never gated on entitlement state.
-    private var latestSnapshot: EntitlementSnapshot = .trialExhausted
+    private static let snapshotCacheKeyPrefix = "billing.entitlement.snapshot.v1."
 
     public init(
         workerClient: WorkerClient,
@@ -63,7 +46,6 @@ public actor EntitlementService {
         self.workerClient = workerClient
         self.defaults = defaults
 
-        // Hydrate from cache. Missing / unknown rawValue → .free.
         let cachedRaw = defaults.string(forKey: Self.defaultsKey)
         let cached = cachedRaw.flatMap(EntitlementLevel.init(rawValue:)) ?? .unsubscribed
         self.latest = cached
@@ -71,21 +53,25 @@ public actor EntitlementService {
         var continuation: AsyncStream<EntitlementLevel>.Continuation!
         self.currentLevel = AsyncStream { c in continuation = c }
         self.continuation = continuation
-        // Yield the cached value so any consumer subscribing immediately
-        // after init sees a value without waiting for a refresh.
         continuation.yield(cached)
 
-        var snapshotContinuation: AsyncStream<EntitlementSnapshot>.Continuation!
-        self.currentSnapshot = AsyncStream { c in snapshotContinuation = c }
-        self.snapshotContinuation = snapshotContinuation
-        snapshotContinuation.yield(latestSnapshot)
+        var resolutionContinuation: AsyncStream<EntitlementSnapshotResolution>.Continuation!
+        self.currentResolution = AsyncStream { c in resolutionContinuation = c }
+        self.resolutionContinuation = resolutionContinuation
+        resolutionContinuation.yield(.unresolved)
     }
 
-    /// Synchronously seed the cache (e.g. when the auth service hands back
-    /// a `SessionUser` with a known `hasPro` value). Bypasses the network.
-    ///
-    /// No-op when `level` matches the current cached value — avoids spurious
-    /// stream emissions.
+    /// Associate cached snapshot storage with the signed-in user and hydrate
+    /// from disk when available.
+    public func bindToUser(userId: String) {
+        boundUserId = userId
+        if let cached = loadCachedResolution(for: userId) {
+            setCachedResolution(cached.resolution, fetchedAt: cached.fetchedAt)
+        } else {
+            setCachedResolution(.unresolved, fetchedAt: nil)
+        }
+    }
+
     public func setCached(_ level: EntitlementLevel) {
         guard level != latest else { return }
         latest = level
@@ -94,13 +80,6 @@ public actor EntitlementService {
         Log.event("billing.entitlement.cached", level: .info, data: ["level": level.rawValue])
     }
 
-    /// Hit `/api/auth/get-session` and update cache + stream. Transport errors
-    /// are logged but DO NOT clobber the cache — offline reads stay valid.
-    ///
-    /// Better Auth returns literal JSON `null` for unauthenticated callers,
-    /// which decodes as `nil`. That is NOT an error — it just means "no
-    /// session, free tier". Only thrown errors (transport, 4xx/5xx, decode
-    /// failures on a non-null body) flow into `.failure`.
     @discardableResult
     public func refresh() async -> Result<EntitlementLevel, Error> {
         do {
@@ -115,11 +94,6 @@ public actor EntitlementService {
         }
     }
 
-    /// Clear the cached entitlement on sign-out so the next user does not
-    /// briefly inherit the previous user's Pro state before a server refresh.
-    /// Resets to `.free`, persists `.free` (so a relaunch before any refresh
-    /// shows free), and yields `.free` to the stream. Always emits even when
-    /// already `.free`, since sign-out must guarantee a clean baseline.
     public func clearCache() {
         latest = .unsubscribed
         defaults.set(EntitlementLevel.unsubscribed.rawValue, forKey: Self.defaultsKey)
@@ -127,26 +101,13 @@ public actor EntitlementService {
         Log.event("billing.entitlement.cleared", level: .info)
     }
 
-    /// Snapshot accessor for code paths that need a synchronous read
-    /// (e.g. SwiftUI body that can't await). Always reflects the latest
-    /// value yielded into the stream.
     public func snapshot() -> EntitlementLevel { latest }
 
-    // MARK: - Server-owned entitlement snapshot (continued)
-
-    /// Hit `GET /api/billing/me` and update ``latestSnapshot``/``currentSnapshot``.
-    /// Called at launch and foreground — see `rishiApp.swift`. Does not
-    /// clobber ``latestSnapshot`` on failure, matching ``refresh()``'s
-    /// "offline reads stay valid" contract. An unauthenticated caller (no
-    /// stored session) fails here like any other network error; callers
-    /// that only want to refresh for signed-in users must check that
-    /// themselves first (see `rishiApp.swift`'s launch/foreground hook).
     @discardableResult
     public func refreshSnapshot() async -> Result<EntitlementSnapshot, Error> {
         do {
             let snapshot = try await workerClient.send(BillingMeEndpoint())
-            latestSnapshot = snapshot
-            snapshotContinuation.yield(snapshot)
+            setCachedResolution(.resolved(snapshot, fetchedAt: Date()), fetchedAt: Date())
             return .success(snapshot)
         } catch {
             Log.event(
@@ -158,7 +119,72 @@ public actor EntitlementService {
         }
     }
 
-    /// Synchronous snapshot accessor, matching ``snapshot()``'s shape for
-    /// the binary `EntitlementLevel` above.
-    public func snapshotNow() -> EntitlementSnapshot { latestSnapshot }
+    public func resolutionNow() -> EntitlementSnapshotResolution { latestResolution }
+
+    /// Clear cached snapshot for a user and reset to unresolved.
+    public func clearSnapshotCache(for userId: String? = nil) {
+        let targetUserId = userId ?? boundUserId
+        if let targetUserId {
+            defaults.removeObject(forKey: Self.snapshotCacheKey(for: targetUserId))
+        }
+        boundUserId = nil
+        setCachedResolution(.unresolved, fetchedAt: nil)
+    }
+
+    // MARK: - Private
+
+    private func setCachedResolution(
+        _ resolution: EntitlementSnapshotResolution,
+        fetchedAt: Date?
+    ) {
+        latestResolution = resolution
+        resolutionContinuation.yield(resolution)
+        persistResolutionIfNeeded(resolution, fetchedAt: fetchedAt)
+    }
+
+    private func persistResolutionIfNeeded(
+        _ resolution: EntitlementSnapshotResolution,
+        fetchedAt: Date?
+    ) {
+        guard let userId = boundUserId else { return }
+        switch resolution {
+        case .unresolved:
+            defaults.removeObject(forKey: Self.snapshotCacheKey(for: userId))
+        case .resolved(let snapshot, let resolvedFetchedAt):
+            let cachedAt = fetchedAt ?? resolvedFetchedAt
+            let payload = CachedEntitlementSnapshotPayload(
+                cachedAt: cachedAt,
+                snapshot: snapshot
+            )
+            if let data = try? JSONEncoder().encode(payload) {
+                defaults.set(data, forKey: Self.snapshotCacheKey(for: userId))
+            }
+        }
+    }
+
+    private func loadCachedResolution(for userId: String) -> (
+        resolution: EntitlementSnapshotResolution,
+        fetchedAt: Date
+    )? {
+        guard let data = defaults.data(forKey: Self.snapshotCacheKey(for: userId)),
+              let payload = try? JSONDecoder().decode(
+                  CachedEntitlementSnapshotPayload.self,
+                  from: data
+              )
+        else { return nil }
+        return (
+            resolution: .resolved(payload.snapshot, fetchedAt: payload.cachedAt),
+            fetchedAt: payload.cachedAt
+        )
+    }
+
+    private static func snapshotCacheKey(for userId: String) -> String {
+        snapshotCacheKeyPrefix + userId
+    }
+}
+
+@available(iOS 18.4, macOS 15.4, *)
+private struct CachedEntitlementSnapshotPayload: Codable {
+    let cachedAt: Date
+    let snapshot: EntitlementSnapshot
 }

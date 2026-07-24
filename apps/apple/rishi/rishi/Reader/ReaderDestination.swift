@@ -54,6 +54,7 @@ struct ReaderDestination: View {
             voicePresenter: services.voicePresenter,
             voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
             entitlementSnapshotStore: services.entitlementSnapshotStore,
+            entitlementRefreshCoordinator: services.entitlementRefreshCoordinator,
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -69,12 +70,16 @@ struct ReaderDestination: View {
 
             bookmarkMarkDirty: { [services] id in await services.syncEngine.markBookmarkDirty(id) },
             onReadAloud: {
-                if let reason = services.entitlementSnapshotStore.snapshot.blockReason(for: .narration) {
-                    pendingNarrationUpgradePrompt = reason
-                    return
-                }
-
                 Task {
+                    if let reason = await EntitlementAIGate.gateAIFeature(
+                        .narration,
+                        store: services.entitlementSnapshotStore,
+                        coordinator: services.entitlementRefreshCoordinator
+                    ) {
+                        pendingNarrationUpgradePrompt = reason
+                        return
+                    }
+
                     if readAloud == nil {
                         readAloud = ReadAloudController(
                             ttsEngine: services.ttsEngine,

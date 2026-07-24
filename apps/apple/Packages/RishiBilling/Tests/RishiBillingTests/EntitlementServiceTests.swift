@@ -3,13 +3,12 @@ import Foundation
 @testable import RishiBilling
 import RishiCore
 
+@available(iOS 18.4, macOS 15.4, *)
 @Suite(.serialized)
 struct EntitlementServiceTests {
 
     // MARK: - Helpers
 
-    /// Build a fresh, isolated UserDefaults suite per test so tests can run in
-    /// parallel without bleeding cache state into one another.
     private func makeDefaults() -> UserDefaults {
         let suiteName = "test.billing.\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
@@ -17,9 +16,6 @@ struct EntitlementServiceTests {
         return suite
     }
 
-    /// Test-only WorkerClient pointing at an invalid host. Unit tests in this
-    /// suite never actually exercise `refresh()` against the network — the
-    /// integration coverage lives in 11-06 with StubURLProtocol.
     private func makeWorkerClient() -> WorkerClient {
         WorkerClient(
             baseURL: URL(string: "https://example.invalid")!,
@@ -32,14 +28,14 @@ struct EntitlementServiceTests {
 
     @Test("EntitlementLevel rawValues are stable")
     func entitlementLevelRawValuesStable() {
-        #expect(EntitlementLevel.free.rawValue == "free")
-        #expect(EntitlementLevel.pro.rawValue == "pro")
+        #expect(EntitlementLevel.unsubscribed.rawValue == "unsubscribed")
+        #expect(EntitlementLevel.subscribed.rawValue == "subscribed")
     }
 
     @Test("EntitlementLevel(hasPro:) maps booleans correctly")
     func entitlementLevelFromHasPro() {
-        #expect(EntitlementLevel(hasPro: true) == .pro)
-        #expect(EntitlementLevel(hasPro: false) == .free)
+        #expect(EntitlementLevel(hasPro: true) == .subscribed)
+        #expect(EntitlementLevel(hasPro: false) == .unsubscribed)
     }
 
     // MARK: - EntitlementService cache hydration
@@ -47,27 +43,27 @@ struct EntitlementServiceTests {
     @Test("Service hydrates from UserDefaults on init")
     func serviceHydratesFromDefaults() async {
         let defaults = makeDefaults()
-        defaults.set("pro", forKey: "billing.entitlement.level")
+        defaults.set("subscribed", forKey: EntitlementService.defaultsKey)
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
         let snap = await service.snapshot()
-        #expect(snap == .pro)
+        #expect(snap == .subscribed)
     }
 
-    @Test("Missing UserDefaults key defaults to .free")
+    @Test("Missing UserDefaults key defaults to .unsubscribed")
     func missingCacheDefaultsToFree() async {
         let defaults = makeDefaults()
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
         let snap = await service.snapshot()
-        #expect(snap == .free)
+        #expect(snap == .unsubscribed)
     }
 
-    @Test("Unknown rawValue in UserDefaults falls back to .free")
+    @Test("Unknown rawValue in UserDefaults falls back to .unsubscribed")
     func corruptCacheDefaultsToFree() async {
         let defaults = makeDefaults()
-        defaults.set("enterprise-ultra", forKey: "billing.entitlement.level")
+        defaults.set("enterprise-ultra", forKey: EntitlementService.defaultsKey)
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
         let snap = await service.snapshot()
-        #expect(snap == .free)
+        #expect(snap == .unsubscribed)
     }
 
     // MARK: - setCached
@@ -78,20 +74,17 @@ struct EntitlementServiceTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
-        await service.setCached(.pro)
+        await service.setCached(.subscribed)
         let snap = await service.snapshot()
-        #expect(snap == .pro)
+        #expect(snap == .subscribed)
 
-        // Re-open the same suite by name to read the persisted value from a
-        // fresh, isolation-safe handle (Swift 6 strict concurrency dislikes
-        // touching `defaults` after we sent it into the actor).
         let reader = UserDefaults(suiteName: suiteName)!
-        #expect(reader.string(forKey: "billing.entitlement.level") == "pro")
+        #expect(reader.string(forKey: EntitlementService.defaultsKey) == "subscribed")
     }
 
     // MARK: - clearCache
 
-    @Test("clearCache resets snapshot to .free, persists .free, and emits .free")
+    @Test("clearCache resets snapshot to .unsubscribed, persists, and emits")
     func clearCacheResetsToFree() async {
         let suiteName = "test.billing.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -99,21 +92,20 @@ struct EntitlementServiceTests {
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
 
         var iter = service.currentLevel.makeAsyncIterator()
-        // Drain the init yield (.free) before driving to .pro.
         _ = await iter.next()
 
-        await service.setCached(.pro)
-        #expect(await service.snapshot() == .pro)
-        _ = await iter.next() // .pro emission
+        await service.setCached(.subscribed)
+        #expect(await service.snapshot() == .subscribed)
+        _ = await iter.next()
 
         await service.clearCache()
-        #expect(await service.snapshot() == .free)
+        #expect(await service.snapshot() == .unsubscribed)
 
         let reader = UserDefaults(suiteName: suiteName)!
-        #expect(reader.string(forKey: "billing.entitlement.level") == "free")
+        #expect(reader.string(forKey: EntitlementService.defaultsKey) == "unsubscribed")
 
         let emitted = await iter.next()
-        #expect(emitted == .free)
+        #expect(emitted == .unsubscribed)
     }
 
     // MARK: - AsyncStream
@@ -121,25 +113,100 @@ struct EntitlementServiceTests {
     @Test("currentLevel stream yields cached value to first subscriber")
     func currentLevelYieldsCachedValue() async {
         let defaults = makeDefaults()
-        defaults.set("pro", forKey: "billing.entitlement.level")
+        defaults.set("subscribed", forKey: EntitlementService.defaultsKey)
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
 
         var iter = service.currentLevel.makeAsyncIterator()
         let first = await iter.next()
-        #expect(first == .pro)
+        #expect(first == .subscribed)
+    }
+
+    // MARK: - Resolution stream
+
+    @Test("resolution starts unresolved")
+    func resolutionStartsUnresolved() async {
+        let service = EntitlementService(
+            workerClient: makeWorkerClient(),
+            defaults: makeDefaults()
+        )
+        #expect(await service.resolutionNow() == .unresolved)
+    }
+
+    @Test("bindToUser hydrates persisted snapshot resolution")
+    func bindToUserHydratesCache() async {
+        let defaults = makeDefaults()
+        let userId = "user-123"
+        let snapshot = EntitlementSnapshot.trialActive(remainingCredits: 42)
+        let payload = CachedEntitlementSnapshotPayloadForTests(
+            cachedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            snapshot: snapshot
+        )
+        let data = try! JSONEncoder().encode(payload)
+        defaults.set(data, forKey: "billing.entitlement.snapshot.v1.\(userId)")
+
+        let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
+        await service.bindToUser(userId: userId)
+
+        let resolution = await service.resolutionNow()
+        guard case .resolved(let cached, let fetchedAt) = resolution else {
+            Issue.record("Expected resolved snapshot after bindToUser")
+            return
+        }
+        #expect(cached == snapshot)
+        #expect(fetchedAt == payload.cachedAt)
+    }
+
+    @Test("clearSnapshotCache resets to unresolved and deletes persisted key")
+    func clearSnapshotCacheResets() async {
+        let defaults = makeDefaults()
+        let userId = "user-456"
+        let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
+        await service.bindToUser(userId: userId)
+        _ = await service.refreshSnapshot() // will fail network — stay unresolved
+
+        // Manually seed resolved state through bind with fake cache
+        let snapshot = EntitlementSnapshot.trialActive(remainingCredits: 10)
+        let payload = CachedEntitlementSnapshotPayloadForTests(
+            cachedAt: Date(),
+            snapshot: snapshot
+        )
+        defaults.set(try! JSONEncoder().encode(payload), forKey: "billing.entitlement.snapshot.v1.\(userId)")
+        await service.bindToUser(userId: userId)
+
+        await service.clearSnapshotCache(for: userId)
+        #expect(await service.resolutionNow() == .unresolved)
+        #expect(defaults.data(forKey: "billing.entitlement.snapshot.v1.\(userId)") == nil)
+    }
+}
+
+private struct CachedEntitlementSnapshotPayloadForTests: Codable {
+    let cachedAt: Date
+    let snapshot: EntitlementSnapshot
+}
+
+@available(iOS 18.4, macOS 15.4, *)
+@MainActor
+@Suite
+struct EntitlementSnapshotStoreTests {
+
+    @Test("blockReason is nil while unresolved")
+    func blockReasonNilWhenUnresolved() async {
+        let service = EntitlementService(
+            workerClient: WorkerClient(
+                baseURL: URL(string: "https://example.invalid")!,
+                tokenProvider: StaticTokenProvider(nil),
+                devBypassEnabled: false
+            )
+        )
+        let store = EntitlementSnapshotStore(service: service)
+        #expect(store.blockReason(for: .narration) == nil)
+        #expect(store.blockReason(for: .voiceChat) == nil)
+        #expect(store.isLoading)
     }
 }
 
 // MARK: - Null session refresh (Phase 15 plan 05)
-//
-// Better Auth's `GET /api/auth/get-session` returns literal JSON `null` when
-// the caller is unauthenticated. iOS must treat that as "no session, user is
-// free-tier" rather than surfacing a decode error. The suite below scripts a
-// URLProtocol to return a 200 with body "null" and asserts refresh succeeds
-// with `.free` (not `.failure`).
 
-/// Per-suite URLProtocol subclass so this suite's static handler does not race
-/// with sibling suites in this test target.
 final class NullSessionMockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, Data))?
 
@@ -168,6 +235,7 @@ final class NullSessionMockURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+@available(iOS 18.4, macOS 15.4, *)
 @Suite(.serialized)
 struct EntitlementServiceNullSessionTests {
 
@@ -190,11 +258,7 @@ struct EntitlementServiceNullSessionTests {
         )
     }
 
-    /// RED → GREEN driver for plan 15-05. Before the fix, the worker returns
-    /// JSON `null`, `JSONDecoder` throws `valueNotFound`, and refresh()
-    /// returns `.failure`. After the fix (Response = ProfileResponse?), the
-    /// decoded value is `nil`, refresh yields `.free`, and the call succeeds.
-    @Test("refresh on null session yields free level, not a failure")
+    @Test("refresh on null session yields unsubscribed level, not a failure")
     func refreshOnNullSessionYieldsFreeLevel() async {
         NullSessionMockURLProtocol.reset()
         NullSessionMockURLProtocol.handler = { _ in (200, Data("null".utf8)) }
@@ -206,9 +270,9 @@ struct EntitlementServiceNullSessionTests {
 
         switch result {
         case .success(let level):
-            #expect(level == .free)
+            #expect(level == .unsubscribed)
         case .failure(let error):
-            Issue.record("refresh should succeed with free level, got failure: \(error)")
+            Issue.record("refresh should succeed with unsubscribed level, got failure: \(error)")
         }
     }
 }

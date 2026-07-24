@@ -2,6 +2,7 @@ import RishiBilling
 import RishiChat
 import RishiCore
 import RishiLibrary
+import RishiOnboarding
 import RishiReader
 import RishiSettings
 import RishiSync
@@ -13,18 +14,26 @@ struct LibraryTabView: View {
     let services: BootstrappedServices
     let user: User
     let model: SignedInViewModel
+    let onLibraryReadyForTrial: () -> Void
 
     @Environment(AppRouter.self) private var router
     @State private var vm: LibraryViewModel
+    @AppStorage("rishi.library.firstBookPrompt.seen") private var hasSeenFirstBookPrompt = false
+    @State private var showFirstBookPrompt = false
+    @State private var showDocumentPicker = false
+    @State private var presentDocumentPickerAfterPrompt = false
+    @State private var trialReadyAfterDocumentPicker = false
 
     init(
         services: BootstrappedServices,
         user: User,
         model: SignedInViewModel,
+        onLibraryReadyForTrial: @escaping () -> Void = {},
     ) {
         self.services = services
         self.user = user
         self.model = model
+        self.onLibraryReadyForTrial = onLibraryReadyForTrial
         _vm = State(initialValue: LibraryViewModel.make(services: services, user: user))
     }
 
@@ -44,22 +53,25 @@ struct LibraryTabView: View {
                     model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
                 },
-
                 onShowSettings: settingsHandler,
                 onImported: { outcomes in
                     let successes = outcomes.compactMap(\.book)
+                    if !successes.isEmpty {
+                        hasSeenFirstBookPrompt = true
+                    }
                     guard successes.count == 1, let book = successes.first
                     else { return }
                     model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
-                }
+                },
+                documentPickerPresented: $showDocumentPicker
             )
             .navigationDestination(for: ReaderRoute.self) { route in
                 ReaderDestinationView(
                     route: route,
                     hint: model.hint(for: route.bookId),
                     onRequestPaywall: { name in
-                        let paid = services.entitlementSnapshotStore.snapshot.isPaidActive
+                        let paid = services.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
                         model.requestPaywall(name, serverPaidActive: paid)
                     }
                 )
@@ -87,13 +99,6 @@ struct LibraryTabView: View {
             }
             
             .task(id: user.id) {
-                async let sample = services.sampleBookInstaller.installIfNeeded(
-                    ownerId: user.id
-                )
-                async let reader = services.sampleReaderInstaller
-                    .installIfNeeded(ownerId: user.id)
-                _ = await (sample, reader)
-
                 await model.performInitialLibrarySync(
                     refresh: { await vm.refresh() },
                     sync: {
@@ -102,9 +107,63 @@ struct LibraryTabView: View {
                         }
                     }
                 )
+
+                if !hasSeenFirstBookPrompt && vm.books.isEmpty {
+                    showFirstBookPrompt = true
+                    return
+                }
+                if !hasSeenFirstBookPrompt {
+                    // A restored/synced library already has content, so this
+                    // device no longer needs the first-book invitation.
+                    hasSeenFirstBookPrompt = true
+                }
+
+                // No first-book sheet is competing with the trial notice.
+                onLibraryReadyForTrial()
+
             }
         }
         .environment(vm)
+
+        .sheet(isPresented: $showFirstBookPrompt, onDismiss: {
+            let shouldPresentPicker = presentDocumentPickerAfterPrompt
+            presentDocumentPickerAfterPrompt = false
+            Task { @MainActor in
+                if shouldPresentPicker {
+                    trialReadyAfterDocumentPicker = true
+                    showDocumentPicker = true
+                } else {
+                    onLibraryReadyForTrial()
+                }
+            }
+        }) {
+            SampleOrImportScreen(
+                onUseSample: {
+                    hasSeenFirstBookPrompt = true
+                    showFirstBookPrompt = false
+                    Task {
+                        _ = await services.sampleBookInstaller.installIfNeeded(
+                            ownerId: user.id
+                        )
+                        await vm.refresh()
+                        await installSampleReaderIfNeeded()
+                    }
+                },
+                onImport: {
+                    presentDocumentPickerAfterPrompt = true
+                    showFirstBookPrompt = false
+                },
+                onSkip: {
+                    hasSeenFirstBookPrompt = true
+                    showFirstBookPrompt = false
+                }
+            )
+        }
+        .onChange(of: showDocumentPicker) { _, isPresented in
+            guard !isPresented, trialReadyAfterDocumentPicker else { return }
+            trialReadyAfterDocumentPicker = false
+            onLibraryReadyForTrial()
+        }
 
         #if !targetEnvironment(macCatalyst)
             .sheet(isPresented: Bindable(model).showSettings) {
@@ -118,7 +177,11 @@ struct LibraryTabView: View {
         .sheet(item: Bindable(model).paywallFeature, onDismiss: {
             // Best-effort: purchase/restore via SubscriptionStoreView may have
             // synced entitlements while the sheet was up.
-            Task { await services.entitlementService.refreshSnapshot() }
+            Task {
+                await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+                    reason: .foreground
+                )
+            }
         }) { _ in
             if services.groupID != nil {
                 SubscriptionsView()
@@ -137,14 +200,22 @@ struct LibraryTabView: View {
                 }
             }
         }
-        .onChange(of: services.entitlementSnapshotStore.snapshot) { old, snapshot in
+        .onChange(of: services.entitlementSnapshotStore.resolution) { old, new in
+            let oldPaid = old.resolvedSnapshot?.isPaidActive ?? false
+            let newPaid = new.resolvedSnapshot?.isPaidActive ?? false
             // Dismiss only when crossing into paid-active (verified grant).
             // Do not dismiss when already paid (allowance upgrade / plan change).
-            if model.paywallFeature != nil, snapshot.isPaidActive, !old.isPaidActive {
+            if model.paywallFeature != nil, newPaid, !oldPaid {
                 model.dismissPaywall()
             }
         }
 
         .deepLinkHandling(model: model, refreshLibrary: { await vm.refresh() })
+    }
+
+    @MainActor
+    private func installSampleReaderIfNeeded() async {
+        _ = await services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+        await vm.refresh()
     }
 }

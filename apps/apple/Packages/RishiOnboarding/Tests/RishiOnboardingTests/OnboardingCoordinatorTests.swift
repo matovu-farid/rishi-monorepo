@@ -17,8 +17,6 @@ struct OnboardingCoordinatorTests {
         let state = InMemoryOnboardingState()
         let c = OnboardingCoordinator(state: state)
 
-        await c.advance(); #expect(c.currentStage == .signIn)
-        await c.advance(); #expect(c.currentStage == .sampleOrImport)
         await c.advance(); #expect(c.currentStage == .micPrimer)
         await c.advance(); #expect(c.currentStage == .voiceLanguagePrimer)
         await c.advance(); #expect(c.currentStage == .firstReaderHint)
@@ -32,7 +30,7 @@ struct OnboardingCoordinatorTests {
         let state = InMemoryOnboardingState()
         await state.setPrimerShownMic(true)
         let c = OnboardingCoordinator(state: state)
-        c.setStageForTest(.sampleOrImport)
+        c.setStageForTest(.micPrimer)
         await c.advance()
         #expect(c.currentStage == .voiceLanguagePrimer)
     }
@@ -42,12 +40,9 @@ struct OnboardingCoordinatorTests {
         let c = OnboardingCoordinator(state: InMemoryOnboardingState())
         c.back()
         #expect(c.currentStage == .welcome)
-        c.setStageForTest(.signIn)
+        c.setStageForTest(.micPrimer)
         c.back()
         #expect(c.currentStage == .welcome)
-        c.setStageForTest(.sampleOrImport)
-        c.back()
-        #expect(c.currentStage == .signIn)
     }
 
     @Test("skipCurrentStage on micPrimer marks primerShownMic + advances")

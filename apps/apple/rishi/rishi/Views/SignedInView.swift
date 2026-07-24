@@ -16,6 +16,8 @@ import SwiftUI
 #endif
 
 struct SignedInView: View {
+    let onLibraryReadyForTrial: () -> Void
+
     @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw:
     String = ""
     @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw:
@@ -25,6 +27,8 @@ struct SignedInView: View {
     @Environment(\.appDependencies) private var appDependencies
 
     @Environment(CurrentUserBox.self) private var currentUserBox
+    @Environment(\.signOut) private var signOut
+
     var services: BootstrappedServices? {appDependencies?.services}
     var user: User? {
         guard case .signedIn(user: let user) = currentUserBox.state else {return nil}
@@ -33,6 +37,10 @@ struct SignedInView: View {
     
     @State private var model = SignedInViewModel()
 
+    init(onLibraryReadyForTrial: @escaping () -> Void = {}) {
+        self.onLibraryReadyForTrial = onLibraryReadyForTrial
+    }
+
     var body: some View {
         if let services, let user  {
             
@@ -40,7 +48,8 @@ struct SignedInView: View {
             LibraryTabView(
                 services: services,
                 user: user,
-                model: model
+                model: model,
+                onLibraryReadyForTrial: onLibraryReadyForTrial
             )
             
             .sheet(item: $model.selectedConversation) { convo in
@@ -86,7 +95,8 @@ struct SignedInView: View {
                         services.voicePresenter.clearFailure()
                         model.requestPaywall(
                             "voice_chat_exhausted",
-                            serverPaidActive: services.entitlementSnapshotStore.snapshot.isPaidActive
+                            serverPaidActive: services.entitlementSnapshotStore
+                                .resolvedSnapshot?.isPaidActive ?? false
                         )
                     }
                 case .dismiss:
@@ -108,6 +118,7 @@ struct SignedInView: View {
             .readerPrefsMenuPublisher(
                 services: services,
                 user: user,
+                onSignedOut: { signOut() },
                 account: appDependencies?.macAccountMenu
             )
             
@@ -155,6 +166,7 @@ extension View {
     func readerPrefsMenuPublisher(
         services: BootstrappedServices,
         user: User,
+        onSignedOut: @escaping () -> Void,
         account: MacAccountMenuModel?
     ) -> some View {
         #if targetEnvironment(macCatalyst)

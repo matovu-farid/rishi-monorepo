@@ -5,8 +5,9 @@
 // public symbol — comments only. Update this file when you add or
 // remove a public type.
 //
-// RishiOnboarding owns the first-run flow: a small set of intro screens,
-// sign-in, a mic primer, and a voice-language chooser.
+// RishiOnboarding owns the pre-auth first-run flow: a small set of intro
+// screens, a mic primer, and a voice-language chooser. Book setup is exposed
+// as a reusable screen and presented by the authenticated library host.
 // It also persists the "user has completed onboarding" bit so the app
 // can skip the flow on subsequent launches.
 //
@@ -16,7 +17,9 @@
 // MARK: - Views
 //
 // OnboardingFlowView          — `UI/OnboardingFlowView.swift`. The full first-run experience:
-//                                intro pages -> Sign in with Apple -> mic -> voice language -> done.
+//                                intro pages -> mic -> voice language -> done.
+// SampleOrImportScreen         — `UI/SampleOrImportScreen.swift`. Reusable
+//                                first-library-open sample/import prompt.
 // NoCardTrialScreen             — `UI/NoCardTrialScreen.swift`. One-time,
 //                                per-account "300 free credits, no card"
 //                                explainer shown after first sign-in.
@@ -24,8 +27,8 @@
 // MARK: - Coordinators / Flows
 //
 // OnboardingCoordinator       — `Flow/OnboardingCoordinator.swift`. State + actions for
-//                                OnboardingFlowView. Talks to AuthService for sign-in and
-//                                to OnboardingState for persistence.
+//                                OnboardingFlowView and persists progress via
+//                                OnboardingState.
 
 // MARK: - Storage
 //

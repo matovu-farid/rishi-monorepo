@@ -44,9 +44,9 @@ private struct CustomerEntitlementsViewModifier: ViewModifier {
                             // Entitlement-sync may have just landed; refresh
                             // so Settings/gates update without waiting for
                             // the next foreground.
-                            if let entitlementService = services?.entitlementService {
+                            if let coordinator = services?.entitlementRefreshCoordinator {
                                 Task {
-                                    await entitlementService.refreshSnapshot()
+                                    await coordinator.refreshIfSignedIn(reason: .foreground)
                                 }
                             }
                         }

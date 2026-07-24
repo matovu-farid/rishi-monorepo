@@ -17,14 +17,18 @@ struct OnboardingUITests {
         _ = MicPermissionPrimer(onAllow: {}, onSkip: {}).body
     }
 
-    @Test("SampleOrImportScreen constructs")
-    func sampleScreenConstructs() {
-        _ = SampleOrImportScreen(onUseSample: {}, onImport: {}, onSkip: {}).body
-    }
-
     @Test("FirstReaderHint constructs")
     func hintConstructs() {
         _ = FirstReaderHint(onGotIt: {}).body
+    }
+
+    @Test("SampleOrImportScreen constructs")
+    func sampleOrImportConstructs() {
+        _ = SampleOrImportScreen(
+            onUseSample: {},
+            onImport: {},
+            onSkip: {}
+        ).body
     }
 
     @Test("VoiceLanguagePrimer constructs")
@@ -39,7 +43,7 @@ struct OnboardingUITests {
     @Test("OnboardingFlowView constructs for every stage")
     func flowConstructsForEveryStage() async {
         let stages: [OnboardingCoordinator.Stage] = [
-            .welcome, .signIn, .sampleOrImport, .micPrimer,
+            .welcome, .micPrimer,
             .voiceLanguagePrimer, .firstReaderHint, .completed
         ]
         for stage in stages {
@@ -47,9 +51,6 @@ struct OnboardingUITests {
             coord.setStageForTest(stage)
             let view = OnboardingFlowView(
                 coordinator: coord,
-                onSignIn: {},
-                onUseSample: {},
-                onImport: {},
                 onRequestMic: {},
                 voiceLanguage: .constant("en"),
                 onCompleted: {}

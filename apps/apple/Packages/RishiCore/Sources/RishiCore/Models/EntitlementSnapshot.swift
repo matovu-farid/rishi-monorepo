@@ -70,9 +70,9 @@ public enum EntitlementSnapshot: Sendable, Equatable {
     }
 }
 
-// MARK: - Decodable
+// MARK: - Codable (wire shape)
 
-extension EntitlementSnapshot: Decodable {
+extension EntitlementSnapshot: Codable {
     private enum CodingKeys: String, CodingKey {
         case state
         case remainingCredits
@@ -81,7 +81,7 @@ extension EntitlementSnapshot: Decodable {
         case remainingVoiceChatSeconds
     }
 
-    private enum WireState: String, Decodable {
+    private enum WireState: String, Codable {
         case trialActive = "trial_active"
         case trialExhausted = "trial_exhausted"
         case readerActive = "reader_active"
@@ -111,6 +111,29 @@ extension EntitlementSnapshot: Decodable {
                 )
             )
             self = (state == .readerActive) ? .readerActive(period) : .voiceActive(period)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .trialActive(let remainingCredits):
+            try container.encode(WireState.trialActive, forKey: .state)
+            try container.encode(remainingCredits, forKey: .remainingCredits)
+        case .trialExhausted:
+            try container.encode(WireState.trialExhausted, forKey: .state)
+        case .subscriptionExpired:
+            try container.encode(WireState.subscriptionExpired, forKey: .state)
+        case .readerActive(let period):
+            try container.encode(WireState.readerActive, forKey: .state)
+            try container.encode(period.periodEndMs, forKey: .periodEnd)
+            try container.encode(period.remainingNarrationSeconds, forKey: .remainingNarrationSeconds)
+            try container.encode(period.remainingVoiceChatSeconds, forKey: .remainingVoiceChatSeconds)
+        case .voiceActive(let period):
+            try container.encode(WireState.voiceActive, forKey: .state)
+            try container.encode(period.periodEndMs, forKey: .periodEnd)
+            try container.encode(period.remainingNarrationSeconds, forKey: .remainingNarrationSeconds)
+            try container.encode(period.remainingVoiceChatSeconds, forKey: .remainingVoiceChatSeconds)
         }
     }
 }

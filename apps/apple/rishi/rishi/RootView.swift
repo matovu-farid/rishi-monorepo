@@ -9,15 +9,9 @@ import SwiftUI
 struct RootView: View {
 
     @Environment(AppRouter.self) private var router
-    @Environment(\.rishiAuthService) private var auth
     @Environment(\.appDependencies) private var deps
 
-    @State private var currentUser: User? = nil
     @State private var bootstrapped = false
-
-    @State private var authProbeComplete = false
-
-    @State private var entitlementResolved = false
 
     @State private var showOnboarding = false
     @State private var showNoCardTrialIntro = false
@@ -47,8 +41,11 @@ struct RootView: View {
             .environment(
                 \.signOut,
                 {
-                    deps.entitlementReconciler.reset()
-                    currentUser = nil
+                    Task {
+                        await deps.performSignOut(currentUserBox: currentUserBox)
+                        showOnboarding = false
+                        showNoCardTrialIntro = false
+                    }
                 }
             )
             .loadProducts()
@@ -67,6 +64,9 @@ struct RootView: View {
                             UserGetEndpoint()
                         )
                         currentUserBox.signIn(user: user)
+                        await deps.entitlementRefreshCoordinator.refreshIfSignedIn(
+                            reason: .signIn
+                        )
                     } catch {
                         Log.error("root.current_user.bootstrap_failed", error: error)
                         currentUserBox.state = .signedOut
@@ -91,9 +91,7 @@ struct RootView: View {
         Group {
             switch currentUserBox.state {
             case .signedOut:
-                SignedOutView(onSignedIn: { user in
-                    currentUser = user
-                })
+                SignedOutView()
             case .loading:
                 #if DEBUG
                     Text("Current UserBox loading")
@@ -107,7 +105,11 @@ struct RootView: View {
                 // SignedInView. AI-feature-specific upgrade prompts for
                 // exhausted/expired users are a later plan's job, built on
                 // the EntitlementSnapshotStore injected below.
-                SignedInView()
+                SignedInView(
+                    onLibraryReadyForTrial: {
+                        Task { await presentNoCardTrialIntroIfNeeded(deps: deps) }
+                    }
+                )
 
             }
         }
@@ -115,37 +117,14 @@ struct RootView: View {
         .task {
             guard !bootstrapped else { return }
             bootstrapped = true
-
-            let probedUser = await auth?.currentUser
-            currentUser = probedUser
-            authProbeComplete = true
-
-            if probedUser != nil {
-                async let completedAsync = deps.onboardingState
-                    .hasCompletedOnboarding()
-
-                let completed = await completedAsync
-
-                entitlementResolved = true
-                showOnboarding = !completed
-                if completed {
-                    await presentNoCardTrialIntroIfNeeded(deps: deps)
-                }
-            } else {
-                let completed = await deps.onboardingState
-                    .hasCompletedOnboarding()
-                showOnboarding = !completed
-            }
-
+            await updateOnboardingPresentation(deps: deps)
         }
-
         #if canImport(UIKit)
             .fullScreenCover(isPresented: $showOnboarding) {
                 OnboardingHost(
                     services: deps.services!,
                     onCompleted: {
                         showOnboarding = false
-                        Task { await presentNoCardTrialIntroIfNeeded(deps: deps) }
                     }
                 )
             }
@@ -155,7 +134,6 @@ struct RootView: View {
                     services: deps.services!,
                     onCompleted: {
                         showOnboarding = false
-                        Task { await presentNoCardTrialIntroIfNeeded(deps: deps) }
                     }
                 )
             }
@@ -165,17 +143,23 @@ struct RootView: View {
             }
     }
 
-    /// Shows the no-card trial explainer exactly once per account. Called
-    /// after the device-scoped onboarding wizard's cover has closed (or was
-    /// never shown), so the two full-screen covers never race — and again
-    /// from the initial bootstrap `.task` for the "wizard already completed
-    /// on a prior launch, but this account hasn't seen the intro yet" case
-    /// (e.g. a second account signing in on this device).
+    /// Presents the device-scoped onboarding wizard before authentication.
+    /// Authentication remains a later, intentional action from the signed-out
+    /// surface; the library's first-book prompt is presented only after sign-in.
+    @MainActor
+    private func updateOnboardingPresentation(deps: AppDependencies) async {
+        let completed = await deps.onboardingState.hasCompletedOnboarding()
+        showOnboarding = !completed
+    }
+
+    /// Shows the no-card trial explainer exactly once per account when the
+    /// signed-in library reports that its first-book flow has settled.
     private func presentNoCardTrialIntroIfNeeded(deps: AppDependencies) async {
         guard case .signedIn(let user) = currentUserBox.state else { return }
         let alreadySeen = await deps.trialOnboardingState.hasSeenNoCardIntro(userId: user.id)
         guard !alreadySeen else { return }
         await deps.trialOnboardingState.setHasSeenNoCardIntro(true, userId: user.id)
+        await deps.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn)
         showNoCardTrialIntro = true
     }
 }

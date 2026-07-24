@@ -1,5 +1,5 @@
 import AuthenticationServices
-import RishiCore
+import RishiBilling
 import RishiCore
 import RishiUIKit
 import SwiftUI
@@ -164,6 +164,9 @@ struct SignedOutView: View {
                         
                     }
                     currentUserBox.signIn(user: auth.user)
+                    await deps?.entitlementRefreshCoordinator.refreshIfSignedIn(
+                        reason: .signIn
+                    )
                 }
             }
             

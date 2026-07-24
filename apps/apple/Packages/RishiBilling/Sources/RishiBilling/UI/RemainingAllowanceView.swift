@@ -8,51 +8,66 @@ import RishiCore
 /// (spec: "Never expose paid internal credits"). Warning color/icon appears
 /// below the documented thresholds in `AllowanceWarningThreshold`.
 public struct RemainingAllowanceView: View {
-    public let snapshot: EntitlementSnapshot
+    public let snapshot: EntitlementSnapshot?
+    public let isLoading: Bool
 
-    public init(snapshot: EntitlementSnapshot) {
+    public init(snapshot: EntitlementSnapshot, isLoading: Bool = false) {
         self.snapshot = snapshot
+        self.isLoading = isLoading
+    }
+
+    public init(isLoading: Bool) {
+        self.snapshot = nil
+        self.isLoading = isLoading
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: RishiSpacing.xs) {
-            switch snapshot {
-            case .trialActive(let remainingCredits):
+            if isLoading {
                 AllowanceRow(
-                    iconName: "bolt.fill",
-                    text: AllowanceFormatter.creditsDescription(remainingCredits),
-                    isLow: AllowanceWarningThreshold.isLowTrialCredits(remainingCredits)
+                    iconName: "arrow.trianglehead.2.clockwise",
+                    text: "Checking allowance…",
+                    isLow: false
                 )
-            case .readerActive(let period):
-                planRows(
-                    period: period,
-                    narrationTotal: PlanAllowance.readerNarrationSeconds,
-                    voiceChatTotal: PlanAllowance.readerVoiceChatSeconds
-                )
-            case .voiceActive(let period):
-                planRows(
-                    period: period,
-                    narrationTotal: PlanAllowance.voiceNarrationSeconds,
-                    voiceChatTotal: PlanAllowance.voiceVoiceChatSeconds
-                )
-            case .trialExhausted:
-                AllowanceRow(
-                    iconName: "exclamationmark.circle.fill",
-                    text: "Trial credits used up",
-                    isLow: true
-                )
-            case .subscriptionExpired:
-                AllowanceRow(
-                    iconName: "exclamationmark.circle.fill",
-                    text: "Subscription expired",
-                    isLow: true
-                )
-            }
+            } else if let snapshot {
+                switch snapshot {
+                case .trialActive(let remainingCredits):
+                    AllowanceRow(
+                        iconName: "bolt.fill",
+                        text: AllowanceFormatter.creditsDescription(remainingCredits),
+                        isLow: AllowanceWarningThreshold.isLowTrialCredits(remainingCredits)
+                    )
+                case .readerActive(let period):
+                    planRows(
+                        period: period,
+                        narrationTotal: PlanAllowance.readerNarrationSeconds,
+                        voiceChatTotal: PlanAllowance.readerVoiceChatSeconds
+                    )
+                case .voiceActive(let period):
+                    planRows(
+                        period: period,
+                        narrationTotal: PlanAllowance.voiceNarrationSeconds,
+                        voiceChatTotal: PlanAllowance.voiceVoiceChatSeconds
+                    )
+                case .trialExhausted:
+                    AllowanceRow(
+                        iconName: "exclamationmark.circle.fill",
+                        text: "Trial credits used up",
+                        isLow: true
+                    )
+                case .subscriptionExpired:
+                    AllowanceRow(
+                        iconName: "exclamationmark.circle.fill",
+                        text: "Subscription expired",
+                        isLow: true
+                    )
+                }
 
-            if let periodEnd = snapshot.periodEnd {
-                Text(AllowanceFormatter.resetDateDescription(periodEnd))
-                    .font(RishiTypography.caption)
-                    .foregroundStyle(RishiColor.textMuted)
+                if let periodEnd = snapshot.periodEnd {
+                    Text(AllowanceFormatter.resetDateDescription(periodEnd))
+                        .font(RishiTypography.caption)
+                        .foregroundStyle(RishiColor.textMuted)
+                }
             }
         }
     }

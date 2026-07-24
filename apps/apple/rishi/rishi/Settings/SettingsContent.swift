@@ -15,6 +15,7 @@ struct SettingsContent: View {
 
     @Environment(\.signOut) private var signOut
     @Environment(CurrentUserBox.self) private var currentUserBox
+    @Environment(EntitlementSnapshotStore.self) private var entitlementStore
 
     @State private var initialAudio: TTSSettings = .default
     @State private var audioLoaded = false
@@ -23,7 +24,6 @@ struct SettingsContent: View {
         Group {
             if audioLoaded {
                 let defaults = services.readerDefaults
-                //                let presenter = services.manageSubscriptionPresenter
                 let sync = services.syncEngine
                 SettingsScreen(
                     user: user,
@@ -52,19 +52,19 @@ struct SettingsContent: View {
                     onSyncNow: { Task { await sync.syncNow() } },
                     telemetryStore: services.telemetryStore,
                     footerDetectionStore: services.footerDetectionStore,
-                    entitlementSnapshot: services.entitlementSnapshotStore.snapshot,
+                    entitlementSnapshot: entitlementStore.resolvedSnapshot,
+                    allowanceLoading: entitlementStore.isLoading,
                     onSignOut: {
-                        //                        try? await auth.signOut()
-                        currentUserBox.signout()
-
                         await MainActor.run {
                             onDismiss()
                             signOut()
                         }
                     },
                     onDelete: {
-                        //try await auth.deleteAccount()
-                        currentUserBox.signout()
+                        await MainActor.run {
+                            onDismiss()
+                            signOut()
+                        }
                     },
                     onDeleted: {
                         onDismiss()

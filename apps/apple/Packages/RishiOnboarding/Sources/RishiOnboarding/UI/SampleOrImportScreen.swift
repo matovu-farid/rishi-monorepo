@@ -1,8 +1,10 @@
 import SwiftUI
 import RishiUIKit
 
-/// ONB-01 step letting the user pick a sample book or import their own.
-struct SampleOrImportScreen: View {
+/// First-library-open prompt letting the user pick a sample book or import
+/// their own. The app presents this after authentication, outside the intro
+/// onboarding wizard.
+public struct SampleOrImportScreen: View {
     public let onUseSample: () -> Void
     public let onImport: () -> Void
     public let onSkip: () -> Void

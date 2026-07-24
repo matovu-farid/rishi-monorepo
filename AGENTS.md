@@ -1,5 +1,15 @@
 # Working in this repo
 
+## Adversarial review loop
+
+Run an **independent, iterative** review at research, plan, and implement stages — not a single self-review pass. Each round: review → log findings → update the artifact → **re-review** until Critical/High issues are closed.
+
+**Full process:** [`docs/superpowers/ADVERSARIAL-REVIEW-LOOP.md`](docs/superpowers/ADVERSARIAL-REVIEW-LOOP.md) (severity levels, verdicts, plan template, anti-patterns, worked example).
+
+- Fix all **Critical** and **High** findings before advancing.
+- **PASS WITH NOTES** only when remaining items are explicitly accepted; if the user asks to loop until no issues remain, aim for **PASS (0 open Critical/High)**.
+- Plans live under `docs/superpowers/plans/` (Apple: `apps/apple/docs/superpowers/plans/`) and must include an adversarial review section after non-trivial planning.
+
 ## Use a subagent-driven / agent-team approach
 
 Delegate work to subagents (the Agent tool) or agent teams rather than doing it

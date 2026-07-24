@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import RishiCore
 import RishiBilling
-import RishiCore
 import RishiReader
 import RishiSettings
 
@@ -19,6 +18,9 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     /// clears it.
     public private(set) var pendingUpgradePrompt: AIFeatureBlockReason?
 
+    /// True while an entitlement refresh + gate check is in flight.
+    public private(set) var isCheckingEntitlement = false
+
     private let voicePresenter: VoiceSessionPresenter
     private let voiceLanguageProvider: @MainActor () -> VoiceLanguageOption
 
@@ -27,17 +29,22 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     /// production always passes `services.entitlementSnapshotStore`.
     private let entitlementSnapshotStore: EntitlementSnapshotStore?
 
+    /// Coalesced refresh path for tap-time gating. `nil` only in tests.
+    private let entitlementRefreshCoordinator: EntitlementRefreshCoordinator?
+
     private let onRequestPaywall: (String) -> Void
 
     init(
         voicePresenter: VoiceSessionPresenter,
         voiceLanguageProvider: @escaping @MainActor () -> VoiceLanguageOption,
         entitlementSnapshotStore: EntitlementSnapshotStore? = nil,
+        entitlementRefreshCoordinator: EntitlementRefreshCoordinator? = nil,
         onRequestPaywall: @escaping (String) -> Void
     ) {
         self.voicePresenter = voicePresenter
         self.voiceLanguageProvider = voiceLanguageProvider
         self.entitlementSnapshotStore = entitlementSnapshotStore
+        self.entitlementRefreshCoordinator = entitlementRefreshCoordinator
         self.onRequestPaywall = onRequestPaywall
     }
 
@@ -46,24 +53,33 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
         context: ReaderVoiceContext,
         initialQuote: String?
     ) {
-        if let reason = entitlementSnapshotStore?.snapshot.blockReason(for: .voiceChat) {
-            pendingUpgradePrompt = reason
-            return
-        }
-
-        let contextSnapshot = BookContextSnapshot(
-            bookId: bookId,
-            currentPage: context.currentPage,
-            pageText: context.pageText,
-            outline: BookOutlineDTO(
-                title: context.title,
-                author: context.author,
-                chapters: context.chapters
-            ),
-            activeParagraphText: context.activeParagraphText
-        )
-
         Task {
+            isCheckingEntitlement = true
+            defer { isCheckingEntitlement = false }
+
+            if let store = entitlementSnapshotStore,
+               let coordinator = entitlementRefreshCoordinator,
+               let reason = await EntitlementAIGate.gateAIFeature(
+                   .voiceChat,
+                   store: store,
+                   coordinator: coordinator
+               ) {
+                pendingUpgradePrompt = reason
+                return
+            }
+
+            let contextSnapshot = BookContextSnapshot(
+                bookId: bookId,
+                currentPage: context.currentPage,
+                pageText: context.pageText,
+                outline: BookOutlineDTO(
+                    title: context.title,
+                    author: context.author,
+                    chapters: context.chapters
+                ),
+                activeParagraphText: context.activeParagraphText
+            )
+
             await voicePresenter.start(
                 bookId: bookId,
                 language: voiceLanguageProvider().rawValue,
