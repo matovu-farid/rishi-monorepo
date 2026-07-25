@@ -7,7 +7,7 @@ export function HowItWorks() {
         <div className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-bold mb-4">Three simple steps</h2>
           <p className="text-lg text-muted-foreground text-pretty">
-            Getting started is effortless. No complicated setup, no learning curve.
+            A simple flow for turning reading time into learning time.
           </p>
         </div>
 
@@ -16,20 +16,20 @@ export function HowItWorks() {
             {
               icon: BookOpen,
               step: '1',
-              title: 'Add Your Books',
-              desc: 'Import books from your library or open files directly. Your collection is organized and ready to go.'
+              title: 'Add a book',
+              desc: 'Bring a book into your library and make it part of your everyday rhythm.'
             },
             {
               icon: Ear,
               step: '2',
-              title: 'Read or Listen',
-              desc: 'Read at your own pace, or listen while you do other things. Switch between modes whenever you want.'
+              title: 'Read or listen',
+              desc: 'Move between reading and listening whenever the moment calls for it.'
             },
             {
               icon: MessageSquare,
               step: '3',
-              title: 'Ask & Learn',
-              desc: 'When something interests you or confuses you, ask your book. Get instant clarity and deeper insights.'
+              title: 'Ask and go deeper',
+              desc: 'Follow your curiosity with contextual questions, explanations, and new connections.'
             }
           ].map((item, i) => {
             const Icon = item.icon

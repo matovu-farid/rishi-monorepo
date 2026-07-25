@@ -1,3 +1,5 @@
+export {};
+
 /**
  * Set a fake Clerk dev-browser cookie before visiting so Clerk's middleware
  * doesn't 307 → dummy.clerk.accounts.dev (which 400s in tests). With this
@@ -10,7 +12,7 @@ function setClerkDevCookie() {
 describe("Download CTA — dropdown navigation", () => {
   beforeEach(() => {
     setClerkDevCookie();
-    cy.visit("/");
+    cy.visit("/docs");
   });
 
   it("navigates to /api/download/mac when clicking the macOS row", () => {
@@ -69,7 +71,7 @@ describe("Download CTA — dropdown navigation", () => {
 describe("Download CTA — keyboard focus", () => {
   it("shows a visible focus ring on the download chevron when focused via keyboard", () => {
     setClerkDevCookie();
-    cy.visit("/");
+    cy.visit("/docs");
     cy.get("[aria-label='Other platforms']").first().as("chevron");
 
     // Try using real keyboard events so :focus-visible matches reliably.
@@ -105,7 +107,7 @@ describe("Download CTA — keyboard focus", () => {
 describe("Download CTA — header dropdown stacking", () => {
   it("renders the header's dropdown content above the sticky header", () => {
     setClerkDevCookie();
-    cy.visit("/");
+    cy.visit("/docs");
     // The layout wraps everything in a sticky <header>. The site's Header component
     // (with the Download button) renders inside that sticky <header>.
     // Find the FIRST "Other platforms" button — it's inside the sticky header's desktop nav.

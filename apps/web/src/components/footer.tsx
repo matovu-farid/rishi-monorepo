@@ -1,3 +1,5 @@
+import Image from "next/image";
+
 export function Footer() {
   return (
     <footer className="border-t border-border py-12 px-6">
@@ -5,9 +7,7 @@ export function Footer() {
         <div className="grid md:grid-cols-4 gap-8 mb-12">
           <div>
             <div className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
-                <span className="text-white font-bold text-sm">R</span>
-              </div>
+              <Image src="/brand/rishi-icon.png" alt="" width={32} height={32} className="rounded-lg" />
               <span className="font-bold">Rishi</span>
             </div>
             <p className="text-sm text-muted-foreground">
@@ -21,7 +21,6 @@ export function Footer() {
               links: [
                 { label: 'Features', href: '/#features' },
                 { label: 'Pricing', href: '/pricing' },
-                { label: 'Download', href: '/#' },
                 { label: 'Changelog', href: '/changelog' },
               ]
             },

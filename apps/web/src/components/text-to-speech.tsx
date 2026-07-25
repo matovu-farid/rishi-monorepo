@@ -39,10 +39,10 @@ export function TextToSpeech() {
             <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-orange-500/20 rounded-2xl blur-3xl -z-10"></div>
             <div className="border border-border rounded-2xl overflow-hidden bg-card h-full flex items-center justify-center p-4">
               <Image
-                src="/screenshots/book.png"
-                alt="Reading interface with playback controls and dual-column layout"
-                width={500}
-                height={400}
+                src="/screenshots/ios/listening.png"
+                alt="Rishi listening interface on iPhone"
+                width={1284}
+                height={2778}
                 className="w-full h-auto"
               />
             </div>

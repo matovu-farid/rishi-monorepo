@@ -6,16 +6,13 @@ export function FeatureShowcase() {
       <div className="max-w-7xl mx-auto">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           {/* Left: Image */}
-          <div className="relative aspect-square md:aspect-auto">
+          <div className="relative grid grid-cols-2 gap-4 items-start">
             <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-orange-500/20 rounded-2xl blur-3xl -z-10"></div>
             <div className="border border-border rounded-2xl overflow-hidden bg-card h-full flex items-center justify-center p-4">
-              <Image
-                src="/screenshots/library.png"
-                alt="Book library interface showing multiple books in a grid"
-                width={500}
-                height={400}
-                className="w-full h-auto"
-              />
+              <Image src="/screenshots/ios/library.png" alt="Rishi library on iPhone" width={1206} height={2622} className="w-full h-auto" />
+            </div>
+            <div className="border border-border rounded-2xl overflow-hidden bg-card flex items-center justify-center p-4 mt-12">
+              <Image src="/screenshots/ios/library-books.png" alt="Rishi library with books on iPhone" width={1284} height={2778} className="w-full h-auto" />
             </div>
           </div>
 
@@ -24,7 +21,8 @@ export function FeatureShowcase() {
             <div>
               <h2 className="text-4xl md:text-5xl font-bold mb-4">Your library, reimagined</h2>
               <p className="text-lg text-muted-foreground text-pretty leading-relaxed">
-                Organize your books in one beautiful place. Access them instantly across all your devices, from desktop to tablet. Start reading one moment, pick up another the next.
+                Keep your books close and your reading life organized. Start with a library
+                that feels at home on iPhone and grows with you across the Apple ecosystem.
               </p>
             </div>
 

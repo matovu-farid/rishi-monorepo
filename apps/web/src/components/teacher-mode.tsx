@@ -1,4 +1,5 @@
 import { Brain } from 'lucide-react'
+import Image from 'next/image'
 
 export function TeacherMode() {
   return (
@@ -7,7 +8,7 @@ export function TeacherMode() {
         <div className="space-y-8 text-center">
           <div className="flex items-center justify-center gap-3">
             <Brain className="text-amber-500" size={32} />
-            <span className="text-sm font-semibold text-amber-500 tracking-wide">INNOVATION</span>
+            <span className="text-sm font-semibold text-amber-500 tracking-wide">TEACHER MODE</span>
           </div>
 
           <div>
@@ -19,7 +20,11 @@ export function TeacherMode() {
         </div>
 
         {/* Feature Grid */}
-        <div className="grid md:grid-cols-2 gap-6 mt-16">
+        <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-10 mt-16 items-center">
+          <div className="border border-border rounded-2xl overflow-hidden bg-card p-4 max-w-sm mx-auto">
+            <Image src="/screenshots/ios/reader.png" alt="Rishi reading interface on iPhone" width={1284} height={2778} className="w-full h-auto" />
+          </div>
+          <div className="grid sm:grid-cols-2 gap-6">
           {[
             {
               title: 'Conversational Learning',
@@ -43,6 +48,7 @@ export function TeacherMode() {
               <p className="text-muted-foreground text-sm leading-relaxed">{feature.desc}</p>
             </div>
           ))}
+          </div>
         </div>
       </div>
     </section>
