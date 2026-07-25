@@ -17,13 +17,13 @@ Create a concise, launch-stage pitch deck for Rishi’s Google AI Lab applicatio
 
 ## Story arc
 
-1. Cover: Rishi — Make every page more understandable.
-2. Problem: long, dense documents are difficult to read, search, remember, and discuss.
-3. Product: an AI-powered reading companion for books and documents.
-4. Voice: read aloud and voice conversation extend reading beyond the screen.
-5. AI layer: contextual chat, document text, retrieval, semantic/vector search, and book-specific conversations.
-6. Workflow: library → reader → highlights/bookmarks → search → conversation, with sync across devices.
-7. Launch stage: first App Store release; product capabilities are built, while real-world measurement begins at launch.
+1. Cover: Rishi — A teacher inside every book.
+2. Problem: people often need a teacher, professor, or guide to explain dense reading material; a book alone does not always make knowledge easy to understand.
+3. Product: an assistant within the book that explains, breaks down, and discusses what the reader is studying.
+4. Two-mode learning: readers can see the material and hear it at the same time through text-to-speech, supporting a more accessible and flexible learning experience.
+5. AI layer: contextual chat, document text, retrieval, semantic/vector search, and book-specific conversations make explanations grounded in the current book.
+6. Workflow: choose a book → read and listen → ask for an explanation → search and revisit → highlight/bookmark the insight, with sync across devices.
+7. Launch stage: first App Store release; the product is built around making it easier for anyone with a book to cover it and assimilate its knowledge.
 8. Launch measurement: activation, books imported, reading/listening sessions, AI questions, retention, and qualitative feedback.
 9. Why Rishi / why now: founder perspective plus the opportunity created by conversational AI.
 10. Ask: AI product guidance, model/evaluation expertise, and launch mentorship from Google AI Lab.
@@ -61,11 +61,13 @@ The deck must explicitly say Rishi is pre-revenue and does not yet have meaningf
 
 - Critical/high issue found: repository evidence does not establish market size, revenue, user traction, or founder biography. Resolution: keep these as explicit placeholders.
 - High issue found: launch timing is uncertain. Resolution: use “launching its first version on the App Store” plus an editable exact-status field.
+- High issue found: the original problem framing was too generic. Resolution: center the deck on the founder’s thesis that Rishi provides a teacher-like assistant inside the book and combines seeing with hearing to enhance learning.
 
 ### Design review
 
 - Critical/high issue found: none after revision. Product, launch stage, and evidence boundaries are separated.
 - Note: avoid presenting technical implementation details as proof of user value; pair each capability with the user benefit.
+- Note: avoid claiming that simultaneous text and audio automatically improve retention; describe it as a flexible, multimodal learning experience unless user research supports a stronger claim.
 
 ### Implementation review target
 
