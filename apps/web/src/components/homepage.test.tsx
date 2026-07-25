@@ -29,6 +29,8 @@ describe("iOS-first homepage", () => {
     expect(screen.getByText(/launching soon on iphone/i)).toBeTruthy();
     expect(screen.getAllByText(/macos planned next/i).length > 0).toBe(true);
     expect(screen.queryByText(/download/i)).toBeNull();
+    expect(screen.queryByRole("link", { name: /sign in/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /get started/i })).toBeNull();
     expect(screen.getAllByRole("link", { name: /explore the experience/i })[0].getAttribute("href")).toBe("#features");
   });
 

@@ -1,11 +1,15 @@
 "use client"
 
 import { useSession, signOut } from "@/lib/auth-client"
+import { usePathname } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 
 export function AuthButtons() {
+  const pathname = usePathname()
   const { data: session, isPending } = useSession()
+
+  if (pathname === "/") return null
 
   if (isPending) return <div className="h-9 w-20" />
 

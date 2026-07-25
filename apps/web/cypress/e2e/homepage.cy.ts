@@ -15,6 +15,8 @@ describe("iOS-first homepage", () => {
     cy.contains(/launching soon on iphone/i).should("be.visible");
     cy.contains(/macos planned next/i).should("be.visible");
     cy.contains("Download").should("not.exist");
+    cy.contains("Sign in").should("not.exist");
+    cy.contains("Get started").should("not.exist");
     cy.get('a[href="#features"]').contains("Explore the experience").should("be.visible");
   });
 

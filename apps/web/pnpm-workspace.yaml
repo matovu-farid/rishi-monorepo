@@ -1,0 +1,8 @@
+overrides:
+  import-in-the-middle: 3.3.2
+
+allowBuilds:
+  '@sentry/cli': true
+  cypress: true
+  sharp: true
+  unrs-resolver: true
