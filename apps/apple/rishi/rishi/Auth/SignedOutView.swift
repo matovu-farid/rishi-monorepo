@@ -188,7 +188,8 @@ struct SignedOutView: View {
             }
         )
         .signInWithAppleButtonStyle(.black)
-        .frame(height: 50)
+        .frame(maxWidth: 400)
+        .frame(height: 44)
         .cornerRadius(10)
     }
 

@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>rishi.ipa</key>
+	<array>
+		<dict>
+			<key>architectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>buildNumber</key>
+			<string>1</string>
+			<key>certificate</key>
+			<dict>
+				<key>SHA1</key>
+				<string>5AD31ED2A19DB467F41643543C53C930B527848E</string>
+				<key>dateExpires</key>
+				<string>21/04/2027</string>
+				<key>type</key>
+				<string>Apple Distribution</string>
+			</dict>
+			<key>embeddedBinaries</key>
+			<array>
+				<dict>
+					<key>architectures</key>
+					<array>
+						<string>arm64</string>
+					</array>
+					<key>buildNumber</key>
+					<string>1.0</string>
+					<key>certificate</key>
+					<dict>
+						<key>SHA1</key>
+						<string>5AD31ED2A19DB467F41643543C53C930B527848E</string>
+						<key>dateExpires</key>
+						<string>21/04/2027</string>
+						<key>type</key>
+						<string>Apple Distribution</string>
+					</dict>
+					<key>name</key>
+					<string>LiveKitWebRTC.framework</string>
+					<key>symbols</key>
+					<true/>
+					<key>team</key>
+					<dict>
+						<key>id</key>
+						<string>9VL7VRY6QZ</string>
+						<key>name</key>
+						<string>Farid Matovu</string>
+					</dict>
+					<key>versionNumber</key>
+					<string>1.0</string>
+				</dict>
+				<dict>
+					<key>architectures</key>
+					<array>
+						<string>arm64</string>
+					</array>
+					<key>buildNumber</key>
+					<string>9.16.1</string>
+					<key>certificate</key>
+					<dict>
+						<key>SHA1</key>
+						<string>5AD31ED2A19DB467F41643543C53C930B527848E</string>
+						<key>dateExpires</key>
+						<string>21/04/2027</string>
+						<key>type</key>
+						<string>Apple Distribution</string>
+					</dict>
+					<key>name</key>
+					<string>Sentry.framework</string>
+					<key>symbols</key>
+					<true/>
+					<key>team</key>
+					<dict>
+						<key>id</key>
+						<string>9VL7VRY6QZ</string>
+						<key>name</key>
+						<string>Farid Matovu</string>
+					</dict>
+					<key>versionNumber</key>
+					<string>9.16.1</string>
+				</dict>
+			</array>
+			<key>entitlements</key>
+			<dict>
+				<key>application-identifier</key>
+				<string>9VL7VRY6QZ.org.fidexa.rishi</string>
+				<key>aps-environment</key>
+				<string>production</string>
+				<key>beta-reports-active</key>
+				<true/>
+				<key>com.apple.developer.applesignin</key>
+				<array>
+					<string>Default</string>
+				</array>
+				<key>com.apple.developer.associated-domains</key>
+				<array>
+					<string>applinks:rishi.fidexa.org</string>
+				</array>
+				<key>com.apple.developer.team-identifier</key>
+				<string>9VL7VRY6QZ</string>
+				<key>com.apple.security.application-groups</key>
+				<array>
+					<string>group.org.fidexa.rishi</string>
+				</array>
+				<key>get-task-allow</key>
+				<false/>
+			</dict>
+			<key>name</key>
+			<string>rishi.app</string>
+			<key>profile</key>
+			<dict>
+				<key>UUID</key>
+				<string>dc5d45ae-5d63-4c76-8976-b28cf7d7a522</string>
+				<key>dateExpires</key>
+				<string>19/06/2027</string>
+				<key>name</key>
+				<string>iOS Team Store Provisioning Profile: org.fidexa.rishi</string>
+			</dict>
+			<key>symbols</key>
+			<true/>
+			<key>team</key>
+			<dict>
+				<key>id</key>
+				<string>9VL7VRY6QZ</string>
+				<key>name</key>
+				<string>Farid Matovu</string>
+			</dict>
+			<key>versionNumber</key>
+			<string>2.1</string>
+		</dict>
+	</array>
+</dict>
+</plist>

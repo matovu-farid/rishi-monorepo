@@ -17,6 +17,9 @@ struct LibraryTabView: View {
     let onLibraryReadyForTrial: () -> Void
 
     @Environment(AppRouter.self) private var router
+    #if targetEnvironment(macCatalyst)
+        @Environment(ReaderWindowCoordinator.self) private var readerWindows
+    #endif
     @State private var vm: LibraryViewModel
     @AppStorage("rishi.library.firstBookPrompt.seen") private var hasSeenFirstBookPrompt = false
     @State private var showFirstBookPrompt = false
@@ -51,7 +54,11 @@ struct LibraryTabView: View {
                 importCoordinator: services.importCoordinator,
                 onOpenBook: { book in
                     model.hint(book)
-                    router.path.append(ReaderRoute.route(for: book))
+                    #if targetEnvironment(macCatalyst)
+                        readerWindows.open(book: book, user: user)
+                    #else
+                        router.path.append(ReaderRoute.route(for: book))
+                    #endif
                 },
                 onShowSettings: settingsHandler,
                 onImported: { outcomes in
@@ -62,7 +69,11 @@ struct LibraryTabView: View {
                     guard successes.count == 1, let book = successes.first
                     else { return }
                     model.hint(book)
-                    router.path.append(ReaderRoute.route(for: book))
+                    #if targetEnvironment(macCatalyst)
+                        readerWindows.open(book: book, user: user)
+                    #else
+                        router.path.append(ReaderRoute.route(for: book))
+                    #endif
                 },
                 documentPickerPresented: $showDocumentPicker
             )

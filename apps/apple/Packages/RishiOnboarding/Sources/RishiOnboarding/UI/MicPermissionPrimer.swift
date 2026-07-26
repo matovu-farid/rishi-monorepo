@@ -46,6 +46,7 @@ struct MicPermissionPrimer: View {
                     Text("Allow microphone")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
+                        .onboardingCTAWidth()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(RishiColor.accent)

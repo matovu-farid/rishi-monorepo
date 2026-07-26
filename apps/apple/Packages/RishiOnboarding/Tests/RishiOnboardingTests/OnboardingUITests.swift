@@ -7,6 +7,23 @@ import SwiftUI
 @Suite("Onboarding UI construction smoke")
 struct OnboardingUITests {
 
+    @Test("Onboarding CTA stays full width in compact layouts")
+    func onboardingCTAUsesFullWidthInCompactLayouts() {
+        #expect(OnboardingCTAConfiguration.maxWidth(for: .compact) == .infinity)
+        #expect(OnboardingCTAConfiguration.maxWidth(for: nil) == .infinity)
+    }
+
+    @Test("Onboarding CTA is capped in regular layouts")
+    func onboardingCTAUsesCompactWidthInRegularLayouts() {
+        #expect(OnboardingCTAConfiguration.maxWidth(for: .regular) == 400)
+    }
+
+    @Test("Language primer copy is capped in regular layouts")
+    func languagePrimerCopyUsesReadableWidthInRegularLayouts() {
+        #expect(OnboardingContentConfiguration.maxWidth(for: .regular) == 560)
+        #expect(OnboardingContentConfiguration.maxWidth(for: .compact) == .infinity)
+    }
+
     @Test("WelcomeScreen constructs")
     func welcomeConstructs() {
         _ = WelcomeScreen(onGetStarted: {}, logo: "rishi").body

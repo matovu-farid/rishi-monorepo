@@ -38,6 +38,7 @@ struct WelcomeScreen: View {
                 Text("Get started")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, RishiSpacing.m)
+                    .onboardingCTAWidth()
             }
             .buttonStyle(.borderedProminent)
             .tint(RishiColor.accent)

@@ -299,7 +299,7 @@ public struct ReaderScreen: View {
             trigger: viewModel.currentPageIndex
         )
         .sensoryFeedback(.warning, trigger: viewModel.lastBoundaryHitTick)
-        #if !os(macOS)
+        #if !os(macOS) && !targetEnvironment(macCatalyst)
             .statusBarHidden(!chrome.isVisible)
             .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
         #endif
@@ -408,7 +408,7 @@ public struct ReaderScreen: View {
                 sheetContent(for: sheet)
             }
         #endif
-        #if !os(macOS)
+        #if !os(macOS) && !targetEnvironment(macCatalyst)
 
             //
 
@@ -425,9 +425,35 @@ public struct ReaderScreen: View {
                 for: .bottomBar
             )
 
-            .opaqueReaderNavBar(readerBarColor)
+            .readerNavBarAppearance(readerBarColor)
             .navigationTitle(viewModel.book.title)
             .navigationBarTitleDisplayMode(.inline)
+        #endif
+
+        #if targetEnvironment(macCatalyst)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                CatalystReaderToolbar(title: viewModel.book.title) {
+                    if onReadAloud != nil {
+                        Button(action: readAloudAction) { Image(systemName: "speaker.wave.2.fill") }
+                            .popoverTip(readAloudTip)
+                            .accessibilityIdentifier("reader.toolbar.readAloud")
+                            .accessibilityLabel(A11yLabel.readerReadAloud)
+                    }
+                    if voicePresenter != nil {
+                        Button(action: voiceAction) { Image(systemName: "waveform.circle.fill") }
+                            .popoverTip(voiceChatTip)
+                            .accessibilityIdentifier("reader.toolbar.voice")
+                            .accessibilityLabel(A11yLabel.readerOpenVoice)
+                    }
+                    Button(action: showTypographyAction) { Image(systemName: "textformat.size") }
+                        .accessibilityIdentifier("reader.toolbar.typography")
+                        .accessibilityLabel(A11yLabel.readerOpenTypography)
+                    Button(action: showThemeAction) { Image(systemName: "circle.lefthalf.filled") }
+                        .accessibilityIdentifier("reader.toolbar.theme")
+                        .accessibilityLabel(A11yLabel.readerOpenTheme)
+                    readerMoreMenu
+                }
+            }
         #endif
 
         .onDisappear {
@@ -839,10 +865,25 @@ public struct ReaderScreen: View {
     extension View {
 
         @ViewBuilder
-        fileprivate func opaqueReaderNavBar(_ color: SwiftUI.Color) -> some View
-        {
+        fileprivate func readerNavBarAppearance(_ color: SwiftUI.Color) -> some View {
+            #if targetEnvironment(macCatalyst)
+            toolbarBackground(.bar, for: .navigationBar)
+                .toolbarBackground(Visibility.visible, for: .navigationBar)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.10))
+                        .frame(height: 1)
+                        .shadow(
+                            color: Color.black.opacity(0.14),
+                            radius: 3,
+                            y: 2
+                        )
+                        .accessibilityHidden(true)
+                }
+            #else
             toolbarBackground(color, for: .navigationBar)
                 .toolbarBackground(Visibility.visible, for: .navigationBar)
+            #endif
         }
     }
 #endif

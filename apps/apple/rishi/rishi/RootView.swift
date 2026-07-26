@@ -16,6 +16,9 @@ struct RootView: View {
     @State private var showOnboarding = false
     @State private var showNoCardTrialIntro = false
     @Environment(CurrentUserBox.self) private var currentUserBox
+    #if targetEnvironment(macCatalyst)
+        @Environment(ReaderWindowCoordinator.self) private var readerWindows
+    #endif
 
     var body: some View {
 
@@ -42,6 +45,11 @@ struct RootView: View {
                 \.signOut,
                 {
                     Task {
+                        #if targetEnvironment(macCatalyst)
+                            if case .signedIn(let user) = currentUserBox.state {
+                                readerWindows.invalidate(userID: user.id)
+                            }
+                        #endif
                         await deps.performSignOut(currentUserBox: currentUserBox)
                         showOnboarding = false
                         showNoCardTrialIntro = false

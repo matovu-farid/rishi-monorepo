@@ -45,6 +45,7 @@ public struct SampleOrImportScreen: View {
                     Text("Use sample book")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
+                        .onboardingCTAWidth()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(RishiColor.accent)
@@ -54,6 +55,7 @@ public struct SampleOrImportScreen: View {
                     Text("Import a book")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
+                        .onboardingCTAWidth()
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("onboarding-sample-import")

@@ -52,6 +52,7 @@ public struct NoCardTrialScreen: View {
                 Text("Got it")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, RishiSpacing.m)
+                    .onboardingCTAWidth()
             }
             .buttonStyle(.borderedProminent)
             .tint(RishiColor.accent)

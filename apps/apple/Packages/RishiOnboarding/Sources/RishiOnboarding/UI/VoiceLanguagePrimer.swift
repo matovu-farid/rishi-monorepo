@@ -39,6 +39,7 @@ public struct VoiceLanguagePrimer: View {
                     .foregroundStyle(RishiColor.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, RishiSpacing.l)
+                    .onboardingContentWidth()
 
                 Picker("Language", selection: $selection) {
                     ForEach(Self.options, id: \.code) { option in
@@ -54,6 +55,7 @@ public struct VoiceLanguagePrimer: View {
                     Text("Continue")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
+                        .onboardingCTAWidth()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(RishiColor.accent)
