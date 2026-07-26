@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import RishiAudio
-import RishiCore
+
+
 
 @MainActor
 final class ReaderTTSBridge {

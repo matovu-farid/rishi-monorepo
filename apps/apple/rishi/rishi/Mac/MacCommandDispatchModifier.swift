@@ -1,7 +1,7 @@
 
 
 import SwiftUI
-import RishiReader
+
 
 struct MacCommandDispatchModifier: ViewModifier {
 

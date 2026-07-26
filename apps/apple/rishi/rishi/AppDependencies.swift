@@ -1,21 +1,21 @@
 import Foundation
 import OSLog
 import Observation
-import RishiCore
-import RishiAudio
-import RishiAuth
-import RishiBilling
-import RishiChat
-import RishiCore
-import RishiDB
-import RishiLibrary
-import RishiLogging
-import RishiOnboarding
-import RishiReader
-import RishiSearch
-import RishiSettings
-import RishiSync
-import RishiVoice
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import SwiftUI
 
 @MainActor
@@ -199,7 +199,7 @@ extension EnvironmentValues {
 }
 
 private struct AppDependenciesKey: EnvironmentKey {
-    @MainActor static let defaultValue: AppDependencies? = nil
+    static let defaultValue: AppDependencies? = nil
 }
 
 extension EnvironmentValues {
@@ -210,7 +210,7 @@ extension EnvironmentValues {
 }
 
 private struct ServicesKey: EnvironmentKey {
-    @MainActor static let defaultValue: BootstrappedServices? = nil
+    static let defaultValue: BootstrappedServices? = nil
 }
 
 extension EnvironmentValues {
@@ -221,7 +221,7 @@ extension EnvironmentValues {
 }
 
 private struct CurrentUserKey: EnvironmentKey {
-    @MainActor static let defaultValue: User? = nil
+    static let defaultValue: User? = nil
 }
 
 extension EnvironmentValues {
@@ -232,7 +232,7 @@ extension EnvironmentValues {
 }
 
 private struct SignOutActionKey: EnvironmentKey {
-    @MainActor static let defaultValue: () -> Void = {}
+    nonisolated(unsafe) static let defaultValue: () -> Void = {}
 }
 
 extension EnvironmentValues {

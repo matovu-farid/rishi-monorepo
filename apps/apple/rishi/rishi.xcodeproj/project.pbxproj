@@ -7,44 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		09B561A62FF1258600972BA3 /* RishiDB in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561A52FF1258600972BA3 /* RishiDB */; };
-		09B561A82FF125A000972BA3 /* RishiCore in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561A72FF125A000972BA3 /* RishiCore */; };
-		09B561AA2FF125A000972BA3 /* RishiUIKit in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561A92FF125A000972BA3 /* RishiUIKit */; };
-		09B561AC2FF125A000972BA3 /* RishiLogging in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561AB2FF125A000972BA3 /* RishiLogging */; };
-		09B561AE2FF125A000972BA3 /* RishiTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561AD2FF125A000972BA3 /* RishiTesting */; };
-		09B561B02FF125A000972BA3 /* RishiAPI in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561AF2FF125A000972BA3 /* RishiAPI */; };
-		09B561B22FF125A000972BA3 /* RishiDB in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561B12FF125A000972BA3 /* RishiDB */; };
-		09B561B42FF125A000972BA3 /* RishiAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561B32FF125A000972BA3 /* RishiAuth */; };
-		09B561B62FF125A000972BA3 /* RishiLibrary in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561B52FF125A000972BA3 /* RishiLibrary */; };
-		09B561B82FF125A000972BA3 /* RishiReader in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561B72FF125A000972BA3 /* RishiReader */; };
-		09B561BA2FF125A000972BA3 /* RishiSync in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561B92FF125A000972BA3 /* RishiSync */; };
-		09B561BC2FF125A000972BA3 /* RishiAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561BB2FF125A000972BA3 /* RishiAudio */; };
-		09B561BE2FF125A000972BA3 /* RishiChat in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561BD2FF125A000972BA3 /* RishiChat */; };
-		09B561C02FF125A000972BA3 /* RishiVoice in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561BF2FF125A000972BA3 /* RishiVoice */; };
-		09B561C22FF125A000972BA3 /* RishiBilling in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C12FF125A000972BA3 /* RishiBilling */; };
-		09B561C42FF125A000972BA3 /* RishiSettings in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C32FF125A000972BA3 /* RishiSettings */; };
-		09B561C62FF125A000972BA3 /* RishiOnboarding in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C52FF125A000972BA3 /* RishiOnboarding */; };
-		09B561C82FF125A000972BA3 /* RishiSearch in Frameworks */ = {isa = PBXBuildFile; productRef = 09B561C72FF125A000972BA3 /* RishiSearch */; };
 		09ECC56D2FF7F30900272ABC /* Rishi Reader.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */; };
 		1A1111232FD83183008C5ADE /* TTSPresenceWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */; };
-		1CFCB7146A2AB08228F56E59 /* RishiBilling in Frameworks */ = {isa = PBXBuildFile; productRef = F8BE24D4A39386B6BF18E867 /* RishiBilling */; };
-		252859A25AFDB0AC38588F5F /* RishiUIKit in Frameworks */ = {isa = PBXBuildFile; productRef = 02462412E0BB4964915C0E2F /* RishiUIKit */; };
-		3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */ = {isa = PBXBuildFile; productRef = D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */; };
-		413ED76603381554479A938C /* RishiVoice in Frameworks */ = {isa = PBXBuildFile; productRef = AE82A5810F84E45F40E103A8 /* RishiVoice */; };
-		443936E1F89255A2DE7AE7E4 /* RishiSync in Frameworks */ = {isa = PBXBuildFile; productRef = ED6697329153BA8878524B1C /* RishiSync */; };
-		519E9AFE739F3C46AE57BEE7 /* RishiReader in Frameworks */ = {isa = PBXBuildFile; productRef = 5DF2FEE0C4B237A301D26963 /* RishiReader */; };
-		53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */ = {isa = PBXBuildFile; productRef = 8F44CD0541E29B6DA2049F21 /* RishiAPI */; };
-		57C0D8BB9FAD2213E457E94F /* RishiTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 39E77723BE79C2DC8FD0E4AA /* RishiTesting */; };
-		59D80D1126EB82C9435367FA /* RishiLogging in Frameworks */ = {isa = PBXBuildFile; productRef = 00D1898ADC5FFE76C44614FB /* RishiLogging */; };
-		5A5D45BDA04E05786EED750A /* RishiChat in Frameworks */ = {isa = PBXBuildFile; productRef = 3460E16863E99035F29CC2B4 /* RishiChat */; };
-		8839709E009AD7D4E6F50947 /* RishiAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A27D36EE1DC4536405E418CC /* RishiAuth */; };
-		8CB707F8C3FEB077AEEB7324 /* RishiSettings in Frameworks */ = {isa = PBXBuildFile; productRef = EBA0BD3691EDFD10943AC564 /* RishiSettings */; };
 		BBB28AB44A15558BFB39403C /* PropertyBased in Frameworks */ = {isa = PBXBuildFile; productRef = 4FA89280AD0D00847DBD767F /* PropertyBased */; };
-		BF605045BC208CABD363375D /* RishiSearch in Frameworks */ = {isa = PBXBuildFile; productRef = 88CDB187697D206363CB5E7A /* RishiSearch */; };
-		E7B2FC494C84D0538470DADE /* RishiLibrary in Frameworks */ = {isa = PBXBuildFile; productRef = C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */; };
-		F262D7B88E378B23684A699F /* RishiDB in Frameworks */ = {isa = PBXBuildFile; productRef = FCF3C76E4FA9636D03567457 /* RishiDB */; };
-		F886F339335BF6972B7F324F /* RishiOnboarding in Frameworks */ = {isa = PBXBuildFile; productRef = 19858D081930A763C26C3381 /* RishiOnboarding */; };
-		F9D3B1838D2E03155B41B0AE /* RishiCore in Frameworks */ = {isa = PBXBuildFile; productRef = F9E6AED6A64A152D5FEA764C /* RishiCore */; };
+		C10000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* ReadiumShared */; };
+		C10000000000000000000002 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000002 /* ReadiumNavigator */; };
+		C10000000000000000000003 /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000003 /* ReadiumStreamer */; };
+		C10000000000000000000004 /* ReadiumAdapterGCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000004 /* ReadiumAdapterGCDWebServer */; };
+		C10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* ReadiumZIPFoundation */; };
+		C10000000000000000000006 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000006 /* Sentry */; };
+		C10000000000000000000007 /* USearch in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000007 /* USearch */; };
+		C10000000000000000000008 /* ChunkedAudioPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000008 /* ChunkedAudioPlayer */; };
+		C10000000000000000000009 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000009 /* LiveKitWebRTC */; };
+		D10000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* ReadiumShared */; };
+		D10000000000000000000002 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000002 /* ReadiumNavigator */; };
+		D10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* ReadiumZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,53 +53,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		09B561852FF11CE300972BA3 /* Exceptions for "rishi" folder in "rishiTests" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				AppDependencies.swift,
-				Audio/ParagraphAdvanceWatcher.swift,
-				Audio/ReadAheadCoordinator.swift,
-				Audio/ReaderTTSBridge.swift,
-				Audio/TTSPresenceController.swift,
-				AudioStackFactory.swift,
-				BackgroundSyncLifecycle.swift,
-				Billing/AppReaderDefaultsBindings.swift,
-				Billing/AppTelemetrySink.swift,
-				Chat/AppChatRefreshAdapter.swift,
-				Mac/MacAccountMenuModel.swift,
-				Mac/MacCommandRouter.swift,
-				Mac/ReaderPrefsMenuModel.swift,
-				Mac/RishiKeyboardCommands.swift,
-				ServiceGraphFactory.swift,
-				Voice/AppVoiceDirtyAdapter.swift,
-				Voice/VoiceSessionPresenter.swift,
-				Voice/VoiceSessionRegistry.swift,
-			);
-			target = 092254A22FD83186008C5ADE /* rishiTests */;
-		};
-		09B5618B2FF1237700972BA3 /* Exceptions for "rishi" folder in "rishiUITests" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				AppDependencies.swift,
-				Audio/ParagraphAdvanceWatcher.swift,
-				Audio/ReadAheadCoordinator.swift,
-				Audio/TTSPresenceController.swift,
-				AudioStackFactory.swift,
-				BackgroundSyncLifecycle.swift,
-				Billing/AppReaderDefaultsBindings.swift,
-				Billing/AppTelemetrySink.swift,
-				Chat/AppChatRefreshAdapter.swift,
-				Mac/MacAccountMenuModel.swift,
-				Mac/MacCommandRouter.swift,
-				Mac/ReaderPrefsMenuModel.swift,
-				Mac/RishiKeyboardCommands.swift,
-				ServiceGraphFactory.swift,
-				Voice/AppVoiceDirtyAdapter.swift,
-				Voice/VoiceSessionPresenter.swift,
-				Voice/VoiceSessionRegistry.swift,
-			);
-			target = 092254AC2FD83186008C5ADE /* rishiUITests */;
-		};
 		C444E2697AFC3ABDFAD0AFC3 /* Exceptions for "rishi" folder in "rishi" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -137,8 +67,6 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				C444E2697AFC3ABDFAD0AFC3 /* Exceptions for "rishi" folder in "rishi" target */,
-				09B561852FF11CE300972BA3 /* Exceptions for "rishi" folder in "rishiTests" target */,
-				09B5618B2FF1237700972BA3 /* Exceptions for "rishi" folder in "rishiUITests" target */,
 			);
 			path = rishi;
 			sourceTree = "<group>";
@@ -160,22 +88,15 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F9D3B1838D2E03155B41B0AE /* RishiCore in Frameworks */,
-				252859A25AFDB0AC38588F5F /* RishiUIKit in Frameworks */,
-				59D80D1126EB82C9435367FA /* RishiLogging in Frameworks */,
-				53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */,
-				F262D7B88E378B23684A699F /* RishiDB in Frameworks */,
-				8839709E009AD7D4E6F50947 /* RishiAuth in Frameworks */,
-				E7B2FC494C84D0538470DADE /* RishiLibrary in Frameworks */,
-				519E9AFE739F3C46AE57BEE7 /* RishiReader in Frameworks */,
-				443936E1F89255A2DE7AE7E4 /* RishiSync in Frameworks */,
-				3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */,
-				5A5D45BDA04E05786EED750A /* RishiChat in Frameworks */,
-				413ED76603381554479A938C /* RishiVoice in Frameworks */,
-				1CFCB7146A2AB08228F56E59 /* RishiBilling in Frameworks */,
-				8CB707F8C3FEB077AEEB7324 /* RishiSettings in Frameworks */,
-				F886F339335BF6972B7F324F /* RishiOnboarding in Frameworks */,
-				BF605045BC208CABD363375D /* RishiSearch in Frameworks */,
+				C10000000000000000000001 /* ReadiumShared in Frameworks */,
+				C10000000000000000000002 /* ReadiumNavigator in Frameworks */,
+				C10000000000000000000003 /* ReadiumStreamer in Frameworks */,
+				C10000000000000000000004 /* ReadiumAdapterGCDWebServer in Frameworks */,
+				C10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */,
+				C10000000000000000000006 /* Sentry in Frameworks */,
+				C10000000000000000000007 /* USearch in Frameworks */,
+				C10000000000000000000008 /* ChunkedAudioPlayer in Frameworks */,
+				C10000000000000000000009 /* LiveKitWebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -183,7 +104,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				57C0D8BB9FAD2213E457E94F /* RishiTesting in Frameworks */,
+				D10000000000000000000001 /* ReadiumShared in Frameworks */,
+				D10000000000000000000002 /* ReadiumNavigator in Frameworks */,
+				D10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */,
 				BBB28AB44A15558BFB39403C /* PropertyBased in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -192,24 +115,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				09B561C82FF125A000972BA3 /* RishiSearch in Frameworks */,
-				09B561C22FF125A000972BA3 /* RishiBilling in Frameworks */,
-				09B561A62FF1258600972BA3 /* RishiDB in Frameworks */,
-				09B561B22FF125A000972BA3 /* RishiDB in Frameworks */,
-				09B561C62FF125A000972BA3 /* RishiOnboarding in Frameworks */,
-				09B561B42FF125A000972BA3 /* RishiAuth in Frameworks */,
-				09B561B02FF125A000972BA3 /* RishiAPI in Frameworks */,
-				09B561BE2FF125A000972BA3 /* RishiChat in Frameworks */,
-				09B561C02FF125A000972BA3 /* RishiVoice in Frameworks */,
-				09B561A82FF125A000972BA3 /* RishiCore in Frameworks */,
-				09B561AC2FF125A000972BA3 /* RishiLogging in Frameworks */,
-				09B561B62FF125A000972BA3 /* RishiLibrary in Frameworks */,
-				09B561BC2FF125A000972BA3 /* RishiAudio in Frameworks */,
-				09B561BA2FF125A000972BA3 /* RishiSync in Frameworks */,
-				09B561AE2FF125A000972BA3 /* RishiTesting in Frameworks */,
-				09B561C42FF125A000972BA3 /* RishiSettings in Frameworks */,
-				09B561AA2FF125A000972BA3 /* RishiUIKit in Frameworks */,
-				09B561B82FF125A000972BA3 /* RishiReader in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -285,22 +190,15 @@
 			);
 			name = rishi;
 			packageProductDependencies = (
-				F9E6AED6A64A152D5FEA764C /* RishiCore */,
-				02462412E0BB4964915C0E2F /* RishiUIKit */,
-				00D1898ADC5FFE76C44614FB /* RishiLogging */,
-				8F44CD0541E29B6DA2049F21 /* RishiAPI */,
-				FCF3C76E4FA9636D03567457 /* RishiDB */,
-				A27D36EE1DC4536405E418CC /* RishiAuth */,
-				C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */,
-				5DF2FEE0C4B237A301D26963 /* RishiReader */,
-				ED6697329153BA8878524B1C /* RishiSync */,
-				D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */,
-				3460E16863E99035F29CC2B4 /* RishiChat */,
-				AE82A5810F84E45F40E103A8 /* RishiVoice */,
-				F8BE24D4A39386B6BF18E867 /* RishiBilling */,
-				EBA0BD3691EDFD10943AC564 /* RishiSettings */,
-				19858D081930A763C26C3381 /* RishiOnboarding */,
-				88CDB187697D206363CB5E7A /* RishiSearch */,
+				B10000000000000000000001 /* ReadiumShared */,
+				B10000000000000000000002 /* ReadiumNavigator */,
+				B10000000000000000000003 /* ReadiumStreamer */,
+				B10000000000000000000004 /* ReadiumAdapterGCDWebServer */,
+				B10000000000000000000005 /* ReadiumZIPFoundation */,
+				B10000000000000000000006 /* Sentry */,
+				B10000000000000000000007 /* USearch */,
+				B10000000000000000000008 /* ChunkedAudioPlayer */,
+				B10000000000000000000009 /* LiveKitWebRTC */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -324,7 +222,9 @@
 			);
 			name = rishiTests;
 			packageProductDependencies = (
-				39E77723BE79C2DC8FD0E4AA /* RishiTesting */,
+				B10000000000000000000001 /* ReadiumShared */,
+				B10000000000000000000002 /* ReadiumNavigator */,
+				B10000000000000000000005 /* ReadiumZIPFoundation */,
 				4FA89280AD0D00847DBD767F /* PropertyBased */,
 			);
 			productName = rishiTests;
@@ -405,23 +305,12 @@
 			mainGroup = 0922548B2FD83183008C5ADE;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */,
-				C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */,
-				D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */,
-				AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */,
-				2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */,
-				1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */,
-				02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */,
-				B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "../Packages/RishiLibrary" */,
-				8E875199F9111A45295EC692 /* XCLocalSwiftPackageReference "../Packages/RishiReader" */,
-				ACA86917896799659B23A413 /* XCLocalSwiftPackageReference "../Packages/RishiSync" */,
-				075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "../Packages/RishiAudio" */,
-				D543BA7EAE3658F96B6E7A4F /* XCLocalSwiftPackageReference "../Packages/RishiChat" */,
-				CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "../Packages/RishiVoice" */,
-				23F5A10321ECE2D592AAB508 /* XCLocalSwiftPackageReference "../Packages/RishiBilling" */,
-				1814C4F9F69C5F71D563C1ED /* XCLocalSwiftPackageReference "../Packages/RishiSettings" */,
-				A085716BDBA83B46F4D26FCB /* XCLocalSwiftPackageReference "../Packages/RishiOnboarding" */,
-				E355382D13BD753C8EDD076C /* XCLocalSwiftPackageReference "../Packages/RishiSearch" */,
+				A10000000000000000000001 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+				A10000000000000000000002 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				A10000000000000000000003 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				A10000000000000000000004 /* XCRemoteSwiftPackageReference "usearch" */,
+				A10000000000000000000005 /* XCRemoteSwiftPackageReference "swift-chunked-audio-player" */,
+				A10000000000000000000006 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
 				409EA85688A9CBA8B4DFA13A /* XCRemoteSwiftPackageReference "swift-property-based" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -697,8 +586,8 @@
 				SUPPORTS_MACCATALYST = YES;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/rishi/Modules/hnswlib.swift/hnswlib.swift/include";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -743,8 +632,8 @@
 				SUPPORTS_MACCATALYST = YES;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/rishi/Modules/hnswlib.swift/hnswlib.swift/include";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -766,6 +655,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/rishi/Modules/hnswlib.swift/hnswlib.swift/include";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -788,6 +678,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/rishi/Modules/hnswlib.swift/hnswlib.swift/include";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -809,6 +700,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/rishi/Modules/hnswlib.swift/hnswlib.swift/include";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -830,6 +722,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/rishi/Modules/hnswlib.swift/hnswlib.swift/include";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -939,77 +832,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiAuth;
-		};
-		075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "../Packages/RishiAudio" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiAudio;
-		};
-		0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiCore;
-		};
-		1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiDB;
-		};
-		1814C4F9F69C5F71D563C1ED /* XCLocalSwiftPackageReference "../Packages/RishiSettings" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiSettings;
-		};
-		2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiAPI;
-		};
-		23F5A10321ECE2D592AAB508 /* XCLocalSwiftPackageReference "../Packages/RishiBilling" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiBilling;
-		};
-		8E875199F9111A45295EC692 /* XCLocalSwiftPackageReference "../Packages/RishiReader" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiReader;
-		};
-		A085716BDBA83B46F4D26FCB /* XCLocalSwiftPackageReference "../Packages/RishiOnboarding" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiOnboarding;
-		};
-		ACA86917896799659B23A413 /* XCLocalSwiftPackageReference "../Packages/RishiSync" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiSync;
-		};
-		AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiTesting;
-		};
-		B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "../Packages/RishiLibrary" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiLibrary;
-		};
-		C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiUIKit;
-		};
-		CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "../Packages/RishiVoice" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiVoice;
-		};
-		D543BA7EAE3658F96B6E7A4F /* XCLocalSwiftPackageReference "../Packages/RishiChat" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiChat;
-		};
-		D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiLogging;
-		};
-		E355382D13BD753C8EDD076C /* XCLocalSwiftPackageReference "../Packages/RishiSearch" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/RishiSearch;
-		};
-/* End XCLocalSwiftPackageReference section */
-
 /* Begin XCRemoteSwiftPackageReference section */
 		409EA85688A9CBA8B4DFA13A /* XCRemoteSwiftPackageReference "swift-property-based" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -1019,188 +841,106 @@
 				minimumVersion = 1.0.0;
 			};
 		};
+		A10000000000000000000001 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/swift-toolkit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.9.0;
+			};
+		};
+		A10000000000000000000002 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.0.0;
+			};
+		};
+		A10000000000000000000003 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.15.0;
+			};
+		};
+		A10000000000000000000004 /* XCRemoteSwiftPackageReference "usearch" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/unum-cloud/usearch";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.25.3;
+			};
+		};
+		A10000000000000000000005 /* XCRemoteSwiftPackageReference "swift-chunked-audio-player" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mihai8804858/swift-chunked-audio-player";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+		A10000000000000000000006 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/webrtc-xcframework.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		00D1898ADC5FFE76C44614FB /* RishiLogging */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */;
-			productName = RishiLogging;
-		};
-		02462412E0BB4964915C0E2F /* RishiUIKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */;
-			productName = RishiUIKit;
-		};
-		09B561A52FF1258600972BA3 /* RishiDB */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */;
-			productName = RishiDB;
-		};
-		09B561A72FF125A000972BA3 /* RishiCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */;
-			productName = RishiCore;
-		};
-		09B561A92FF125A000972BA3 /* RishiUIKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */;
-			productName = RishiUIKit;
-		};
-		09B561AB2FF125A000972BA3 /* RishiLogging */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */;
-			productName = RishiLogging;
-		};
-		09B561AD2FF125A000972BA3 /* RishiTesting */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */;
-			productName = RishiTesting;
-		};
-		09B561AF2FF125A000972BA3 /* RishiAPI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */;
-			productName = RishiAPI;
-		};
-		09B561B12FF125A000972BA3 /* RishiDB */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */;
-			productName = RishiDB;
-		};
-		09B561B32FF125A000972BA3 /* RishiAuth */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */;
-			productName = RishiAuth;
-		};
-		09B561B52FF125A000972BA3 /* RishiLibrary */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "../Packages/RishiLibrary" */;
-			productName = RishiLibrary;
-		};
-		09B561B72FF125A000972BA3 /* RishiReader */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 8E875199F9111A45295EC692 /* XCLocalSwiftPackageReference "../Packages/RishiReader" */;
-			productName = RishiReader;
-		};
-		09B561B92FF125A000972BA3 /* RishiSync */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = ACA86917896799659B23A413 /* XCLocalSwiftPackageReference "../Packages/RishiSync" */;
-			productName = RishiSync;
-		};
-		09B561BB2FF125A000972BA3 /* RishiAudio */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "../Packages/RishiAudio" */;
-			productName = RishiAudio;
-		};
-		09B561BD2FF125A000972BA3 /* RishiChat */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = D543BA7EAE3658F96B6E7A4F /* XCLocalSwiftPackageReference "../Packages/RishiChat" */;
-			productName = RishiChat;
-		};
-		09B561BF2FF125A000972BA3 /* RishiVoice */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "../Packages/RishiVoice" */;
-			productName = RishiVoice;
-		};
-		09B561C12FF125A000972BA3 /* RishiBilling */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 23F5A10321ECE2D592AAB508 /* XCLocalSwiftPackageReference "../Packages/RishiBilling" */;
-			productName = RishiBilling;
-		};
-		09B561C32FF125A000972BA3 /* RishiSettings */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1814C4F9F69C5F71D563C1ED /* XCLocalSwiftPackageReference "../Packages/RishiSettings" */;
-			productName = RishiSettings;
-		};
-		09B561C52FF125A000972BA3 /* RishiOnboarding */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A085716BDBA83B46F4D26FCB /* XCLocalSwiftPackageReference "../Packages/RishiOnboarding" */;
-			productName = RishiOnboarding;
-		};
-		09B561C72FF125A000972BA3 /* RishiSearch */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E355382D13BD753C8EDD076C /* XCLocalSwiftPackageReference "../Packages/RishiSearch" */;
-			productName = RishiSearch;
-		};
-		19858D081930A763C26C3381 /* RishiOnboarding */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A085716BDBA83B46F4D26FCB /* XCLocalSwiftPackageReference "../Packages/RishiOnboarding" */;
-			productName = RishiOnboarding;
-		};
-		3460E16863E99035F29CC2B4 /* RishiChat */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = D543BA7EAE3658F96B6E7A4F /* XCLocalSwiftPackageReference "../Packages/RishiChat" */;
-			productName = RishiChat;
-		};
-		39E77723BE79C2DC8FD0E4AA /* RishiTesting */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */;
-			productName = RishiTesting;
-		};
 		4FA89280AD0D00847DBD767F /* PropertyBased */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 409EA85688A9CBA8B4DFA13A /* XCRemoteSwiftPackageReference "swift-property-based" */;
 			productName = PropertyBased;
 		};
-		5DF2FEE0C4B237A301D26963 /* RishiReader */ = {
+		B10000000000000000000001 /* ReadiumShared */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8E875199F9111A45295EC692 /* XCLocalSwiftPackageReference "../Packages/RishiReader" */;
-			productName = RishiReader;
+			package = A10000000000000000000001 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumShared;
 		};
-		88CDB187697D206363CB5E7A /* RishiSearch */ = {
+		B10000000000000000000002 /* ReadiumNavigator */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E355382D13BD753C8EDD076C /* XCLocalSwiftPackageReference "../Packages/RishiSearch" */;
-			productName = RishiSearch;
+			package = A10000000000000000000001 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumNavigator;
 		};
-		8F44CD0541E29B6DA2049F21 /* RishiAPI */ = {
+		B10000000000000000000003 /* ReadiumStreamer */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */;
-			productName = RishiAPI;
+			package = A10000000000000000000001 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumStreamer;
 		};
-		A27D36EE1DC4536405E418CC /* RishiAuth */ = {
+		B10000000000000000000004 /* ReadiumAdapterGCDWebServer */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */;
-			productName = RishiAuth;
+			package = A10000000000000000000001 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumAdapterGCDWebServer;
 		};
-		AE82A5810F84E45F40E103A8 /* RishiVoice */ = {
+		B10000000000000000000005 /* ReadiumZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "../Packages/RishiVoice" */;
-			productName = RishiVoice;
+			package = A10000000000000000000002 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ReadiumZIPFoundation;
 		};
-		C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */ = {
+		B10000000000000000000006 /* Sentry */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "../Packages/RishiLibrary" */;
-			productName = RishiLibrary;
+			package = A10000000000000000000003 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
-		D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */ = {
+		B10000000000000000000007 /* USearch */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "../Packages/RishiAudio" */;
-			productName = RishiAudio;
+			package = A10000000000000000000004 /* XCRemoteSwiftPackageReference "usearch" */;
+			productName = USearch;
 		};
-		EBA0BD3691EDFD10943AC564 /* RishiSettings */ = {
+		B10000000000000000000008 /* ChunkedAudioPlayer */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1814C4F9F69C5F71D563C1ED /* XCLocalSwiftPackageReference "../Packages/RishiSettings" */;
-			productName = RishiSettings;
+			package = A10000000000000000000005 /* XCRemoteSwiftPackageReference "swift-chunked-audio-player" */;
+			productName = ChunkedAudioPlayer;
 		};
-		ED6697329153BA8878524B1C /* RishiSync */ = {
+		B10000000000000000000009 /* LiveKitWebRTC */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = ACA86917896799659B23A413 /* XCLocalSwiftPackageReference "../Packages/RishiSync" */;
-			productName = RishiSync;
-		};
-		F8BE24D4A39386B6BF18E867 /* RishiBilling */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 23F5A10321ECE2D592AAB508 /* XCLocalSwiftPackageReference "../Packages/RishiBilling" */;
-			productName = RishiBilling;
-		};
-		F9E6AED6A64A152D5FEA764C /* RishiCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */;
-			productName = RishiCore;
-		};
-		FCF3C76E4FA9636D03567457 /* RishiDB */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */;
-			productName = RishiDB;
+			package = A10000000000000000000006 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
+			productName = LiveKitWebRTC;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

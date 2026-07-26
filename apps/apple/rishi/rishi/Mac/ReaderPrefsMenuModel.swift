@@ -1,8 +1,8 @@
 
 
 import SwiftUI
-import RishiReader   
-import RishiSync     
+
+
 
 
 

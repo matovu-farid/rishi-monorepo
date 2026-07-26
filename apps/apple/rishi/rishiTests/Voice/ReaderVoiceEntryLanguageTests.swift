@@ -1,12 +1,12 @@
 import Testing
 import Foundation
 @testable import rishi
-import RishiAudio
-import RishiChat
-import RishiCore
-import RishiReader
-import RishiSettings
-import RishiVoice
+
+
+
+
+
+
 
 @MainActor
 @Suite("ReaderVoiceEntry language wiring", .serialized)

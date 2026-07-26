@@ -1,5 +1,5 @@
-import RishiCore
-import RishiReader
+
+
 import SwiftUI
 
 struct ReaderDestinationView: View {

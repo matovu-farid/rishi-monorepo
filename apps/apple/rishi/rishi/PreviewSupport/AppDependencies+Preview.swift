@@ -1,5 +1,5 @@
 import SwiftUI
-import RishiUIKit
+
 
 struct PreviewPlaceholder: View {
 

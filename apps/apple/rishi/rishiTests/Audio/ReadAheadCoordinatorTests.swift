@@ -14,7 +14,7 @@
 
 import Foundation
 import Testing
-import RishiAudio
+
 @testable import rishi
 
 @Suite("ReadAheadCoordinator")

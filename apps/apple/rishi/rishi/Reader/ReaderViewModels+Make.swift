@@ -1,6 +1,6 @@
 import Foundation
-import RishiCore
-import RishiReader
+
+
 
 enum ReaderDocumentURL {
     static func url(for book: Book) -> URL {

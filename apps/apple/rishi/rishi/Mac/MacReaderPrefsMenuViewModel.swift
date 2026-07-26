@@ -3,13 +3,13 @@
 #if targetEnvironment(macCatalyst)
 
 import SwiftUI
-import RishiCore
-import RishiAudio    
-import RishiReader   
-import RishiSettings 
-import RishiSync     
-import RishiBilling  
-import RishiAuth     
+
+
+
+
+
+
+
 #if canImport(UIKit)
 import UIKit
 #endif

@@ -1,9 +1,9 @@
 
 
 import Foundation
-import RishiChat
-import RishiCore
-import RishiSync
+
+
+
 
 @MainActor
 final class AppChatRefreshAdapter: ChatSyncRefreshDelegate {
@@ -28,8 +28,11 @@ final class AppChatRefreshAdapter: ChatSyncRefreshDelegate {
 
     
 
-    func chatSyncDidMerge() async {
-        guard let vm = activeViewModel, let userId = activeUserId else { return }
-        await vm.refreshAfterSync(userId: userId)
+    nonisolated func chatSyncDidMerge() async {
+        await MainActor.run { [weak self] in
+            guard let self else { return }
+            guard let vm = activeViewModel, let userId = activeUserId else { return }
+            Task { await vm.refreshAfterSync(userId: userId) }
+        }
     }
 }

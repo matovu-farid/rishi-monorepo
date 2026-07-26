@@ -20,8 +20,8 @@
 
 import Foundation
 import SwiftUI
-import RishiCore
-import RishiReader
+
+
 
 
 

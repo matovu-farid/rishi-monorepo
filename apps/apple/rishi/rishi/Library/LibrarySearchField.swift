@@ -1,6 +1,6 @@
 import SwiftUI
-import RishiCore
-import RishiUIKit
+
+
 
 /// SwiftUI view modifier that attaches `.searchable(...)` to a Library
 /// container view. Also renders a `ContentUnavailableView` overlay when a

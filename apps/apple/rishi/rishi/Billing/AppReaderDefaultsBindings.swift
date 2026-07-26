@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import RishiReader
-import RishiSettings
+
+
 import SwiftUI
 
 @MainActor

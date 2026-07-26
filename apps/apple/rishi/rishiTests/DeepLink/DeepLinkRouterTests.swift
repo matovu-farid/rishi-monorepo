@@ -2,7 +2,7 @@
 
 import Testing
 import Foundation
-import RishiCore
+
 @testable import rishi
 
 @MainActor

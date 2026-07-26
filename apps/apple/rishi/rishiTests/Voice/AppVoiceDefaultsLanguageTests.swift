@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import rishi
-import RishiSettings
+
 
 @MainActor
 @Suite("AppReaderDefaults.voiceLanguage")

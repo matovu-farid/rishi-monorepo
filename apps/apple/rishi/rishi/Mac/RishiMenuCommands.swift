@@ -2,9 +2,9 @@
 
 import SwiftUI
 #if targetEnvironment(macCatalyst)
-import RishiReader   
-import RishiSync     
-import RishiAudio    
+
+
+
 #endif
 
 struct RishiMenuCommands: Commands {

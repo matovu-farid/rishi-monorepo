@@ -21,8 +21,8 @@
 
 import Foundation
 import Testing
-import RishiAudio
-import RishiCore
+
+
 @testable import rishi
 
 @Suite("ReaderTTSBridge seam")

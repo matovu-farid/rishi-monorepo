@@ -1,6 +1,6 @@
 
 import Foundation
-import RishiCore
+
 
 enum DeepLinkDestination: Hashable, Sendable {
     case authCallback(token: String)

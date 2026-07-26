@@ -11,9 +11,9 @@
 
 
 import SwiftUI
-import RishiOnboarding
-import RishiCore
-import RishiSettings
+
+
+
 #if canImport(AVFoundation)
 import AVFoundation
 #endif

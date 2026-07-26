@@ -2,11 +2,11 @@ import Foundation
 import Observation
 import ReadiumNavigator
 import ReadiumShared
-import RishiAudio
-import RishiCore
-import RishiLibrary
-import RishiLogging
-import RishiReader
+
+
+
+
+
 
 @MainActor
 @Observable
@@ -708,24 +708,29 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
 }
 
 extension ReadAloudController: TTSPlaybackControlling {
+    @MainActor
     func pause() async {
         guard ttsState.status == .playing || isActivelySpeaking else { return }
         await togglePlayback()
     }
 
+    @MainActor
     func resume() async {
         guard ttsState.status == .paused else { return }
         await togglePlayback()
     }
 
+    @MainActor
     func previousTrack() async {
         await previous()
     }
 
+    @MainActor
     func nextTrack() async {
         await next()
     }
 
+    @MainActor
     func changePlaybackRate(to rate: Double) async {
         await applyPlaybackRate(rate)
     }

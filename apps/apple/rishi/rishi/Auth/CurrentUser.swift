@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import RishiCore
+
 
 @Observable
 final class CurrentUserBox {

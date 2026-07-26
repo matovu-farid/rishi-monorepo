@@ -21,9 +21,9 @@
 
 import Testing
 import SwiftUI
-import RishiAudio
-import RishiReader
-import RishiSync
+
+
+
 @testable import rishi
 
 @MainActor

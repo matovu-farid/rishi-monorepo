@@ -1,9 +1,10 @@
+@testable import rishi
 #if canImport(UIKit)
 import Testing
 import Foundation
 import ReadiumShared
-import RishiCore
-import RishiReader
+
+
 
 @Suite("EPUB read-aloud page-boundary follow (Bug 4)", .serialized)
 @MainActor

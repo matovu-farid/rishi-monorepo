@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import RishiVoice
+
 @testable import rishi
 
 @MainActor

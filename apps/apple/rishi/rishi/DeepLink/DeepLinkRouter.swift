@@ -1,7 +1,7 @@
 
 
 import Foundation
-import RishiCore
+
 
 struct DeepLinkRouter: Sendable {
 

@@ -1,16 +1,16 @@
 import Foundation
 import ReadiumNavigator
 import ReadiumShared
-import RishiAudio
-import RishiCore
-import RishiLogging
+
+
+
 
 /// Readium's TTS engine backed directly by the app's remote speech pipeline.
 ///
 /// The app owns this type because it owns the worker-backed `TTSPlaying`
 /// engine, persisted voice settings, and user identity. Readium still owns
 /// publication iteration and invokes this engine one utterance at a time.
-final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
+final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
 
     let availableVoices: [TTSVoice]
 
@@ -155,7 +155,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine {
         return pieces.isEmpty ? [text] : pieces
     }
 
-    private static let defaultVoices: [TTSVoice] = VoiceCatalog.all.map { identifier in
+    private nonisolated(unsafe) static let defaultVoices: [TTSVoice] = VoiceCatalog.all.map { identifier in
         TTSVoice(
             identifier: identifier,
             language: Language("en"),

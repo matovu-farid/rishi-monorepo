@@ -1,6 +1,6 @@
 import Foundation
-import RishiBilling
-import RishiCore
+
+
 
 extension AppDependencies {
 

@@ -1,3 +1,4 @@
+@testable import rishi
 //
 //  BareTaskAuditTests.swift
 //  rishiTests

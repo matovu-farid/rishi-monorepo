@@ -1,3 +1,4 @@
+@testable import rishi
 //
 //  Purchase.swift
 //  rishiTests
@@ -6,7 +7,7 @@
 //
 
 import Testing
-import RishiBilling
+
 import StoreKit
 
 enum PurchaseTestError:Error {

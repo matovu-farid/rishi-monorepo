@@ -16,8 +16,8 @@
 import Testing
 import Foundation
 import SwiftUI
-import RishiCore
-import RishiReader
+
+
 @testable import rishi
 
 

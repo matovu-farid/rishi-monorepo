@@ -4,7 +4,7 @@
 
 
 import SwiftUI
-import RishiCore
+
 
 
 

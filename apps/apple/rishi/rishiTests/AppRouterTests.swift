@@ -3,9 +3,9 @@
 import Testing
 import Foundation
 import SwiftUI
-import RishiCore
-import RishiReader
-import RishiTesting
+
+
+
 @testable import rishi
 
 

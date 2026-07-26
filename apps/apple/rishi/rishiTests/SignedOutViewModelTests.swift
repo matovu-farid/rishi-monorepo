@@ -16,7 +16,7 @@
 import Foundation
 import Testing
 import os
-import RishiCore
+
 @testable import rishi
 
 

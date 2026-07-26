@@ -1,6 +1,6 @@
 
 import SwiftUI
-import RishiCore
+
 
 
 struct EpubPlaceholderView: View {

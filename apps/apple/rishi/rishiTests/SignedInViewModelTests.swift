@@ -4,8 +4,8 @@
 
 
 import Testing
-import RishiCore
-import RishiTesting
+
+
 @testable import rishi
 
 @MainActor

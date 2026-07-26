@@ -1,6 +1,6 @@
-import RishiAudio
-import RishiUIKit
-import RishiVoice
+
+
+
 import SwiftUI
 
 enum ReaderAudioChromeMode: Equatable {
@@ -174,7 +174,7 @@ struct ReaderAudioChromeOverlay: View {
 }
 
 private struct ReaderAudioChromeOverlaySizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
+    nonisolated(unsafe) static var defaultValue: CGSize = .zero
 
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
         value = nextValue()

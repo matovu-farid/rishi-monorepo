@@ -1,3 +1,4 @@
+@testable import rishi
 //
 //  PremptionTest.swift
 //  rishiTests
@@ -7,8 +8,8 @@
 
 import Testing
 import Foundation
-import RishiAudio
-import RishiVoice
+
+
 
 
 enum PremptionTestError:Error {
