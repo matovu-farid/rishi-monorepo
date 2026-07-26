@@ -1,6 +1,5 @@
 import SwiftUI
 import RishiCore
-import RishiLogging
 import RishiUIKit
 import UniformTypeIdentifiers
 
@@ -61,35 +60,12 @@ struct LibraryDropDestination: ViewModifier {
                 of: [UTType.fileURL.identifier, UTType.item.identifier],
                 isTargeted: $isTargeted
             ) { providers in
-                Log.event("library.drop.received", data: [
-                    "provider_count": String(providers.count)
-                ])
-                guard !providers.isEmpty else {
-                    Log.event("library.drop.empty", level: .warning)
-                    return false
-                }
+                guard !providers.isEmpty else { return false }
                 Task {
                     let urls = await Self.urls(from: providers)
                     let supported = ImportCoordinator.filterSupported(urls)
-                    Log.event("library.drop.decoded", data: [
-                        "url_count": String(urls.count),
-                        "supported_count": String(supported.count),
-                        "filenames": urls.map(\.lastPathComponent).joined(separator: ",")
-                    ])
-                    guard !supported.isEmpty else {
-                        Log.event("library.drop.no_supported_files", level: .warning, data: [
-                            "decoded_filenames": urls.map(\.lastPathComponent).joined(separator: ",")
-                        ])
-                        return
-                    }
+                    guard !supported.isEmpty else { return }
                     let outcomes = await coordinator.importBooks(supported)
-                    let errors = outcomes.compactMap(\.error).joined(separator: " | ")
-                    Log.event("library.drop.import_completed", data: [
-                        "outcome_count": String(outcomes.count),
-                        "imported_count": String(outcomes.filter { $0.book != nil }.count),
-                        "error_count": String(outcomes.filter { $0.error != nil }.count),
-                        "errors": errors
-                    ])
                     onImported(outcomes)
                     Self.removeTemporaryCopies(urls)
                 }
@@ -98,11 +74,6 @@ struct LibraryDropDestination: ViewModifier {
         #else
             .dropDestination(for: URL.self) { urls, _ in
                 let supported = ImportCoordinator.filterSupported(urls)
-                Log.event("library.drop.received", data: [
-                    "provider_count": String(urls.count),
-                    "supported_count": String(supported.count),
-                    "filenames": urls.map(\.lastPathComponent).joined(separator: ",")
-                ])
                 guard !supported.isEmpty else { return false }
                 Task {
                     let outcomes = await coordinator.importBooks(supported)
@@ -119,18 +90,9 @@ struct LibraryDropDestination: ViewModifier {
         private static func urls(from providers: [NSItemProvider]) async -> [URL] {
             var urls: [URL] = []
             for provider in providers {
-                Log.event("library.drop.provider", data: [
-                    "types": provider.registeredTypeIdentifiers.joined(separator: ",")
-                ])
                 let url = await Self.url(from: provider)
                 if let url {
-                    Log.event("library.drop.provider.url_decoded", data: [
-                        "filename": url.lastPathComponent,
-                        "extension": url.pathExtension
-                    ])
                     urls.append(url)
-                } else {
-                    Log.event("library.drop.provider.url_missing", level: .warning)
                 }
             }
             return urls
@@ -149,20 +111,10 @@ struct LibraryDropDestination: ViewModifier {
             }
 
             for typeIdentifier in typeIdentifiers {
-                Log.event("library.drop.provider.type_attempt", data: [
-                    "type": typeIdentifier
-                ])
                 let url = await withCheckedContinuation {
                     (continuation: CheckedContinuation<URL?, Never>) in
                     provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) {
-                        temporaryURL, error in
-                        if let error {
-                            Log.error("library.drop.provider.file_load_failed", error: error)
-                        }
-                        Log.event("library.drop.provider.payload", data: [
-                            "type": typeIdentifier,
-                            "payload_type": temporaryURL.map { String(describing: type(of: $0)) } ?? "nil"
-                        ])
+                        temporaryURL, _ in
                         guard let temporaryURL else {
                             continuation.resume(returning: nil)
                             return
@@ -177,7 +129,6 @@ struct LibraryDropDestination: ViewModifier {
                             try FileManager.default.copyItem(at: temporaryURL, to: destination)
                             continuation.resume(returning: destination)
                         } catch {
-                            Log.error("library.drop.provider.copy_failed", error: error)
                             continuation.resume(returning: nil)
                         }
                     }
