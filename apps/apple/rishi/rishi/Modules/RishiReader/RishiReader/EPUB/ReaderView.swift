@@ -39,6 +39,8 @@ public struct ReaderView: UIViewControllerRepresentable {
     /// the navigator. The screen uses this to anchor the floating
     /// ``EPUBHighlightContextMenu``.
     public let onSelectionChange: (Selection?) -> Void
+    public let onPageForward: () -> Void
+    public let onPageBackward: () -> Void
     /// Phase 21 — single-tap callback driven by a UIKit
     /// `UITapGestureRecognizer` attached directly to the engine's
     /// container view with `cancelsTouchesInView = false`. This replaces
@@ -65,6 +67,8 @@ public struct ReaderView: UIViewControllerRepresentable {
         pdfViewMode: PDFViewModeSetting = .continuous,
         pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
+        onPageForward: @escaping () -> Void = {},
+        onPageBackward: @escaping () -> Void = {},
         onTap: @escaping (CGPoint) -> Void = { _ in },
         coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
@@ -73,6 +77,8 @@ public struct ReaderView: UIViewControllerRepresentable {
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
         self.onSelectionChange = onSelectionChange
+        self.onPageForward = onPageForward
+        self.onPageBackward = onPageBackward
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
     }
@@ -80,6 +86,8 @@ public struct ReaderView: UIViewControllerRepresentable {
     public func makeCoordinator() -> ReaderNavigatorCoordinator {
         let c = ReaderNavigatorCoordinator(viewModel: viewModel)
         c.onSelectionChange = onSelectionChange
+        c.onPageForward = onPageForward
+        c.onPageBackward = onPageBackward
         c.onTap = onTap
         coordinatorRef.coordinator = c
         return c
@@ -89,6 +97,8 @@ public struct ReaderView: UIViewControllerRepresentable {
         let container = UIViewController()
         container.view.backgroundColor = backgroundUIColor(pageTheme)
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onPageForward = onPageForward
+        context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onTap = onTap
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator

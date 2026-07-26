@@ -21,6 +21,11 @@ public enum ReaderRoute: Hashable, Identifiable, Codable, Sendable {
         }
     }
 
+    public var isPDF: Bool {
+        if case .pdf = self { return true }
+        return false
+    }
+
     /// Mirrors the prior private `RootView.openTarget(for:)` switch so the call-site
     /// migration is a one-line swap.
     public static func route(for book: Book) -> ReaderRoute {

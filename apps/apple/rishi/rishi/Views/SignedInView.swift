@@ -184,7 +184,8 @@ extension View {
         services: BootstrappedServices,
         user: User,
         onSignedOut: @escaping () -> Void,
-        account: MacAccountMenuModel?
+        account: MacAccountMenuModel?,
+        pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) -> some View {
         #if targetEnvironment(macCatalyst)
             self.modifier(
@@ -192,7 +193,8 @@ extension View {
                     services: services,
                     user: user,
                     onSignedOut: onSignedOut,
-                    account: account
+                    account: account,
+                    pdfViewMode: pdfViewMode
                 )
             )
         #else
@@ -208,12 +210,14 @@ extension View {
         @State private var vm: MacReaderPrefsMenuViewModel
         let user: User
         let account: MacAccountMenuModel?
+        let pdfViewMode: Binding<PDFViewModeSetting>?
 
         init(
             services: BootstrappedServices,
             user: User,
             onSignedOut: @escaping () -> Void,
-            account: MacAccountMenuModel?
+            account: MacAccountMenuModel?,
+            pdfViewMode: Binding<PDFViewModeSetting>?
         ) {
             _vm = State(
                 wrappedValue: MacReaderPrefsMenuViewModel(
@@ -224,11 +228,15 @@ extension View {
             )
             self.user = user
             self.account = account
+            self.pdfViewMode = pdfViewMode
         }
 
         func body(content: Content) -> some View {
             content
-                .focusedSceneValue(\.readerPrefsMenu, vm.makeModel())
+                .focusedSceneValue(
+                    \.readerPrefsMenu,
+                    vm.makeModel(pdfViewModeOverride: pdfViewMode)
+                )
                 .task(id: user.id) { await vm.seed() }
 
                 .onAppear { account?.update(vm.makeAccountPayload()) }

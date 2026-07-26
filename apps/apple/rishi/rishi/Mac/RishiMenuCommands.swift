@@ -57,21 +57,6 @@ struct RishiMenuCommands: Commands {
         
         
         CommandGroup(after: .sidebar) {
-            #if targetEnvironment(macCatalyst)
-            
-            
-            
-            
-            
-            
-            
-            ThemeMenuItems()
-            PDFViewModeMenuItems()
-            AudioMenuItems()
-            Divider()
-            #endif
-            
-            
             Button("Increase Font Size") { router.send(.fontIncrease) }
                 .keyboardShortcut(RishiKeyboardShortcut.fontIncrease.key,
                                   modifiers: RishiKeyboardShortcut.fontIncrease.modifiers)
@@ -91,10 +76,6 @@ struct RishiMenuCommands: Commands {
                 .keyboardShortcut(RishiKeyboardShortcut.addBookmark.key,
                                   modifiers: RishiKeyboardShortcut.addBookmark.modifiers)
             Divider()
-            #if targetEnvironment(macCatalyst)
-            SyncMenuItems()
-            Divider()
-            #endif
             Button("Library") { router.send(.selectTab(.library)) }
                 .keyboardShortcut(RishiKeyboardShortcut.libraryTab.key,
                                   modifiers: RishiKeyboardShortcut.libraryTab.modifiers)
@@ -112,6 +93,65 @@ struct RishiMenuCommands: Commands {
 }
 
 #if targetEnvironment(macCatalyst)
+
+struct ReaderWindowMenuCommands: Commands {
+    let dependencies: AppDependencies
+    let readerWindows: ReaderWindowCoordinator
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            Picker("Theme", selection: themeBinding) {
+                Text("Match Device").tag(ReaderTheme.matchDevice)
+                Text("Light").tag(ReaderTheme.light)
+                Text("Sepia").tag(ReaderTheme.sepia)
+                Text("Dark").tag(ReaderTheme.dark)
+            }
+            .pickerStyle(.inline)
+            if let activeReader = readerWindows.activeReader,
+               ReaderKeyboardNavigationPolicy.showsPDFViewModeMenu(
+                   isPDF: activeReader.route.isPDF
+               ) {
+                Picker("PDF View Mode", selection: pdfViewModeBinding) {
+                    ForEach(PDFViewModeSetting.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            AudioMenuItems()
+            Divider()
+            SyncMenuItems()
+        }
+    }
+
+    private var themeBinding: Binding<ReaderTheme> {
+        Binding(
+            get: { dependencies.services?.readerDefaults.theme ?? .default },
+            set: { theme in
+                guard let defaults = dependencies.services?.readerDefaults else { return }
+                defaults.theme = theme
+                NotificationCenter.default.post(
+                    name: .rishiReaderThemeChanged,
+                    object: theme
+                )
+            }
+        )
+    }
+
+    private var pdfViewModeBinding: Binding<PDFViewModeSetting> {
+        Binding(
+            get: { dependencies.services?.readerDefaults.pdfViewMode ?? .automatic },
+            set: { mode in
+                guard let defaults = dependencies.services?.readerDefaults else { return }
+                defaults.pdfViewMode = mode
+                NotificationCenter.default.post(
+                    name: .rishiPDFViewModeChanged,
+                    object: mode
+                )
+            }
+        )
+    }
+}
 
 
 
@@ -142,7 +182,7 @@ private struct ThemeMenuItems: View {
 
 
 private struct PDFViewModeMenuItems: View {
-    @FocusedValue(\.pdfReaderFocusedMenu) private var prefs
+    @FocusedValue(\.readerPrefsMenu) private var prefs
     var body: some View {
         Picker("PDF View Mode", selection: prefs?.pdfViewMode ?? .constant(.automatic)) {
             ForEach(PDFViewModeSetting.allCases, id: \.self) { mode in

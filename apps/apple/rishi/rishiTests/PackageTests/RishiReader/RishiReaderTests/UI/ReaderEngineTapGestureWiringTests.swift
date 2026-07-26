@@ -128,6 +128,20 @@ struct ReaderEngineTapGestureWiringTests {
         #expect(received == CGPoint(x: 60, y: 100))
     }
 
+    @Test("EPUB left and right arrows invoke the wired page callbacks")
+    func epubArrowKeysInvokePageCallbacks() {
+        var forwardCount = 0
+        var backwardCount = 0
+        let coordinator = ReaderNavigatorCoordinator(viewModel: makeEPUBViewModel())
+        coordinator.onPageForward = { forwardCount += 1 }
+        coordinator.onPageBackward = { backwardCount += 1 }
+
+        #expect(coordinator.handleArrowKey(.arrowRight) == true)
+        #expect(coordinator.handleArrowKey(.arrowLeft) == true)
+        #expect(forwardCount == 1)
+        #expect(backwardCount == 1)
+    }
+
     // MARK: - Fixtures
 
     private func makePDFViewModel() -> PDFReaderViewModel {

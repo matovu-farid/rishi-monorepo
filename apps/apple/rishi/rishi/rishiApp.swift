@@ -117,6 +117,12 @@ struct rishiApp: App {
             // initial scene size; user resizing is never overridden after
             // the reader opens.
             .defaultSize(width: 1400, height: 1000)
+            .commands {
+                ReaderWindowMenuCommands(
+                    dependencies: deps,
+                    readerWindows: readerWindows
+                )
+            }
         #endif
     }
 

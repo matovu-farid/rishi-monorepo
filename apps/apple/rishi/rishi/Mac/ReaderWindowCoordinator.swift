@@ -69,6 +69,7 @@ struct ReaderWindowRestorationState: Codable, Sendable, Equatable {
 @Observable
 final class ReaderWindowCoordinator {
     private(set) var openWindows: [ReaderWindowID: ReaderWindowInput] = [:]
+    private(set) var activeReader: ReaderWindowInput?
 
     private var openWindowAction: OpenWindowAction?
     private var closeWindowAction: DismissWindowAction?
@@ -113,8 +114,22 @@ final class ReaderWindowCoordinator {
         openWindows[input.id] = input
     }
 
+    func activate(_ input: ReaderWindowInput) {
+        activeReader = input
+        register(input)
+    }
+
     func unregister(_ input: ReaderWindowInput) {
         openWindows.removeValue(forKey: input.id)
+        if activeReader?.id == input.id {
+            activeReader = nil
+        }
+    }
+
+    func deactivate(_ input: ReaderWindowInput) {
+        if activeReader?.id == input.id {
+            activeReader = nil
+        }
     }
 
     func invalidate(userID: UserID) {

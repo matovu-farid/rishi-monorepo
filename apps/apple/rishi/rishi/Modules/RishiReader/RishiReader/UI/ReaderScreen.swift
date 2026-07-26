@@ -166,6 +166,8 @@ public struct ReaderScreen: View {
             onSelectionChange: { selection in
                 highlightInteractor.handleSelectionChange(selection)
             },
+            onPageForward: { pageNavigator.goNext() },
+            onPageBackward: { pageNavigator.goPrev() },
             onTap: { location in
                 let resolver = ReaderTapRegionResolver()
                 let decision = resolver.decide(
@@ -369,6 +371,14 @@ public struct ReaderScreen: View {
             }
             .onChange(of: viewModel.typography) { _, _ in applyPreferences() }
             .onChange(of: viewModel.theme) { _, _ in applyPreferences() }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: .rishiReaderThemeChanged
+                )
+            ) { note in
+                guard let theme = note.object as? ReaderTheme else { return }
+                viewModel.theme = theme
+            }
             .onChange(of: colorScheme) { _, _ in
                 guard viewModel.theme == .matchDevice else { return }
                 applyPreferences()

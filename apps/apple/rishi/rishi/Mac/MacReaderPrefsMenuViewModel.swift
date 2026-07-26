@@ -102,10 +102,12 @@ final class MacReaderPrefsMenuViewModel {
     
 
 
-    func makeModel() -> ReaderPrefsMenuModel {
+    func makeModel(
+        pdfViewModeOverride: Binding<PDFViewModeSetting>? = nil
+    ) -> ReaderPrefsMenuModel {
         ReaderPrefsMenuModel(
             theme: theme,
-            pdfViewMode: pdfViewMode,
+            pdfViewMode: pdfViewModeOverride ?? pdfViewMode,
             fontFamily: fontFamily,
             voice: Binding(
                 get: { self.audioPrefs.voice },
@@ -165,7 +167,16 @@ extension MacReaderPrefsMenuViewModel {
         let presenter = services.manageSubscriptionPresenter
         let userId = user.id
         self.init(
-            theme: Binding(get: { defaults.theme }, set: { defaults.theme = $0 }),
+            theme: Binding(
+                get: { defaults.theme },
+                set: {
+                    defaults.theme = $0
+                    NotificationCenter.default.post(
+                        name: .rishiReaderThemeChanged,
+                        object: $0
+                    )
+                }
+            ),
             pdfViewMode: Binding(get: { defaults.pdfViewMode }, set: { defaults.pdfViewMode = $0 }),
             fontFamily: Binding(get: { defaults.fontFamily }, set: { defaults.fontFamily = $0 }),
             autoSync: Binding(get: { defaults.autoSync }, set: { defaults.autoSync = $0 }),

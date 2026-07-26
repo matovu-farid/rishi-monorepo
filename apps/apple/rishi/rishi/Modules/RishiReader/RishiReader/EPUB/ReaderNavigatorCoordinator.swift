@@ -115,14 +115,69 @@ public final class ReaderNavigatorCoordinator: NSObject {
         onTap(recognizer.location(in: view))
     }
 
-    /// Maps a Readium arrow key to a page turn. Returns true when consumed.
+    /// Maps a Readium arrow key to the active reader's Catalyst behavior.
+    /// Returns true when the event is consumed by Rishi.
     @discardableResult
     public func handleArrowKey(_ key: Key) -> Bool {
-        switch key {
-        case .arrowRight: onPageForward(); return true
-        case .arrowLeft:  onPageBackward(); return true
-        default:          return false
+        let action = ReaderKeyboardNavigationPolicy.action(
+            for: key,
+            isPDF: navigator is PDFNavigatorViewController,
+            pdfViewMode: pdfViewMode
+        )
+        switch action {
+        case .pageForward:
+            onPageForward()
+            return true
+        case .pageBackward:
+            onPageBackward()
+            return true
+        case .scrollUp:
+            scrollPDFVertically(direction: -1)
+            return true
+        case .scrollDown:
+            scrollPDFVertically(direction: 1)
+            return true
+        case .consume:
+            return true
+        case .passThrough:
+            return false
         }
+    }
+
+    /// Moves a Continuous PDF by one viewport with a small overlap so the
+    /// reader keeps visual context between key presses. Readium's navigator
+    /// consumes unhandled key events while it is first responder, so this must
+    /// be explicit rather than delegated to UIKit's responder chain.
+    private func scrollPDFVertically(direction: CGFloat) {
+        guard let pdfNavigator = navigator as? PDFNavigatorViewController,
+              let scrollView = pdfNavigator.pdfView.flatMap({ firstScrollView(in: $0) })
+                  ?? firstScrollView(in: pdfNavigator.view),
+              scrollView.bounds.height > 0 else { return }
+
+        let step = scrollView.bounds.height * 0.8
+        let top = -scrollView.adjustedContentInset.top
+        let bottom = max(
+            top,
+            scrollView.contentSize.height
+                - scrollView.bounds.height
+                + scrollView.adjustedContentInset.bottom
+        )
+        let targetY = min(
+            max(scrollView.contentOffset.y + (direction * step), top),
+            bottom
+        )
+        scrollView.setContentOffset(
+            CGPoint(x: scrollView.contentOffset.x, y: targetY),
+            animated: true
+        )
+    }
+
+    private func firstScrollView(in view: UIView) -> UIScrollView? {
+        if let scrollView = view as? UIScrollView { return scrollView }
+        for subview in view.subviews {
+            if let scrollView = firstScrollView(in: subview) { return scrollView }
+        }
+        return nil
     }
 
     /// Re-applies the supplied highlights as Readium decorations in the
@@ -369,16 +424,23 @@ public final class ReaderNavigatorCoordinator: NSObject {
             epub.delegate = self
             nav = epub
         }
-        // Hardware arrow keys (primarily Mac; iPad hardware keyboards get it
-        // for free) drive page turns through the same seam as the on-screen
-        // edge chevrons. The returned tokens are discarded — the observers
-        // live as long as the navigator.
+        #if targetEnvironment(macCatalyst)
+        // Hardware arrows drive the same page-turn seam as the on-screen
+        // chevrons. Continuous PDFs consume horizontal arrows so PDFKit cannot
+        // turn pages, while vertical arrows explicitly move its native scroller.
         _ = nav.addObserver(.key(.arrowRight) { [weak self] in
             self?.handleArrowKey(.arrowRight) ?? false
         })
         _ = nav.addObserver(.key(.arrowLeft) { [weak self] in
             self?.handleArrowKey(.arrowLeft) ?? false
         })
+        _ = nav.addObserver(.key(.arrowUp) { [weak self] in
+            self?.handleArrowKey(.arrowUp) ?? false
+        })
+        _ = nav.addObserver(.key(.arrowDown) { [weak self] in
+            self?.handleArrowKey(.arrowDown) ?? false
+        })
+        #endif
         self.navigator = nav
         #if targetEnvironment(macCatalyst)
         if publication.manifest.conforms(to: .pdf) {

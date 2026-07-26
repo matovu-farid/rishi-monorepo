@@ -29,6 +29,7 @@ struct CatalystReaderWindow: View {
     @Environment(\.appDependencies) private var appDependencies
     @Environment(CurrentUserBox.self) private var currentUser
     @Environment(ReaderWindowCoordinator.self) private var coordinator
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var presentation = presentationState
@@ -48,14 +49,19 @@ struct CatalystReaderWindow: View {
                     services: services,
                     user: user,
                     onSignedOut: {},
-                    account: nil
-                )
-                .focusedSceneValue(\.pdfReaderFocusedMenu, isPDFReader ? PDFReaderFocusedMenuModel(
+                    account: nil,
                     pdfViewMode: $presentation.requestedMode
-                ) : nil)
+                )
                 .toolbarBackground(.visible, for: .navigationBar)
-                .onAppear { coordinator.register(input) }
+                .onAppear { coordinator.activate(input) }
                 .onDisappear { coordinator.unregister(input) }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        coordinator.activate(input)
+                    } else {
+                        coordinator.deactivate(input)
+                    }
+                }
                 .environment(\.services, services)
                 .task {
                     guard case .pdf = input.route else { return }
@@ -67,6 +73,16 @@ struct CatalystReaderWindow: View {
                     presentation.beginTransition(to: mode)
                     services.readerDefaults.pdfViewMode = mode
                     presentation.didApply(mode: mode)
+                }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: .rishiPDFViewModeChanged
+                    )
+                ) { note in
+                    guard isPDFReader,
+                          let mode = note.object as? PDFViewModeSetting,
+                          presentation.requestedMode != mode else { return }
+                    presentation.requestedMode = mode
                 }
             } else {
                 ContentUnavailableView(

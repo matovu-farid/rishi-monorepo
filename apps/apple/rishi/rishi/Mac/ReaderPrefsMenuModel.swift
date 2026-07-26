@@ -2,6 +2,15 @@
 
 import SwiftUI
 
+extension Notification.Name {
+    static let rishiReaderThemeChanged = Notification.Name(
+        "rishi.reader.themeChanged"
+    )
+    static let rishiPDFViewModeChanged = Notification.Name(
+        "rishi.reader.pdfViewModeChanged"
+    )
+}
+
 
 
 
@@ -31,22 +40,6 @@ extension FocusedValues {
     var readerPrefsMenu: ReaderPrefsMenuModel? {
         get { self[ReaderPrefsMenuKey.self] }
         set { self[ReaderPrefsMenuKey.self] = newValue }
-    }
-}
-
-@MainActor
-struct PDFReaderFocusedMenuModel {
-    var pdfViewMode: Binding<PDFViewModeSetting>
-}
-
-private struct PDFReaderFocusedMenuKey: FocusedValueKey {
-    typealias Value = PDFReaderFocusedMenuModel
-}
-
-extension FocusedValues {
-    var pdfReaderFocusedMenu: PDFReaderFocusedMenuModel? {
-        get { self[PDFReaderFocusedMenuKey.self] }
-        set { self[PDFReaderFocusedMenuKey.self] = newValue }
     }
 }
 
