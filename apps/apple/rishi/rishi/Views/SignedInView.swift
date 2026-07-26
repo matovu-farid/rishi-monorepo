@@ -25,6 +25,9 @@ struct SignedInView: View {
   
     @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var appDependencies
+    #if targetEnvironment(macCatalyst)
+        @Environment(ReaderWindowCoordinator.self) private var readerWindows
+    #endif
 
     @Environment(CurrentUserBox.self) private var currentUserBox
     @Environment(\.signOut) private var signOut
@@ -51,6 +54,18 @@ struct SignedInView: View {
                 model: model,
                 onLibraryReadyForTrial: onLibraryReadyForTrial
             )
+
+            #if targetEnvironment(macCatalyst)
+                .task {
+                    router.onCatalystBookResolved = { book in
+                        model.hint(book)
+                        readerWindows.open(book: book, user: user)
+                    }
+                }
+                .onDisappear {
+                    readerWindows.invalidate(userID: user.id)
+                }
+            #endif
             
             .sheet(item: $model.selectedConversation) { convo in
                 ConversationChatHost(
@@ -122,11 +137,13 @@ struct SignedInView: View {
                 account: appDependencies?.macAccountMenu
             )
             
-            .sceneRestoration(
-                model: model,
-                tabRaw: $selectedTabRaw,
-                openBookIdRaw: $openBookIdRaw
-            )
+            #if !targetEnvironment(macCatalyst)
+                .sceneRestoration(
+                    model: model,
+                    tabRaw: $selectedTabRaw,
+                    openBookIdRaw: $openBookIdRaw
+                )
+            #endif
         }
         else {
             VStack{

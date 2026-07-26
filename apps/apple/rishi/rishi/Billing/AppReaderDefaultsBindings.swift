@@ -46,10 +46,17 @@ final class AppReaderDefaults {
         get {
             guard let raw = defaults.string(forKey: Self.pdfViewModeKey),
                 let mode = PDFViewModeSetting(rawValue: raw)
-            else { return .automatic }
+            else { return .continuous }
             return mode
         }
         set { defaults.set(newValue.rawValue, forKey: Self.pdfViewModeKey) }
+    }
+
+    /// Distinguishes a fresh install from a user who explicitly selected
+    /// Automatic. This keeps the new default from overwriting an existing
+    /// preference.
+    var hasSavedPDFViewMode: Bool {
+        defaults.object(forKey: Self.pdfViewModeKey) != nil
     }
 
     var autoSync: Bool {

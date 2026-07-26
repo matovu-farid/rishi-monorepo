@@ -16,6 +16,7 @@ struct ReaderDestination: View {
     let services: BootstrappedServices
     let userId: UserID
     let onRequestPaywall: (String) -> Void
+    let pdfViewMode: Binding<PDFViewModeSetting>?
 
     @State private var vm: ReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
@@ -30,7 +31,8 @@ struct ReaderDestination: View {
         vm: ReaderViewModel,
         services: BootstrappedServices,
         userId: UserID,
-        onRequestPaywall: @escaping (String) -> Void
+        onRequestPaywall: @escaping (String) -> Void,
+        pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) {
         let peeked = services.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? services.readerDefaults.theme
@@ -50,6 +52,7 @@ struct ReaderDestination: View {
         self.services = services
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
+        self.pdfViewMode = pdfViewMode
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
             voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
@@ -98,7 +101,9 @@ struct ReaderDestination: View {
             } ,
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
-            readAloudLocator: readAloud?.currentLocator
+            readAloudLocator: readAloud?.currentLocator,
+            pdfViewMode: pdfViewMode?.wrappedValue ?? services.readerDefaults.pdfViewMode,
+            pdfViewModeBinding: pdfViewMode
         )
 
 

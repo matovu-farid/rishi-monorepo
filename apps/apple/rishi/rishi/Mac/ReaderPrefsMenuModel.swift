@@ -34,4 +34,20 @@ extension FocusedValues {
     }
 }
 
+@MainActor
+struct PDFReaderFocusedMenuModel {
+    var pdfViewMode: Binding<PDFViewModeSetting>
+}
+
+private struct PDFReaderFocusedMenuKey: FocusedValueKey {
+    typealias Value = PDFReaderFocusedMenuModel
+}
+
+extension FocusedValues {
+    var pdfReaderFocusedMenu: PDFReaderFocusedMenuModel? {
+        get { self[PDFReaderFocusedMenuKey.self] }
+        set { self[PDFReaderFocusedMenuKey.self] = newValue }
+    }
+}
+
 #endif

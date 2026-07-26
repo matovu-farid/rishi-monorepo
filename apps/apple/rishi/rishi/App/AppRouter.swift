@@ -14,6 +14,10 @@ final class AppRouter {
 
     var onBookResolved: ((Book) -> Void)?
 
+    #if targetEnvironment(macCatalyst)
+        var onCatalystBookResolved: ((Book) -> Void)?
+    #endif
+
     var onConversationResolved: ((Conversation) -> Void)?
 
     var onFileURL: ((URL) -> Void)?
@@ -41,10 +45,13 @@ final class AppRouter {
                 guard let book else { return }
 
                 onBookResolved?(book)
-
-                var p = NavigationPath()
-                p.append(ReaderRoute.route(for: book))
-                path = p
+                #if targetEnvironment(macCatalyst)
+                    onCatalystBookResolved?(book)
+                #else
+                    var p = NavigationPath()
+                    p.append(ReaderRoute.route(for: book))
+                    path = p
+                #endif
             }
 
         case .openConversation(let conversationId):

@@ -64,6 +64,8 @@ public struct ReaderScreen: View {
 
     private let readAloudParagraph: String?
     private let readAloudLocator: Locator?
+    private let pdfViewMode: PDFViewModeSetting
+    private let pdfViewModeBinding: Binding<PDFViewModeSetting>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -129,7 +131,9 @@ public struct ReaderScreen: View {
         onReadAloud: (() -> Void)? = nil,
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
-        readAloudLocator: Locator? = nil
+        readAloudLocator: Locator? = nil,
+        pdfViewMode: PDFViewModeSetting = .continuous,
+        pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil
     ) {
         self.viewModel = viewModel
         self.appDefaultTheme = appDefaultTheme
@@ -141,6 +145,12 @@ public struct ReaderScreen: View {
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
+        self.pdfViewMode = pdfViewMode
+        self.pdfViewModeBinding = pdfViewModeBinding
+    }
+
+    private var activePDFViewMode: PDFViewModeSetting {
+        pdfViewModeBinding?.wrappedValue ?? pdfViewMode
     }
 
     private var resolvedTheme: ReaderTheme {
@@ -151,6 +161,8 @@ public struct ReaderScreen: View {
         ReaderView(
             viewModel: viewModel,
             pageTheme: resolvedTheme,
+            pdfViewMode: activePDFViewMode,
+            pdfViewModeBinding: pdfViewModeBinding,
             onSelectionChange: { selection in
                 highlightInteractor.handleSelectionChange(selection)
             },
@@ -198,7 +210,7 @@ public struct ReaderScreen: View {
 
                 if ReaderEdgeArrowPolicy.shouldShow(
                     idiom: UIDevice.current.userInterfaceIdiom
-                ) {
+                ) && !(isCatalystPDF && activePDFViewMode == .continuous) {
                     HStack {
                         EPUBEdgeArrowButton(
                             systemName: "chevron.left",
@@ -414,7 +426,7 @@ public struct ReaderScreen: View {
             )
 
             .opaqueReaderNavBar(readerBarColor)
-            .navigationTitle("")
+            .navigationTitle(viewModel.book.title)
             .navigationBarTitleDisplayMode(.inline)
         #endif
 
@@ -424,6 +436,14 @@ public struct ReaderScreen: View {
         }
 
         .preferredColorScheme(viewModel.theme.preferredColorScheme)
+    }
+
+    private var isCatalystPDF: Bool {
+        #if targetEnvironment(macCatalyst)
+        return viewModel.book.formatType == .pdf
+        #else
+        return false
+        #endif
     }
 
     //
@@ -545,11 +565,7 @@ public struct ReaderScreen: View {
     }
 
     private var readerMacTopTrim: CGFloat {
-        #if targetEnvironment(macCatalyst)
-            return -50
-        #else
-            return 0
-        #endif
+        return 0
     }
 
     private var readerBarColor: SwiftUI.Color {

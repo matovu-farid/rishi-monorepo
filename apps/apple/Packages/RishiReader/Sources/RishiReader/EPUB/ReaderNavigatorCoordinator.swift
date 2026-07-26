@@ -71,11 +71,31 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageBackward: () -> Void = {}
 
+    /// The focused Catalyst PDF presentation mode. EPUB ignores this value.
+    public var pdfViewMode: PDFViewModeSetting = .continuous {
+        didSet {
+            guard oldValue != pdfViewMode else { return }
+            #if targetEnvironment(macCatalyst)
+            guard navigator != nil else { return }
+            if isApplyingPDFViewMode {
+                pendingPDFViewMode = pdfViewMode
+                return
+            }
+            applyPDFViewMode()
+            #endif
+        }
+    }
+
     /// PDF decoration sink — attached in ``setupPDFView`` and used by
     /// ``applyHighlights(_:)`` when the active navigator is PDF.
     private let pdfDecorable = PDFDecorableNavigator()
     private var pdfViewportFitTask: Task<Void, Never>?
     private var hasFittedPDFViewport = false
+    private var lastFittedPDFViewportSize: CGSize?
+    private var pdfFitCandidateSize: CGSize?
+    private var pdfFitCandidatePasses = 0
+    private var isApplyingPDFViewMode = false
+    private var pendingPDFViewMode: PDFViewModeSetting?
 
     public init(viewModel: ReaderViewModel) {
         self.viewModel = viewModel
@@ -360,7 +380,56 @@ public final class ReaderNavigatorCoordinator: NSObject {
             self?.handleArrowKey(.arrowLeft) ?? false
         })
         self.navigator = nav
+        #if targetEnvironment(macCatalyst)
+        if publication.manifest.conforms(to: .pdf) {
+            applyPDFViewMode(to: nav as? PDFNavigatorViewController)
+        }
+        #endif
     }
+
+    #if targetEnvironment(macCatalyst)
+    private func applyPDFViewMode() {
+        applyPDFViewMode(to: navigator as? PDFNavigatorViewController)
+    }
+
+    private func applyPDFViewMode(to pdfNavigator: PDFNavigatorViewController?) {
+        guard let pdfNavigator else { return }
+        isApplyingPDFViewMode = true
+        pendingPDFViewMode = nil
+        let preferences: PDFPreferences
+        switch pdfViewMode {
+        case .continuous, .automatic:
+            preferences = PDFPreferences(
+                fit: .width,
+                scroll: true,
+                scrollAxis: .vertical,
+                spread: .never,
+                visibleScrollbar: true
+            )
+        case .singlePage:
+            preferences = PDFPreferences(
+                fit: .page,
+                scroll: false,
+                spread: .never,
+                visibleScrollbar: true
+            )
+        case .twoPage:
+            preferences = PDFPreferences(
+                fit: .page,
+                offsetFirstPage: true,
+                scroll: false,
+                spread: .always,
+                visibleScrollbar: true
+            )
+        }
+        pdfNavigator.submitPreferences(preferences)
+        hasFittedPDFViewport = false
+        lastFittedPDFViewportSize = nil
+        pdfFitCandidateSize = nil
+        pdfFitCandidatePasses = 0
+        schedulePDFViewportFit()
+    }
+    #endif
 
     /// Recomputes the initial PDF fit after the Readium child view has been
     /// installed and laid out. Readium performs its first fit while creating
@@ -370,7 +439,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
         guard navigator is PDFNavigatorViewController, !hasFittedPDFViewport else { return }
         pdfViewportFitTask?.cancel()
         pdfViewportFitTask = Task { [weak self] in
-            for _ in 0..<20 {
+            for _ in 0..<60 {
                 guard !Task.isCancelled, let self else { return }
                 if self.fitPDFViewportIfReady() { return }
                 try? await Task.sleep(for: .milliseconds(25))
@@ -385,24 +454,39 @@ public final class ReaderNavigatorCoordinator: NSObject {
               let pdfView = pdfNavigator.pdfView,
               pdfView.document != nil,
               pdfView.currentPage != nil,
-              !pdfNavigator.settings.scroll,
-              pdfNavigator.view.bounds.width > 1,
-              pdfNavigator.view.bounds.height > 1 else {
+              pdfView.bounds.width > 1,
+              pdfView.bounds.height > 1 else {
             return false
         }
 
         pdfNavigator.view.layoutIfNeeded()
         pdfView.layoutIfNeeded()
-        // Readium's fit helper is package-internal. The public PDFKit
-        // equivalent is the scale that fits the current page in the live
-        // viewport, which is the correct initial behavior for the unified
-        // reader's paginated PDF presentation.
-        let fitScale = pdfView.scaleFactorForSizeToFit
-        guard fitScale.isFinite, fitScale > 0 else { return false }
+        let viewportSize = pdfView.bounds.size
+        guard viewportSize.width > 1, viewportSize.height > 1 else { return false }
 
-        pdfView.minScaleFactor = fitScale
-        pdfView.scaleFactor = fitScale
+        // Readium rebuilds the PDF view when preferences change, and
+        // Catalyst can deliver one layout pass before the window reaches its
+        // final size. Require two identical passes before committing the
+        // scale so a transient size cannot permanently zoom the document.
+        if pdfFitCandidateSize == viewportSize {
+            pdfFitCandidatePasses += 1
+        } else {
+            pdfFitCandidateSize = viewportSize
+            pdfFitCandidatePasses = 1
+            return false
+        }
+        guard pdfFitCandidatePasses >= 2 else { return false }
+        // Readium owns PDF fitting through PDFPreferences. Do not override
+        // PDFView's scale here: changing the window frame and scale factor
+        // during Readium's presentation rebuild causes stale/oversized zoom
+        // on subsequent opens. This gate only waits for a finalized viewport.
+        lastFittedPDFViewportSize = viewportSize
         hasFittedPDFViewport = true
+        isApplyingPDFViewMode = false
+        if let pendingPDFViewMode {
+            self.pendingPDFViewMode = nil
+            self.pdfViewMode = pendingPDFViewMode
+        }
         return true
     }
 }
@@ -477,6 +561,21 @@ extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
             // Document is often still nil here; locationDidChange / a later
             // apply with document present will flush via reapplyIfNeeded.
             pdfDecorable.reapplyIfNeeded()
+            schedulePDFViewportFit()
+        }
+    }
+
+    public nonisolated func navigator(
+        _ navigator: any ViewportObservingNavigator,
+        viewportDidChange viewport: NavigatorViewport?
+    ) {
+        guard let pdfNavigator = navigator as? PDFNavigatorViewController else { return }
+        let viewportSize = pdfNavigator.view.bounds.size
+        MainActor.assumeIsolated {
+            guard viewportSize != lastFittedPDFViewportSize else { return }
+            hasFittedPDFViewport = false
+            pdfFitCandidateSize = nil
+            pdfFitCandidatePasses = 0
             schedulePDFViewportFit()
         }
     }

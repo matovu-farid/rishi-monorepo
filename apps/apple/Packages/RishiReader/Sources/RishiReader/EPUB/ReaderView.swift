@@ -33,6 +33,8 @@ public struct ReaderView: UIViewControllerRepresentable {
 
     public let viewModel: ReaderViewModel
     public let pageTheme: ReaderTheme
+    public let pdfViewMode: PDFViewModeSetting
+    public let pdfViewModeBinding: Binding<PDFViewModeSetting>?
     /// Called whenever the user makes (or clears) a text selection in
     /// the navigator. The screen uses this to anchor the floating
     /// ``EPUBHighlightContextMenu``.
@@ -60,12 +62,16 @@ public struct ReaderView: UIViewControllerRepresentable {
     public init(
         viewModel: ReaderViewModel,
         pageTheme: ReaderTheme,
+        pdfViewMode: PDFViewModeSetting = .continuous,
+        pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
         onTap: @escaping (CGPoint) -> Void = { _ in },
         coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
         self.viewModel = viewModel
         self.pageTheme = pageTheme
+        self.pdfViewMode = pdfViewMode
+        self.pdfViewModeBinding = pdfViewModeBinding
         self.onSelectionChange = onSelectionChange
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
@@ -84,6 +90,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         container.view.backgroundColor = backgroundUIColor(pageTheme)
         context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.onTap = onTap
+        context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
         installContainerTapRecognizer(on: container.view, coordinator: context.coordinator)
         attachNavigatorIfReady(into: container, coordinator: context.coordinator)
@@ -96,6 +103,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         // state that the closure captures — pendingSelection bindings, etc).
         context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.onTap = onTap
+        context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
         attachNavigatorIfReady(into: uiViewController, coordinator: context.coordinator)
     }

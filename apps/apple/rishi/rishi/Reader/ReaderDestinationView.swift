@@ -6,8 +6,10 @@ struct ReaderDestinationView: View {
     let route: ReaderRoute
     let hint: Book?
     let onRequestPaywall: (String) -> Void
+    var pdfViewMode: Binding<PDFViewModeSetting>? = nil
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.services) private var servicesEnv
     @Environment(CurrentUserBox.self) private var currentUser
     var user:User? {
@@ -36,7 +38,8 @@ struct ReaderDestinationView: View {
                     ),
                     services: services,
                     userId: userId,
-                    onRequestPaywall: onRequestPaywall
+                    onRequestPaywall: onRequestPaywall,
+                    pdfViewMode: pdfViewMode
                 )
             }
         case .unsupportedFormat(let bookId):
@@ -46,7 +49,11 @@ struct ReaderDestinationView: View {
                 bookStore: services.bookStore
             ) { book in
                 EpubPlaceholderView(book: book) {
-                    if !router.path.isEmpty { router.path.removeLast() }
+                    #if targetEnvironment(macCatalyst)
+                        dismiss()
+                    #else
+                        if !router.path.isEmpty { router.path.removeLast() }
+                    #endif
                 }
             }
         }

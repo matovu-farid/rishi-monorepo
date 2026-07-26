@@ -142,7 +142,7 @@ private struct ThemeMenuItems: View {
 
 
 private struct PDFViewModeMenuItems: View {
-    @FocusedValue(\.readerPrefsMenu) private var prefs
+    @FocusedValue(\.pdfReaderFocusedMenu) private var prefs
     var body: some View {
         Picker("PDF View Mode", selection: prefs?.pdfViewMode ?? .constant(.automatic)) {
             ForEach(PDFViewModeSetting.allCases, id: \.self) { mode in

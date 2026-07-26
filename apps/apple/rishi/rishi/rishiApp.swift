@@ -16,6 +16,9 @@ import StoreKit
 struct rishiApp: App {
     @State private var deps = AppDependencies()
     @State private var router = AppRouter()
+    #if targetEnvironment(macCatalyst)
+        @State private var readerWindows = ReaderWindowCoordinator()
+    #endif
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -45,6 +48,10 @@ struct rishiApp: App {
                 .environment(\.macCommandRouter, deps.macCommandRouter)
                 .environment(SubscriptionService.shared)
                 .environment(router)
+                #if targetEnvironment(macCatalyst)
+                    .environment(readerWindows)
+                    .modifier(ReaderWindowCoordinatorConfiguration(coordinator: readerWindows))
+                #endif
          
 
                 .task {
@@ -70,6 +77,9 @@ struct rishiApp: App {
                 }
                 
         }
+#if targetEnvironment(macCatalyst)
+        .defaultSize(width: 1400, height: 1000)
+#endif
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .background:
@@ -88,6 +98,26 @@ struct rishiApp: App {
                 account: deps.macAccountMenu
             )
         }
+
+        #if targetEnvironment(macCatalyst)
+            WindowGroup(id: "reader", for: ReaderWindowInput.self) { input in
+                if let input = input.wrappedValue {
+                    CatalystReaderWindow(input: input)
+                        .environment(currentUserBox)
+                        .environment(\.appDependencies, deps)
+                        .environment(deps)
+                        .environment(\.macCommandRouter, deps.macCommandRouter)
+                        .environment(router)
+                        .environment(readerWindows)
+                } else {
+                    ProgressView()
+                }
+            }
+            // Apple Books-like document window proportions. This is only the
+            // initial scene size; user resizing is never overridden after
+            // the reader opens.
+            .defaultSize(width: 1400, height: 1000)
+        #endif
     }
 
     /// Launch/foreground entitlement-snapshot refresh, per both specs'
