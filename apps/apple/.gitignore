@@ -5,6 +5,7 @@
 build/
 .swiftpm/
 DerivedData/
+*.ipa
 
 # Per-package SwiftPM resolutions from dev-host `swift test` runs
 Packages/*/Package.resolved
