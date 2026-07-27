@@ -70,6 +70,8 @@ struct ReaderWindowRestorationState: Codable, Sendable, Equatable {
 final class ReaderWindowCoordinator {
     private(set) var openWindows: [ReaderWindowID: ReaderWindowInput] = [:]
     private(set) var activeReader: ReaderWindowInput?
+    private(set) var activeTheme: ReaderTheme = .default
+    private(set) var activePDFViewMode: PDFViewModeSetting = .automatic
 
     private var openWindowAction: OpenWindowAction?
     private var closeWindowAction: DismissWindowAction?
@@ -114,15 +116,31 @@ final class ReaderWindowCoordinator {
         openWindows[input.id] = input
     }
 
-    func activate(_ input: ReaderWindowInput) {
+    func activate(
+        _ input: ReaderWindowInput,
+        theme: ReaderTheme? = nil,
+        pdfViewMode: PDFViewModeSetting? = nil
+    ) {
         activeReader = input
+        if let theme { activeTheme = theme }
+        if let pdfViewMode { activePDFViewMode = pdfViewMode }
         register(input)
+    }
+
+    func updateActiveTheme(_ theme: ReaderTheme) {
+        activeTheme = theme
+    }
+
+    func updateActivePDFViewMode(_ mode: PDFViewModeSetting) {
+        activePDFViewMode = mode
     }
 
     func unregister(_ input: ReaderWindowInput) {
         openWindows.removeValue(forKey: input.id)
         if activeReader?.id == input.id {
             activeReader = nil
+            activeTheme = .default
+            activePDFViewMode = .automatic
         }
     }
 

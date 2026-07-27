@@ -53,11 +53,21 @@ struct CatalystReaderWindow: View {
                     pdfViewMode: $presentation.requestedMode
                 )
                 .toolbarBackground(.visible, for: .navigationBar)
-                .onAppear { coordinator.activate(input) }
+                .onAppear {
+                    coordinator.activate(
+                        input,
+                        theme: services.readerDefaults.theme,
+                        pdfViewMode: isPDFReader ? services.readerDefaults.pdfViewMode : nil
+                    )
+                }
                 .onDisappear { coordinator.unregister(input) }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
-                        coordinator.activate(input)
+                        coordinator.activate(
+                            input,
+                            theme: services.readerDefaults.theme,
+                            pdfViewMode: isPDFReader ? services.readerDefaults.pdfViewMode : nil
+                        )
                     } else {
                         coordinator.deactivate(input)
                     }
@@ -72,6 +82,7 @@ struct CatalystReaderWindow: View {
                     guard isPDFReader else { return }
                     presentation.beginTransition(to: mode)
                     services.readerDefaults.pdfViewMode = mode
+                    coordinator.updateActivePDFViewMode(mode)
                     presentation.didApply(mode: mode)
                 }
                 .onReceive(
@@ -82,7 +93,16 @@ struct CatalystReaderWindow: View {
                     guard isPDFReader,
                           let mode = note.object as? PDFViewModeSetting,
                           presentation.requestedMode != mode else { return }
+                    coordinator.updateActivePDFViewMode(mode)
                     presentation.requestedMode = mode
+                }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: .rishiReaderThemeChanged
+                    )
+                ) { note in
+                    guard let theme = note.object as? ReaderTheme else { return }
+                    coordinator.updateActiveTheme(theme)
                 }
             } else {
                 ContentUnavailableView(

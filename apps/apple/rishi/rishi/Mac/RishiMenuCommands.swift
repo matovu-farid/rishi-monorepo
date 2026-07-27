@@ -126,10 +126,11 @@ struct ReaderWindowMenuCommands: Commands {
 
     private var themeBinding: Binding<ReaderTheme> {
         Binding(
-            get: { dependencies.services?.readerDefaults.theme ?? .default },
+            get: { readerWindows.activeTheme },
             set: { theme in
                 guard let defaults = dependencies.services?.readerDefaults else { return }
                 defaults.theme = theme
+                readerWindows.updateActiveTheme(theme)
                 NotificationCenter.default.post(
                     name: .rishiReaderThemeChanged,
                     object: theme
@@ -140,10 +141,11 @@ struct ReaderWindowMenuCommands: Commands {
 
     private var pdfViewModeBinding: Binding<PDFViewModeSetting> {
         Binding(
-            get: { dependencies.services?.readerDefaults.pdfViewMode ?? .automatic },
+            get: { readerWindows.activePDFViewMode },
             set: { mode in
                 guard let defaults = dependencies.services?.readerDefaults else { return }
                 defaults.pdfViewMode = mode
+                readerWindows.updateActivePDFViewMode(mode)
                 NotificationCenter.default.post(
                     name: .rishiPDFViewModeChanged,
                     object: mode
