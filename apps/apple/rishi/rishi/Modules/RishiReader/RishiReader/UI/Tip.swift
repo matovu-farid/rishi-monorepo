@@ -14,11 +14,11 @@ struct VoiceChatTip: Tip {
     }
     
     var message: Text? {
-        Text("Ask questions about what you're reading, explore characters, or get explanations without losing your place.")
+        Text("Ask questions, explore characters, and get explanations while you read.")
     }
     
     var image: Image? {
-        Image(systemName: "waveform.circle.fill")
+        Image(systemName: "waveform")
     }
 }
 
@@ -28,10 +28,10 @@ struct ReadAloudTip: Tip {
     }
     
     var message: Text? {
-        Text("Have the book read aloud with natural-sounding voices. Playback remembers your place so you can continue anytime.")
+        Text("Listen to your book with natural voices and easily resume where you left off.")
     }
     
     var image: Image? {
-        Image(systemName: "speaker.wave.2.fill")
+        Image(systemName: "speaker.wave.2")
     }
 }
