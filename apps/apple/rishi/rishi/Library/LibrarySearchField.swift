@@ -25,12 +25,7 @@ struct LibrarySearchable: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
-        content
-            .searchable(
-                text: $text,
-                placement: searchPlacement,
-                prompt: Text("Search title or author")
-            )
+        searchableContent(content)
             .overlay {
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     && filteredIsEmpty
@@ -39,6 +34,23 @@ struct LibrarySearchable: ViewModifier {
                         .background(RishiColor.background)
                 }
             }
+    }
+
+    @ViewBuilder
+    private func searchableContent(_ content: Content) -> some View {
+        #if targetEnvironment(macCatalyst)
+            content.toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    CatalystLibrarySearchField(text: $text)
+                }
+            }
+        #else
+            content.searchable(
+                text: $text,
+                placement: searchPlacement,
+                prompt: Text("Search title or author")
+            )
+        #endif
     }
 
     /// `.toolbar` on Mac Catalyst (sidebar-aware) + macOS host (dev-build),
@@ -54,6 +66,66 @@ struct LibrarySearchable: ViewModifier {
         #endif
     }
 }
+
+#if targetEnvironment(macCatalyst)
+
+private struct CatalystLibrarySearchField: View {
+    @Binding var text: String
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("Search title or author", text: $text)
+                .textFieldStyle(.plain)
+                .focused($isFocused)
+                .focusEffectDisabled()
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 9)
+        .frame(width: 320, height: 30)
+        .background(Color(uiColor: .systemBackground), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(
+                    isFocused ? Color.accentColor.opacity(0.75) : Color.secondary.opacity(0.35),
+                    lineWidth: 1
+                )
+        }
+        .contentShape(Capsule())
+        .onTapGesture {
+            isFocused = true
+        }
+        .onAppear {
+            clearInitialFocus()
+        }
+        .task {
+            // Catalyst may assign first-responder status after the toolbar
+            // item appears, so clear it once more on the next run-loop turn.
+            await Task.yield()
+            clearInitialFocus()
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func clearInitialFocus() {
+        isFocused = false
+    }
+}
+
+#endif
 
 extension View {
     /// Adds the library-shell `.searchable(...)` + empty-results overlay.
