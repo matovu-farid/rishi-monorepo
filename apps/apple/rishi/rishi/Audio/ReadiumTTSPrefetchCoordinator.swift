@@ -116,7 +116,6 @@ final class ReadiumTTSPrefetchCoordinator {
                 // ensures any requests it launched are cleared before the
                 // new utterance starts warming the cache.
                 await previousDiscoveryTask?.value
-                await prewarmer.cancelAll()
                 guard !Task.isCancelled, self.generation == generation else { return }
 
                 let candidates = try await self.candidates(
