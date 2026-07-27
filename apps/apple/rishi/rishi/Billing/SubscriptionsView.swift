@@ -5,7 +5,6 @@ import SwiftUI
 
 
 public struct SubscriptionsView: View {
-    private let groupID: String
     @State private var hasSession: Bool?
     @State private var tokenError = false
     /// Preloaded `appAccountToken` — only non-nil after a confirmed session.
@@ -13,9 +12,7 @@ public struct SubscriptionsView: View {
     /// a purchase without account binding; that API is non-throwing).
     @State private var appAccountToken: UUID?
 
-    public init(groupID: String) {
-        self.groupID = groupID
-    }
+    public init() {}
 
     public var body: some View {
         NavigationStack {
@@ -35,6 +32,14 @@ public struct SubscriptionsView: View {
                 hasSession = true
             }
         }
+        #if targetEnvironment(macCatalyst)
+        .frame(
+            minWidth: 880,
+            idealWidth: 880,
+            minHeight: 1_000,
+            idealHeight: 1_000
+        )
+        #endif
     }
 
     @ViewBuilder
@@ -52,7 +57,7 @@ public struct SubscriptionsView: View {
                 description: Text("Sign in to purchase a plan so your subscription can be linked to your account.")
             )
         } else if hasSession == true, let token = appAccountToken {
-            SubscriptionStoreView(groupID: groupID) {
+            SubscriptionStoreView(productIDs: RishiProductID.currentPlatformProductIDs) {
                 VStack {
                     Image("rishi")
                         .resizable()

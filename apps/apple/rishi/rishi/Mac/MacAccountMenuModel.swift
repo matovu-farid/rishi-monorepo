@@ -7,9 +7,17 @@ import Observation
 @Observable
 final class MacAccountMenuModel {
 
+    enum SubscriptionAction: Equatable {
+        case subscribe
+        case manage
+        case unavailable
+    }
+
 
     struct Payload {
         var userEmail: String?
+        var subscriptionAction: SubscriptionAction = .unavailable
+        var onSubscribe: () -> Void = {}
         var onManageSubscription: () -> Void
         var onSignOut: () -> Void
         var onOpenPrivacy: () -> Void

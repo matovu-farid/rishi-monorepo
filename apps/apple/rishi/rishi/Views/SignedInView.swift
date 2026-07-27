@@ -208,6 +208,7 @@ extension View {
     private struct ReaderPrefsMenuPublisher: ViewModifier {
 
         @State private var vm: MacReaderPrefsMenuViewModel
+        let services: BootstrappedServices
         let user: User
         let account: MacAccountMenuModel?
         let pdfViewMode: Binding<PDFViewModeSetting>?
@@ -219,6 +220,7 @@ extension View {
             account: MacAccountMenuModel?,
             pdfViewMode: Binding<PDFViewModeSetting>?
         ) {
+            self.services = services
             _vm = State(
                 wrappedValue: MacReaderPrefsMenuViewModel(
                     services: services,
@@ -239,8 +241,21 @@ extension View {
                 )
                 .task(id: user.id) { await vm.seed() }
 
-                .onAppear { account?.update(vm.makeAccountPayload()) }
+                .onAppear { updateAccountPayload() }
+                .onChange(of: services.entitlementSnapshotStore.resolution) { _, _ in
+                    updateAccountPayload()
+                }
                 .onDisappear { account?.clear() }
+        }
+
+        private func updateAccountPayload() {
+            let action: MacAccountMenuModel.SubscriptionAction
+            if let snapshot = services.entitlementSnapshotStore.resolvedSnapshot {
+                action = snapshot.isPaidActive ? .manage : .subscribe
+            } else {
+                action = .unavailable
+            }
+            account?.update(vm.makeAccountPayload(subscriptionAction: action))
         }
     }
 

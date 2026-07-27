@@ -15,6 +15,9 @@ struct RootView: View {
 
     @State private var showOnboarding = false
     @State private var showNoCardTrialIntro = false
+    #if targetEnvironment(macCatalyst)
+        @State private var showSubscriptions = false
+    #endif
     @Environment(CurrentUserBox.self) private var currentUserBox
     #if targetEnvironment(macCatalyst)
         @Environment(ReaderWindowCoordinator.self) private var readerWindows
@@ -46,6 +49,7 @@ struct RootView: View {
                 {
                     Task {
                         #if targetEnvironment(macCatalyst)
+                            showSubscriptions = false
                             if case .signedIn(let user) = currentUserBox.state {
                                 readerWindows.invalidate(userID: user.id)
                             }
@@ -93,6 +97,18 @@ struct RootView: View {
                     }
                 }
             }
+            #if targetEnvironment(macCatalyst)
+            .onReceive(NotificationCenter.default.publisher(for: .rishiPresentSubscriptions)) { _ in
+                showSubscriptions = true
+            }
+            .sheet(isPresented: $showSubscriptions, onDismiss: {
+                Task {
+                    await deps.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
+                }
+            }) {
+                SubscriptionsView()
+            }
+            #endif
     }
 
     private func realBodyContent(deps: AppDependencies) -> some View {

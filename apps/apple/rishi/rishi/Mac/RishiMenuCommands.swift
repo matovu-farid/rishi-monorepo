@@ -295,8 +295,17 @@ private struct AccountMenuItems: View {
         Text(Self.aboutLine)
             .disabled(true)
         Divider()
-        Button("Manage Subscription…") { payload?.onManageSubscription() }
-            .disabled(payload == nil)
+        Group {
+            switch payload?.subscriptionAction {
+            case .subscribe:
+                Button("Subscribe…") { payload?.onSubscribe() }
+            case .manage:
+                Button("Manage Subscription…") { payload?.onManageSubscription() }
+            case .unavailable, nil:
+                Button("Subscription…") {}
+            }
+        }
+        .disabled(payload == nil)
         Button("Sign Out") { payload?.onSignOut() }
             .disabled(payload == nil)
         Divider()

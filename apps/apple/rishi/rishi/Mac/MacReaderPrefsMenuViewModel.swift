@@ -43,6 +43,7 @@ final class MacReaderPrefsMenuViewModel {
     private let saveSettings: (TTSSettings) async -> Void
     private let runManualSync: () async -> Void
     private let presentManageSubscription: () async -> Void
+    private let presentSubscriptions: () -> Void
     private let signOut: () async -> Void
     private let openURL: (URL) -> Void
 
@@ -61,6 +62,7 @@ final class MacReaderPrefsMenuViewModel {
         saveSettings: @escaping (TTSSettings) async -> Void,
         runManualSync: @escaping () async -> Void,
         presentManageSubscription: @escaping () async -> Void,
+        presentSubscriptions: @escaping () -> Void = {},
         signOut: @escaping () async -> Void,
         openURL: @escaping (URL) -> Void
     ) {
@@ -74,6 +76,7 @@ final class MacReaderPrefsMenuViewModel {
         self.saveSettings = saveSettings
         self.runManualSync = runManualSync
         self.presentManageSubscription = presentManageSubscription
+        self.presentSubscriptions = presentSubscriptions
         self.signOut = signOut
         self.openURL = openURL
     }
@@ -133,6 +136,8 @@ final class MacReaderPrefsMenuViewModel {
     func makeAccountPayload() -> MacAccountMenuModel.Payload {
         MacAccountMenuModel.Payload(
             userEmail: (userEmail?.isEmpty == false) ? userEmail : nil,
+            subscriptionAction: .subscribe,
+            onSubscribe: presentSubscriptions,
             onManageSubscription: { [presentManageSubscription] in
                 Task { @MainActor in await presentManageSubscription() }
             },
@@ -142,6 +147,12 @@ final class MacReaderPrefsMenuViewModel {
             onOpenPrivacy: { self.open(.privacyPolicy) },
             onOpenTerms: { self.open(.termsOfUse) }
         )
+    }
+
+    func makeAccountPayload(subscriptionAction: MacAccountMenuModel.SubscriptionAction) -> MacAccountMenuModel.Payload {
+        var payload = makeAccountPayload()
+        payload.subscriptionAction = subscriptionAction
+        return payload
     }
 
     private func open(_ link: LegalLinksSection.LegalLink) {
@@ -190,6 +201,9 @@ extension MacReaderPrefsMenuViewModel {
             
             
             presentManageSubscription: { await presenter.present() },
+            presentSubscriptions: {
+                NotificationCenter.default.post(name: .rishiPresentSubscriptions, object: nil)
+            },
             
             
             signOut: {
@@ -200,6 +214,10 @@ extension MacReaderPrefsMenuViewModel {
             openURL: { url in UIApplication.shared.open(url) }
         )
     }
+}
+
+extension Notification.Name {
+    static let rishiPresentSubscriptions = Notification.Name("Rishi.presentSubscriptions")
 }
 
 #endif
