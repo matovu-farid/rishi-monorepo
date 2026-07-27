@@ -96,7 +96,7 @@ struct SettingsContent: View {
             }
         }) {
             if let groupID = services.groupID {
-                SubscriptionsView(groupID: groupID.value)
+                SubscriptionsView()
             } else {
                 NavigationStack {
                     ContentUnavailableView(

@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: "Rishi", category: "Store")
 typealias ProductID = String
 
 func fetchProductIDs()->[ProductID]{
-    return RishiProductID.all
+    return RishiProductID.currentPlatformProductIDs
 }
 
 @available(iOS 18.4, macOS 15.4, *)
@@ -24,9 +24,10 @@ public final class Store {
     public func loadProducts() async {
         do {
             
-            let productIDs =  fetchProductIDs()
+            let productIDs = fetchProductIDs()
             let products = try await Product.products(for: productIDs)
-            self.products = products
+            let productIDSet = Set(productIDs)
+            self.products = products.filter { productIDSet.contains($0.id) }
         } catch {
             logger.error("Failed product request from the App Store. \(error)")
         }

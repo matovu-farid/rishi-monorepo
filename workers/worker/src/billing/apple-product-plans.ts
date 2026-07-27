@@ -1,6 +1,6 @@
 /**
- * Apple product-ID -> Rishi plan mapping for the four StoreKit subscription
- * products (2026-07-17 pricing/trial-launch design doc, "Paid-plan product
+ * Apple product-ID -> Rishi plan mapping for the iOS and macOS StoreKit
+ * subscription products (2026-07-17 pricing/trial-launch design doc, "Paid-plan product
  * policy"). `entitlement-sync.ts` imports this table to verify an incoming
  * transaction's product ID and to look up full plan allowances; it lives in
  * its own module (rather than inline in `entitlement-sync.ts`) so any future
@@ -32,10 +32,15 @@ export interface ApplePlanMapping {
 export const APPLE_BUNDLE_ID = "org.fidexa.rishi";
 
 export const APPLE_PRODUCT_PLAN_MAP: Record<string, ApplePlanMapping> = {
-  "org.fidexa.rishi.reader.monthly": { plan: "reader", durationMonths: 1 },
+  // The live App Store product was created without the org.fidexa prefix.
+  "rishi.reader.monthly": { plan: "reader", durationMonths: 1 },
   "org.fidexa.rishi.reader.annual": { plan: "reader", durationMonths: 12 },
   "org.fidexa.rishi.voice.monthly": { plan: "voice", durationMonths: 1 },
   "org.fidexa.rishi.voice.annual": { plan: "voice", durationMonths: 12 },
+  "org.fidexa.rishi.reader.monthly.macos": { plan: "reader", durationMonths: 1 },
+  "org.fidexa.rishi.reader.annual.macos": { plan: "reader", durationMonths: 12 },
+  "org.fidexa.rishi.voice.monthly.macos": { plan: "voice", durationMonths: 1 },
+  "org.fidexa.rishi.voice.annual.macos": { plan: "voice", durationMonths: 12 },
 };
 
 /**

@@ -34,8 +34,12 @@ This is a per-product one-time configuration. Skip if §0 confirmed the products
    | ----------------------------------- | ---------------------- | -------- | ---------- |
    | `org.fidexa.rishi.voice.monthly`    | Rishi Voice Monthly    | 1 month  | $14.99     |
    | `org.fidexa.rishi.voice.annual`     | Rishi Voice Annual     | 1 year   | $143.99    |
-   | `org.fidexa.rishi.reader.monthly`   | Rishi Reader Monthly   | 1 month  | $7.99      |
+   | `rishi.reader.monthly`              | Rishi Reader Monthly   | 1 month  | $7.99      |
    | `org.fidexa.rishi.reader.annual`    | Rishi Reader Annual    | 1 year   | $76.99     |
+   | `org.fidexa.rishi.voice.monthly.macos` | Rishi Voice Monthly macOS | 1 month | $14.99 |
+   | `org.fidexa.rishi.voice.annual.macos`  | Rishi Voice Annual macOS  | 1 year  | $99.99  |
+   | `org.fidexa.rishi.reader.monthly.macos` | Rishi Reader Monthly macOS | 1 month | $7.99 |
+   | `org.fidexa.rishi.reader.annual.macos`  | Rishi Reader Annual macOS  | 1 year  | $79.99 |
 
 4. For each product configure an introductory offer if required by current pricing policy (otherwise skip).
 5. Fill in the App Store Information localizations (English at minimum).

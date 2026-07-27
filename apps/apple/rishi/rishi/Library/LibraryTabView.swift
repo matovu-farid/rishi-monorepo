@@ -195,7 +195,7 @@ struct LibraryTabView: View {
             }
         }) { _ in
             if let groupID = services.groupID {
-                SubscriptionsView(groupID: groupID.value)
+                SubscriptionsView()
             } else {
                 NavigationStack {
                     ContentUnavailableView(

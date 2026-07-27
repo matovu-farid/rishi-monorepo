@@ -21,13 +21,18 @@ require "uri"
 
 BUNDLE_ID   = "org.fidexa.rishi"
 GROUP_NAME  = "Rishi Reader & Voice"
+GROUP_ID    = "22247412"
 # IDs must match RishiProductID + workers/worker/src/billing/apple-product-plans.ts.
 # Legacy org.fidexa.rishi.pro.* products are not created here.
 PRODUCTS    = [
-  { product_id: "org.fidexa.rishi.voice.monthly",  name: "Rishi Voice Monthly",  period: "ONE_MONTH" },
-  { product_id: "org.fidexa.rishi.voice.annual",   name: "Rishi Voice Annual",   period: "ONE_YEAR"  },
-  { product_id: "org.fidexa.rishi.reader.monthly", name: "Rishi Reader Monthly", period: "ONE_MONTH" },
-  { product_id: "org.fidexa.rishi.reader.annual",  name: "Rishi Reader Annual",  period: "ONE_YEAR"  },
+  { product_id: "org.fidexa.rishi.voice.monthly",  name: "Rishi Voice Monthly",  period: "ONE_MONTH", level: 1 },
+  { product_id: "org.fidexa.rishi.voice.annual",   name: "Rishi Voice Annual",   period: "ONE_YEAR",  level: 1 },
+  { product_id: "rishi.reader.monthly", name: "Rishi Reader Monthly", period: "ONE_MONTH", level: 2 },
+  { product_id: "org.fidexa.rishi.reader.annual",  name: "Rishi Reader Annual",  period: "ONE_YEAR",  level: 2 },
+  { product_id: "org.fidexa.rishi.voice.monthly.macos", name: "Rishi Voice Monthly macOS", period: "ONE_MONTH", level: 1 },
+  { product_id: "org.fidexa.rishi.voice.annual.macos", name: "Rishi Voice Annual macOS", period: "ONE_YEAR", level: 1 },
+  { product_id: "org.fidexa.rishi.reader.monthly.macos", name: "Rishi Reader Monthly macOS", period: "ONE_MONTH", level: 2 },
+  { product_id: "org.fidexa.rishi.reader.annual.macos", name: "Rishi Reader Annual macOS", period: "ONE_YEAR", level: 2 },
 ]
 # Apple caps subscription localization description at 55 chars. This is
 # the one-liner shown on the paywall sheet, NOT the App Store page description.
@@ -69,33 +74,14 @@ puts "App: #{app_name} (id=#{app_id})"
 # --- Resolve / create subscription group ---------------------------------
 code, body = asc_call(:get, "/v1/apps/#{app_id}/subscriptionGroups", token)
 fail!("Group list failed (#{code})") if code >= 400
-existing_group = body["data"].find { |g| g["attributes"]["referenceName"] == GROUP_NAME }
+existing_group = body["data"].find { |g| g["id"] == GROUP_ID }
 
 if existing_group
   group_id = existing_group["id"]
-  puts "Subscription group exists: #{GROUP_NAME} (id=#{group_id})"
+  fail!("Group #{GROUP_ID} has unexpected reference name") unless existing_group.dig("attributes", "referenceName") == "rishi-reader-voice-group"
+  puts "Subscription group exists: rishi-reader-voice-group (id=#{group_id})"
 else
-  group_body = {
-    data: {
-      type: "subscriptionGroups",
-      attributes: { referenceName: GROUP_NAME },
-      relationships: { app: { data: { type: "apps", id: app_id } } }
-    }
-  }
-  code, body = asc_call(:post, "/v1/subscriptionGroups", token, group_body)
-  fail!("Group create failed (#{code}): #{body}") if code >= 400
-  group_id = body["data"]["id"]
-  puts "Created subscription group: #{GROUP_NAME} (id=#{group_id})"
-
-  # Add en-US localization for the group display name (App Store requires)
-  glocal_body = {
-    data: {
-      type: "subscriptionGroupLocalizations",
-      attributes: { name: GROUP_NAME, locale: "en-US", customAppName: nil },
-      relationships: { subscriptionGroup: { data: { type: "subscriptionGroups", id: group_id } } }
-    }
-  }
-  asc_call(:post, "/v1/subscriptionGroupLocalizations", token, glocal_body)
+  fail!("Expected existing subscription group #{GROUP_ID} was not found; refusing to create a duplicate group")
 end
 
 # --- Resolve / create products + en-US localizations ---------------------
@@ -117,7 +103,7 @@ PRODUCTS.each do |p|
           productId: p[:product_id],
           subscriptionPeriod: p[:period],
           familySharable: false,
-          groupLevel: 1
+          groupLevel: p[:level]
         },
         relationships: { group: { data: { type: "subscriptionGroups", id: group_id } } }
       }
@@ -155,7 +141,7 @@ end
 
 puts ""
 puts "Done. Three manual steps remain in ASC UI:"
-puts "  1. Set price: $6.99/mo and $74.99/yr"
+puts "  1. Set prices: Voice $14.99/mo and $99.99/yr; Reader $7.99/mo and $79.99/yr"
 puts "  2. Add 7-day free-trial intro offers (new subscribers only)"
 puts "  3. Upload App Review screenshot per product (after sandbox smoke)"
 puts ""

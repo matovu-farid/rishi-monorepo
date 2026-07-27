@@ -100,6 +100,30 @@
           "subscriptionGroupID": "22149819",
           "type": "RecurringSubscription",
           "winbackOffers": []
+        },
+        {
+          "adHocOffers": [], "billingPlans": [{"billingPlanType":"BILLED_UPFRONT","commitmentDisplayPrice":"14.99","displayPrice":"14.99","internalID":"RISHI_VOICE_MONTHLY_MAC_INTERNAL_BILLED_UPFRONT","isEnabled":true}],
+          "codeOffers": [], "displayPrice":"14.99", "familyShareable":false, "groupNumber":1, "internalID":"RISHI_VOICE_MONTHLY_MAC_INTERNAL", "introductoryOffers":[],
+          "localizations":[{"description":"12h AI narration, 540 min Voice Chat monthly.","displayName":"Rishi Voice Monthly","locale":"en_US"}],
+          "productID":"org.fidexa.rishi.voice.monthly.macos", "recurringSubscriptionPeriod":"P1M", "referenceName":"Rishi Voice Monthly macOS", "subscriptionGroupID":"22247412", "type":"RecurringSubscription", "winbackOffers":[]
+        },
+        {
+          "adHocOffers": [], "billingPlans": [{"billingPlanType":"BILLED_UPFRONT","commitmentDisplayPrice":"99.99","displayPrice":"99.99","internalID":"RISHI_VOICE_ANNUAL_MAC_INTERNAL_BILLED_UPFRONT","isEnabled":true}],
+          "codeOffers": [], "displayPrice":"99.99", "familyShareable":false, "groupNumber":1, "internalID":"RISHI_VOICE_ANNUAL_MAC_INTERNAL", "introductoryOffers":[],
+          "localizations":[{"description":"12h AI narration, 540 min Voice Chat. Billed yearly.","displayName":"Rishi Voice Annual","locale":"en_US"}],
+          "productID":"org.fidexa.rishi.voice.annual.macos", "recurringSubscriptionPeriod":"P1Y", "referenceName":"Rishi Voice Annual macOS", "subscriptionGroupID":"22247412", "type":"RecurringSubscription", "winbackOffers":[]
+        },
+        {
+          "adHocOffers": [], "billingPlans": [{"billingPlanType":"BILLED_UPFRONT","commitmentDisplayPrice":"7.99","displayPrice":"7.99","internalID":"RISHI_READER_MONTHLY_MAC_INTERNAL_BILLED_UPFRONT","isEnabled":true}],
+          "codeOffers": [], "displayPrice":"7.99", "familyShareable":false, "groupNumber":2, "internalID":"RISHI_READER_MONTHLY_MAC_INTERNAL", "introductoryOffers":[],
+          "localizations":[{"description":"6h AI narration, 270 min Voice Chat monthly.","displayName":"Rishi Reader Monthly","locale":"en_US"}],
+          "productID":"org.fidexa.rishi.reader.monthly.macos", "recurringSubscriptionPeriod":"P1M", "referenceName":"Rishi Reader Monthly macOS", "subscriptionGroupID":"22247412", "type":"RecurringSubscription", "winbackOffers":[]
+        },
+        {
+          "adHocOffers": [], "billingPlans": [{"billingPlanType":"BILLED_UPFRONT","commitmentDisplayPrice":"79.99","displayPrice":"79.99","internalID":"RISHI_READER_ANNUAL_MAC_INTERNAL_BILLED_UPFRONT","isEnabled":true}],
+          "codeOffers": [], "displayPrice":"79.99", "familyShareable":false, "groupNumber":2, "internalID":"RISHI_READER_ANNUAL_MAC_INTERNAL", "introductoryOffers":[],
+          "localizations":[{"description":"6h AI narration, 270 min Voice Chat. Billed yearly.","displayName":"Rishi Reader Annual","locale":"en_US"}],
+          "productID":"org.fidexa.rishi.reader.annual.macos", "recurringSubscriptionPeriod":"P1Y", "referenceName":"Rishi Reader Annual macOS", "subscriptionGroupID":"22247412", "type":"RecurringSubscription", "winbackOffers":[]
         }
       ]
     },
@@ -200,7 +224,7 @@
               "locale": "en_US"
             }
           ],
-          "productID": "org.fidexa.rishi.reader.monthly",
+          "productID": "rishi.reader.monthly",
           "recurringSubscriptionPeriod": "P1M",
           "referenceName": "Rishi Reader Monthly",
           "subscriptionGroupID": "22247412",
@@ -212,14 +236,14 @@
           "billingPlans": [
             {
               "billingPlanType": "BILLED_UPFRONT",
-              "commitmentDisplayPrice": "76.99",
-              "displayPrice": "76.99",
+              "commitmentDisplayPrice": "79.99",
+              "displayPrice": "79.99",
               "internalID": "RISHI_READER_ANNUAL_INTERNAL_BILLED_UPFRONT",
               "isEnabled": true
             }
           ],
           "codeOffers": [],
-          "displayPrice": "76.99",
+          "displayPrice": "79.99",
           "familyShareable": false,
           "groupNumber": 2,
           "internalID": "RISHI_READER_ANNUAL_INTERNAL",
