@@ -52,6 +52,13 @@ public struct DocumentPickerView: UIViewControllerRepresentable {
             _ controller: UIDocumentPickerViewController,
             didPickDocumentsAt urls: [URL]
         ) {
+            Log.event(
+                "library.import.document_picker.success",
+                data: [
+                    "count": String(urls.count),
+                    "files": urls.map(\.lastPathComponent).joined(separator: ",")
+                ]
+            )
             // UIKit delegate callbacks already arrive on the main thread,
             // but the @MainActor isolation is satisfied explicitly via Task.
             let snapshot = urls
@@ -62,6 +69,7 @@ public struct DocumentPickerView: UIViewControllerRepresentable {
         }
 
         public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            Log.event("library.import.document_picker.cancelled", level: .warning)
             // KEEP: UIKit delegate callback; explicit @MainActor hop.
             Task { @MainActor in onPicked([]) }
         }

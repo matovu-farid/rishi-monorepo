@@ -3,7 +3,6 @@ import TipKit
 
 
 import SwiftUI
-import UniformTypeIdentifiers
 import os.signpost
 
 
@@ -95,25 +94,32 @@ public struct LibraryRootView: View {
             }
         }
 
-        .fileImporter(
-            isPresented: documentPickerPresented,
-            allowedContentTypes: [.epub, .pdf],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-
+#if canImport(UIKit)
+        .sheet(isPresented: documentPickerPresented) {
+            DocumentPickerView { urls in
+                Log.event(
+                    "library.import.picker.completed",
+                    data: [
+                        "count": String(urls.count),
+                        "files": urls.map(\.lastPathComponent).joined(separator: ",")
+                    ]
+                )
+                documentPickerPresented.wrappedValue = false
                 Task {
                     let outcomes = await vm.importPicked(urls)
+                    Log.event(
+                        "library.import.picker.outcomes",
+                        data: [
+                            "count": String(outcomes.count),
+                            "successes": String(outcomes.filter { $0.book != nil }.count),
+                            "failures": String(outcomes.filter { $0.error != nil }.count)
+                        ]
+                    )
                     onImported?(outcomes)
                 }
-            case .failure(let error):
-                vm.importError = .init(
-                    message:
-                        "Couldn't open the selected file. \(error.localizedDescription)"
-                )
             }
         }
+#endif
         .alert(item: $vm.importError) { failure in
             Alert(
                 title: Text("Import Failed"),

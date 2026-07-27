@@ -96,10 +96,25 @@ public final class LibraryViewModel {
     @discardableResult
     public func importPicked(_ urls: [URL]) async -> [ImportCoordinator.ImportOutcome] {
         importError = nil
-        guard !urls.isEmpty else { return [] }
+        Log.event(
+            "library.import.picked.received",
+            data: ["count": String(urls.count)]
+        )
+        guard !urls.isEmpty else {
+            Log.event("library.import.picked.empty", level: .warning)
+            return []
+        }
         let outcomes = await importCoordinator.importBooks(urls)
         await refresh()
         if outcomes.compactMap(\.book).isEmpty {
+            Log.event(
+                "library.import.picked.no_books",
+                level: .error,
+                data: [
+                    "count": String(outcomes.count),
+                    "errors": outcomes.compactMap(\.error).joined(separator: " | ")
+                ]
+            )
             importError = ImportFailure(message: "Couldn't import the selected file. Please choose a valid EPUB or PDF.")
         }
         return outcomes

@@ -59,6 +59,14 @@ public actor ImportCoordinator {
     /// would otherwise throw `.unsupportedFormat` for them.
     public func importBooks(_ urls: [URL]) async -> [ImportOutcome] {
         let supported = Self.filterSupported(urls)
+        Log.event(
+            "library.import.coordinator.started",
+            data: [
+                "received": String(urls.count),
+                "supported": String(supported.count),
+                "extensions": supported.map { $0.pathExtension.lowercased() }.joined(separator: ",")
+            ]
+        )
         guard let userId = await currentUserId() else {
             Log.event(
                 "library.import.skipped",
@@ -74,6 +82,14 @@ public actor ImportCoordinator {
             // UIDocumentPickerViewController. Harmless for plain file URLs
             // (returns false; nothing to balance).
             let didStart = url.startAccessingSecurityScopedResource()
+            Log.event(
+                "library.import.file.started",
+                data: [
+                    "name": url.lastPathComponent,
+                    "security_scoped": String(didStart),
+                    "exists": String(FileManager.default.fileExists(atPath: url.path))
+                ]
+            )
             defer {
                 if didStart {
                     url.stopAccessingSecurityScopedResource()
@@ -82,6 +98,10 @@ public actor ImportCoordinator {
             do {
                 let book = try await storage.importBook(from: url, ownerId: userId)
                 results.append(ImportOutcome(url: url, book: book, error: nil))
+                Log.event(
+                    "library.import.file.succeeded",
+                    data: ["name": url.lastPathComponent, "book_id": book.id.uuidString]
+                )
                 if let onBookImported {
                     await onBookImported(book.id)
                 }
