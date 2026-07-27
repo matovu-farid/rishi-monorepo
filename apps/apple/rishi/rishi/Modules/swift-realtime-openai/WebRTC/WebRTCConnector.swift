@@ -74,6 +74,7 @@ import FoundationNetworking
 	/// was a no-op because the peer was already connected/connecting).
 	@discardableResult
 	internal func connect(using request: URLRequest) async throws -> String? {
+		print("[voice.webrtc] connect.begin connectionState=\(connection.connectionState.rawValue) dataChannelState=\(dataChannel.readyState.rawValue) hasAuthHeader=\(request.value(forHTTPHeaderField: "Authorization") != nil)")
 		guard connection.connectionState == .new else { return nil }
 
 		guard AVAudioApplication.shared.recordPermission == .granted else {
@@ -81,7 +82,9 @@ import FoundationNetworking
 		}
 
 		let providerCallId = try await performHandshake(using: request)
+		print("[voice.webrtc] connect.sdp_complete connectionState=\(connection.connectionState.rawValue) iceState=\(connection.iceConnectionState.rawValue) dataChannelState=\(dataChannel.readyState.rawValue) providerCallIdPresent=\(providerCallId != nil)")
 		Self.configureAudioSession()
+		print("[voice.webrtc] connect.returning_after_sdp connectionState=\(connection.connectionState.rawValue) iceState=\(connection.iceConnectionState.rawValue) dataChannelState=\(dataChannel.readyState.rawValue)")
 		return providerCallId
 	}
 
@@ -179,17 +182,20 @@ private extension WebRTCConnector {
 	}
 
 	func performHandshake(using request: URLRequest) async throws -> String? {
+		print("[voice.webrtc] handshake.offer.begin")
 		let sdp = try await Result { try await connection.offer(for: LKRTCMediaConstraints(mandatoryConstraints: ["levelControl": "true"], optionalConstraints: nil)) }
 			.mapError(WebRTCError.failedToCreateSDPOffer)
 			.get()
 
 		do { try await connection.setLocalDescription(sdp) }
 		catch { throw WebRTCError.failedToSetLocalDescription(error) }
+		print("[voice.webrtc] handshake.local_description_set sdpBytes=\(connection.localDescription?.sdp.utf8.count ?? 0)")
 
 		let result = try await fetchRemoteSDP(using: request, localSdp: connection.localDescription!.sdp)
 
 		do { try await connection.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: result.remoteSdp)) }
 		catch { throw WebRTCError.failedToSetRemoteDescription(error) }
+		print("[voice.webrtc] handshake.remote_description_set remoteSdpBytes=\(result.remoteSdp.utf8.count) iceState=\(connection.iceConnectionState.rawValue)")
 
 		return result.providerCallId
 	}
@@ -209,7 +215,10 @@ private extension WebRTCConnector {
 		request.httpBody = localSdp.data(using: .utf8)
 		request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
 
+		print("[voice.webrtc] sdp_request.begin endpoint=\(request.url?.host ?? "<none>") localSdpBytes=\(localSdp.utf8.count)")
 		let (data, response) = try await URLSession.shared.data(for: request)
+		let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
+		print("[voice.webrtc] sdp_request.response status=\(httpStatus) responseBytes=\(data.count)")
 
 		guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 201, let remoteSdp = String(data: data, encoding: .utf8) else {
 			if (response as? HTTPURLResponse)?.statusCode == 401 { throw WebRTCError.invalidEphemeralKey }
@@ -241,7 +250,7 @@ extension WebRTCConnector: LKRTCPeerConnectionDelegate {
 	public func peerConnection(_: LKRTCPeerConnection, didChange _: LKRTCIceGatheringState) {}
 
 	public func peerConnection(_: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {
-		print("ICE Connection State changed to: \(newState)")
+		print("[voice.webrtc] ice.state_changed state=\(newState.rawValue) dataChannelState=\(dataChannel.readyState.rawValue)")
 	}
 }
 
@@ -259,6 +268,7 @@ extension WebRTCConnector: LKRTCDataChannelDelegate {
 	}
 
 	public func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
+		print("[voice.webrtc] data_channel.state_changed state=\(dataChannel.readyState.rawValue) iceState=\(connection.iceConnectionState.rawValue)")
 		Task { @MainActor [state = dataChannel.readyState] in
 			switch state {
 				case .open:

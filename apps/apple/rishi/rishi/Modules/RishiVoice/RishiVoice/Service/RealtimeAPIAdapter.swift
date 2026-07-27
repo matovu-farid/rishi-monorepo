@@ -93,6 +93,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// the connection critical path. The task is shared so concurrent callers
     /// never create two peers.
     public func prewarm() async {
+        Log.event("voice.adapter.prewarm.begin", level: .info)
         audioUnit.enableManualModeOnce()
         let task: Task<SDKConversation, Never>? = lock.withLock {
             guard conversation == nil else { return nil }
@@ -106,8 +107,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         if let task {
             await withTaskCancellationHandler {
                 _ = await task.value
+                Log.event("voice.adapter.prewarm.completed", level: .info)
             } onCancel: {
                 task.cancel()
+                Log.event("voice.adapter.prewarm.cancelled", level: .warning)
             }
         }
     }
@@ -250,7 +253,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // reconnect needs to re-apply the latest client context.
         let isReconnect = lock.withLock { conversation != nil }
         await teardownActiveConversation()
-        Log.event("voice.adapter.connecting", level: .info)
+        Log.event("voice.adapter.connecting", level: .info, data: [
+            "is_reconnect": String(isReconnect),
+            "defer_mic_capture": String(deferMicCapture),
+            "has_book_context": String(bookContext != nil),
+        ])
         // The ephemeral client secret is minted with the complete session
         // configuration (prompt, tools, VAD, and audio formats) by the
         // Worker. Passing a session-update callback here would send the same
@@ -272,8 +279,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         }
         let convo: SDKConversation
         if !isReconnect, let pendingPrewarm {
+            Log.event("voice.adapter.peer_source", level: .info, data: ["source": "prewarmed"])
             convo = await pendingPrewarm.value
         } else {
+            Log.event("voice.adapter.peer_source", level: .info, data: ["source": "new"])
             convo = await MainActor.run { () -> SDKConversation in
                 if isReconnect {
                     return SDKConversation(debug: false) { [self] session in
@@ -297,6 +306,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         let capturedProviderCallId = try await convo.connect(
             ephemeralKey: ephemeralKey
         )
+        Log.event("voice.adapter.sdk_connect.returned", level: .info, data: [
+            "provider_call_id_present": String(capturedProviderCallId != nil),
+            "sdk_status": String(describing: await MainActor.run { convo.status }),
+        ])
         lock.withLock { self._providerCallId = capturedProviderCallId }
         // Never log the raw call ID value (spec: "Do not record ... OpenAI
         // call IDs in general logs") — presence/absence only.
@@ -313,7 +326,15 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // it as a lost connection, and reconnect — spawning a second overlapping
         // peer (the "two voices" echo) in an endless loop. Wait for the channel
         // to actually open so "connected" is honest.
-        try await Self.waitUntilConnected(statusUpdates: statusUpdates)
+        do {
+            try await Self.waitUntilConnected(statusUpdates: statusUpdates)
+        } catch {
+            Log.event("voice.adapter.data_channel.wait_failed", level: .error, data: [
+                "error": String(describing: error),
+                "sdk_status": String(describing: await MainActor.run { convo.status }),
+            ])
+            throw error
+        }
         Log.event("voice.adapter.connected", level: .info)
 
         // The initial ephemeral secret already contains the complete session
@@ -345,9 +366,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // has stopped — dual capture (engine + LKRTCAudioSession) drops ICE.
         // Non-deferred connect (incl. reconnect) initializes audio here.
         if deferMicCapture {
+            Log.event("voice.adapter.audio.setup.deferred", level: .info)
             await MainActor.run { convo.muted = true }
             assistantOutputEnabled = false
         } else {
+            Log.event("voice.adapter.audio.setup.enabling", level: .info)
             audioUnit.enableAudioUnit()
             assistantOutputEnabled = true
         }
