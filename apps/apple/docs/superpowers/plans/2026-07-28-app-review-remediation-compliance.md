@@ -311,4 +311,48 @@ Each round: review the current plan against the repository, log findings, update
 
 ## Final verification status
 
-The current app build is clean on the available `iPad Air 11-inch (M4)` simulator destination (`xcodebuild ... build`, exit 0). The requested `iPhone 16` destination is unavailable locally; the plan uses an installed iPad destination for the test gate. Worker audit found existing test drift, so focused Bun tests are mandatory before claiming the worker boundary is green.
+The current app source builds successfully on the available simulator destination (`xcodebuild -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -sdk iphonesimulator -configuration Debug build`, exit 0). This is source/build evidence only; no signed Release archive has been produced locally yet. The requested `iPhone 16` destination is unavailable locally, so physical-device/TestFlight verification remains a required external gate. Worker audit found existing test drift, so focused Bun tests are mandatory before claiming the worker boundary is green.
+
+## Live App Store Connect verification — 2026-07-28
+
+The corrected App Store Connect API credentials were verified through the configured MCP server. Read-only inspection found:
+
+- App `Rishi Reader`, bundle ID `org.fidexa.rishi`, App Store Connect ID `6763041630`.
+- Subscription group `rishi-reader-voice-group`, ID `22247412`.
+- The four iOS subscriptions are present but currently `REJECTED`; the four macOS variants are `READY_TO_SUBMIT`.
+- The submitted iOS version `1.0` is `REJECTED`.
+- The rejected Reader subscription localization is also `REJECTED`.
+- No non-subscription IAPs are configured.
+
+These are external submission blockers. Do not use a price-schedule write as a substitute for resolving the rejected subscription state, Paid Apps Agreement/storefront configuration, or the required new binary review. Before resubmission, confirm the iOS products are available in the reviewer storefront, their localizations and review screenshots are valid, the Paid Apps Agreement is active, and the new build is attached to a new review submission.
+
+### MCP metadata synchronization
+
+The App Manager API key was used to update the live rejected iOS version localization from `apps/apple/fastlane/metadata/en-US/` and to correct the app-level privacy URL. The live values now use the canonical HTTPS destinations `https://rishi.fidexa.org/privacy`, `https://rishi.fidexa.org/terms`, and `https://rishi.fidexa.org/legal/subscription-terms`. Read-only verification also confirmed 175 available app territories, committed iPhone/iPad screenshots, and one valid 1284×2778 review screenshot for each iOS subscription.
+
+Apple rejected the `whatsNew` PATCH on the already-rejected version with `409 STATE_ERROR`; the new version must receive `release_notes.txt` while it is editable. The description, keywords, promotional text, marketing URL, support URL, and privacy URL were accepted and read back successfully.
+
+### Follow-up audit and hardening — 2026-07-28
+
+An independent source/release audit found and resolved the following risks:
+
+- The anti-steering scanner incorrectly treated StoreKit's `unsafePayloadValue` inspection API as a prohibited external-billing signal. The scanner now excludes that API while retaining the actual external-purchase and steering patterns. Strict scan and synthetic self-test both pass.
+- The paywall now exposes a direct `Restore Purchases` action next to the native StoreKit purchase UI, using the production `RestoreService` and entitlement refresh path. This matches the reviewer note and makes restore discoverable without first triggering an error alert.
+- Fastlane release lanes now skip screenshots by default and require `UPLOAD_SCREENSHOTS=1` to upload captures. This prevents the repository's known 1×1 placeholder files from overwriting the committed App Store screenshots.
+- Runbooks now distinguish the rejected 1.0 product state from the `Ready to Submit` state required for the new version and accurately describe App Privacy answers versus the Privacy Manifest as separate Apple declarations.
+
+Verification after these changes: app Debug simulator build succeeded; an unsigned Release archive for version `2.1`/build `34` succeeded at `/private/tmp/Rishi-2.1-remediated.xcarchive`; the archive has bundle ID `org.fidexa.rishi`, contains the corrected microphone usage text, and contains no `UIBackgroundModes` or `audio` declaration. Metadata validator and validator self-tests passed; anti-steering strict scan and self-test passed; entitlement guard passed; Ruby Fastfile syntax passed; `git diff --check` passed. At the time of this check, reviewer storefront purchase, Paid Apps Agreement, and physical-device/TestFlight behavior remain unverified external gates.
+
+### Build delivery — 2026-07-28
+
+The Release archive was re-created with the locally available signing assets (`Apple Development: Farid Matovu`) and exported successfully as an App Store distribution IPA. Apple transporter validation returned `VERIFY SUCCEEDED with no errors`, then the IPA was uploaded successfully with delivery UUID `b6b61040-4bf5-4d0c-8f50-938e6be53b01`. App Store Connect MCP verification now reports build `34` as valid, active, and App Store eligible for iOS 18.4.
+
+The MCP was retried after the build became valid. Apple rejected creating a separate version record because the app was still in the rejected review state, so the existing version record was patched successfully in place to version `2.1`, copyright `© 2026 Fidexa, LLC`, and build `34`. App Store Connect now reports `PREPARE_FOR_SUBMISSION`.
+
+The MCP also created a fresh iOS review-submission draft (`READY_FOR_REVIEW`). Adding version 2.1 was rejected because the version remains attached to the prior unresolved submission (`28a6dd30-53e2-4016-9ee9-7fd127d7bec0`); removing the old rejected item was likewise rejected because Apple considers it already submitted. The remaining handoff is therefore the App Store Connect web action `Resolve/Update Review`, which releases the version from the old submission. After that action, the existing draft can be rebuilt or the version can be submitted from the UI.
+
+### StoreKit catalog verification — 2026-07-28
+
+The synced StoreKit configuration downloaded from App Store Connect contains only the four macOS subscription IDs. The live MCP catalog confirms the four iOS IDs are still `REJECTED` from the prior review, while the macOS IDs are `READY_TO_SUBMIT`. The app's iOS product allow-list matches the live iOS IDs exactly, so its intentional complete-catalog gate correctly displays “Plans unavailable” when run with that synced file. The synced file is retained only as a Debug scheme StoreKit configuration; it is not a production target resource. A clean build 35 verification archive contained no `.storekit` file.
+
+After excluding the remaining `StoreKitTestCertificate.cer` test asset from the synchronized production target, a final clean build 35 archive and IPA were produced. The IPA contains neither `.storekit` nor StoreKit test-certificate assets. App Store Connect processing verification for this replacement upload remains pending.

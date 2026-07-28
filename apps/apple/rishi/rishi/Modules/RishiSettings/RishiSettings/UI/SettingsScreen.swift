@@ -68,6 +68,10 @@ public struct SettingsScreen: View {
     /// Opens the app-owned subscriptions sheet for a non-paid account.
     public let onSubscribe: (() -> Void)?
 
+    /// Live StoreKit status used to avoid a stale Subscribe CTA while the
+    /// server entitlement snapshot is still refreshing.
+    public let storeKitIsSubscribed: Bool
+
     @State private var showDeleteConfirm = false
     @State private var deleteModel: DeleteAccountModel?
 
@@ -95,6 +99,7 @@ public struct SettingsScreen: View {
         entitlementSnapshot: EntitlementSnapshot? = nil,
         allowanceLoading: Bool = false,
         onSubscribe: (() -> Void)? = nil,
+        storeKitIsSubscribed: Bool = false,
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
@@ -117,6 +122,7 @@ public struct SettingsScreen: View {
         self.entitlementSnapshot = entitlementSnapshot
         self.allowanceLoading = allowanceLoading
         self.onSubscribe = onSubscribe
+        self.storeKitIsSubscribed = storeKitIsSubscribed
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
@@ -147,7 +153,8 @@ public struct SettingsScreen: View {
                     entitlement: billingEntitlement,
                     entitlementSnapshot: entitlementSnapshot,
                     allowanceLoading: allowanceLoading,
-                    onSubscribe: onSubscribe
+                    onSubscribe: onSubscribe,
+                    storeKitIsSubscribed: storeKitIsSubscribed
                 )
                 ReaderDefaultsSection(
                     defaultTheme: $readerTheme,
@@ -186,7 +193,7 @@ public struct SettingsScreen: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will permanently delete your account, your library, your highlights, and your conversations. Your Rishi subscription will be cancelled on the next billing cycle from rishi.fidexa.org. This cannot be undone.")
+                Text("This will permanently delete your account, your library, your highlights, and your conversations. Your Apple subscription is managed in Apple’s subscription settings; deleting your Rishi account does not cancel it. This cannot be undone.")
             }
             .alert(
                 "Couldn't delete your account",

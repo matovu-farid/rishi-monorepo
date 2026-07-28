@@ -46,6 +46,17 @@ struct SettingsScreenSmokeTests {
         )
     }
 
+    @Test("BillingSection uses Manage when StoreKit is active before server refresh")
+    func billingSectionUsesManageForStoreKitSnapshotLag() {
+        #expect(
+            BillingSection(
+                entitlementSnapshot: nil,
+                storeKitIsSubscribed: true,
+                onSubscribe: {}
+            ).subscriptionAction == .manage
+        )
+    }
+
     @Test("BillingSection uses Subscribe for non-paid resolved snapshots")
     func billingSectionUsesSubscribeForNonPaidSnapshots() {
         let snapshots: [EntitlementSnapshot] = [

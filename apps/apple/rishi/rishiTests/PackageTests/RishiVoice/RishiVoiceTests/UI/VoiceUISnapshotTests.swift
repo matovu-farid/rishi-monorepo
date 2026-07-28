@@ -22,6 +22,29 @@ import SwiftUI
 @Suite("Voice UI construction smoke")
 struct VoiceUISnapshotTests {
 
+    private static func rishiRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // RishiVoiceTests
+            .deletingLastPathComponent() // RishiVoice
+            .deletingLastPathComponent() // PackageTests
+            .deletingLastPathComponent() // rishiTests
+            .deletingLastPathComponent() // rishi
+    }
+
+    @Test("Voice permission prompt uses neutral Continue wording and active voice rationale")
+    func permissionPromptUsesAccurateCopy() throws {
+        let source = try String(
+            contentsOf: Self.rishiRoot()
+                .appendingPathComponent("rishi/Modules/RishiVoice/RishiVoice/UI/VoicePermissionPrompt.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("Text(\"Continue\")"))
+        #expect(!source.contains("Allow microphone"))
+        #expect(source.contains("Audio is only sent while a voice conversation is active."))
+        #expect(source.contains("Button(\"Not now\", action: onCancel)"))
+    }
+
     // MARK: VoiceControlsView
 
     @Test("VoiceControlsView constructs for every activityPhase")

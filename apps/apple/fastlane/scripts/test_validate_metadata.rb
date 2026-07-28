@@ -78,4 +78,12 @@ with_fixture do |root, locale, _|
 end
 puts 'OK: oversize keywords fails'
 
+# Test 6: placeholder review phone fails
+with_fixture do |root, _, review|
+  File.write(File.join(review, 'phone_number.txt'), '+1 555 0100')
+  errs = validate(root)
+  assert(errs.any? { |e| e.include?('placeholder number') }, 'should flag placeholder review phone')
+end
+puts 'OK: placeholder review phone fails'
+
 puts 'All metadata validator tests passed.'

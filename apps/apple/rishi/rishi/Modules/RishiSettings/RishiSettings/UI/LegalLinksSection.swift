@@ -38,8 +38,8 @@ public struct LegalLinksSection: View {
     /// pattern matches that path prefix.
     public enum LegalLink: String, CaseIterable, Identifiable {
         case subscriptionTerms = "https://rishi.fidexa.org/legal/subscription-terms"
-        case privacyPolicy     = "https://rishi.fidexa.org/legal/privacy"
-        case termsOfUse        = "https://rishi.fidexa.org/legal/terms"
+        case privacyPolicy     = "https://rishi.fidexa.org/privacy"
+        case termsOfUse        = "https://rishi.fidexa.org/terms"
 
         public var id: String { rawValue }
 

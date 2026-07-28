@@ -5,7 +5,7 @@
 
 This runbook covers the metadata side of DIST-03. Screenshot capture lives in plan 12-06. Xcode Cloud build configuration lives in `docs/XCODE-CLOUD-SETUP.md`.
 
-**Last updated:** 2026-06-10 (Phase 12 plan 12-05)
+**Last updated:** 2026-07-28 (App Review remediation)
 
 ---
 
@@ -17,7 +17,7 @@ Confirm each item before running either release lane:
 - [ ] App record exists in App Store Connect for bundle id `org.fidexa.rishi` (iOS + macOS via Mac Catalyst). If missing, create it under https://appstoreconnect.apple.com/apps → **+** → **New App**.
 - [ ] App Store Connect API key configured locally (`APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_CONTENT`). See `docs/XCODE-CLOUD-SETUP.md` § 5.
 - [ ] `bundle install` succeeded in `apps/apple/`. The release lanes depend on the Gemfile-pinned `fastlane`.
-- [ ] Reader App entitlement application (`com.apple.developer.storekit.external-link.account`) status known. Pending today. If denied, see § 6 below.
+- [x] Native StoreKit subscription products are available in App Store Connect and in **Ready to Submit** status for the new version. The four iOS products were verified in App Store Connect and successfully tested through Apple Sandbox on a physical device.
 
 ---
 
@@ -61,13 +61,14 @@ Description, screenshots, and version-specific release notes require a new binar
 
 ## 3. App Privacy answers → PrivacyInfo.xcprivacy mapping
 
-`fastlane/metadata/app_privacy.json` and `rishi/rishi/PrivacyInfo.xcprivacy` MUST stay in lockstep — App Review compares them.
+`fastlane/metadata/app_privacy.json` and `rishi/rishi/PrivacyInfo.xcprivacy` are separate Apple declarations. They must be reviewed together, but they are not one-to-one mirrors: App Privacy answers describe collection/use in the product, while the manifest covers required-reason APIs and the data types declared by the bundled SDKs.
 
 | `app_privacy.json` data type | PrivacyInfo.xcprivacy entry | Notes |
 | --- | --- | --- |
 | User Content / Other User Content | (declared via App Privacy only) | Books, highlights, notes, chat — not a Privacy Manifest collected-type code |
 | Identifiers / User ID | (declared via App Privacy only) | SIWA stable user id, or Google sub |
 | Contact Info / Email Address | (declared via App Privacy only) | May be private relay |
+| Sensitive Info / Audio Data | (declared via App Privacy only) | Microphone audio is transmitted only during an active voice conversation; raw audio is not retained |
 | Diagnostics / Crash Data | `NSPrivacyCollectedDataTypeCrashData`, linked=false, tracking=false | Sentry crash data |
 | Diagnostics / Performance Data | `NSPrivacyCollectedDataTypePerformanceData`, linked=false, tracking=false | Sentry performance + breadcrumbs |
 | Usage Data / Product Interaction | (declared via App Privacy only) | Anonymous reading-session + chat-turn counts |
@@ -75,7 +76,7 @@ Description, screenshots, and version-specific release notes require a new binar
 Nothing is marked `used_for_tracking: true`. No third-party tracking SDKs are bundled. Confirm before each submission with:
 
 ```bash
-grep -i 'tracking\|advertis' apps/apple/Packages/*/Sources/**/*.swift | grep -v '//' | head
+rg -i 'tracking|advertis' apps/apple/rishi/rishi/Modules -g '*.swift' | rg -v '//' | head
 ```
 
 If the grep returns hits, audit the new dep before submission.
@@ -108,21 +109,17 @@ Six device frames required. See `fastlane/screenshots/README.md` for the matrix.
 - iPad 13" (2064×2752), 11" (1668×2388)
 - Mac (1280×800 minimum, 2880×1800 preferred)
 
-Capture playbook executes in plan 12-06. For dry-runs before captures land, pass `SKIP_SCREENSHOTS=1` to the release lanes.
+Capture playbook executes in plan 12-06. Screenshot upload is opt-in: set `UPLOAD_SCREENSHOTS=1` only when the repository contains reviewed, production-quality captures.
 
 ---
 
 ## 6. Common rejection causes — and the local mitigation
 
-### Guideline 4.0 — Reader App entitlement
+### Guideline 3.1.1 — Native subscriptions
 
-Rishi is a reader app. Subscription management lives at `rishi.fidexa.org`, not in-app.
+Rishi uses native StoreKit 2 subscriptions. The paywall presents the current platform's Reader and Voice products; successful purchases and restores are synced through the worker for entitlement reconciliation. Settings opens Apple's in-app subscription management sheet.
 
-- **Status today:** Reader App entitlement (External Link Account Entitlement) application is pending.
-- **If APPROVED:** Settings → Subscription opens a SafariViewController to `rishi.fidexa.org/subscribe` with the external-link confirmation sheet (handled automatically by `_SCAccountStorefrontExtension`).
-- **If DENIED:** Phase 11 ships text-only "Manage your subscription at rishi.fidexa.org" copy with zero tappable billing UI. Code-path already gated on `Pro.entitlement.canPresentExternalLink` — flip to `false` and re-ship.
-
-Both paths are documented in `STATE.md` Phase 0 decisions.
+The native purchase and entitlement-sync path is covered by the StoreKit Sandbox runbook and the billing feature documentation.
 
 ### Guideline 5.1.1(v) — Account deletion
 
@@ -154,7 +151,7 @@ Cause: a new dep introduced a required-reason API call without an entry in `Priv
 - **Sandbox entitlement:** Catalyst Release builds use `App Sandbox` automatically. Verify via Signing & Capabilities for the rishi target.
 - **Microphone permission UX:** Catalyst requires `NSMicrophoneUsageDescription` in `Info.plist` (already present from Phase 0 BOOT-01). On macOS, the system prompt only fires the FIRST time the engine starts — the primer must run before that.
 - **Hardened runtime:** Release Catalyst builds need Hardened Runtime with `com.apple.security.device.audio-input` for mic. Already in the entitlements file.
-- **Signed dev builds for mic testing:** Local debug Catalyst builds will silently fail mic access unless signed with a Developer ID certificate. See the `project_macos_mic_entitlements` user memory for the workaround — sign dev builds with `codesign --force --sign "Developer ID Application: Farid Matovu (<TEAM>)" …`.
+- **Sandbox mic testing:** use a signed device/TestFlight build and follow the foreground voice flow; the in-app rationale appears before the system microphone prompt.
 - **Mac App Store screenshot dimensions:** Differ from iOS. The Mac frame is 1280×800 minimum, 2880×1800 preferred. Captured in plan 12-06.
 
 ---
@@ -167,11 +164,11 @@ All commands run from `apps/apple/`.
 # Lint metadata only — fast, runs in seconds, no Xcode build
 bundle exec fastlane metadata_validate
 
-# Dry-run iOS App Store upload (no screenshots; assumes captures not yet ready)
-bundle exec fastlane release_app_store SKIP_SCREENSHOTS=1
-
-# Full iOS App Store upload (post plan 12-06 captures)
+# iOS App Store upload (screenshots are skipped by default)
 bundle exec fastlane release_app_store
+
+# Full iOS App Store upload only after reviewing captures
+UPLOAD_SCREENSHOTS=1 bundle exec fastlane release_app_store
 
 # Mac App Store upload
 bundle exec fastlane release_mac_app_store
@@ -207,21 +204,28 @@ App Store Connect API key expired or scope is wrong. Regenerate at https://appst
 
 ---
 
-## 10. Deferred items (tracked here, not blockers)
+## 10. Submission blockers requiring external confirmation
 
-- [ ] Real phone number in `review_information/phone_number.txt` (placeholder today — App Review prefers a reachable number).
+- [x] Replace `review_information/phone_number.txt` with a real, monitored phone number. The submission contact is now `+256705222144`.
+- [x] Resolve the four rejected iOS subscriptions in App Store Connect and confirm the exact iOS products are available in the reviewer storefront. Their reviewer notes have been updated and the products are `READY_TO_SUBMIT`.
+- [ ] Confirm tax/banking setup with the Account Holder. The Paid Apps Agreement is signed and storefront availability is confirmed by the physical-device Sandbox test.
+- [x] App Store Connect currently has committed iPhone and iPad screenshots, including valid subscription review screenshots. Do not run a screenshot-enabled upload until the repository’s 1×1 placeholders are replaced or the upload explicitly skips screenshots.
+- [x] Verify the StoreKit Sandbox subscription flow on a physical device: the four iOS products loaded and a purchase completed successfully.
+- [ ] Upload and verify the new signed build or TestFlight build for restore, microphone denial recovery, and foreground Read Aloud.
+
+## 11. Deferred items (tracked here, not blockers)
+
 - [ ] Localized metadata beyond `en-US` (English-only at v1).
-- [ ] Real screenshot captures land in plan 12-06.
+- [ ] Real screenshot captures land in plan 12-06; this remains a submission blocker until completed.
 - [ ] Reader App entitlement application status — moves out of "Pending" once Apple replies.
 - [ ] Apple `team_id` in `fastlane/Appfile` is sourced from `APP_STORE_CONNECT_API_KEY_*` env at runtime; if we ever ship local-only fastlane runs from another machine, hard-code it.
 
 ---
 
-## 11. References
+## 12. References
 
 - Apple — App Store Review Guidelines: <https://developer.apple.com/app-store/review/guidelines/>
 - Apple — App Privacy details: <https://developer.apple.com/app-store/app-privacy-details/>
 - Apple — Required-reason APIs: <https://developer.apple.com/documentation/bundleresources/privacy_manifest_files/describing_use_of_required_reason_api>
-- Apple — Reader App entitlement: <https://developer.apple.com/support/storekit-external-entitlement/>
 - Fastlane deliver: <https://docs.fastlane.tools/actions/upload_to_app_store/>
 - Fastlane App Privacy: <https://docs.fastlane.tools/actions/upload_to_app_store/#app-privacy-details>

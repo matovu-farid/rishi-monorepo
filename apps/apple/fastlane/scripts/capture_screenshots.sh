@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Captures placeholder screenshots for every required device frame so
-# `fastlane release_app_store SKIP_SCREENSHOTS=0` can dry-run end-to-end
+# `UPLOAD_SCREENSHOTS=1 fastlane release_app_store` is required to upload captures
 # before real captures land. Replace with real captures from the post-a11y
 # UI before publishing to App Store Connect.
 #

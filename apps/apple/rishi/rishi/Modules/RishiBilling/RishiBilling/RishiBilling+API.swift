@@ -18,7 +18,9 @@
 // PaywallView                 — `UI/PaywallView.swift`. The full paywall screen.
 // PaywallViewModel            — `UI/PaywallViewModel.swift`. State + actions for PaywallView.
 // ManageSubscriptionRow       — `UI/ManageSubscriptionRow.swift`. Settings row to open
-//                                "Manage Subscription" inside the App Store sheet.
+//                                Rishi's platform-filtered plan picker.
+// AppleManageSubscriptionRow  — `UI/ManageSubscriptionRow.swift`. Apple-native
+//                                cancellation/account-management entry point.
 // PremiumGateModifier         — `UI/PremiumGateModifier.swift`. View modifier that overlays
 //                                the paywall when a premium feature is tapped without an
 //                                entitlement. Use via the `.premiumGate(...)` extension.

@@ -276,13 +276,20 @@ async function dispatch(
     case "DID_RENEW": {
       // Recover the owning user from a prior /verify-receipt row keyed on the
       // ORIGINAL transaction id (renewals share it). When found, the
-      // notification-written row attaches to the real user instead of "".
+      // notification-written row attaches to the real user instead of an
+      // ownerless placeholder.
       // When null (brand-new purchase whose verify-receipt hasn't arrived
-      // yet) we keep the "" placeholder: the row is still useful for status
-      // tracking and gets reconciled on the next /verify-receipt call from
-      // the device (which keys the real userId).
+      // yet), keep the verified notification log only. A subscription row
+      // without an owner is invalid because userId is the entitlement owner
+      // and a later notification can reconcile after ownership is known.
       const resolvedUserId =
-        (await deps.db.findUserIdByOriginalTransactionId(origIdStr)) ?? "";
+        await deps.db.findUserIdByOriginalTransactionId(origIdStr);
+      if (!resolvedUserId) {
+        console.log(
+          `[apple-webhook] ${envelope.notificationType}: verified notification logged without resolved owner for original transaction ${origIdStr}`,
+        );
+        return;
+      }
       await deps.db.upsertSub({
         appleTransactionId: txIdStr,
         appleOriginalTransactionId: origIdStr,

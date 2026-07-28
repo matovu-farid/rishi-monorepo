@@ -11,7 +11,7 @@ import Testing
 ///   1. AppStore.sync() forces a refresh from Apple servers.
 ///   2. Transaction.currentEntitlements is re-walked.
 ///   3. Verified + non-revoked transactions whose productID belongs to the
-///      Rishi Pro tier flip `EntitlementReconciler.setOnDevice(.pro)`.
+///      active Reader/Voice catalog flip `EntitlementReconciler.setOnDevice(.pro)`.
 ///
 /// The `revocationDate == nil` filter is load-bearing — refunded transactions
 /// can linger in `currentEntitlements` briefly (RESEARCH §10 Pitfall 5). Tests
@@ -29,7 +29,7 @@ import Testing
 struct RestoreServiceTests {
 
     private let session: SKTestSession
-    private let monthlyId = "org.fidexa.rishi.pro.monthly"
+    private let monthlyId = RishiProductID.readerMonthly
 
     init() throws {
         // PackageTestResourceBundle.bundle resolves the Rishi.storekit copied into the test
@@ -71,6 +71,74 @@ struct RestoreServiceTests {
     private func makeReconciler() -> EntitlementReconciler {
         EntitlementReconciler(initial: .free)
     }
+
+    @Test
+    func restore_successSyncsOnlyCurrentPlatformProducts() async throws {
+        let reconciler = makeReconciler()
+        let lock = CallRecorder()
+        let service = RestoreService(
+            reconciler: reconciler,
+            appStoreSync: {},
+            activeEntitlements: {
+                [
+                    RestoreEntitlement(productID: RishiProductID.proMonthly, jws: "legacy"),
+                    RestoreEntitlement(productID: RishiProductID.readerMonthly, jws: "reader"),
+                ]
+            },
+            entitlementSync: { jws in
+                await lock.append(jws)
+                return EntitlementSyncResult(verified: true, reason: nil)
+            }
+        )
+
+        let outcome = try await service.restore()
+
+        #expect(outcome == .restored(productIds: [RishiProductID.readerMonthly]))
+        #expect(await lock.values() == ["reader"])
+    }
+
+    @Test
+    func restore_withNoEntitlements_returnsNothingToRestoreWithoutSync() async throws {
+        let lock = CallRecorder()
+        let service = RestoreService(
+            reconciler: makeReconciler(),
+            appStoreSync: {},
+            activeEntitlements: { [] },
+            entitlementSync: { _ in
+                await lock.append("unexpected")
+                return EntitlementSyncResult(verified: true, reason: nil)
+            }
+        )
+
+        #expect(try await service.restore() == .nothingToRestore)
+        #expect(await lock.values().isEmpty)
+    }
+
+    @Test
+    func restore_whenEntitlementSyncFails_doesNotReportRestored() async throws {
+        let reconciler = makeReconciler()
+        let service = RestoreService(
+            reconciler: reconciler,
+            appStoreSync: {},
+            activeEntitlements: {
+                [RestoreEntitlement(productID: RishiProductID.readerMonthly, jws: "reader")]
+            },
+            entitlementSync: { _ in throw RestoreTestError.syncFailed }
+        )
+
+        await #expect(throws: RestoreError.self) {
+            _ = try await service.restore()
+        }
+        #expect(reconciler.level == .free)
+    }
+
+    private actor CallRecorder {
+        private var recorded: [String] = []
+        func append(_ value: String) { recorded.append(value) }
+        func values() -> [String] { recorded }
+    }
+
+    private enum RestoreTestError: Error { case syncFailed }
 
     // MARK: - No purchases path (daemon-independent)
 

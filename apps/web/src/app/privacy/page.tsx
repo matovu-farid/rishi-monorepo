@@ -93,11 +93,14 @@ export default function PrivacyPolicy() {
               <span className="font-medium">
                 exclusively for real-time voice input processing
               </span>
-              . We do not record, store, or transmit audio data to our servers.
-              Voice input is processed on-device or streamed transiently for
-              real-time processing and is not retained after the interaction is
-              complete. You can revoke microphone permissions at any time through
-              your device&apos;s system settings.
+              . During an active voice conversation, microphone audio is
+              transmitted over the encrypted session to our real-time voice
+              provider so it can generate the conversation response. We do not
+              use microphone audio for advertising or tracking, and raw audio is
+              not retained after the voice session. Conversation transcripts
+              may be saved as part of the chat feature. You can revoke
+              microphone permissions at any time through your device&apos;s system
+              settings.
             </p>
           </section>
 

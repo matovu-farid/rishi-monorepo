@@ -23,6 +23,18 @@ public enum RestoreOutcome: Sendable, Equatable {
 public enum RestoreError: Error, Equatable, Sendable {
     /// `AppStore.sync()` threw. The reconciler is NOT touched.
     case syncFailed(String)
+    /// A verified on-device entitlement could not be accepted by Rishi.
+    case entitlementSyncFailed(String)
+}
+
+public struct RestoreEntitlement: Sendable, Equatable {
+    public let productID: String
+    public let jws: String
+
+    public init(productID: String, jws: String) {
+        self.productID = productID
+        self.jws = jws
+    }
 }
 
 // MARK: - RestoreProtocol seam
@@ -60,19 +72,42 @@ public protocol RestoreProtocol: Sendable {
 public actor RestoreService {
 
     private let reconciler: EntitlementReconciler
+    private let appStoreSync: @Sendable () async throws -> Void
+    private let activeEntitlements: @Sendable () async -> [RestoreEntitlement]
+    private let entitlementSync: @Sendable (String) async throws -> EntitlementSyncResult
 
-    /// Product ID prefix for the legacy Rishi Pro tier — matches both
-    /// `org.fidexa.rishi.pro.monthly` and `org.fidexa.rishi.pro.annual`.
-    /// Kept as public API for source compatibility; `readActiveProductIds()`
-    /// below no longer uses this alone for filtering — it checks
-    /// `EntitlementLevel.initialize(productId:) == .subscribed`
-    /// (`RishiProductID.all`), which covers this prefix's two ids plus the
-    /// four Reader/Voice ids, so a future new tier only needs to be added
-    /// to `RishiProductID.all` once, not duplicated here too.
+    /// Product ID prefix for the grandfathered Rishi Pro tier.
     public static let productIdPrefix = "org.fidexa.rishi.pro."
 
-    public init(reconciler: EntitlementReconciler) {
+    public init(
+        reconciler: EntitlementReconciler,
+        appStoreSync: (@Sendable () async throws -> Void)? = nil,
+        activeEntitlements: (@Sendable () async -> [RestoreEntitlement])? = nil,
+        entitlementSync: (@Sendable (String) async throws -> EntitlementSyncResult)? = nil
+    ) {
         self.reconciler = reconciler
+        self.appStoreSync = appStoreSync ?? {
+            try await AppStore.sync()
+        }
+        self.activeEntitlements = activeEntitlements ?? {
+            var entitlements: [RestoreEntitlement] = []
+            for await result in Transaction.currentEntitlements {
+                guard case .verified(let transaction) = result,
+                      transaction.revocationDate == nil,
+                      RishiProductID.all.contains(transaction.productID)
+                else { continue }
+                entitlements.append(
+                    RestoreEntitlement(
+                        productID: transaction.productID,
+                        jws: result.jwsRepresentation
+                    )
+                )
+            }
+            return entitlements
+        }
+        self.entitlementSync = entitlementSync ?? {
+            try await syncEntitlement(jws: $0)
+        }
     }
 
     /// User-initiated restore. NEVER call from app launch — triggers an
@@ -95,7 +130,7 @@ public actor RestoreService {
     public func restore() async throws -> RestoreOutcome {
         Log.event("iap.restore.start", level: .info)
         do {
-            try await AppStore.sync()
+            try await appStoreSync()
         } catch {
             Log.event(
                 "iap.restore.sync_failed",
@@ -105,7 +140,22 @@ public actor RestoreService {
             throw RestoreError.syncFailed(String(describing: error))
         }
 
-        let granted = await readActiveProductIds()
+        let entitlements = await activeEntitlements()
+        var granted: [String] = []
+        for entitlement in entitlements {
+            guard RishiProductID.all.contains(entitlement.productID) else { continue }
+            do {
+                let result = try await entitlementSync(entitlement.jws)
+                guard result.verified else {
+                    throw RestoreError.entitlementSyncFailed(result.reason ?? "server rejected entitlement")
+                }
+                granted.append(entitlement.productID)
+            } catch let error as RestoreError {
+                throw error
+            } catch {
+                throw RestoreError.entitlementSyncFailed(String(describing: error))
+            }
+        }
         if granted.isEmpty {
             Log.event("iap.restore.nothing", level: .info)
             return .nothingToRestore
@@ -128,14 +178,14 @@ public actor RestoreService {
     /// Launch-time on-device entitlement reconciliation. Walks
     /// `Transaction.currentEntitlements` (NO `AppStore.sync()`, so no Apple ID
     /// prompt) and flips the reconciler to `.pro` if a verified, non-revoked
-    /// Rishi Pro entitlement is present. This is the "startup path" referenced
+    /// current or grandfathered Rishi entitlement is present. This is the "startup path" referenced
     /// in this file's header: it restores Pro from the device on a cold launch
     /// independent of the server signal (which can be stale, or — for local
     /// StoreKit-test purchases — never aware of the purchase at all). Safe to
     /// call unconditionally at launch. No-op when `StoreKitIAPFlag` is OFF
     /// (the flip goes through `setOnDevice`, which is flag-gated).
     public func refreshOnDeviceEntitlementAtLaunch() async {
-        let granted = await readActiveProductIds()
+        let granted = await activeEntitlements().map(\.productID)
         guard !granted.isEmpty else {
             Log.event("iap.launch_reconcile.none", level: .info)
             return
@@ -147,38 +197,12 @@ public actor RestoreService {
     }
 
     /// Walks `Transaction.currentEntitlements`, filters to verified +
-    /// non-revoked + Rishi Pro tier product IDs. Returns the matching ids.
+    /// non-revoked + recognized Rishi product IDs. Returns the matching ids.
     ///
     /// **Pitfall 5 — `revocationDate == nil`.** A refunded transaction
     /// can briefly remain in `currentEntitlements` until Apple ages it
     /// out. Without this filter, the user would keep Pro through the
     /// refund window — the load-bearing guard for this plan.
-    private func readActiveProductIds() async -> [String] {
-        var ids: [String] = []
-        for await result in Transaction.currentEntitlements {
-            guard case .verified(let tx) = result else { continue }
-            // `EntitlementLevel.initialize` (RishiProductID.all) recognizes
-            // both the legacy Pro ids and the four new Reader/Voice ids —
-            // the old `productIdPrefix`-only check below would have
-            // silently excluded every Reader/Voice restore.
-            guard EntitlementLevel.initialize(productId: tx.productID) == .subscribed else { continue }
-            guard tx.revocationDate == nil else { continue }
-            ids.append(tx.productID)
-            do {
-                let syncResult = try await syncEntitlement(jws: result.jwsRepresentation)
-                // verified:false is a business reject for this JWS — not fatal
-                // to restore; onSynced only fires on verified so continue either way.
-                if !syncResult.verified { continue }
-            } catch {
-                // Restore already flipped the on-device reconciler from
-                // StoreKit entitlements; sync failure is logged inside
-                // syncEntitlement and retried on the next restore / purchase
-                // / unfinished replay. Do not abort the product-id walk.
-                continue
-            }
-        }
-        return ids
-    }
 }
 
 // MARK: - RestoreProtocol conformance (plan 13-05)

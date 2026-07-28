@@ -24,8 +24,7 @@ Sync
 - Manual pull-to-refresh on every screen.
 
 Read Aloud
-- High-quality narration with lock-screen and AirPods controls.
-- Background playback, configurable voice, and per-book resume.
+- Foreground narration from the open book with a configurable voice.
 - Sentence-level highlighting tracks the spoken text.
 
 Chat
@@ -33,7 +32,7 @@ Chat
 - Conversations grouped per-book, with full history.
 - Streamed answers grounded in the current chapter or selection.
 
-Voice Chat (Rishi Pro)
+Voice Chat (Apple subscription)
 - Real-time spoken conversation about your reading.
 - Push-to-talk and continuous modes.
 - Microphone permission primer explains why access is needed.
@@ -55,5 +54,5 @@ Account
 - Anonymous diagnostics can be turned off.
 
 Subscription
-- Rishi Pro subscriptions are managed at rishi.fidexa.org.
-- Open the page from Settings to subscribe, change, or cancel.
+- Native Apple in-app purchase flow for Reader and Voice subscriptions.
+- Restore Purchases recovers an existing subscription; Settings opens Apple's subscription management sheet.

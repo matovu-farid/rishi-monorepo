@@ -33,8 +33,12 @@ PATTERNS=(
     'manage at rishi'
     'manage your subscription at'
     'https://buy\.itunes\.apple\.com'
-    'unsafePayloadValue'
 )
+
+# `unsafePayloadValue` is a StoreKit verification API used only to inspect a
+# transaction before the verified/unverified branch. It is not an external
+# purchase path or steering language, so it must not be treated as a 3.1.1
+# violation by this source scanner.
 
 # Patterns currently present in Phase-11 fallback code (PaywallView text-only
 # CTA, BillingAPI.swift Stripe portal endpoint, BillingPortalService actor).

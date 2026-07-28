@@ -70,6 +70,7 @@ describe("apple_subscriptions schema", () => {
       [
         "apple_original_transaction_id",
         "apple_transaction_id",
+        "app_account_token",
         "auto_renew",
         "created_at",
         "current_period_end",

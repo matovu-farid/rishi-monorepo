@@ -17,6 +17,8 @@ struct RootView: View {
     @State private var showNoCardTrialIntro = false
     #if targetEnvironment(macCatalyst)
         @State private var showSubscriptions = false
+        @State private var pendingSubscriptionConfirmation = false
+        @State private var showSubscriptionConfirmation = false
     #endif
     @Environment(CurrentUserBox.self) private var currentUserBox
     #if targetEnvironment(macCatalyst)
@@ -43,6 +45,9 @@ struct RootView: View {
         realBodyContent(deps: deps)
             .environment(\.services, deps.services)
             .environment(deps.services!.entitlementSnapshotStore)
+            .environment(deps.services!.manageSubscriptionPresenter)
+            .environment(Store.shared)
+            .checkCustomerEntitlements()
 
             .environment(
                 \.signOut,
@@ -87,16 +92,6 @@ struct RootView: View {
                     currentUserBox.state = .signedOut
                 }
             }
-            .onInAppPurchaseCompletion { product, result in
-                Task {
-
-                    if let purchaseResult = try? result.get() {
-                        await Store.shared.process(
-                            purchaseResult: purchaseResult
-                        )
-                    }
-                }
-            }
             #if targetEnvironment(macCatalyst)
             .onReceive(NotificationCenter.default.publisher(for: .rishiPresentSubscriptions)) { _ in
                 showSubscriptions = true
@@ -104,9 +99,22 @@ struct RootView: View {
             .sheet(isPresented: $showSubscriptions, onDismiss: {
                 Task {
                     await deps.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
+                    guard pendingSubscriptionConfirmation else { return }
+                    await MainActor.run {
+                        pendingSubscriptionConfirmation = false
+                        showSubscriptionConfirmation = true
+                    }
                 }
             }) {
-                SubscriptionsView()
+                SubscriptionsView(onPurchaseCompleted: {
+                    pendingSubscriptionConfirmation = true
+                    showSubscriptions = false
+                })
+            }
+            .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Thank you for subscribing. Your plan is now active.")
             }
             #endif
     }

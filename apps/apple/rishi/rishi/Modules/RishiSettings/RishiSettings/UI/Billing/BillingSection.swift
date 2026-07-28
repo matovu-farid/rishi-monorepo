@@ -27,29 +27,43 @@ public struct BillingSection: View {
     /// Opens the app-owned subscriptions sheet for a non-paid account.
     public let onSubscribe: (() -> Void)?
 
+    /// StoreKit can know about a subscription before the server snapshot has
+    /// refreshed, so Settings must not briefly show a misleading Subscribe CTA.
+    public let storeKitIsSubscribed: Bool
+
     public init(
         entitlement: ReaderAppEntitlementFlag.Resolver = .production,
         entitlementSnapshot: EntitlementSnapshot? = nil,
         allowanceLoading: Bool = false,
-        onSubscribe: (() -> Void)? = nil
+        onSubscribe: (() -> Void)? = nil,
+        storeKitIsSubscribed: Bool = false
     ) {
         self.entitlement = entitlement
         self.entitlementSnapshot = entitlementSnapshot
         self.allowanceLoading = allowanceLoading
         self.onSubscribe = onSubscribe
+        self.storeKitIsSubscribed = storeKitIsSubscribed
     }
 
     var subscriptionAction: BillingSubscriptionAction {
         guard !allowanceLoading else { return .neutral }
-        return entitlementSnapshot?.isPaidActive == true ? .manage : .subscribe
+        return entitlementSnapshot?.isPaidActive == true || storeKitIsSubscribed
+            ? .manage
+            : .subscribe
     }
 
     public var body: some View {
         Section {
             if allowanceLoading {
-                RemainingAllowanceView(isLoading: true)
+                RemainingAllowanceView(
+                    isLoading: true,
+                    storeKitIsSubscribed: storeKitIsSubscribed
+                )
             } else if let entitlementSnapshot {
-                RemainingAllowanceView(snapshot: entitlementSnapshot)
+                RemainingAllowanceView(
+                    snapshot: entitlementSnapshot,
+                    storeKitIsSubscribed: storeKitIsSubscribed
+                )
             }
             switch subscriptionAction {
             case .neutral:

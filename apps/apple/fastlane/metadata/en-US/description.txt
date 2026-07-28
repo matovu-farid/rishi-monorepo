@@ -8,9 +8,9 @@ Pick up where you left off. Open a book on your Mac, keep reading on iPhone on t
 
 Chat with any book. Ask "what does this chapter argue?" or "summarize this scene," and Rishi answers grounded in the book you're reading. Conversations are saved per-book and per-session, so you can come back to the thread later.
 
-Talk it through. Real-time voice chat lets you have a natural spoken conversation about what you're reading — ideal for studying, language practice, or thinking out loud on a walk. (Voice chat requires Rishi Pro.)
+Talk it through. Real-time voice chat lets you have a natural spoken conversation about what you’re reading — ideal for studying, language practice, or thinking out loud on a walk. Voice chat and premium narration require an active Apple subscription.
 
-Read aloud. High-quality narration plays through any speaker or AirPods, with background playback, lock-screen controls, and a configurable voice. Listen while you commute, cook, or rest your eyes.
+Read aloud. Start foreground narration from the open book with a configurable voice and sentence-level highlighting. Follow along on the page while Rishi is open.
 
 Made for Apple silicon. Optimized for Mac Catalyst with a real sidebar, full keyboard navigation, native menus, and scene restoration. Universal Links open books straight from Safari, Mail, or Messages.
 
@@ -18,4 +18,4 @@ Accessible by default. VoiceOver labels across the reader, library, and chat. Fu
 
 Private by design. Sign in with Apple — no password to manage, no email required. Your reading data lives in your account, not in an ad network. Anonymous diagnostics can be turned off in Settings.
 
-Pro features (subscription). Voice chat, unlimited chat conversations, and premium narration voices are part of Rishi Pro. Subscriptions are managed at rishi.fidexa.org — open the page from Settings to subscribe, change, or cancel.
+Pro features (subscription). Voice chat, unlimited chat conversations, and premium narration voices are available through an Apple subscription purchased in Rishi. Use the in-app purchase sheet to subscribe, Restore Purchases to recover an existing subscription, or Settings to open Apple's subscription management sheet. Terms of Use: https://rishi.fidexa.org/terms. Subscription Terms: https://rishi.fidexa.org/legal/subscription-terms

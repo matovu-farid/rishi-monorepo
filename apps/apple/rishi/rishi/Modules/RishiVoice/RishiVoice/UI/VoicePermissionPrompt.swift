@@ -35,7 +35,7 @@ public struct VoicePermissionPrompt: View {
                 .multilineTextAlignment(.center)
 
             // Mirrors the Info.plist NSMicrophoneUsageDescription copy.
-            Text("Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.")
+            Text("Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent while a voice conversation is active.")
                 .font(RishiTypography.body)
                 .foregroundStyle(RishiColor.textSecondary)
                 .multilineTextAlignment(.center)
@@ -43,7 +43,7 @@ public struct VoicePermissionPrompt: View {
 
             VStack(spacing: RishiSpacing.m) {
                 Button(action: onAllow) {
-                    Text("Allow microphone")
+                    Text("Continue")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
                 }

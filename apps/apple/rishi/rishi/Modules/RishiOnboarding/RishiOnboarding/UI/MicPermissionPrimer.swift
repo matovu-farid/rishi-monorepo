@@ -43,7 +43,7 @@ struct MicPermissionPrimer: View {
         } actions: {
             VStack(spacing: RishiSpacing.m) {
                 Button(action: onAllow) {
-                    Text("Allow microphone")
+                    Text("Continue")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
                         .onboardingCTAWidth()

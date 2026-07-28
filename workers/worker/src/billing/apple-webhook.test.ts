@@ -115,7 +115,7 @@ const baseEnvelope = (overrides: Partial<any> = {}) => ({
 });
 
 const baseTx = (overrides: Partial<any> = {}) => ({
-  productId: "org.fidexa.rishi.pro.monthly",
+  productId: "rishi.reader.monthly",
   transactionId: "2000000300000001",
   originalTransactionId: "2000000300000001",
   expiresDate: EXPIRES_MS,
@@ -125,7 +125,16 @@ const baseTx = (overrides: Partial<any> = {}) => ({
 
 describe("handleAppleWebhook", () => {
   it("SUBSCRIBED/INITIAL_BUY: logs + upserts active subscription", async () => {
-    const deps = makeDeps({ envelope: baseEnvelope(), tx: baseTx() });
+    const deps = makeDeps({
+      envelope: baseEnvelope(),
+      tx: baseTx(),
+      existingSub: {
+        appleTransactionId: "2000000300000001",
+        appleOriginalTransactionId: "2000000300000001",
+        userId: "u-1",
+        status: "active",
+      },
+    });
     const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
     expect(result.status).toBe(200);
     expect(result.body).toEqual({ ok: true });
@@ -147,6 +156,7 @@ describe("handleAppleWebhook", () => {
       tx: baseTx({ expiresDate: NEW_EXPIRES_MS }),
       existingSub: {
         appleTransactionId: "2000000300000001",
+        appleOriginalTransactionId: "2000000300000001",
         userId: "u1",
         status: "active",
       },
@@ -191,19 +201,19 @@ describe("handleAppleWebhook", () => {
     expect(row.userId).toBe("u-1");
   });
 
-  it("SUBSCRIBED: keeps userId='' fallback when no prior row resolves", async () => {
+  it("SUBSCRIBED: logs verified notification but does not write before ownership resolves", async () => {
     const deps = makeDeps({ envelope: baseEnvelope(), tx: baseTx() });
     const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
     expect(result.status).toBe(200);
     expect(
       deps._spy.findUserIdByOriginalTransactionId,
     ).toHaveBeenCalledWith("2000000300000001");
-    expect(deps._spy.upsertSub).toHaveBeenCalledOnce();
-    const row = deps._spy.upsertSub.mock.calls[0][0];
-    expect(row.userId).toBe("");
+    expect(deps._spy.insertLog).toHaveBeenCalledOnce();
+    expect(deps._spy.markLogProcessed).toHaveBeenCalledWith("uuid-1", null);
+    expect(deps._spy.upsertSub).not.toHaveBeenCalled();
   });
 
-  it("DID_RENEW: keeps userId='' fallback when no prior row exists", async () => {
+  it("DID_RENEW: writes after a later notification can resolve ownership", async () => {
     const deps = makeDeps({
       envelope: baseEnvelope({
         notificationType: "DID_RENEW",
@@ -212,11 +222,25 @@ describe("handleAppleWebhook", () => {
       }),
       tx: baseTx({ expiresDate: NEW_EXPIRES_MS }),
     });
-    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
-    expect(result.status).toBe(200);
-    expect(deps._spy.upsertSub).toHaveBeenCalledOnce();
-    const row = deps._spy.upsertSub.mock.calls[0][0];
-    expect(row.userId).toBe("");
+    const firstResult = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+    expect(firstResult.status).toBe(200);
+    expect(deps._spy.upsertSub).not.toHaveBeenCalled();
+
+    const ownerRow = {
+      appleTransactionId: "2000000300000001",
+      appleOriginalTransactionId: "2000000300000001",
+      userId: "u-later",
+      status: "active",
+    };
+    const secondDeps = makeDeps({
+      envelope: baseEnvelope({ notificationUUID: "uuid-renew-owned", notificationType: "DID_RENEW", subtype: undefined }),
+      tx: baseTx({ transactionId: "2000000300000002", expiresDate: NEW_EXPIRES_MS }),
+      existingSub: ownerRow,
+    });
+    const secondResult = await handleAppleWebhook({ deps: secondDeps, signedPayload: "OUTER" });
+    expect(secondResult.status).toBe(200);
+    expect(secondDeps._spy.upsertSub).toHaveBeenCalledOnce();
+    expect(secondDeps._spy.upsertSub.mock.calls[0][0].userId).toBe("u-later");
   });
 
   it("REFUND: sets status=refunded, currentPeriodEnd=now", async () => {

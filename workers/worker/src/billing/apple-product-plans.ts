@@ -11,7 +11,8 @@
  * Product IDs must match `RishiProductID` in the Apple app and
  * `apps/apple/scripts/setup_storekit_products.rb` — `.annual`, not `.yearly`
  * — so App Store Connect product creation and this table use byte-identical
- * strings. Legacy `org.fidexa.rishi.pro.*` ids are not in this map.
+ * strings. Legacy `org.fidexa.rishi.pro.*` ids remain mapped to the Reader
+ * allowance so existing subscribers can restore after the new paywall ships.
  *
  * `durationMonths` is NOT consumed by this plan's allowance-period logic
  * (every plan gets a 1-month allowance period regardless of billing
@@ -31,7 +32,16 @@ export interface ApplePlanMapping {
 
 export const APPLE_BUNDLE_ID = "org.fidexa.rishi";
 
+/** Grandfathered product IDs retained for restore/migration compatibility. */
+export const APPLE_LEGACY_PRODUCT_IDS = [
+  "org.fidexa.rishi.pro.monthly",
+  "org.fidexa.rishi.pro.annual",
+] as const;
+
 export const APPLE_PRODUCT_PLAN_MAP: Record<string, ApplePlanMapping> = {
+  // Grandfathered Pro subscriptions retain paid access as Reader entitlements.
+  "org.fidexa.rishi.pro.monthly": { plan: "reader", durationMonths: 1 },
+  "org.fidexa.rishi.pro.annual": { plan: "reader", durationMonths: 12 },
   // The live App Store product was created without the org.fidexa prefix.
   "rishi.reader.monthly": { plan: "reader", durationMonths: 1 },
   "org.fidexa.rishi.reader.annual": { plan: "reader", durationMonths: 12 },

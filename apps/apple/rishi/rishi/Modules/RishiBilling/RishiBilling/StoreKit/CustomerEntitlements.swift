@@ -40,6 +40,12 @@ public final class CustomerEntitlements {
     public private(set) var subscriptionStatuses: [SubscriptionGroupID: [SubscriptionStatus]] = [:]
     
     public private(set) var error: CustomerEntitlementsError?
+
+    /// Returns whether StoreKit currently reports an active subscription in
+    /// the supplied group, including grace-period and billing-retry states.
+    public func hasActiveSubscription(in groupID: SubscriptionGroupID) -> Bool {
+        subscriptionStatuses[groupID]?.activeSubscriptionStatuses.isEmpty == false
+    }
     
     /// Sync entitlement with the worker, then finish on any successful HTTP
     /// (verified or business reject). On transport failure the transaction

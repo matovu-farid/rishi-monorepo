@@ -16,10 +16,18 @@ struct SettingsContent: View {
     @Environment(\.signOut) private var signOut
     @Environment(CurrentUserBox.self) private var currentUserBox
     @Environment(EntitlementSnapshotStore.self) private var entitlementStore
+    @State private var customerEntitlements = CustomerEntitlements.shared
 
     @State private var initialAudio: TTSSettings = .default
     @State private var audioLoaded = false
     @State private var showSubscriptions = false
+    @State private var pendingSubscriptionConfirmation = false
+    @State private var showSubscriptionConfirmation = false
+
+    private var hasActiveStoreKitSubscription: Bool {
+        guard let groupID = services.groupID?.value else { return false }
+        return customerEntitlements.hasActiveSubscription(in: groupID)
+    }
 
     var body: some View {
         Group {
@@ -56,6 +64,7 @@ struct SettingsContent: View {
                     entitlementSnapshot: entitlementStore.resolvedSnapshot,
                     allowanceLoading: entitlementStore.isLoading,
                     onSubscribe: { showSubscriptions = true },
+                    storeKitIsSubscribed: hasActiveStoreKitSubscription,
                     onSignOut: {
                         await MainActor.run {
                             onDismiss()
@@ -93,10 +102,18 @@ struct SettingsContent: View {
                 await services.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground
                 )
+                guard pendingSubscriptionConfirmation else { return }
+                await MainActor.run {
+                    pendingSubscriptionConfirmation = false
+                    showSubscriptionConfirmation = true
+                }
             }
         }) {
-            if let groupID = services.groupID {
-                SubscriptionsView()
+            if services.groupID != nil {
+                SubscriptionsView(onPurchaseCompleted: {
+                    pendingSubscriptionConfirmation = true
+                    showSubscriptions = false
+                })
             } else {
                 NavigationStack {
                     ContentUnavailableView(
@@ -111,6 +128,11 @@ struct SettingsContent: View {
                     }
                 }
             }
+        }
+        .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Thank you for subscribing. Your plan is now active.")
         }
     }
 }

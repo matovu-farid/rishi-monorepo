@@ -10,15 +10,33 @@ import SwiftUI
 public struct RemainingAllowanceView: View {
     public let snapshot: EntitlementSnapshot?
     public let isLoading: Bool
+    public let storeKitIsSubscribed: Bool
 
-    public init(snapshot: EntitlementSnapshot, isLoading: Bool = false) {
+    public init(
+        snapshot: EntitlementSnapshot,
+        isLoading: Bool = false,
+        storeKitIsSubscribed: Bool = false
+    ) {
         self.snapshot = snapshot
         self.isLoading = isLoading
+        self.storeKitIsSubscribed = storeKitIsSubscribed
     }
 
-    public init(isLoading: Bool) {
+    public init(isLoading: Bool, storeKitIsSubscribed: Bool = false) {
         self.snapshot = nil
         self.isLoading = isLoading
+        self.storeKitIsSubscribed = storeKitIsSubscribed
+    }
+
+    /// StoreKit can confirm a purchase before the server snapshot has caught
+    /// up. Never expose the free-trial balance during that transition.
+    public static func shouldShowTrialCredits(
+        snapshot: EntitlementSnapshot,
+        storeKitIsSubscribed: Bool
+    ) -> Bool {
+        guard !storeKitIsSubscribed else { return false }
+        if case .trialActive = snapshot { return true }
+        return false
     }
 
     public var body: some View {
@@ -30,43 +48,55 @@ public struct RemainingAllowanceView: View {
                     isLow: false
                 )
             } else if let snapshot {
-                switch snapshot {
-                case .trialActive(let remainingCredits):
+                if storeKitIsSubscribed && !snapshot.isPaidActive {
+                    // StoreKit can report an Xcode/local test purchase while
+                    // the production Worker correctly rejects that fake JWS.
+                    // Do not expose trial credits, but also do not imply that
+                    // an allowance request is still actively running forever.
                     AllowanceRow(
-                        iconName: "bolt.fill",
-                        text: AllowanceFormatter.creditsDescription(remainingCredits),
-                        isLow: AllowanceWarningThreshold.isLowTrialCredits(remainingCredits)
+                        iconName: "checkmark.seal.fill",
+                        text: "Subscription active; allowance pending sync",
+                        isLow: false
                     )
-                case .readerActive(let period):
-                    planRows(
-                        period: period,
-                        narrationTotal: PlanAllowance.readerNarrationSeconds,
-                        voiceChatTotal: PlanAllowance.readerVoiceChatSeconds
-                    )
-                case .voiceActive(let period):
-                    planRows(
-                        period: period,
-                        narrationTotal: PlanAllowance.voiceNarrationSeconds,
-                        voiceChatTotal: PlanAllowance.voiceVoiceChatSeconds
-                    )
-                case .trialExhausted:
-                    AllowanceRow(
-                        iconName: "exclamationmark.circle.fill",
-                        text: "Trial credits used up",
-                        isLow: true
-                    )
-                case .subscriptionExpired:
-                    AllowanceRow(
-                        iconName: "exclamationmark.circle.fill",
-                        text: "Subscription expired",
-                        isLow: true
-                    )
-                }
+                } else {
+                    switch snapshot {
+                    case .trialActive(let remainingCredits):
+                        AllowanceRow(
+                            iconName: "bolt.fill",
+                            text: AllowanceFormatter.creditsDescription(remainingCredits),
+                            isLow: AllowanceWarningThreshold.isLowTrialCredits(remainingCredits)
+                        )
+                    case .readerActive(let period):
+                        planRows(
+                            period: period,
+                            narrationTotal: PlanAllowance.readerNarrationSeconds,
+                            voiceChatTotal: PlanAllowance.readerVoiceChatSeconds
+                        )
+                    case .voiceActive(let period):
+                        planRows(
+                            period: period,
+                            narrationTotal: PlanAllowance.voiceNarrationSeconds,
+                            voiceChatTotal: PlanAllowance.voiceVoiceChatSeconds
+                        )
+                    case .trialExhausted:
+                        AllowanceRow(
+                            iconName: "exclamationmark.circle.fill",
+                            text: "Trial credits used up",
+                            isLow: true
+                        )
+                    case .subscriptionExpired:
+                        AllowanceRow(
+                            iconName: "exclamationmark.circle.fill",
+                            text: "Subscription expired",
+                            isLow: true
+                        )
+                    }
 
-                if let periodEnd = snapshot.periodEnd {
-                    Text(AllowanceFormatter.resetDateDescription(periodEnd))
-                        .font(RishiTypography.caption)
-                        .foregroundStyle(RishiColor.textMuted)
+                    if let periodEnd = snapshot.periodEnd {
+                        Text(AllowanceFormatter.resetDateDescription(periodEnd))
+                            .font(RishiTypography.caption)
+                            .foregroundStyle(RishiColor.textMuted)
+                    }
                 }
             }
         }

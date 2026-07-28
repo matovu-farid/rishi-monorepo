@@ -1,6 +1,7 @@
 
 
 
+import Foundation
 import OSLog
 import StoreKit
 import SwiftUI
@@ -129,11 +130,29 @@ extension View {
 @available(iOS 18.4, *)
 private struct ErrorObserverViewModifier: ViewModifier {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.services) private var services
 
     private var customerEntitlements = CustomerEntitlements.shared
     private var store = Store.shared
 
     @State private var error: (any Error)?
+
+    private enum RestorePresentationError: LocalizedError {
+        case restored
+        case nothingToRestore
+        case failed(any Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .restored:
+                return "Purchases restored."
+            case .nothingToRestore:
+                return "No purchases were found to restore."
+            case .failed(let error):
+                return "Could not restore purchases: \(error.localizedDescription)"
+            }
+        }
+    }
 
     private var showErrorAlert: Binding<Bool> {
         Binding {
@@ -149,9 +168,24 @@ private struct ErrorObserverViewModifier: ViewModifier {
         Button("Restore Purchases", role: .destructive) {
             Task {
                 do {
-                    try await AppStore.sync()
+                    guard let services else {
+                        error = RestorePresentationError.failed(
+                            NSError(domain: "RishiBilling", code: 1)
+                        )
+                        return
+                    }
+                    let outcome = try await services.restoreService.restore()
+                    await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+                        reason: .foreground
+                    )
+                    switch outcome {
+                    case .restored:
+                        self.error = RestorePresentationError.restored
+                    case .nothingToRestore:
+                        self.error = RestorePresentationError.nothingToRestore
+                    }
                 } catch {
-                    self.error = error
+                    self.error = RestorePresentationError.failed(error)
                 }
             }
         }

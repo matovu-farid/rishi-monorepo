@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		09ECC56D2FF7F30900272ABC /* Rishi Reader.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */; };
+		095536713018ED9500C80DA0 /* synced.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 095536703018ED9500C80DA0 /* synced.storekit */; };
 		1A1111232FD83183008C5ADE /* TTSPresenceWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */; };
 		BBB28AB44A15558BFB39403C /* PropertyBased in Frameworks */ = {isa = PBXBuildFile; productRef = 4FA89280AD0D00847DBD767F /* PropertyBased */; };
 		C10000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* ReadiumShared */; };
@@ -45,7 +45,7 @@
 		092254942FD83183008C5ADE /* rishi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rishi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		092254A32FD83186008C5ADE /* rishiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		092254AD2FD83186008C5ADE /* rishiUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Rishi Reader.storekit"; sourceTree = "<group>"; };
+		095536703018ED9500C80DA0 /* synced.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = synced.storekit; sourceTree = "<group>"; };
 		1A1111122FD83183008C5ADE /* TTSPresenceWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TTSPresenceWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSPresenceWidgetBundle.swift; sourceTree = "<group>"; };
 		1A1111212FD83183008C5ADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -57,6 +57,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				StoreKitTestCertificate.cer,
 			);
 			target = 092254932FD83183008C5ADE /* rishi */;
 		};
@@ -131,7 +132,7 @@
 		0922548B2FD83183008C5ADE = {
 			isa = PBXGroup;
 			children = (
-				09ECC56C2FF7F30900272ABC /* Rishi Reader.storekit */,
+				095536703018ED9500C80DA0 /* synced.storekit */,
 				092254962FD83183008C5ADE /* rishi */,
 				092254A62FD83186008C5ADE /* rishiTests */,
 				092254B02FD83186008C5ADE /* rishiUITests */,
@@ -331,7 +332,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				09ECC56D2FF7F30900272ABC /* Rishi Reader.storekit in Resources */,
+				095536713018ED9500C80DA0 /* synced.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -554,10 +555,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = rishi/rishi.entitlements;
-				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = rishi/rishi-mac.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "rishi/rishi-mac.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -601,10 +602,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = rishi/rishi.entitlements;
-				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = rishi/rishi-mac.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "rishi/rishi-mac.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -866,6 +867,8 @@
 				kind = upToNextMajorVersion;
 				minimumVersion = 9.15.0;
 			};
+			traits = (
+			);
 		};
 		A10000000000000000000004 /* XCRemoteSwiftPackageReference "usearch" */ = {
 			isa = XCRemoteSwiftPackageReference;

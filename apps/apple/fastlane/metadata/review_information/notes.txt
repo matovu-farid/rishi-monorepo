@@ -9,16 +9,15 @@ FIRST-RUN CONTENT
 - A sample EPUB ("The Sample Book") ships in the bundle and is auto-installed into the library on first launch. The reviewer does not need to import their own content to exercise the reader, highlights, chat, or read-aloud surfaces.
 
 VOICE CHAT (PRO FEATURE)
-- Real-time voice chat is gated on a Rishi Pro entitlement. In production this is a paid subscription managed at rishi.fidexa.org under our pending Reader App entitlement (External Link Account Entitlement).
-- For App Review: the build submitted by this lane is a DEBUG configuration that honors the X-Dev-Bypass header. The reviewer can exercise voice chat by tapping Settings → Developer → Enable Dev Bypass. This toggle is compiled out of Release builds and is documented at apps/apple/docs/APP-STORE-METADATA.md.
-- If the reviewer prefers, we can provide a TestFlight build with the bypass pre-enabled — contact the email above.
+- Real-time voice chat is gated on an Apple subscription. The submitted Release/TestFlight build uses native StoreKit purchase and entitlement sync.
+- To test microphone access, start the voice conversation flow. Rishi first explains that microphone audio is used only during an active conversation, then tap Continue on the in-app permission screen and allow the system prompt.
 
 UNIVERSAL LINKS
 - Universal Links to https://rishi.fidexa.org/book/<id> are wired in the app but the worker-side AASA endpoint is not yet active in production. Deep links via rishi:// custom scheme still work from the simulator.
 
 BILLING
-- Rishi is a reader app. All subscription management is performed at rishi.fidexa.org. The app does not present any IAP UI. Pro entitlement is pulled from the worker on launch.
-- Our Reader App entitlement (External Link Account Entitlement) application is pending Apple review. If denied, the next build will ship with text-only "Manage your subscription at rishi.fidexa.org" copy and zero tappable billing UI per Guideline 4.0.
+- Rishi uses native StoreKit in-app purchases. From a premium feature, the reviewer can open the paywall, choose a Reader or Voice plan, and complete the Apple purchase flow. The paywall also provides Restore Purchases; Settings opens Apple's in-app subscription management sheet.
+- For a real purchase test, use the `rishi (Sandbox)` scheme on a device with an App Store Connect Sandbox tester, or install the uploaded build through TestFlight and use the Sandbox Apple Account. The app's Apple sign-in account is separate from the Sandbox purchase account.
 
 PRIVACY
 - See PrivacyInfo.xcprivacy in the bundle and the App Privacy section of this submission. No tracking SDKs are bundled. Sentry crash data is first-party and can be disabled in Settings → Diagnostics.

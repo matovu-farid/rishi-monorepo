@@ -33,6 +33,11 @@ URL_FIELDS = %w[marketing_url.txt support_url.txt privacy_url.txt].freeze
 # Review-team contact fields. All five are required.
 REVIEW_FIELDS = %w[first_name.txt last_name.txt email_address.txt
                    phone_number.txt notes.txt].freeze
+REVIEW_PHONE_PLACEHOLDERS = [
+  '+1 555 0100',
+  '555-0100',
+  '5550100',
+].freeze
 
 def validate(root)
   errors = []
@@ -88,6 +93,8 @@ def validate(root)
       path = File.join(review_dir, name)
       if !File.file?(path) || File.read(path).strip.empty?
         errors << "review_information/#{name} missing or empty"
+      elsif name == 'phone_number.txt' && REVIEW_PHONE_PLACEHOLDERS.include?(File.read(path).strip)
+        errors << 'review_information/phone_number.txt contains a placeholder number'
       end
     end
   else

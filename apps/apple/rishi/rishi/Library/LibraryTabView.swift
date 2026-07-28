@@ -26,6 +26,8 @@ struct LibraryTabView: View {
     @State private var showDocumentPicker = false
     @State private var presentDocumentPickerAfterPrompt = false
     @State private var trialReadyAfterDocumentPicker = false
+    @State private var pendingSubscriptionConfirmation = false
+    @State private var showSubscriptionConfirmation = false
 
     init(
         services: BootstrappedServices,
@@ -192,10 +194,18 @@ struct LibraryTabView: View {
                 await services.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground
                 )
+                guard pendingSubscriptionConfirmation else { return }
+                await MainActor.run {
+                    pendingSubscriptionConfirmation = false
+                    showSubscriptionConfirmation = true
+                }
             }
         }) { _ in
-            if let groupID = services.groupID {
-                SubscriptionsView()
+            if services.groupID != nil {
+                SubscriptionsView(onPurchaseCompleted: {
+                    pendingSubscriptionConfirmation = true
+                    model.dismissPaywall()
+                })
             } else {
                 NavigationStack {
                     ContentUnavailableView(
@@ -219,6 +229,16 @@ struct LibraryTabView: View {
             if model.paywallFeature != nil, newPaid, !oldPaid {
                 model.dismissPaywall()
             }
+        }
+        .onChange(of: model.paywallFeature) { old, new in
+            guard old != nil, new == nil, pendingSubscriptionConfirmation else { return }
+            pendingSubscriptionConfirmation = false
+            showSubscriptionConfirmation = true
+        }
+        .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Thank you for subscribing. Your plan is now active.")
         }
 
         .deepLinkHandling(model: model, refreshLibrary: { await vm.refresh() })

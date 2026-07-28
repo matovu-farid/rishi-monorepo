@@ -33,7 +33,7 @@ Up to 10 screenshots per device class are accepted. We ship five per class:
 
 ## Placeholder PNGs (for dry-run uploads only)
 
-The two release lanes accept `SKIP_SCREENSHOTS=1` to bypass the screenshot upload entirely. That is the path plan 12-05 uses. If you instead need to exercise the upload code path before real captures exist, drop 1×1 placeholder PNGs into each directory:
+The two release lanes skip screenshot upload by default. Set `UPLOAD_SCREENSHOTS=1` only after real captures have been reviewed and placed in each directory. If you need to exercise the upload code path before real captures exist, drop 1×1 placeholder PNGs into each directory only in a disposable test checkout:
 
 ```bash
 # macOS — uses built-in sips
@@ -53,7 +53,7 @@ for dir in en-US/iphone_6_9 en-US/iphone_6_7 en-US/iphone_6_5 \
 done
 ```
 
-App Store Connect will REJECT placeholders at submission time — never let a placeholder reach the submit-for-review step. The `SKIP_SCREENSHOTS=1` flag in plan 12-05's lanes is the safe path.
+App Store Connect will REJECT placeholders at submission time — never set `UPLOAD_SCREENSHOTS=1` while placeholders are present. The default screenshot-skip behavior in the release lanes is the safe path.
 
 ## Capture playbook (executes in plan 12-06)
 

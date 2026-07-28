@@ -8,6 +8,7 @@ const APPLE_MS = 1812585600000;
 // production adapter converts the Drizzle `timestamp`-mode Date to seconds
 // before handing it to the pure handler).
 const STRIPE_SEC = 1815264000;
+const LEDGER_SNAPSHOT = { state: "trial_active" as const, remainingCredits: 300 };
 
 function makeDeps(
   opts: {
@@ -20,8 +21,10 @@ function makeDeps(
 } } {
   const findAppleActive = vi.fn(async () => opts.appleRow ?? null);
   const findStripeActive = vi.fn(async () => opts.stripeRow ?? null);
+  const getEntitlementSnapshot = vi.fn(async () => LEDGER_SNAPSHOT);
   return {
     db: { findAppleActive, findStripeActive },
+    ledger: { getEntitlementSnapshot },
     _spy: { findAppleActive, findStripeActive },
   };
 }
@@ -35,6 +38,7 @@ describe("handleBillingMe", () => {
     expect(result).toEqual({
       premium: true,
       premiumUntil: new Date(APPLE_MS).toISOString(),
+      ...LEDGER_SNAPSHOT,
     });
     expect(deps._spy.findStripeActive).not.toHaveBeenCalled();
   });
@@ -47,6 +51,7 @@ describe("handleBillingMe", () => {
     expect(result).toEqual({
       premium: true,
       premiumUntil: new Date(STRIPE_SEC * 1000).toISOString(),
+      ...LEDGER_SNAPSHOT,
     });
     expect(deps._spy.findStripeActive).toHaveBeenCalledOnce();
   });
@@ -54,7 +59,11 @@ describe("handleBillingMe", () => {
   it("No subscriptions anywhere → premium=false, premiumUntil=null", async () => {
     const deps = makeDeps({});
     const result = await handleBillingMe({ deps, userId: "u1" });
-    expect(result).toEqual({ premium: false, premiumUntil: null });
+    expect(result).toEqual({
+      premium: false,
+      premiumUntil: null,
+      ...LEDGER_SNAPSHOT,
+    });
     expect(deps._spy.findAppleActive).toHaveBeenCalledOnce();
     expect(deps._spy.findStripeActive).toHaveBeenCalledOnce();
   });

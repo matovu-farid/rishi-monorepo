@@ -18,16 +18,13 @@ Billing decides whether the current user is on the free tier or on Rishi Pro, se
 
 | Role | File |
 |------|------|
-| Paywall screen | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/UI/PaywallView.swift` |
-| Paywall view-model | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/UI/PaywallViewModel.swift` |
-| Modifier that gates a Pro feature | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/UI/PremiumGateModifier.swift` |
-| Product fetch from App Store | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/StoreKit/StoreKitProductService.swift` |
-| Purchase + restore services | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/StoreKit/PurchaseService.swift`, `RestoreService.swift` |
-| Transaction listener (background) | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/StoreKit/TransactionListener.swift` |
-| Worker receipt verifier | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/StoreKit/WorkerReceiptVerifier.swift` |
-| Manage Subscriptions launcher | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/StoreKit/ManageSubscriptionPresenter.swift` |
-| Reconciler (device + server signal) | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Entitlements/EntitlementReconciler.swift` |
-| Cached entitlement service | `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Service/EntitlementService.swift` |
+| Paywall screen | `apps/apple/rishi/rishi/Billing/SubscriptionsView.swift` |
+| Product catalog + StoreKit state | `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/StoreKit/Store.swift` |
+| Purchase + restore services | `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/StoreKit/PurchaseService.swift`, `RestoreService.swift` |
+| Transaction listener | `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/StoreKit/TransactionListener.swift` |
+| Entitlement sync | `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/StoreKit/EntitlementSyncClient.swift` |
+| Manage Subscriptions launcher | `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/StoreKit/ManageSubscriptionPresenter.swift` |
+| Reconciler (device + server signal) | `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/Entitlements/EntitlementReconciler.swift` |
 
 ## What it depends on
 
@@ -39,10 +36,10 @@ Billing decides whether the current user is on the free tier or on Rishi Pro, se
 
 ## Why it's built this way
 
-- iOS uses native StoreKit 2 in-app purchase because Apple denied the Reader App external-link entitlement. The web and Electron builds use external-link billing through Stripe — the two platforms are deliberately not unified so each follows its own platform's purchase rules cleanly.
+- Apple builds use native StoreKit 2 in-app purchase. The web and Electron billing implementations are separate products and are not part of the Apple purchase flow.
 - `EntitlementReconciler` unions two signals: what `StoreKit.Transaction.currentEntitlements` reports on the device, and what `/api/auth/get-session` reports from the worker. The most permissive answer wins. This keeps the user unlocked when offline right after a purchase (device knows, server hasn't caught up) and when they switch devices (server knows, the new device hasn't called StoreKit yet).
 - All paywall copy is reviewed against App Review Guideline 3.1.1 (no external steering) and 3.1.2 (auto-renewal disclosure must appear verbatim near the Subscribe button). The forbidden strings — "manage on our website", links to Stripe, billing URLs — are never rendered.
-- `StoreKitIAPFlag` lets the team flip in-app purchase on or off without a code release if Apple changes a requirement late. When off, the paywall renders a neutral "subscriptions temporarily unavailable" body and the feature gate fails closed.
+- The default `rishi` scheme uses the local `apps/apple/rishi/rishi/Rishi Reader.storekit` configuration for development. The shared `rishi (Sandbox)` scheme sets StoreKit Configuration to `None`, so device/TestFlight testing uses App Store Connect Sandbox products.
 
 ## Gotchas
 

@@ -40,7 +40,7 @@ platform :ios do
 
   desc "Build the iOS app for App Store, upload metadata + screenshots, DO NOT submit. " \
        "Run the manual submit step in plan 12-06 when the build is ready for review. " \
-       "Pass SKIP_SCREENSHOTS=1 for dry-runs before captures land."
+       "Screenshots are uploaded only when UPLOAD_SCREENSHOTS=1 is explicitly set."
   lane :release_app_store do
     metadata_validate
     build_app(
@@ -54,14 +54,14 @@ platform :ios do
       submit_for_review: false,
       automatic_release: false,
       force: true,
-      skip_screenshots: ENV["SKIP_SCREENSHOTS"] == "1",
+      skip_screenshots: ENV["UPLOAD_SCREENSHOTS"] != "1",
       precheck_include_in_app_purchases: false,
       submission_information: { add_id_info_uses_idfa: false }
     )
   end
 
   desc "Build the Mac Catalyst app, upload metadata + screenshots to the Mac App Store, DO NOT submit. " \
-       "Same SKIP_SCREENSHOTS=1 escape hatch as release_app_store."
+       "Screenshots are uploaded only when UPLOAD_SCREENSHOTS=1 is explicitly set."
   lane :release_mac_app_store do
     metadata_validate
     build_app(
@@ -77,7 +77,7 @@ platform :ios do
       submit_for_review: false,
       automatic_release: false,
       force: true,
-      skip_screenshots: ENV["SKIP_SCREENSHOTS"] == "1"
+      skip_screenshots: ENV["UPLOAD_SCREENSHOTS"] != "1"
     )
   end
 

@@ -64,9 +64,5 @@
 		<key>SWIFT_IS_CURRENT_EXECUTOR_LEGACY_MODE_OVERRIDE</key>
 		<string>legacy</string>
 	</dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
 </dict>
 </plist>

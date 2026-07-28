@@ -16,7 +16,7 @@ Confirm each item before moving on:
 - [ ] You have App Store Connect access for `org.fidexa.rishi` (Admin or App Manager role).
 - [ ] You have an Apple ID that is NOT signed into the App Store on the test device. Sandbox testers must be entirely separate accounts — this is Apple's restriction, not ours.
 - [ ] The Rishi product IDs are registered in App Store Connect (see §1). If they are not, complete §1 once and skip it on subsequent runs.
-- [ ] The build is either (a) signed with the Distribution profile and installed via TestFlight, or (b) running from Xcode against the `rishi (Sandbox)` scheme on a real device.
+- [ ] The build is either (a) signed with the Distribution profile and installed via TestFlight, or (b) running from Xcode against the shared `rishi (Sandbox)` scheme on a real device.
 - [ ] Sandbox tester credentials are available in the `#ios-billing` Slack channel. DO NOT commit credentials to git — Apple-issued sandbox passwords are credentials.
 - [ ] The worker is reachable at the env-configured `WORKER_BASE_URL` (verify with a `curl` against `/api/health` or the equivalent ping route).
 
@@ -44,11 +44,11 @@ This is a per-product one-time configuration. Skip if §0 confirmed the products
 4. For each product configure an introductory offer if required by current pricing policy (otherwise skip).
 5. Fill in the App Store Information localizations (English at minimum).
 6. Add a Review Note for each product pointing the App Review team at the runbook's §10 checklist.
-7. Status: leave at **Ready to Submit**. Apple ties subscription review to app review — submit when the app build is submitted.
+7. For a new version, leave the products at **Ready to Submit**. The currently rejected 1.0 submission is an external review state and must not be mistaken for a product-configuration failure; verify the new version’s product state before submission.
 
-> Product **IDs are LOCKED** — they MUST match `RishiProductID` in `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Models/RishiProductID.swift`, the worker map in `workers/worker/src/billing/apple-product-plans.ts`, and `apps/apple/rishi/Rishi Reader.storekit`. Legacy `org.fidexa.rishi.pro.*` ids are grandfathered for existing subscribers only; do **not** create new Pro products.
+> Product **IDs are LOCKED** — they MUST match `RishiProductID` in `apps/apple/rishi/rishi/Modules/RishiBilling/RishiBilling/Models/RishiProductID.swift`, the worker map in `workers/worker/src/billing/apple-product-plans.ts`, and `apps/apple/rishi/Rishi Reader.storekit`. Legacy `org.fidexa.rishi.pro.*` ids are grandfathered for existing subscribers only; do **not** create new Pro products.
 
-Verify: all four Reader/Voice products appear in the IAP list with status `Ready to Submit`, grouped under `Rishi Reader & Voice`.
+Verify: all four Reader/Voice products appear in the IAP list, are grouped under `Rishi Reader & Voice`, and are `Ready to Submit` or otherwise explicitly attached to the new version. The existing rejected 1.0 records are not evidence that the new version is ready.
 
 ---
 
@@ -98,7 +98,8 @@ Verify: the tester appears in the Sandbox Testers list. The first time you sign 
 | `rishi` (default) | `Rishi Reader.storekit` (local) | Daily development — offline, fast, no ASC roundtrip               |
 | `rishi (Sandbox)` | None — uses real ASC sandbox | This runbook (end-to-end Sandbox validation; App Review pre-flight) |
 
-To create the Sandbox scheme (one-time, already wired in `rishi.xcodeproj` per Plan 13-01):
+The shared Sandbox scheme is stored at `apps/apple/rishi/rishi.xcodeproj/xcshareddata/xcschemes/rishi (Sandbox).xcscheme`.
+If it needs to be recreated in Xcode:
 
 1. Xcode → **Product** → **Scheme** → **Manage Schemes**… → duplicate `rishi`.
 2. Rename to `rishi (Sandbox)`.
@@ -211,6 +212,17 @@ If purchase history persists despite clearing, file a Feedback Assistant report 
 
 ## 10. App Review Pre-Submission Checklist
 
+### Post-rejection handoff
+
+Build 34 (`2.1`) has been uploaded successfully and is `VALID` / `APP_STORE` eligible in App Store Connect. The API cannot create version 2.1 while the rejected 1.0 review submission remains `UNRESOLVED_ISSUES`, so use the App Store Connect web UI:
+
+1. Open **Rishi Reader → iOS App** and use the rejected-submission **Resolve / Update Review** flow.
+2. Create the new iOS version `2.1` and select build `34`.
+3. Enter the release notes from `fastlane/metadata/en-US/release_notes.txt` and confirm the review contact phone is `+256705222144`.
+4. Confirm the four iOS subscriptions are attached/available for the new version, then run the checklist below before submitting.
+
+Do not submit the rejected 1.0 record or reuse build 33; build 34 contains the remediation fixes.
+
 Run all of the following before tapping **Submit for Review** in ASC. This is the one-page checklist a QA operator can copy-paste into the App Review submission notes.
 
 ```text
@@ -229,7 +241,7 @@ Run all of the following before tapping **Submit for Review** in ASC. This is th
 [ ] Manage Subscription opens the in-app
     `AppStore.showManageSubscriptions(in:)` sheet (NOT an external URL,
     NOT the legacy web portal removed in Phase 13).
-[ ] All subscription products in ASC are in "Ready to Submit" status.
+[ ] All subscription products for the new version are in "Ready to Submit" status (not the rejected 1.0 submission).
 [ ] App Review notes include a sandbox tester credential reference
     pointing the reviewer at the team's ASC sandbox testers list.
 ```
@@ -260,42 +272,3 @@ If any step in §5–§8 fails after retrying with a fresh tester (§9):
 5. File in `#ios-billing` Slack with the above four attachments, the build number, the device model + iOS version, and the Sandbox tester email used.
 
 ---
-
-## 13. DEBUG stub verifier (offline / pre-deploy testing)
-
-Phase 14 plan 14-07 adds `DebugStubReceiptVerifier`, a `#if DEBUG`-gated
-actor that returns `verified: true` with `premiumUntil = now + 30 days`
-without contacting the worker. Use this when the worker is unreachable
-or not yet deployed, but you still need to exercise the iOS IAP flow.
-
-### Activate (simulator)
-
-Run BOTH commands — the StoreKit feature flag turns the IAP graph on,
-the stub flag swaps the verifier:
-
-```bash
-defaults write org.fidexa.rishi StoreKitIAPFlag -bool YES
-defaults write org.fidexa.rishi RishiUseStubReceiptVerifier -bool YES
-```
-
-Relaunch the app. The graph wires `DebugStubReceiptVerifier` in
-`AppDependencies` and emits `iap.verifier.stub.enabled` at .info.
-
-### Deactivate
-
-```bash
-defaults delete org.fidexa.rishi RishiUseStubReceiptVerifier
-```
-
-(Leave `StoreKitIAPFlag` ON unless you also want the IAP graph dormant.)
-
-### Compile-strip guarantee
-
-The entire `DebugStubReceiptVerifier.swift` source file and the
-corresponding branch in `AppDependencies.swift` are wrapped in `#if DEBUG`.
-Release builds emit a zero-symbol object for the stub — it physically
-cannot ship to TestFlight or the App Store. Pattern mirrors Phase 3's
-`DevBypassConfig`.
-
-A future CI step (`nm .build/release/RishiBilling.o | grep DebugStub`
-must return empty) is tracked as deferred in `14-07-SUMMARY.md`.

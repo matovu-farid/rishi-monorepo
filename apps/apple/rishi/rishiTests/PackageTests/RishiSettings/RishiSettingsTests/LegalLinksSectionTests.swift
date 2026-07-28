@@ -28,11 +28,11 @@ struct LegalLinksSectionTests {
         )
         #expect(
             LegalLinksSection.LegalLink.privacyPolicy.rawValue
-                == "https://rishi.fidexa.org/legal/privacy"
+                == "https://rishi.fidexa.org/privacy"
         )
         #expect(
             LegalLinksSection.LegalLink.termsOfUse.rawValue
-                == "https://rishi.fidexa.org/legal/terms"
+                == "https://rishi.fidexa.org/terms"
         )
     }
 
@@ -85,7 +85,7 @@ struct LegalLinksSectionTests {
     #if canImport(SafariServices) && canImport(UIKit)
     @Test("SafariSheet conforms to UIViewControllerRepresentable")
     func safariSheet_compilesAndConforms() {
-        let url = URL(string: "https://rishi.fidexa.org/legal/privacy")!
+        let url = URL(string: "https://rishi.fidexa.org/privacy")!
         let sheet = SafariSheet(url: url)
         let _: any UIViewControllerRepresentable = sheet
         #expect(sheet.url == url)
