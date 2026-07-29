@@ -76,38 +76,38 @@ struct SignedInView: View {
                 )
             }
             
-            .onChange(of: services.voicePresenter.isPresenting) { _, presenting in
+            .onChange(of: services.voice.presenter.isPresenting) { _, presenting in
                 if !presenting {
-                    services.voicePresenter.promotePendingFailure()
+                    services.voice.presenter.promotePendingFailure()
                 }
             }
 
             .alert(
                 voiceFailureTitle,
                 isPresented: Binding(
-                    get: { services.voicePresenter.failure != nil },
+                    get: { services.voice.presenter.failure != nil },
                     set: { presented in
                         if presented == false {
-                            services.voicePresenter.clearFailure()
+                            services.voice.presenter.clearFailure()
                         }
                     }
                 ),
-                presenting: services.voicePresenter.failure
+                presenting: services.voice.presenter.failure
             ) { failure in
                 switch failure.primaryAction {
                 case .openSettings:
                     Button("Open Settings") {
                         Self.openSettings()
-                        services.voicePresenter.clearFailure()
+                        services.voice.presenter.clearFailure()
                     }
                 case .retry:
                     Button("Try again") {
                         
-                        Task { await services.voicePresenter.retry() }
+                        Task { await services.voice.presenter.retry() }
                     }
                 case .upgrade:
                     Button("See plans") {
-                        services.voicePresenter.clearFailure()
+                        services.voice.presenter.clearFailure()
                         model.requestPaywall(
                             "voice_chat_exhausted",
                             serverPaidActive: services.billing.entitlementSnapshotStore
@@ -116,20 +116,17 @@ struct SignedInView: View {
                     }
                 case .dismiss:
                     Button("OK") {
-                        services.voicePresenter.clearFailure()
+                        services.voice.presenter.clearFailure()
                     }
                 }
                 Button("Dismiss", role: .cancel) {
-                    services.voicePresenter.clearFailure()
+                    services.voice.presenter.clearFailure()
                 }
             } message: { failure in
                 Text(failure.message)
             }
-            
-     
-            
             .macCommandDispatch(readerDefaults: services.readerDefaults)
-            
+
             .readerPrefsMenuPublisher(
                 services: services,
                 user: user,
@@ -157,7 +154,7 @@ struct SignedInView: View {
        
 
     private var voiceFailureTitle: String {
-        services?.voicePresenter.failure?.title ?? ""
+        services?.voice.presenter.failure?.title ?? ""
     }
 
     private static func openSettings() {

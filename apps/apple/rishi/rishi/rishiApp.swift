@@ -84,7 +84,7 @@ struct rishiApp: App {
             switch newPhase {
             case .background:
                 Task { @MainActor in
-                    await deps.services?.voicePresenter.requestEnd()
+                    await deps.services?.voice.presenter.requestEnd()
                 }
             case .active:
                 Task { await refreshEntitlementSnapshot(reason: .foreground) }
@@ -212,7 +212,7 @@ struct rishiApp: App {
 
         func applicationWillTerminate(_ application: UIApplication) {
             Task { @MainActor in
-                await dependencies?.services?.voicePresenter.requestEnd()
+                await dependencies?.services?.voice.presenter.requestEnd()
             }
         }
 

@@ -76,7 +76,7 @@ final class AppDependencies {
             )
             let built = await Self.makeServices(userIdBox: self.userIdBox)
             self.services = built
-            await built.voiceSessionRegistry.recoverPersistedSession()
+            await built.voice.sessionRegistry.recoverPersistedSession()
             Self.signposter.endInterval("cold-launch.bootstrap", state)
         }
         bootstrapTask = task
@@ -105,8 +105,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let chat: ChatRuntime
 
-    let voicePresenter: VoiceSessionPresenter
-    let voiceSessionRegistry: VoiceSessionRegistry
+    let voice: VoiceRuntime
 
     let billing: BillingRuntime
 
@@ -117,6 +116,11 @@ struct BootstrappedServices: @unchecked Sendable {
     let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+}
+
+struct VoiceRuntime: @unchecked Sendable {
+    let presenter: VoiceSessionPresenter
+    let sessionRegistry: VoiceSessionRegistry
 }
 
 struct AudioRuntime: @unchecked Sendable {

@@ -54,7 +54,7 @@ struct ReaderDestination: View {
         self.onRequestPaywall = onRequestPaywall
         self.pdfViewMode = pdfViewMode
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
-            voicePresenter: services.voicePresenter,
+            voicePresenter: services.voice.presenter,
             voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
             entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
             entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
@@ -158,12 +158,12 @@ struct ReaderDestination: View {
             syncBinding = nil
 
             Task {
-                await services.voicePresenter.parkSession()
+                await services.voice.presenter.parkSession()
                 await readAloud?.stop()
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if !services.voicePresenter.isPresenting {
+            if !services.voice.presenter.isPresenting {
                 IndexingIndicatorChip(
                     bookId: vm.book.id,
                     bookSearch: services.library.bookSearch
@@ -173,7 +173,7 @@ struct ReaderDestination: View {
             }
         }
         .overlay {
-            let voiceActive = services.voicePresenter.isPresenting
+            let voiceActive = services.voice.presenter.isPresenting
             let ttsVisible = readAloud?.showControls == true
             if ReaderAudioChromeVisibility.shouldShow(
                 voiceActive: voiceActive,
@@ -183,7 +183,7 @@ struct ReaderDestination: View {
                     isVisible: true,
                     mode: voiceActive ? .voice : .tts,
                     ttsState: services.audio.ttsState,
-                    voiceState: services.voicePresenter.state,
+                    voiceState: services.voice.presenter.state,
                     readAloud: readAloud,
                     onOpenVoiceChat: {
                         Task {
@@ -198,13 +198,13 @@ struct ReaderDestination: View {
                     },
                     onOpenReadAloud: {
                         Task {
-                            await services.voicePresenter.requestEnd()
+                            await services.voice.presenter.requestEnd()
                             await ensureReadAloudController().openReadAloudFromVoice(vm: vm)
                         }
                     },
                     onEndVoice: {
                         Task {
-                            await services.voicePresenter.dismissVoiceChrome()
+                            await services.voice.presenter.dismissVoiceChrome()
                             await readAloud?.resumeAfterVoiceIfNeeded()
                         }
                     },
@@ -217,18 +217,18 @@ struct ReaderDestination: View {
                 if let voiceTextVM {
                     ChatPanelView(
                         viewModel: voiceTextVM,
-                        initialQuote: services.voicePresenter.pendingInitialQuote
+                        initialQuote: services.voice.presenter.pendingInitialQuote
                     )
                 } else {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .task(id: services.voicePresenter.currentBookId) {
+            .task(id: services.voice.presenter.currentBookId) {
                 voiceTextVM = nil
                 if let convo = try? await services.chat.conversationLookup.findOrCreate(
                     userId: userId,
-                    bookId: services.voicePresenter.currentBookId
+                    bookId: services.voice.presenter.currentBookId
                 ) {
                     voiceTextVM = ChatPanelViewModel.make(
                         conversation: convo,
@@ -237,7 +237,7 @@ struct ReaderDestination: View {
                 }
             }
         }
-        .onChange(of: services.voicePresenter.pendingInitialQuote) { _, quote in
+        .onChange(of: services.voice.presenter.pendingInitialQuote) { _, quote in
             if quote != nil {
                 showVoiceTextChat = true
             }

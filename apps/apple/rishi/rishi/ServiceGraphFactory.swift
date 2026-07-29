@@ -442,8 +442,10 @@ enum ServiceGraphFactory {
                 conversationLookup: conversationLookup,
                 service: chatService
             ),
-            voicePresenter: voicePresenter,
-            voiceSessionRegistry: voiceSessionRegistry,
+            voice: VoiceRuntime(
+                presenter: voicePresenter,
+                sessionRegistry: voiceSessionRegistry
+            ),
             billing: BillingRuntime(
                 entitlementService: entitlementService,
                 entitlementSnapshotStore: entitlementSnapshotStore,

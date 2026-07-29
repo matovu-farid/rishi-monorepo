@@ -40,7 +40,7 @@ struct PremptionTest {
        // act
         //assert
         
-        let voicePresenter = services.voicePresenter
+        let voicePresenter = services.voice.presenter
         //let mode = await services.audio.coordinator.currentMode
         await bridge.start(paragraphs: paragraphs)
         #expect(await services.audio.coordinator.currentMode == .tts)
