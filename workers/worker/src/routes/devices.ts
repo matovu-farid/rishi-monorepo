@@ -4,6 +4,7 @@ import { devices } from "../db/schema";
 import { createDb } from "../db/drizzle";
 
 import { requireAuth } from "../index";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 
 // 1970->2001 epoch gap. Matches workers/worker/src/routes/changes.ts.
 // Required so iOS WorkerClient.swift:96 bare JSONDecoder (.deferredToDate)
@@ -42,7 +43,7 @@ export const devicesRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-devicesRoutes.post("/register", requireAuth, async (c) => {
+devicesRoutes.post("/register", requireAuth, requireAiDataConsent, async (c) => {
   const raw = await c.req.json().catch(() => null);
   const parsed = BodySchema.safeParse(raw);
   if (!parsed.success) {

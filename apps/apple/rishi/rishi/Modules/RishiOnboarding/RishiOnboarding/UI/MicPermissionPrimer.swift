@@ -6,7 +6,7 @@ import SwiftUI
 /// see a consistent rationale in both the in-app primer and the system alert.
 ///
 /// `onAllow` is wired (by 11-06) to call
-/// `AVAudioApplication.requestRecordPermission`.
+/// The live voice flow owns microphone authorization after data-use consent.
 struct MicPermissionPrimer: View {
     public let onAllow: () -> Void
     public let onSkip: () -> Void

@@ -49,6 +49,7 @@ public actor RealtimeVoiceSession {
     public typealias BookContextResponderFactory = @Sendable (UUID) -> BookContextResponder
 
     private let micGate: any MicPermissionGate
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let coordinator: AudioSessionCoordinator
     private let keyFetcher: any EphemeralKeyFetching
     private let client: any RealtimeClientAPI
@@ -122,6 +123,7 @@ public actor RealtimeVoiceSession {
         keyFetcher: any EphemeralKeyFetching,
         client: any RealtimeClientAPI,
         state: VoiceSessionState,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         sessionCoordinator: (any VoiceSessionCoordinating)? = nil,
         controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
         responderFactory: BookContextResponderFactory? = nil,
@@ -140,6 +142,7 @@ public actor RealtimeVoiceSession {
         confirmationInterval: Duration = .milliseconds(150)
     ) {
         self.micGate = micGate
+        self.dataUseConsentProvider = dataUseConsentProvider
         self.coordinator = coordinator
         self.keyFetcher = keyFetcher
         self.client = client
@@ -170,6 +173,10 @@ public actor RealtimeVoiceSession {
         activeParagraphText: String? = nil,
         preflighted: Bool = false
     ) async {
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            await fail(reason: .unknown("Data use consent required"))
+            return
+        }
         await update(.requestingMic)
 
         if !preflighted {

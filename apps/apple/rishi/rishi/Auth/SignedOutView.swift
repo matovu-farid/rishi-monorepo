@@ -174,6 +174,7 @@ struct SignedOutView: View {
                         
                     }
                     currentUserBox.signIn(user: auth.user)
+                    await deps?.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
                     await deps?.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                         reason: .signIn
                     )

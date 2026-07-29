@@ -54,6 +54,7 @@ final class VoiceSessionPresenter {
     private let userIdProvider: @MainActor () -> UserID?
     private let dirtyHook: any VoiceTranscriptDirtyHook
     private let micGate: any MicPermissionGate
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
     private let bookSearch: (any BookSearch)?
     private let embedderPrewarm: (@Sendable () async -> Void)?
@@ -135,6 +136,7 @@ final class VoiceSessionPresenter {
         // caller also overrides `controlSocketFactory`.
         baseURL: URL = URL(string: "https://api.fidexa.org")!,
         tokenProvider: any TokenProvider = StaticTokenProvider(nil),
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         messageStore: any MessageStore,
         conversationLookup: ConversationLookup,
         userIdProvider: @escaping @MainActor () -> UserID?,
@@ -156,13 +158,14 @@ final class VoiceSessionPresenter {
         self.userIdProvider = userIdProvider
         self.dirtyHook = dirtyHook
         self.micGate = micGate
+        self.dataUseConsentProvider = dataUseConsentProvider
         self.bookSearch = bookSearch
         self.embedderPrewarm = embedderPrewarm
 
         self.clientFactory = clientFactory ?? { RealtimeAPIAdapter() }
         self.keyFetcherFactory =
             keyFetcherFactory ?? {
-                EphemeralKeyFetcher(workerClient: workerClient)
+                DisabledLegacyEphemeralKeyFetcher()
             }
         let effectiveSessionCoordinatorFactory: @MainActor () -> (any VoiceSessionCoordinating)? = sessionCoordinatorFactory ?? {
             Self.isTrialVoiceSessionFlowEnabled ? VoiceSessionAPIClient(workerClient: workerClient) : nil
@@ -173,6 +176,7 @@ final class VoiceSessionPresenter {
             return ControlWebSocketClient(
                 baseURL: baseURL,
                 tokenProvider: tokenProvider,
+                dataUseConsentProvider: dataUseConsentProvider,
                 rishiSessionId: rishiSessionId,
                 onTerminal: onTerminal
             )
@@ -201,6 +205,12 @@ final class VoiceSessionPresenter {
             "hasBook": String(bookId != nil),
             "isParked": String(sessionRegistry.state == .parked),
         ])
+
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            state.recordError("Data use consent required")
+            enterFailure(reason: .dataUseConsentRequired)
+            return
+        }
 
         if await resumeParkedSessionIfEligible(
             bookId: bookId,
@@ -233,6 +243,15 @@ final class VoiceSessionPresenter {
         pendingInitialQuote = initialQuote
         currentBookContext = bookContext
         currentLanguage = language
+
+        // Consent can be revoked while stale-session cleanup and other
+        // asynchronous startup work is in flight. Re-check immediately before
+        // touching the microphone or creating a new remote voice session.
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            state.recordError("Data use consent required")
+            enterFailure(reason: .dataUseConsentRequired)
+            return
+        }
 
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
@@ -291,6 +310,7 @@ final class VoiceSessionPresenter {
             keyFetcher: fetcher,
             client: adapter,
             state: state,
+            dataUseConsentProvider: dataUseConsentProvider,
             sessionCoordinator: sessionCoordinatorFactory(),
             controlSocketFactory: controlSocketFactory,
             responderFactory: responderFactory,
@@ -666,6 +686,15 @@ final class VoiceSessionPresenter {
         await endStaleServerSessionIfNeeded()
         await start(bookId: bookId, language: language, initialQuote: quote, bookContext: context)
     }
+
+    /// Dismiss the consent-specific alert without discarding the failed
+    /// feature's book, quote, or context. `retry()` consumes that context
+    /// after the user grants consent; declining consent can call
+    /// `clearFailure()` to discard it.
+    func prepareForDataUseConsent() {
+        failure = nil
+        pendingFailure = nil
+    }
     
 
     func clearFailure() {
@@ -705,7 +734,12 @@ final class VoiceSessionPresenter {
         }
         guard failure == nil, pendingFailure == nil else { return }
         state.apply(status: .failed(reason: reason))
-        let alert = VoiceFailureAlert(reason: reason, message: state.lastError)
+        let message: String? = if case .dataUseConsentRequired = reason {
+            nil
+        } else {
+            state.lastError
+        }
+        let alert = VoiceFailureAlert(reason: reason, message: message)
         if isPresenting {
 
             pendingFailure = alert
@@ -720,5 +754,14 @@ final class VoiceSessionPresenter {
         guard let pending = pendingFailure else { return }
         pendingFailure = nil
         failure = pending
+    }
+}
+
+private actor DisabledLegacyEphemeralKeyFetcher: EphemeralKeyFetching {
+    func fetch(language: String?, bookContext: BookContextSnapshot?) async throws -> EphemeralKey {
+        throw RishiError.network(
+            code: "legacy_voice_disabled",
+            message: "The legacy realtime voice flow is disabled"
+        )
     }
 }

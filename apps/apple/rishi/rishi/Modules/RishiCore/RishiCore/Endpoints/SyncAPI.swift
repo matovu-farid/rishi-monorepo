@@ -38,6 +38,7 @@ public struct SyncUploadURLEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/sync/upload-url"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) {
@@ -62,6 +63,7 @@ struct SyncDownloadURLEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/sync/download-url"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) {
@@ -192,6 +194,7 @@ public struct SyncChangesEndpoint: WorkerEndpoint {
 
     public let method: HTTPMethod = .GET
     public let path: String
+    public let requiresDataUseConsent = true
     public let since: Date?
 
     public init(since: Date?) {
@@ -230,6 +233,7 @@ public struct SyncPushEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/sync/push"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) { self.body = body }

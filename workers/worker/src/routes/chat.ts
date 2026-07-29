@@ -36,6 +36,7 @@ import { z } from "zod";
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import { requireAuth } from "../index";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { requireActiveSubscription } from "../billing/sub-gate";
 import { meterFromContext } from "../billing/meter";
 
@@ -62,7 +63,12 @@ export const chatRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-chatRoutes.post("/", requireAuth, async (c) => {
+chatRoutes.post(
+  "/",
+  requireAuth,
+  requireAiDataConsent,
+  requireActiveSubscription,
+  async (c) => {
   const raw = await c.req.json().catch(() => null);
   const parsed = BodySchema.safeParse(raw);
   if (!parsed.success) {
@@ -140,4 +146,5 @@ chatRoutes.post("/", requireAuth, async (c) => {
       Connection: "keep-alive",
     },
   });
-});
+  },
+);

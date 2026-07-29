@@ -21,6 +21,7 @@ struct SignedInContentDependencies {
     let messageStore: any MessageStore
     let voicePresenter: VoiceSessionPresenter
     let entitlementSnapshotStore: EntitlementSnapshotStore
+    let dataUseConsentStore: any DataUseConsentStore
 
     @MainActor
     static func make(services: BootstrappedServices) -> Self {
@@ -50,13 +51,16 @@ struct SignedInContentDependencies {
                     entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
                     restoreService: services.billing.restoreService,
                     manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
-                    groupID: services.billing.groupID
+                    groupID: services.billing.groupID,
+                    dataUseConsentStore: services.dataUseConsentStore,
+                    onRevokeDataUse: { await services.voice.presenter.requestEnd() }
                 )
             ),
             chatService: services.chat.service,
             messageStore: services.chat.messageStore,
             voicePresenter: services.voice.presenter,
-            entitlementSnapshotStore: services.billing.entitlementSnapshotStore
+            entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+            dataUseConsentStore: services.dataUseConsentStore
         )
     }
 }
@@ -115,6 +119,8 @@ struct SignedInContent: View {
     @Environment(ReaderWindowCoordinator.self) private var readerWindows
 #endif
     @State private var model = SignedInViewModel()
+    @State private var showDataUseConsent = false
+    @State private var retryVoiceAfterConsent = false
 
     var body: some View {
         @Bindable var model = model
@@ -135,6 +141,30 @@ struct SignedInContent: View {
             readerWindows.invalidate(userID: user.id)
         }
 #endif
+        .task(id: user.id) {
+            await dependencies.dataUseConsentStore.setCurrentUser(user.id.uuidString)
+            showDataUseConsent = !(await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString))
+        }
+        .sheet(isPresented: $showDataUseConsent) {
+            AIDataConsentView(
+                onAllow: {
+                    Task {
+                        await dependencies.dataUseConsentStore.setCurrentUser(user.id.uuidString)
+                        await dependencies.dataUseConsentStore.grant(for: user.id.uuidString)
+                        showDataUseConsent = false
+                        if retryVoiceAfterConsent {
+                            retryVoiceAfterConsent = false
+                            await dependencies.voicePresenter.retry()
+                        }
+                    }
+                },
+                onNotNow: {
+                    retryVoiceAfterConsent = false
+                    showDataUseConsent = false
+                    dependencies.voicePresenter.clearFailure()
+                }
+            )
+        }
         .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
                 vm: ChatPanelViewModel.make(
@@ -156,6 +186,12 @@ struct SignedInContent: View {
             presenting: dependencies.voicePresenter.failure
         ) { failure in
             switch failure.primaryAction {
+            case .requestDataUseConsent:
+                Button("Review data use") {
+                    retryVoiceAfterConsent = true
+                    dependencies.voicePresenter.prepareForDataUseConsent()
+                    showDataUseConsent = true
+                }
             case .openSettings:
                 Button("Open Settings") {
                     Self.openSettings()

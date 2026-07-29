@@ -18,6 +18,7 @@ extension AppDependencies {
     @MainActor
     func performSignOut(currentUserBox: CurrentUserBox) async {
         let outgoing = try? Keychain.load(.userId)
+        await services?.dataUseConsentStore.clearCurrentUser()
         await clearEntitlementState(for: outgoing)
         await services!.sync.engine.resetForAccountSwitch()
         userIdBox.value = nil

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
+vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
+(vi as any).hoisted ??= <T>(factory: () => T) => factory()
+
 /**
  * Tests for /api/sync/messages — Phase 16-03 Task 2.
  *
@@ -94,8 +97,8 @@ function seedMessage(row: Partial<FakeMsgRow> & {
   })
 }
 
-// ─── Mock @rishi/shared/schema so both tables resolve to column ids ──────────
-vi.mock("@rishi/shared/schema", () => ({
+// ─── Mock ../db/schema so both tables resolve to column ids ─────────────────
+vi.mock("../db/schema", () => ({
   conversations: CONV_COLS,
   messages: MSG_COLS,
   devices: {},
@@ -282,7 +285,7 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-vi.mock("../index", async () => {
+vi.mock("../index.ts", async () => {
   return {
     requireAuth: async (
       c: { set: (k: string, v: unknown) => void; json: (b: unknown, s: number) => Response },
@@ -310,14 +313,20 @@ const env = {
 async function callPost(body: unknown) {
   const req = new Request("http://test.local/", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return messagesRoutes.fetch(req, env)
 }
 
 async function callGet(query: string = "") {
-  const req = new Request(`http://test.local/${query}`, { method: "GET" })
+  const req = new Request(`http://test.local/${query}`, {
+    method: "GET",
+    headers: { "X-Rishi-Data-Use-Consent": "2026-07-29" },
+  })
   return messagesRoutes.fetch(req, env)
 }
 

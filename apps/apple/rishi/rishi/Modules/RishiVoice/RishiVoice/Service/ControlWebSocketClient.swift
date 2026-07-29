@@ -58,6 +58,7 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
 
     private let baseURL: URL
     private let tokenProvider: any TokenProvider
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let rishiSessionId: String
     private let urlSession: URLSession
     private let backoff: @Sendable (Int) -> Duration
@@ -88,6 +89,7 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     public init(
         baseURL: URL,
         tokenProvider: any TokenProvider,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = NoWorkerDataUseConsentProvider(),
         rishiSessionId: String,
         urlSession: URLSession = .shared,
         backoff: @escaping @Sendable (Int) -> Duration = ControlWebSocketClient.defaultBackoff,
@@ -95,6 +97,7 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
     ) {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
+        self.dataUseConsentProvider = dataUseConsentProvider
         self.rishiSessionId = rishiSessionId
         self.urlSession = urlSession
         self.backoff = backoff
@@ -170,14 +173,14 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
 
     private func attemptConnect() async {
         guard !isTerminal else { return }
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            Log.event("voice.control.connect_blocked_without_consent", level: .info)
+            return
+        }
         generation += 1
         let myGeneration = generation
 
-        var request = URLRequest(url: controlURL())
-        request.httpShouldHandleCookies = false
-        if let token = await tokenProvider.token() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        let request = await buildControlRequest()
 
         Log.event("voice.control.connecting", level: .info, data: [
             "rishi_session_id": rishiSessionId,
@@ -192,6 +195,21 @@ public actor ControlWebSocketClient: ControlSocketConnecting {
         receiveTask = Task { [weak self] in
             await self?.runReceiveLoop(task, generation: myGeneration)
         }
+    }
+
+    func buildControlRequest() async -> URLRequest {
+        var request = URLRequest(url: controlURL())
+        request.httpShouldHandleCookies = false
+        if let token = await tokenProvider.token() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if await dataUseConsentProvider.hasCurrentDataUseConsent() {
+            request.setValue(
+                WorkerDataUseConsent.currentVersion,
+                forHTTPHeaderField: WorkerDataUseConsent.headerField
+            )
+        }
+        return request
     }
 
     /// `baseURL` is the plain `https://` worker root (e.g.

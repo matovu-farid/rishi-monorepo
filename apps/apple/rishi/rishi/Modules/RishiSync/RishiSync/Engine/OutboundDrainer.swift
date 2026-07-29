@@ -37,6 +37,7 @@ struct OutboundDrainer: Sendable {
     private let conversationUploader: ConversationUploader
     private let messageUploader: MessageUploader
     private let bookmarkUploader: BookmarkUploader
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
     struct Dependencies {
         let queue: SyncQueue
@@ -48,6 +49,7 @@ struct OutboundDrainer: Sendable {
         let conversationUploader: ConversationUploader
         let messageUploader: MessageUploader
         let bookmarkUploader: BookmarkUploader
+        let dataUseConsentProvider: any WorkerDataUseConsentProvider
     }
 
     init(dependencies: Dependencies) {
@@ -60,11 +62,16 @@ struct OutboundDrainer: Sendable {
         self.conversationUploader = dependencies.conversationUploader
         self.messageUploader = dependencies.messageUploader
         self.bookmarkUploader = dependencies.bookmarkUploader
+        self.dataUseConsentProvider = dependencies.dataUseConsentProvider
     }
 
     /// Drain up to `limit` queue items and push them by kind.
     func drain(limit: Int) async -> DrainResult {
         var result = DrainResult()
+
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            return result
+        }
 
         // Per-kind buckets so a book-only drain doesn't accidentally swallow
         // position items as collateral.

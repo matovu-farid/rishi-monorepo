@@ -41,6 +41,7 @@ import { AppleBucket, createTestNotification } from "./apple-connect/functions";
 import { value } from "effect/Redacted";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { requireAuth } from "./middleware";
+import { requireAiDataConsent } from "./middleware/ai-data-consent";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "./jwt";
 import { findOrCreateUser } from "./findOrCreateUser";
 import { incrementApiUsage } from "./usage/api-usage";
@@ -501,7 +502,12 @@ app.use(
       "http://localhost:5173",
       "http://localhost:5174",
     ],
-    allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
+    allowHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Dev-Bypass",
+      "X-Rishi-Data-Use-Consent",
+    ],
     allowMethods: ["GET", "POST", "OPTIONS", "DELETE"],
     credentials: true,
   }),
@@ -764,7 +770,7 @@ app.get("/health", (c) => {
   });
 });
 
-app.post("/api/audio/speech", requireAuth, async (c) => {
+app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
   c.executionCtx.waitUntil(
     incrementApiUsage(c.env, c.get("userId"), "tts"),
   );
@@ -1009,7 +1015,11 @@ app.get("/api/audio/speech/options", (_c) => {
   });
 });
 
-app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
+app.post(
+  "/api/audio/speech/elevenlabs",
+  requireAuth,
+  requireAiDataConsent,
+  async (c) => {
   c.executionCtx.waitUntil(
     incrementApiUsage(c.env, c.get("userId"), "tts"),
   );
@@ -1219,7 +1229,8 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
     );
     return c.json({ error: "TTS generation failed" }, 500);
   }
-});
+  },
+);
 
 // P0 removal: the legacy `/api/realtime/client_secrets` route used to mint
 // OpenAI Realtime ephemeral credentials directly, with no session creation
@@ -1233,6 +1244,7 @@ app.post("/api/audio/speech/elevenlabs", requireAuth, async (c) => {
 app.post(
   "/api/text/completions",
   requireAuth,
+  requireAiDataConsent,
   requireActiveSubscription,
   async (c) => {
     try {
@@ -1277,7 +1289,12 @@ app.post(
 );
 
 // ─── POST /api/embed — Server-side embedding fallback ────────────────────────
-app.post("/api/embed", requireAuth, requireActiveSubscription, async (c) => {
+app.post(
+  "/api/embed",
+  requireAuth,
+  requireAiDataConsent,
+  requireActiveSubscription,
+  async (c) => {
   const body = await c.req.json<{ texts: string[] }>();
 
   if (!body.texts || body.texts.length === 0) {
@@ -1325,7 +1342,8 @@ app.post("/api/embed", requireAuth, requireActiveSubscription, async (c) => {
   );
 
   return c.json({ embeddings });
-});
+  },
+);
 
 // ─── POST /api/audio/transcribe — Deepgram STT proxy ──────────────────────────
 // Accepts iOS TranscribeEndpoint.Body shape — JSON `{audio: <base64>, mime_type}`
@@ -1342,7 +1360,7 @@ const ALLOWED_TRANSCRIBE_MIME_TYPES = new Set([
   "audio/m4a",
 ]);
 
-app.post("/api/audio/transcribe", requireAuth, async (c) => {
+app.post("/api/audio/transcribe", requireAuth, requireAiDataConsent, async (c) => {
   // 1. Parse JSON body.
   const body = await c.req
     .json<{ audio?: unknown; mime_type?: unknown }>()

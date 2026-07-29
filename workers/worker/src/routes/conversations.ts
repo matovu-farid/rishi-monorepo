@@ -4,6 +4,7 @@ import { conversations } from "../db/schema";
 import { createDb } from "../db/drizzle";
 
 import { requireAuth } from "../index";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { and, desc, eq, gt } from "drizzle-orm";
 
 /**
@@ -44,7 +45,7 @@ export const conversationsRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-conversationsRoutes.post("/", requireAuth, async (c) => {
+conversationsRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   const raw = await c.req.json().catch(() => null);
   const parsed = PostBody.safeParse(raw);
   if (!parsed.success) {
@@ -82,7 +83,7 @@ conversationsRoutes.post("/", requireAuth, async (c) => {
   return c.json({ applied_count: applied });
 });
 
-conversationsRoutes.get("/", requireAuth, async (c) => {
+conversationsRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
   const userId = c.get("userId");
   const sinceRaw = c.req.query("since");
   const since = sinceRaw ? Number(sinceRaw) : null;

@@ -71,6 +71,8 @@ public struct SettingsScreen: View {
     /// Live StoreKit status used to avoid a stale Subscribe CTA while the
     /// server entitlement snapshot is still refreshing.
     public let storeKitIsSubscribed: Bool
+    public let dataUseConsentStore: any DataUseConsentStore
+    public let onRevokeDataUse: @Sendable () async -> Void
 
     @State private var showDeleteConfirm = false
     @State private var deleteModel: DeleteAccountModel?
@@ -80,6 +82,8 @@ public struct SettingsScreen: View {
     /// presentation host — presenting from it collides with the in-progress
     /// Settings sheet and the Safari sheet never appears).
     @State private var legalSheetURL: IdentifiedURL?
+    @State private var dataUseConsentCurrent = false
+    @State private var showDataUseConsent = false
 
     public init(
         user: User,
@@ -100,6 +104,8 @@ public struct SettingsScreen: View {
         allowanceLoading: Bool = false,
         onSubscribe: (() -> Void)? = nil,
         storeKitIsSubscribed: Bool = false,
+        dataUseConsentStore: any DataUseConsentStore = InMemoryDataUseConsentStore(),
+        onRevokeDataUse: @escaping @Sendable () async -> Void = {},
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
@@ -123,6 +129,8 @@ public struct SettingsScreen: View {
         self.allowanceLoading = allowanceLoading
         self.onSubscribe = onSubscribe
         self.storeKitIsSubscribed = storeKitIsSubscribed
+        self.dataUseConsentStore = dataUseConsentStore
+        self.onRevokeDataUse = onRevokeDataUse
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
@@ -170,6 +178,19 @@ public struct SettingsScreen: View {
                     onChange: onAudioChange
                 )
                 SyncSettingsSection(status: syncStatus, onSyncNow: onSyncNow)
+                Section("Data use") {
+                    LabeledContent("Consent", value: dataUseConsentCurrent ? "Allowed" : "Not allowed")
+                    Button("Review data use") { showDataUseConsent = true }
+                    if dataUseConsentCurrent {
+                        Button("Revoke data use", role: .destructive) {
+                            Task {
+                                await onRevokeDataUse()
+                                await dataUseConsentStore.revoke(for: user.id.uuidString)
+                                dataUseConsentCurrent = false
+                            }
+                        }
+                    }
+                }
                 TelemetrySection(store: telemetryStore)
                 LegalLinksSection(onSelect: { legalSheetURL = IdentifiedURL(url: $0) })
                 AboutSection()
@@ -210,6 +231,23 @@ public struct SettingsScreen: View {
             }
             .sheet(item: $legalSheetURL) { wrapper in
                 SafariSheet(url: wrapper.url)
+            }
+            .sheet(isPresented: $showDataUseConsent) {
+                AIDataConsentView(
+                    onAllow: {
+                        Task {
+                            await dataUseConsentStore.setCurrentUser(user.id.uuidString)
+                            await dataUseConsentStore.grant(for: user.id.uuidString)
+                            dataUseConsentCurrent = true
+                            showDataUseConsent = false
+                        }
+                    },
+                    onNotNow: { showDataUseConsent = false }
+                )
+            }
+            .task(id: user.id) {
+                await dataUseConsentStore.setCurrentUser(user.id.uuidString)
+                dataUseConsentCurrent = await dataUseConsentStore.isCurrent(for: user.id.uuidString)
             }
         }
     }

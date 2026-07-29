@@ -21,12 +21,22 @@ public extension TTSChunkSource {
 /// endpoint in SSE event mode and turns ordered chunk frames into `TTSChunk`.
 public struct WorkerTTSChunkSource: TTSChunkSource {
     private let client: WorkerClient
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
-    public init(client: WorkerClient) {
+    public init(
+        client: WorkerClient,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
+    ) {
         self.client = client
+        self.dataUseConsentProvider = dataUseConsentProvider
     }
 
     public func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: WorkerDataUseConsentRequiredError())
+            }
+        }
         let endpoint = SpeechStreamEndpoint(
             body: .init(
                 text: request.text,

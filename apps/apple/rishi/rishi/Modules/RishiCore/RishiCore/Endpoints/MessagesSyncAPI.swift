@@ -72,6 +72,7 @@ public struct MessagesSyncEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/sync/messages"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) {
@@ -94,6 +95,7 @@ public struct MessagesSyncSinceEndpoint: WorkerEndpoint {
 
     public let method: HTTPMethod = .GET
     public let path: String
+    public let requiresDataUseConsent = true
     public let since: Int64?
 
     public init(since: Int64?) {

@@ -139,6 +139,7 @@ public enum VoiceSessionRegistrationFailure: Sendable, Equatable {
 
 /// Reason a voice session terminated in `.failed`.
 public enum VoiceSessionFailureReason: Sendable, Equatable {
+    case dataUseConsentRequired
     case micDenied
     case keyFetch(KeyFetchFailure)
     /// `POST /api/voice-sessions` failed. Trial-voice-session flow only.

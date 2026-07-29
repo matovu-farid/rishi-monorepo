@@ -396,7 +396,10 @@ interface SyncChange {
 async function callPush(body: { changes: SyncChange[] } | unknown) {
   const req = new Request("http://test.local/push", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return syncRoutes.fetch(req, env)

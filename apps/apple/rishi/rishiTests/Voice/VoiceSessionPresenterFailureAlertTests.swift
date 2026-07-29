@@ -84,6 +84,29 @@ struct VoiceSessionPresenterFailureAlertTests {
         #expect(presenter.pendingFailure != nil || presenter.failure != nil)
     }
 
+    @Test("missing consent surfaces a consent action instead of a generic retry")
+    func missingConsent_surfacesConsentAction() async {
+        let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
+        let worker = WorkerClient(
+            baseURL: URL(string: "https://example.invalid")!,
+            tokenProvider: StubTokenProvider()
+        )
+        let presenter = VoiceSessionPresenter(
+            coordinator: coordinator,
+            workerClient: worker,
+            dataUseConsentProvider: NoWorkerDataUseConsentProvider(),
+            messageStore: StubMessageStore(),
+            conversationLookup: ConversationLookup(store: EmptyConversationStore()),
+            userIdProvider: { UUID() },
+            dirtyHook: StubDirtyHook(),
+            micGate: DeniedMicGate()
+        )
+
+        await presenter.start(bookId: UUID())
+
+        #expect(presenter.failure?.primaryAction == .requestDataUseConsent)
+    }
+
     @Test("a repeated startup failure never strands the voice cover")
     func repeatedMicDenied_doesNotStrandCover() async {
         let presenter = makePresenter()

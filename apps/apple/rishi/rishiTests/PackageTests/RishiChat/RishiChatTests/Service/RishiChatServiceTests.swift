@@ -67,6 +67,10 @@ actor SpyDirtyHook: ChatDirtyHook {
     func messageDidUpdate(_ id: MessageID) async { messageCalls.append(id) }
 }
 
+struct DeniedChatDataUseConsent: WorkerDataUseConsentProvider {
+    func hasCurrentDataUseConsent() async -> Bool { false }
+}
+
 // MARK: - Suite
 
 @Suite("RishiChatService happy path", .serialized)
@@ -103,16 +107,46 @@ struct RishiChatServiceTests {
         hook: SpyDirtyHook? = nil,
         worker: WorkerClient,
         conversationStore: any ConversationStore,
-        messageStore: any MessageStore
+        messageStore: any MessageStore,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
     ) -> RishiChatService {
         let lookup = ConversationLookup(store: conversationStore)
         return RishiChatService(
             userIdProvider: { userId },
             workerClient: worker,
+            dataUseConsentProvider: dataUseConsentProvider,
             conversationLookup: lookup,
             messageStore: messageStore,
             dirtyHook: hook
         )
+    }
+
+    @Test("denied data-use consent prevents conversation and user-turn persistence")
+    func deniedConsentStopsBeforePersistence() async {
+        let (worker, _) = makeWorker()
+        let convoStore = InMemoryConversationStore()
+        let msgStore = InMemoryMessageStore()
+        let userId = UUID()
+        let service = makeService(
+            userId: userId,
+            worker: worker,
+            conversationStore: convoStore,
+            messageStore: msgStore,
+            dataUseConsentProvider: DeniedChatDataUseConsent()
+        )
+
+        var sawConsentError = false
+        do {
+            for try await _ in service.stream(query: "private", bookId: UUID()) {}
+        } catch is WorkerDataUseConsentRequiredError {
+            sawConsentError = true
+        } catch {
+            sawConsentError = false
+        }
+
+        #expect(sawConsentError)
+        #expect((try? await convoStore.conversations(for: userId).count) == 0)
+        #expect(ChatMockURLProtocol.recordedRequests.isEmpty)
     }
 
     // 1. Happy path: tokens stream in order + completed event

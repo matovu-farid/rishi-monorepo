@@ -96,6 +96,7 @@ final class AppDependencies {
 struct BootstrappedServices: @unchecked Sendable {
 
     let workerClient: WorkerClient
+    let dataUseConsentStore: any DataUseConsentStore
 
     let library: LibraryRuntime
 

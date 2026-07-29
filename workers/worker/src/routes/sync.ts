@@ -3,6 +3,7 @@ import { eq, gt, and, max, asc, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 
 import { requireAuth } from "../middleware";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { createDb } from "../db/drizzle";
 import {
   books,
@@ -82,7 +83,7 @@ export const syncRoutes = new Hono<{
 //   - conversation -> conversations table (LWW).
 //   - message      -> messages table (append-only — existing rows are never
 //                     overwritten; userId is enforced via parent conversation).
-syncRoutes.post("/push", requireAuth, async (c) => {
+syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
   const rawBody = await c.req.json().catch(() => null);
   const parsed = PushBodySchema.safeParse(rawBody);
   if (!parsed.success) {
@@ -488,7 +489,7 @@ syncRoutes.post("/push", requireAuth, async (c) => {
 // ─── GET /pull ─────────────────────────────────────────────────────────────────
 // Returns books and highlights changed since the given syncVersion for the authenticated user.
 // filePath is set to '' and coverPath to null to prevent path contamination.
-syncRoutes.get("/pull", requireAuth, async (c) => {
+syncRoutes.get("/pull", requireAuth, requireAiDataConsent, async (c) => {
   const sinceVersion = Number(c.req.query("since_version") ?? "0");
   if (!Number.isFinite(sinceVersion) || sinceVersion < 0) {
     return c.json(

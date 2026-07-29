@@ -5,25 +5,22 @@ import SwiftUI
 /// this as a `.fullScreenCover` when `state.hasCompletedOnboarding == false`
 /// on launch.
 ///
-/// The mic / language primer stages are wired to app-owned closures for
-/// AVAudioApplication and AppReaderDefaults respectively. Book selection is
+/// Voice permission is requested only by the consented voice flow. The
+/// language primer remains part of onboarding, while book selection is
 /// presented from the authenticated library instead of this intro wizard.
 public struct OnboardingFlowView: View {
 
     @Bindable private var coordinator: OnboardingCoordinator
 
-    public let onRequestMic: () async -> Void
     @Binding public var voiceLanguage: String
     public let onCompleted: () -> Void
 
     public init(
         coordinator: OnboardingCoordinator,
-        onRequestMic: @escaping () async -> Void,
         voiceLanguage: Binding<String>,
         onCompleted: @escaping () -> Void
     ) {
         self.coordinator = coordinator
-        self.onRequestMic = onRequestMic
         self._voiceLanguage = voiceLanguage
         self.onCompleted = onCompleted
     }
@@ -37,23 +34,6 @@ public struct OnboardingFlowView: View {
                     // mutates currentStage which SwiftUI observes.
                     Task { await coordinator.advance() }
                 }, logo: "rishi")
-
-            case .micPrimer:
-                MicPermissionPrimer(
-                    onAllow: {
-                        // KEEP: onRequestMic awaits AVAudioApplication permission
-                        // (system sheet) and coordinator.advance updates @MainActor
-                        // observable state.
-                        Task {
-                            await onRequestMic()
-                            await coordinator.advance()
-                        }
-                    },
-                    onSkip: {
-                        // KEEP: coordinator skip-stage only.
-                        Task { await coordinator.skipCurrentStage() }
-                    }
-                )
 
             case .voiceLanguagePrimer:
                 VoiceLanguagePrimer(

@@ -18,6 +18,8 @@ struct SettingsContentDependencies {
     let restoreService: RestoreService
     let manageSubscriptionPresenter: ManageSubscriptionPresenter
     let groupID: GroupId?
+    let dataUseConsentStore: any DataUseConsentStore
+    let onRevokeDataUse: @Sendable () async -> Void
 }
 
 struct SettingsContent: View {
@@ -78,6 +80,8 @@ struct SettingsContent: View {
                     allowanceLoading: dependencies.entitlementSnapshotStore.isLoading,
                     onSubscribe: { showSubscriptions = true },
                     storeKitIsSubscribed: hasActiveStoreKitSubscription,
+                    dataUseConsentStore: dependencies.dataUseConsentStore,
+                    onRevokeDataUse: dependencies.onRevokeDataUse,
                     onSignOut: {
                         await MainActor.run {
                             onDismiss()

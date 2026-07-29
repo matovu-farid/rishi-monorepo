@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { requireAuth } from "../middleware";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { rollAllowancePeriodsForward } from "../billing/allowance-period-rollover";
 import { coerceLanguage, mintRealtimeClientSecret } from "../realtime/client-secrets";
 import { voiceSessionErrorResponse } from "./voice-session-errors";
@@ -27,7 +28,11 @@ export const voiceSessionsRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-voiceSessionsRoutes.get("/:id/control", requireAuth, async (c) => {
+voiceSessionsRoutes.get(
+  "/:id/control",
+  requireAuth,
+  requireAiDataConsent,
+  async (c) => {
   if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
     return c.json({ error: "expected_websocket" }, 426);
   }
@@ -48,7 +53,8 @@ voiceSessionsRoutes.get("/:id/control", requireAuth, async (c) => {
   // The DO's own fetch() re-validates and performs the actual upgrade —
   // forward the raw request so the Upgrade/Connection headers survive.
   return stub.fetch(c.req.raw);
-});
+  },
+);
 
 // ---------- POST / (start a voice session + mint an OpenAI client secret) ----------
 
@@ -84,7 +90,11 @@ const CreateVoiceSessionBodySchema = z
  * All fields are optional; a missing/unparseable body degrades to
  * `{ language: "en" }`, matching that existing route's behavior.
  */
-voiceSessionsRoutes.post("/", requireAuth, async (c) => {
+voiceSessionsRoutes.post(
+  "/",
+  requireAuth,
+  requireAiDataConsent,
+  async (c) => {
   const startupStartedAt = performance.now();
   const emitPhase = (phase: string, phaseStartedAt: number): void => {
     // Keep telemetry best-effort: logging must never change the request's
@@ -207,7 +217,8 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
   } finally {
     emitPhase("total", startupStartedAt);
   }
-});
+  },
+);
 
 // ---------- POST /end-active (force-close live session) ----------
 
@@ -215,7 +226,7 @@ voiceSessionsRoutes.post("/", requireAuth, async (c) => {
  * Ends whichever voice session the ledger considers live for this user.
  * Must be registered before `/:id/end` so `end-active` is not captured as an id.
  */
-voiceSessionsRoutes.post("/end-active", requireAuth, async (c) => {
+voiceSessionsRoutes.post("/end-active", requireAuth, requireAiDataConsent, async (c) => {
   const userId = c.get("userId");
   const stub = c.env.USER_USAGE_LEDGER.getByName(userId);
   try {
@@ -233,6 +244,9 @@ voiceSessionsRoutes.post("/end-active", requireAuth, async (c) => {
  * leave an active row burning intervals until inactivity timeout. Also
  * unblocks create after abandoned pending_registration orphans.
  */
+// Lifecycle cleanup carries only the authenticated session identifier and is
+// intentionally available after consent revocation so an already-created
+// voice session can be closed promptly.
 voiceSessionsRoutes.post("/:id/end", requireAuth, async (c) => {
   const userId = c.get("userId");
   const rishiSessionId = c.req.param("id");
@@ -261,7 +275,7 @@ const RegisterCallBodySchema = z.object({
  * is exactly that signal — the iOS client must close its just-opened OpenAI
  * WebRTC connection on any of them and, per that same step, offer retry.
  */
-voiceSessionsRoutes.post("/:id/register-call", requireAuth, async (c) => {
+voiceSessionsRoutes.post("/:id/register-call", requireAuth, requireAiDataConsent, async (c) => {
   const userId = c.get("userId");
   const rishiSessionId = c.req.param("id");
 

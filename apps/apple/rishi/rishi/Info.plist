@@ -4,6 +4,8 @@
 <dict>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.education</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Audio is sent to OpenAI during active voice conversations.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>org.fidexa.rishi.sync.refresh</string>

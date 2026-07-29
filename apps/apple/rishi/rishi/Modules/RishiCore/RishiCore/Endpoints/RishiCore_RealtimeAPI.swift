@@ -87,6 +87,7 @@ public struct RealtimeClientSecretsEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/realtime/client_secrets"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(language: String? = nil, bookContext: BookContextSnapshot? = nil) {

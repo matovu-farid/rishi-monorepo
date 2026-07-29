@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
+vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
+(vi as any).hoisted ??= <T>(factory: () => T) => factory()
+
 /**
  * Tests for GET /api/sync/changes — Quick-G89 inbound book + highlight bridge.
  *
@@ -377,7 +380,7 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-vi.mock("../index", async () => {
+vi.mock("../index.ts", async () => {
   return {
     requireAuth: async (
       c: {
@@ -415,7 +418,10 @@ interface SyncChange {
 
 async function callChanges(query: string = ""): Promise<Response> {
   const url = query ? `http://test.local/${query}` : "http://test.local/"
-  const req = new Request(url, { method: "GET" })
+  const req = new Request(url, {
+    method: "GET",
+    headers: { "X-Rishi-Data-Use-Consent": "2026-07-29" },
+  })
   return changesRoutes.fetch(req, env)
 }
 

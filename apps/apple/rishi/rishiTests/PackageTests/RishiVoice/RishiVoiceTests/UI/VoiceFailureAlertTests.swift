@@ -11,6 +11,15 @@ import Testing
 /// the surface migration is copy-preserving.
 @Suite("VoiceFailureAlert mapping")
 struct VoiceFailureAlertTests {
+    @Test("missing data consent opens the consent flow")
+    func dataUseConsentRequired() {
+        let alert = VoiceFailureAlert(reason: .dataUseConsentRequired, message: nil)
+
+        #expect(alert.title == "Data use permission needed")
+        #expect(alert.message == "Allow data use to use voice chat and other AI features.")
+        #expect(alert.primaryAction == .requestDataUseConsent)
+    }
+
 
     @Test("micDenied → Settings affordance + mic copy")
     func micDenied() {

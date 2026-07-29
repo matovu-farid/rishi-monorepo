@@ -52,6 +52,12 @@ vi.mock("./auth", () => ({
   }),
 }))
 
+vi.mock("./middleware", () => ({
+  requireAuth: async (_c: unknown, next: () => Promise<void>) => {
+    await next()
+  },
+}))
+
 // ─── Stub heavy transitive imports so importing ./index does not crash ──────
 vi.mock("./db/drizzle", () => ({
   createDb: () => ({}),
@@ -102,6 +108,15 @@ vi.mock("./billing/apple-webhook", () => ({
 vi.mock("./billing/apple-me", () => ({
   registerBillingMeRoute: () => undefined,
 }))
+
+vi.mock("./durable-objects/user-usage-ledger/ledger", () => ({
+  UserUsageLedger: class UserUsageLedger {},
+}))
+
+vi.mock("./routes/test-auth", async () => {
+  const { Hono } = await import("hono")
+  return { testAuthRoutes: new Hono() }
+})
 
 vi.mock("@upstash/redis/cloudflare", () => ({
   Redis: { fromEnv: () => ({ set: async () => undefined, get: async () => null }) },
@@ -170,7 +185,10 @@ afterEach(() => {
 async function callTranscribe(body: unknown) {
   const req = new Request("http://test.local/api/audio/transcribe", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return app.fetch(req, env, {
@@ -184,6 +202,39 @@ async function callTranscribe(body: unknown) {
 }
 
 describe("POST /api/audio/transcribe (iOS JSON+base64 contract)", () => {
+  it("missing consent rejects before parsing or Deepgram work", async () => {
+    const res = await app.fetch(
+      new Request("http://test.local/api/audio/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "not-json",
+      }),
+      env,
+      {} as ExecutionContext,
+    )
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(captured).toHaveLength(0)
+  })
+
+  it("unsupported consent rejects before parsing or Deepgram work", async () => {
+    const res = await app.fetch(
+      new Request("http://test.local/api/audio/transcribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Rishi-Data-Use-Consent": "2026-01-01",
+        },
+        body: "not-json",
+      }),
+      env,
+      {} as ExecutionContext,
+    )
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(captured).toHaveLength(0)
+  })
+
   it("happy path: JSON {audio: <base64>, mime_type} -> 200 {transcript}", async () => {
     const res = await callTranscribe({
       audio: FAKE_AUDIO_BASE64,

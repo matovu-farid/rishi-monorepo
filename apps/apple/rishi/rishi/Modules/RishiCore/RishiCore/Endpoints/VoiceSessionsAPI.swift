@@ -19,6 +19,7 @@ public struct CreateVoiceSessionEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/voice-sessions"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(language: String? = nil, bookContext: BookContextSnapshot? = nil) {
@@ -95,6 +96,7 @@ public struct RegisterVoiceCallEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(rishiSessionId: String, callId: String, nonce: String) {
@@ -121,6 +123,7 @@ public struct EndActiveVoiceSessionEndpoint: WorkerEndpoint {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/voice-sessions/end-active"
+    public let requiresDataUseConsent = true
 
     public init() {}
 

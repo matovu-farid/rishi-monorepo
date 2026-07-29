@@ -5,6 +5,7 @@ import { createDb } from "../db/drizzle";
 import { books } from "../db/schema";
 import { signR2Url } from "../r2-presign";
 import { requireAuth } from "../middleware";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 
 // Defaults applied when the corresponding wrangler var is unset.
 const DEFAULT_BOOK_MAX_PER_USER = 500;
@@ -92,7 +93,7 @@ function isR2KeySafe(r2Key: string, expectedPrefix: string): boolean {
 //
 // Does NOT sign Content-Type in headers (signQuery only) so the client's PUT
 // can use whatever Content-Type it likes without breaking the signature.
-uploadRoutes.post("/upload-url", requireAuth, async (c) => {
+uploadRoutes.post("/upload-url", requireAuth, requireAiDataConsent, async (c) => {
   const body = await c.req
     .json<{ key?: unknown; content_type?: unknown }>()
     .catch(() => null);
@@ -190,7 +191,7 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
 // Key safety: `body.key` MUST begin with `books/<authedUserId>/` and contain no
 // `..`/`%`/null-byte tricks (isR2KeySafe). This prevents the client from
 // downloading another user's book file.
-uploadRoutes.post("/download-url", requireAuth, async (c) => {
+uploadRoutes.post("/download-url", requireAuth, requireAiDataConsent, async (c) => {
   const body = await c.req.json<{ key?: unknown }>().catch(() => null);
   if (!body || typeof body.key !== "string") {
     return c.json({ error: "Forbidden: invalid key" }, 403);

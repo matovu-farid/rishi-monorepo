@@ -6,6 +6,34 @@ import Foundation
 @Suite("TTSStreamer", .serialized)
 struct TTSStreamerTests {
 
+    private struct DeniedConsent: WorkerDataUseConsentProvider {
+        func hasCurrentDataUseConsent() async -> Bool { false }
+    }
+
+    @Test("Denied data-use consent prevents TTS from opening a worker stream")
+    func deniedConsentStopsBeforeStreaming() async {
+        let client = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            tokenProvider: StaticTokenProvider("token"),
+            dataUseConsentProvider: DeniedConsent()
+        )
+        let source = WorkerTTSChunkSource(
+            client: client,
+            dataUseConsentProvider: DeniedConsent()
+        )
+
+        var thrown: Error?
+        do {
+            for try await _ in await source.stream(
+                request: TTSStreamRequest(text: "private", voice: "alloy")
+            ) {}
+        } catch {
+            thrown = error
+        }
+
+        #expect(thrown is WorkerDataUseConsentRequiredError)
+    }
+
     @Test("Yields chunks in order")
     func yieldsChunksInOrder() async throws {
         let chunks = [Data([0xFF, 0xFB]), Data([0x90, 0x00]), Data([0x11, 0x22])]

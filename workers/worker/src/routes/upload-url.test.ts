@@ -49,8 +49,8 @@ function resetStore() {
   bookStore.length = 0
 }
 
-// ─── Mock @rishi/shared/schema so `books` resolves to our column ids ─────────
-vi.mock("@rishi/shared/schema", () => ({
+// ─── Mock ../db/schema so `books` resolves to our column ids ────────────────
+vi.mock("../db/schema", () => ({
   books: COLS,
   // Other tables referenced transitively by sibling imports — empty stubs.
   highlights: {},
@@ -198,8 +198,8 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-// ─── Mock ../index to avoid pulling the real Hono app + every route ──────────
-vi.mock("../index", async () => {
+// ─── Mock ../middleware to avoid real JWT verification ─────────────────────
+vi.mock("../middleware", async () => {
   return {
     requireAuth: async (
       c: {
@@ -238,7 +238,10 @@ async function callUploadUrl(
   const env = { ...baseEnv, ...envOverrides }
   const req = new Request("http://test.local/upload-url", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return uploadRoutes.fetch(req, env)

@@ -33,6 +33,9 @@ vi.mock("@sentry/cloudflare", () => ({
 vi.mock("./billing/meter", () => ({
   meterFromContext: meterMock,
 }))
+vi.mock("./usage/api-usage", () => ({
+  incrementApiUsage: vi.fn(async () => undefined),
+}))
 
 vi.mock("./billing/sub-gate", () => ({
   requireActiveSubscription: async (
@@ -76,6 +79,9 @@ vi.mock("./routes/sync", async () => {
   const { Hono } = await import("hono")
   return { syncRoutes: new Hono() }
 })
+vi.mock("./durable-objects/user-usage-ledger/ledger", () => ({
+  UserUsageLedger: class UserUsageLedger {},
+}))
 vi.mock("./routes/upload", async () => {
   const { Hono } = await import("hono")
   return { uploadRoutes: new Hono() }
@@ -216,6 +222,14 @@ const env = {
     get: vi.fn<(key: string) => Promise<unknown>>(),
     put: vi.fn<(key: string, value: unknown, options?: unknown) => Promise<unknown>>(),
   } as unknown as R2Bucket,
+  USER_USAGE_LEDGER: {
+    getByName: () => ({
+      reserveTts: async () => ({ reservationId: "reservation_test" }),
+      commitTtsReservation: async () => undefined,
+      releaseTtsReservation: async () => undefined,
+      getEntitlementSnapshot: async () => ({}),
+    }),
+  },
 } as unknown as Record<string, unknown>
 
 const ctx = {
@@ -226,7 +240,10 @@ const ctx = {
 async function callSpeech(body: unknown) {
   const req = new Request("https://api.fidexa.org/api/audio/speech/elevenlabs", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return app.fetch(req, env, ctx)
@@ -277,6 +294,41 @@ beforeEach(() => {
 })
 
 describe("POST /api/audio/speech/elevenlabs", () => {
+  it("missing consent rejects before parsing, cache lookup, metering, or provider work", async () => {
+    const res = await app.fetch(
+      new Request("https://api.fidexa.org/api/audio/speech/elevenlabs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "not-json",
+      }),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(fetchCalls).toHaveLength(0)
+    expect(meterMock).not.toHaveBeenCalled()
+  })
+
+  it("unsupported consent rejects before parsing, cache lookup, metering, or provider work", async () => {
+    const res = await app.fetch(
+      new Request("https://api.fidexa.org/api/audio/speech/elevenlabs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Rishi-Data-Use-Consent": "2026-01-01",
+        },
+        body: "not-json",
+      }),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(fetchCalls).toHaveLength(0)
+    expect(meterMock).not.toHaveBeenCalled()
+  })
+
   it("cache miss calls ElevenLabs, meters, writes to R2, and returns audio", async () => {
     const cache = env.TTS_CACHE as unknown as {
       get: ReturnType<typeof vi.fn>

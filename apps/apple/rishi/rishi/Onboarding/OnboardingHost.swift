@@ -3,27 +3,7 @@
 
 
 
-
-
-
-
-
-
-
 import SwiftUI
-
-
-
-#if canImport(AVFoundation)
-import AVFoundation
-#endif
-
-
-
-
-
-
-
 
 struct OnboardingHost: View {
 
@@ -44,13 +24,6 @@ struct OnboardingHost: View {
 #endif
         OnboardingFlowView(
             coordinator: coordinator,
-            onRequestMic: {
-                #if canImport(AVFoundation)
-                if #available(iOS 17.0, macCatalyst 17.0, *) {
-                    _ = await AVAudioApplication.requestRecordPermission()
-                }
-                #endif
-            },
             voiceLanguage: Binding(
                 get: { readerDefaults.voiceLanguage.rawValue },
                 set: { readerDefaults.voiceLanguage = VoiceLanguageOption(rawValue: $0) ?? .english }

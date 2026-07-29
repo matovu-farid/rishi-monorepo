@@ -43,10 +43,19 @@ enum ServiceGraphFactory {
 
         let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
 
+        let dataUseConsentStore = UserDefaultsDataUseConsentStore()
+        await dataUseConsentStore.setCurrentUser(await userIdBox.value.map(String.init))
+        let dataUseConsentProvider = AccountDataUseConsentProvider(
+            store: dataUseConsentStore,
+            userIDProvider: { [userIdBox] in
+                await userIdBox.value.map(String.init)
+            }
+        )
+
         let workerClient = WorkerClient(
             baseURL: baseURL,
             tokenProvider: tokenProvider,
-
+            dataUseConsentProvider: dataUseConsentProvider,
         )
 
         let speechOptions = (try? await workerClient.send(SpeechOptionsEndpoint()))
@@ -82,7 +91,8 @@ enum ServiceGraphFactory {
             at: dbURL
         )
         async let audioStackTask: AudioStack = AudioStackFactory.make(
-            workerClient: workerClient
+            workerClient: workerClient,
+            dataUseConsentProvider: dataUseConsentProvider
         )
 
         let dbStore = await dbStoreTask
@@ -249,7 +259,8 @@ enum ServiceGraphFactory {
             conversationsFetcher: conversationsFetcher,
             messagesFetcher: messagesFetcher,
             conversationStore: conversationStore,
-            messageStore: messageStore
+            messageStore: messageStore,
+            dataUseConsentProvider: dataUseConsentProvider
             ),
             chatRefreshDelegate: chatRefreshAdapter
         )
@@ -307,6 +318,7 @@ enum ServiceGraphFactory {
                 await userIdBox.value
             },
             workerClient: workerClient,
+            dataUseConsentProvider: dataUseConsentProvider,
             conversationLookup: conversationLookup,
             messageStore: messageStore,
             dirtyHook: voiceDirtyAdapter
@@ -338,6 +350,7 @@ enum ServiceGraphFactory {
                 workerClient: workerClient,
                 baseURL: baseURL,
                 tokenProvider: tokenProvider,
+                dataUseConsentProvider: dataUseConsentProvider,
                 messageStore: messageStore,
                 conversationLookup: conversationLookup,
                 userIdProvider: { [userIdBox] in userIdBox.value },
@@ -406,6 +419,7 @@ enum ServiceGraphFactory {
 
         return BootstrappedServices(
             workerClient: workerClient,
+            dataUseConsentStore: dataUseConsentStore,
             library: LibraryRuntime(
                 bookStore: bookStore,
                 positionStore: positionStore,

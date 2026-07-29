@@ -2,7 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../middleware", () => ({
   requireAuth: async (c: any, next: () => Promise<void>) => {
+    if (c.req.header("Authorization") !== "Bearer test-token") {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
     c.set("userId", "user_alice");
+    return next();
+  },
+}));
+
+vi.mock("../middleware/ai-data-consent", () => ({
+  requireAiDataConsent: async (c: any, next: () => Promise<void>) => {
+    if (c.req.header("X-Rishi-Data-Use-Consent") !== "2026-07-29") {
+      return c.json({ error: "AI_DATA_CONSENT_REQUIRED" }, 428);
+    }
     await next();
   },
 }));
@@ -24,6 +36,21 @@ import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
 import { voiceSessionsRoutes } from "./voice-sessions";
 
 describe("POST /api/voice-sessions", () => {
+  it("rejects missing consent before parsing, allowance refresh, ledger, or provider mint", async () => {
+    const refresh = (await import("../billing/allowance-period-rollover")).rollAllowancePeriodsForward;
+    const mint = (await import("../realtime/client-secrets")).mintRealtimeClientSecret;
+    const response = await voiceSessionsRoutes.request(
+      "/",
+      { method: "POST", body: "not-json", headers: { "content-type": "application/json", Authorization: "Bearer test-token" } },
+      { USER_USAGE_LEDGER: { getByName: () => ({ createVoiceSession: async () => { throw new Error("must not run"); } }) } } as any,
+    );
+
+    expect(response.status).toBe(428);
+    expect(await response.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+  });
+
   it("returns the canonical realtime model with the minted session contract", async () => {
     const app = voiceSessionsRoutes;
     const env = {
@@ -40,7 +67,7 @@ describe("POST /api/voice-sessions", () => {
 
     const response = await app.request(
       "/",
-      { method: "POST", body: "{}", headers: { "content-type": "application/json" } },
+      { method: "POST", body: "{}", headers: { "content-type": "application/json", Authorization: "Bearer test-token", "X-Rishi-Data-Use-Consent": "2026-07-29" } },
       env,
     );
 
@@ -52,5 +79,68 @@ describe("POST /api/voice-sessions", () => {
       capIntervals: 12,
       realtimeModel: REALTIME_VOICE_MODEL,
     });
+  });
+});
+
+describe("GET /api/voice-sessions/:id/control", () => {
+  it("rejects missing consent before checking the ledger or upgrading", async () => {
+    const getSessionSnapshot = vi.fn(async () => ({ active: true }));
+    const response = await voiceSessionsRoutes.request(
+      "/session_1/control",
+      {
+        method: "GET",
+        headers: { upgrade: "websocket", Authorization: "Bearer test-token" },
+      },
+      { USER_USAGE_LEDGER: { getByName: () => ({ getSessionSnapshot }) } } as any,
+    );
+
+    expect(response.status).toBe(428);
+    expect(getSessionSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("voice session mutation consent boundaries", () => {
+  it.each([
+    ["end-active", "/end-active"],
+    ["register-call", "/session_1/register-call"],
+  ])("rejects missing consent on %s before ledger work", async (_name, path) => {
+    const getByName = vi.fn(() => ({
+      endActiveVoiceSession: vi.fn(),
+      registerCallId: vi.fn(),
+    }));
+    const response = await voiceSessionsRoutes.request(
+      path,
+      {
+        method: "POST",
+        body: path.endsWith("register-call") ? "not-json" : undefined,
+        headers: { Authorization: "Bearer test-token" },
+      },
+      { USER_USAGE_LEDGER: { getByName } } as any,
+    );
+
+    expect(response.status).toBe(428);
+    expect(await response.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" });
+    expect(getByName).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["end-active", "/end-active"],
+    ["register-call", "/session_1/register-call"],
+  ])("rejects unsupported consent on %s", async (_name, path) => {
+    const response = await voiceSessionsRoutes.request(
+      path,
+      {
+        method: "POST",
+        body: path.endsWith("register-call") ? "{}" : undefined,
+        headers: {
+          Authorization: "Bearer test-token",
+          "X-Rishi-Data-Use-Consent": "2026-01-01",
+        },
+      },
+      { USER_USAGE_LEDGER: { getByName: vi.fn() } } as any,
+    );
+
+    expect(response.status).toBe(428);
+    expect(await response.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" });
   });
 });

@@ -23,17 +23,24 @@ enum AudioStackFactory {
     )
 
     nonisolated static func make(
-        workerClient: WorkerClient
+        workerClient: WorkerClient,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider
     ) async -> AudioStack {
         let audioState = signposter.beginInterval("audio.ready")
         defer { signposter.endInterval("audio.ready", audioState) }
         return await MainActor.run {
-            Self.makeAudioStack(workerClient: workerClient)
+            Self.makeAudioStack(
+                workerClient: workerClient,
+                dataUseConsentProvider: dataUseConsentProvider
+            )
         }
     }
 
     @MainActor
-    static func makeAudioStack(workerClient: WorkerClient) -> AudioStack {
+    static func makeAudioStack(
+        workerClient: WorkerClient,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider
+    ) -> AudioStack {
         #if (os(iOS) || targetEnvironment(macCatalyst)) && canImport(AVFAudio)
             let configurator: any AudioSessionConfigurator =
                 AVAudioSessionConfigurator()
@@ -57,7 +64,10 @@ enum AudioStackFactory {
         let coordinator = AudioSessionCoordinator(configurator: configurator)
         let state = TTSPlaybackState()
 
-        let ttsUpstream = WorkerTTSChunkSource(client: workerClient)
+        let ttsUpstream = WorkerTTSChunkSource(
+            client: workerClient,
+            dataUseConsentProvider: dataUseConsentProvider
+        )
         let ttsCacheStore: TTSAudioCacheStore?
         do {
             ttsCacheStore = try TTSAudioCacheStore()

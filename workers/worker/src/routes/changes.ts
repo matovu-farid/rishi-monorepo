@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { and, asc, eq, gt } from "drizzle-orm";
 
 import { requireAuth } from "../index";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { createDb } from "../db/drizzle";
 import { books, highlights, bookmarks } from "../db/schema";
 
@@ -49,7 +50,7 @@ export const changesRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-changesRoutes.get("/", requireAuth, async (c) => {
+changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
   const rawSince = c.req.query("since");
   let sinceMs: number | null = null;
   if (rawSince !== undefined) {

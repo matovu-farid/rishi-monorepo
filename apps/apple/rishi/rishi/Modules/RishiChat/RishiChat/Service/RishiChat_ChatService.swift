@@ -24,6 +24,7 @@ public actor RishiChatService: ChatService {
 
     private let userIdProvider: @Sendable () async -> UserID?
     private let workerClient: WorkerClient
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let conversationLookup: ConversationLookup
     private let legacyConversationStore: (any ConversationStore)?
     private let messageStore: any MessageStore
@@ -33,6 +34,7 @@ public actor RishiChatService: ChatService {
     public init(
         userIdProvider: @escaping @Sendable () async -> UserID?,
         workerClient: WorkerClient,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         conversationLookup: ConversationLookup,
         messageStore: any MessageStore,
         dirtyHook: (any ChatDirtyHook)? = nil,
@@ -40,6 +42,7 @@ public actor RishiChatService: ChatService {
     ) {
         self.userIdProvider = userIdProvider
         self.workerClient = workerClient
+        self.dataUseConsentProvider = dataUseConsentProvider
         self.conversationLookup = conversationLookup
         self.legacyConversationStore = nil
         self.messageStore = messageStore
@@ -51,6 +54,7 @@ public actor RishiChatService: ChatService {
     public init(
         userIdProvider: @escaping @Sendable () async -> UserID?,
         workerClient: WorkerClient,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         conversationLookup: ConversationLookup,
         conversationStore: any ConversationStore,
         messageStore: any MessageStore,
@@ -59,6 +63,7 @@ public actor RishiChatService: ChatService {
     ) {
         self.userIdProvider = userIdProvider
         self.workerClient = workerClient
+        self.dataUseConsentProvider = dataUseConsentProvider
         self.conversationLookup = conversationLookup
         self.legacyConversationStore = conversationStore
         self.messageStore = messageStore
@@ -99,6 +104,10 @@ public actor RishiChatService: ChatService {
     ) async throws {
         guard let userId = await userIdProvider() else {
             throw RishiError.unauthenticated
+        }
+
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            throw WorkerDataUseConsentRequiredError()
         }
 
         // 1. Resolve / mint conversation.

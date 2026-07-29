@@ -3,6 +3,7 @@ import { z } from "zod";
 import { conversations, messages } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { requireAuth } from "../index";
+import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 
 /**
@@ -44,7 +45,7 @@ export const messagesRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-messagesRoutes.post("/", requireAuth, async (c) => {
+messagesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   const raw = await c.req.json().catch(() => null);
   const parsed = PostBody.safeParse(raw);
   if (!parsed.success) {
@@ -91,7 +92,7 @@ messagesRoutes.post("/", requireAuth, async (c) => {
   return c.json({ applied_count: applied });
 });
 
-messagesRoutes.get("/", requireAuth, async (c) => {
+messagesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
   const userId = c.get("userId");
   const sinceRaw = c.req.query("since");
   const since = sinceRaw ? Number(sinceRaw) : null;

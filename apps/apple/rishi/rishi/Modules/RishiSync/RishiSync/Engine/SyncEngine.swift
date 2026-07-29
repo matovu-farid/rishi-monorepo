@@ -65,6 +65,7 @@ public actor SyncEngine {
         public let messagesFetcher: MessagesFetcher
         public let conversationStore: any ConversationStore
         public let messageStore: any MessageStore
+        public let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
         public init(
             queue: SyncQueue,
@@ -81,7 +82,8 @@ public actor SyncEngine {
             conversationsFetcher: ConversationsFetcher,
             messagesFetcher: MessagesFetcher,
             conversationStore: any ConversationStore,
-            messageStore: any MessageStore
+            messageStore: any MessageStore,
+            dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
         ) {
             self.queue = queue
             self.metadataStore = metadataStore
@@ -98,6 +100,7 @@ public actor SyncEngine {
             self.messagesFetcher = messagesFetcher
             self.conversationStore = conversationStore
             self.messageStore = messageStore
+            self.dataUseConsentProvider = dataUseConsentProvider
         }
     }
 
@@ -122,6 +125,7 @@ public actor SyncEngine {
     private let conversationStore: any ConversationStore
     private let messageStore: any MessageStore
     private let chatRefreshDelegate: (any ChatSyncRefreshDelegate)?
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
     // Plan 34-10 (SRP) — runOnce's three responsibilities extracted into
     // focused collaborators. The engine keeps only orchestration + actor
@@ -172,6 +176,7 @@ public actor SyncEngine {
         self.conversationStore = conversationStore
         self.messageStore = messageStore
         self.chatRefreshDelegate = chatRefreshDelegate
+        self.dataUseConsentProvider = dependencies.dataUseConsentProvider
 
         // Plan 34-10 (SRP) — assemble the runOnce collaborators from the
         // already-stored dependencies. No new init params; uploaders/fetchers/
@@ -192,7 +197,8 @@ public actor SyncEngine {
             highlightUploader: highlightUploader,
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
-            bookmarkUploader: bookmarkUploader
+            bookmarkUploader: bookmarkUploader,
+            dataUseConsentProvider: dependencies.dataUseConsentProvider
         ))
         self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
 
@@ -312,6 +318,9 @@ public actor SyncEngine {
         let signpostState = syncSignposter.beginInterval("sync.wave")
         defer { syncSignposter.endInterval("sync.wave", signpostState) }
         var wave = Wave()
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            return wave
+        }
         let waveGeneration = accountGeneration
         statusReporter.setRunning(true, on: status)
 

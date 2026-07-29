@@ -63,11 +63,6 @@ struct OnboardingUITests {
         _ = WelcomeScreen(onGetStarted: {}, logo: "rishi").body
     }
 
-    @Test("MicPermissionPrimer constructs")
-    func micPrimerConstructs() {
-        _ = MicPermissionPrimer(onAllow: {}, onSkip: {}).body
-    }
-
     @Test("FirstReaderHint constructs")
     func hintConstructs() {
         _ = FirstReaderHint(onGotIt: {}).body
@@ -94,7 +89,7 @@ struct OnboardingUITests {
     @Test("OnboardingFlowView constructs for every stage")
     func flowConstructsForEveryStage() async {
         let stages: [OnboardingCoordinator.Stage] = [
-            .welcome, .micPrimer,
+            .welcome,
             .voiceLanguagePrimer, .firstReaderHint, .completed
         ]
         for stage in stages {
@@ -102,7 +97,6 @@ struct OnboardingUITests {
             coord.setStageForTest(stage)
             let view = OnboardingFlowView(
                 coordinator: coord,
-                onRequestMic: {},
                 voiceLanguage: .constant("en"),
                 onCompleted: {}
             )

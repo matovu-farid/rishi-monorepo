@@ -22,9 +22,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *    runs in isolation.
  */
 
-// ─── Mock @rishi/shared/schema (download handler does not touch DB but
+// ─── Mock ../db/schema (download handler does not touch DB but
 //     module-level imports in upload.ts need resolvable stubs) ────────────────
-vi.mock("@rishi/shared/schema", () => ({
+vi.mock("../db/schema", () => ({
   books: {},
   highlights: {},
   conversations: {},
@@ -132,8 +132,8 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-// ─── Mock ../index to avoid pulling the real Hono app + every route ──────────
-vi.mock("../index", async () => {
+// ─── Mock ../middleware to avoid real JWT verification ─────────────────────
+vi.mock("../middleware", async () => {
   return {
     requireAuth: async (
       c: {
@@ -172,7 +172,10 @@ async function callDownloadUrl(
   const env = { ...baseEnv, ...envOverrides }
   const init: RequestInit = {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
   }
   if (body !== undefined) {
     init.body = JSON.stringify(body)

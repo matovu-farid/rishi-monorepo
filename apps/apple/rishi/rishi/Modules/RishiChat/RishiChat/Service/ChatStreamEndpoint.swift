@@ -13,6 +13,7 @@ import Foundation
 struct ChatStreamEndpoint: WorkerStreamingEndpointWithBody {
     public let method: HTTPMethod = .POST
     public let path: String = "/api/chat"
+    public let requiresDataUseConsent = true
     public let body: ChatRequest
 
     public init(body: ChatRequest) {

@@ -8,6 +8,7 @@ public actor WorkerClient {
     private let baseURL: URL
     private let session: URLSession
     private let tokenProvider: any TokenProvider
+    private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let devBypassEnabled: Bool
     private let devBypassSecret: String?
     private var refreshTask: Task<Void, Error>?
@@ -22,12 +23,14 @@ public actor WorkerClient {
         baseURL: URL,
         session: URLSession = .shared,
         tokenProvider: any TokenProvider,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = NoWorkerDataUseConsentProvider(),
         devBypassEnabled: Bool = false,
         devBypassSecret: String? = nil
     ) {
         self.baseURL = baseURL
         self.session = session
         self.tokenProvider = tokenProvider
+        self.dataUseConsentProvider = dataUseConsentProvider
         self.devBypassEnabled = devBypassEnabled
         self.devBypassSecret = devBypassSecret
     }
@@ -417,7 +420,10 @@ public actor WorkerClient {
         // session cookie would trip a 403 MISSING_OR_NULL_ORIGIN on Bearer requests.
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-
+        try await applyDataUseConsentHeaderIfNeeded(
+            endpoint.requiresDataUseConsent,
+            to: &request
+        )
 
         if let token = await tokenProvider.token() {
             request.setValue(
@@ -442,7 +448,7 @@ public actor WorkerClient {
         return request
     }
 
-    private func buildStreamingRequest<E: WorkerStreamingEndpoint>(
+    func buildStreamingRequest<E: WorkerStreamingEndpoint>(
         for endpoint: E
     ) async throws -> URLRequest {
         let url = makeURL(path: endpoint.path)
@@ -450,7 +456,10 @@ public actor WorkerClient {
         request.httpMethod = endpoint.method.rawValue
         // Native bearer-token client: never attach/store cookies (see buildRequest).
         request.httpShouldHandleCookies = false
-
+        try await applyDataUseConsentHeaderIfNeeded(
+            endpoint.requiresDataUseConsent,
+            to: &request
+        )
 
         if let token = await tokenProvider.token() {
             request.setValue(
@@ -468,6 +477,20 @@ public actor WorkerClient {
             request.httpBody = try encoder.encode(AnyEncodable(bodied.body))
         }
         return request
+    }
+
+    private func applyDataUseConsentHeaderIfNeeded(
+        _ required: Bool,
+        to request: inout URLRequest
+    ) async throws {
+        guard required else { return }
+        guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            throw WorkerDataUseConsentRequiredError()
+        }
+        request.setValue(
+            WorkerDataUseConsent.currentVersion,
+            forHTTPHeaderField: WorkerDataUseConsent.headerField
+        )
     }
 }
 

@@ -3,7 +3,7 @@ import Observation
 
 
 /// First-run flow state machine driving the sequence:
-/// welcome → micPrimer → voiceLanguagePrimer → firstReaderHint → completed.
+/// welcome → voiceLanguagePrimer → firstReaderHint → completed.
 ///
 /// Each stage's user-facing button is wired to a closure in 11-06. The
 /// coordinator only owns the stage transitions and the persisted flag updates
@@ -18,7 +18,6 @@ public final class OnboardingCoordinator {
 
     public enum Stage: String, Sendable, Equatable {
         case welcome
-        case micPrimer
         case voiceLanguagePrimer
         case firstReaderHint
         case completed
@@ -40,14 +39,8 @@ public final class OnboardingCoordinator {
         let next: Stage
         switch currentStage {
         case .welcome:
-            // If we've already shown the mic primer once, skip past it.
-            if await state.primerShownMic() {
-                next = .voiceLanguagePrimer
-            } else {
-                next = .micPrimer
-            }
-        case .micPrimer:
-            await state.setPrimerShownMic(true)
+            // Microphone permission is intentionally deferred until a signed-in
+            // user has accepted the combined data-use consent.
             next = .voiceLanguagePrimer
         case .voiceLanguagePrimer:
             next = .firstReaderHint
@@ -66,8 +59,7 @@ public final class OnboardingCoordinator {
         let prev: Stage
         switch currentStage {
         case .welcome:              prev = .welcome
-        case .micPrimer:            prev = .welcome
-        case .voiceLanguagePrimer:   prev = .micPrimer
+        case .voiceLanguagePrimer:   prev = .welcome
         case .firstReaderHint:      prev = .voiceLanguagePrimer
         case .completed:            prev = .firstReaderHint
         }
@@ -78,9 +70,6 @@ public final class OnboardingCoordinator {
     /// don't nag on relaunch, then advances to the next stage.
     public func skipCurrentStage() async {
         switch currentStage {
-        case .micPrimer:
-            await state.setPrimerShownMic(true)
-            currentStage = .voiceLanguagePrimer
         case .voiceLanguagePrimer:
             currentStage = .firstReaderHint
         case .firstReaderHint:

@@ -43,6 +43,7 @@ public struct DevicesRegisterEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/devices/register"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) { self.body = body }

@@ -1,5 +1,33 @@
 import Foundation
 
+/// Shared data-use consent request contract for remote content and AI calls.
+public enum WorkerDataUseConsent {
+    public static let headerField = "X-Rishi-Data-Use-Consent"
+    public static let currentVersion = "2026-07-29"
+}
+
+/// Supplies the currently valid consent header value, if the signed-in user
+/// has granted the current data-use consent.
+public protocol WorkerDataUseConsentProvider: Sendable {
+    func hasCurrentDataUseConsent() async -> Bool
+}
+
+public struct AlwaysAllowWorkerDataUseConsentProvider: WorkerDataUseConsentProvider {
+    public init() {}
+    public func hasCurrentDataUseConsent() async -> Bool { true }
+}
+
+public struct WorkerDataUseConsentRequiredError: Error, Sendable, Equatable {
+    public init() {}
+}
+
+/// Default provider for tests, previews, and non-consent-aware clients.
+public struct NoWorkerDataUseConsentProvider: WorkerDataUseConsentProvider {
+    public init() {}
+
+    public func hasCurrentDataUseConsent() async -> Bool { false }
+}
+
 /// HTTP verb used by a `WorkerEndpoint`.
 public enum HTTPMethod: String, Sendable, Hashable, CaseIterable {
     case GET
@@ -25,8 +53,13 @@ public protocol WorkerEndpoint: Sendable {
 
     /// Path relative to `WorkerClient`'s `baseURL` (must start with `/`).
     var path: String { get }
-    
 
+    /// Whether this request carries remote content or AI-user data.
+    var requiresDataUseConsent: Bool { get }
+}
+
+extension WorkerEndpoint {
+    public var requiresDataUseConsent: Bool { false }
 }
 
 extension WorkerEndpoint {
@@ -70,6 +103,11 @@ public protocol WorkerEndpointWithBody: WorkerEndpoint {
 public protocol WorkerStreamingEndpoint: Sendable {
     var method: HTTPMethod { get }
     var path: String { get }
+    var requiresDataUseConsent: Bool { get }
+}
+
+extension WorkerStreamingEndpoint {
+    public var requiresDataUseConsent: Bool { false }
 }
 
 /// Refinement for streaming endpoints that also send an Encodable body

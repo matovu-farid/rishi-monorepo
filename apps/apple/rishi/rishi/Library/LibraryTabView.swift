@@ -218,7 +218,9 @@ struct LibraryTabView: View {
                         entitlementRefreshCoordinator: dependencies.settings.entitlementRefreshCoordinator,
                         restoreService: dependencies.settings.restoreService,
                         manageSubscriptionPresenter: dependencies.settings.manageSubscriptionPresenter,
-                        groupID: dependencies.settings.groupID
+                        groupID: dependencies.settings.groupID,
+                    dataUseConsentStore: dependencies.settings.dataUseConsentStore,
+                    onRevokeDataUse: {}
                     ),
                     user: user
                 )

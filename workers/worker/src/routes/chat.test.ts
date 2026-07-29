@@ -171,10 +171,12 @@ const env = {
   DB: {} as unknown,
 } as unknown as Record<string, unknown>
 
+const consentHeaders = { "X-Rishi-Data-Use-Consent": "2026-07-29" }
+
 async function callChat(body: unknown) {
   const req = new Request("http://test.local/", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...consentHeaders },
     body: JSON.stringify(body),
   })
   return chatRoutes.fetch(req, env, {
@@ -197,6 +199,22 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("POST /api/chat", () => {
+  it("rejects missing consent before parsing the request or calling the provider", async () => {
+    const req = new Request("http://test.local/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not-json",
+    })
+    const res = await chatRoutes.fetch(req, env, {
+      waitUntil: (_p: Promise<unknown>) => {},
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext)
+
+    expect(res.status).toBe(428)
+    expect(streamTextSpy.lastArgs).toBeNull()
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+  })
+
   it("unauthenticated: no session -> 401 { error: 'Unauthorized' }", async () => {
     setUser(null)
     const res = await callChat({

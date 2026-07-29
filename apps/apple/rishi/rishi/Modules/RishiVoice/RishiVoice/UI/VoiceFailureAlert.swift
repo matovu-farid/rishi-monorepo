@@ -18,6 +18,9 @@ public struct VoiceFailureAlert: Equatable, Sendable {
 
     /// The single primary affordance the alert offers.
     public enum PrimaryAction: Equatable, Sendable {
+        /// Present the in-app data-use consent sheet while preserving the
+        /// failed feature's retry context.
+        case requestDataUseConsent
         /// Deep-link to the Settings app — `.micDenied` only, because there is
         /// no in-app way to re-request the microphone after a denial.
         case openSettings
@@ -45,6 +48,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
 
     private static func primaryAction(for reason: VoiceSessionFailureReason) -> PrimaryAction {
         switch reason {
+        case .dataUseConsentRequired:
+            return .requestDataUseConsent
         case .micDenied:
             return .openSettings
         case .sessionStart(.insufficientCredits):
@@ -69,6 +74,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
 
     private static func title(for reason: VoiceSessionFailureReason) -> String {
         switch reason {
+        case .dataUseConsentRequired:
+            return "Data use permission needed"
         case .micDenied:    return "Microphone access needed"
         case .keyFetch(let failure):
             switch failure {
@@ -115,6 +122,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
 
     private static func bodyCopy(for reason: VoiceSessionFailureReason) -> String {
         switch reason {
+        case .dataUseConsentRequired:
+            return "Allow data use to use voice chat and other AI features."
         case .micDenied:
             return "Allow microphone access in Settings to talk with the AI."
         case .keyFetch(let failure):

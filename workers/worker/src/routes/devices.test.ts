@@ -191,6 +191,18 @@ vi.mock("../index", async () => {
   }
 })
 
+vi.mock("../middleware/ai-data-consent", () => ({
+  requireAiDataConsent: async (
+    c: { req: { header: (name: string) => string | undefined }; json: (b: unknown, s: number) => Response },
+    next: () => Promise<void>,
+  ) => {
+    if (c.req.header("X-Rishi-Data-Use-Consent") !== "2026-07-29") {
+      return c.json({ error: "AI_DATA_CONSENT_REQUIRED" }, 428)
+    }
+    return next()
+  },
+}))
+
 // ─── Now import the route under test ────────────────────────────────────────
 import { devicesRoutes } from "./devices"
 
@@ -204,7 +216,10 @@ const env = {
 async function callRegister(body: unknown) {
   const req = new Request("http://test.local/register", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return devicesRoutes.fetch(req, env)
@@ -231,6 +246,35 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("POST /api/devices/register", () => {
+  it("rejects missing consent before parsing or writing a device", async () => {
+    const req = new Request("http://test.local/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not-json",
+    })
+
+    const res = await devicesRoutes.fetch(req, env)
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(deviceStore.length).toBe(0)
+  })
+
+  it("rejects an unsupported consent version", async () => {
+    const req = new Request("http://test.local/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Rishi-Data-Use-Consent": "2026-01-01",
+      },
+      body: JSON.stringify(validBody()),
+    })
+
+    const res = await devicesRoutes.fetch(req, env)
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(deviceStore.length).toBe(0)
+  })
+
   it("happy path: authenticated + valid body -> 200 { device_id, registered_at }", async () => {
     const res = await callRegister(validBody())
     expect(res.status).toBe(200)

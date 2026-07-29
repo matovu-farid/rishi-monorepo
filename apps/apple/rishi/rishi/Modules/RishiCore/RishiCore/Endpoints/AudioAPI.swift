@@ -50,6 +50,7 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/audio/speech"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) {
@@ -152,6 +153,7 @@ public struct ElevenLabsSpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/audio/speech/elevenlabs"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) {
@@ -191,6 +193,7 @@ struct TranscribeEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/audio/transcribe"
+    public let requiresDataUseConsent = true
     public let body: Body
 
     public init(body: Body) {

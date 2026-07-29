@@ -35,6 +35,7 @@ vi.mock("openai", () => {
         create: vi.fn(async (args: Record<string, unknown>) => {
           speechCalls.push(args)
           return {
+            body: new Response(speechAudioBytes).body,
             arrayBuffer: async () =>
               speechAudioBytes.buffer.slice(
                 speechAudioBytes.byteOffset,
@@ -68,6 +69,9 @@ vi.mock("@sentry/cloudflare", () => ({
 // ─── Mock the metering side-effect so a missing DB doesn't crash waitUntil ──
 vi.mock("./billing/meter", () => ({
   meterFromContext: vi.fn(async () => undefined),
+}))
+vi.mock("./usage/api-usage", () => ({
+  incrementApiUsage: vi.fn(async () => undefined),
 }))
 
 // ─── Stub requireActiveSubscription to a pass-through middleware ────────────
@@ -118,6 +122,9 @@ vi.mock("./routes/sync", async () => {
   const { Hono } = await import("hono")
   return { syncRoutes: new Hono() }
 })
+vi.mock("./durable-objects/user-usage-ledger/ledger", () => ({
+  UserUsageLedger: class UserUsageLedger {},
+}))
 vi.mock("./routes/upload", async () => {
   const { Hono } = await import("hono")
   return { uploadRoutes: new Hono() }
@@ -241,6 +248,14 @@ const env = {
     get: async () => null,
     put: async () => ({}),
   } as unknown as R2Bucket,
+  USER_USAGE_LEDGER: {
+    getByName: () => ({
+      reserveTts: async () => ({ reservationId: "reservation_test" }),
+      commitTtsReservation: async () => undefined,
+      releaseTtsReservation: async () => undefined,
+      getEntitlementSnapshot: async () => ({}),
+    }),
+  },
 } as unknown as Record<string, unknown>
 
 const ctx = {
@@ -251,7 +266,10 @@ const ctx = {
 async function callSpeech(body: unknown) {
   const req = new Request("https://api.fidexa.org/api/audio/speech", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return app.fetch(req, env, ctx)
@@ -305,6 +323,39 @@ beforeEach(() => {
 })
 
 describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
+  it("missing consent rejects before parsing or provider work", async () => {
+    const res = await app.fetch(
+      new Request("https://api.fidexa.org/api/audio/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "not-json",
+      }),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(speechCalls).toHaveLength(0)
+  })
+
+  it("unsupported consent rejects before parsing or provider work", async () => {
+    const res = await app.fetch(
+      new Request("https://api.fidexa.org/api/audio/speech", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Rishi-Data-Use-Consent": "2026-01-01",
+        },
+        body: "not-json",
+      }),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+    expect(speechCalls).toHaveLength(0)
+  })
+
   it("happy path: { text, voice, speed } -> 200 + audio/mpeg", async () => {
     const res = await callSpeech({ text: "hello world", voice: "alloy", speed: 1.0 })
     expect(res.status).toBe(200)
@@ -414,5 +465,64 @@ describe("GET /api/audio/speech/options", () => {
     expect(body.models).toEqual([
       { id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS" },
     ])
+  })
+})
+
+describe("mounted AI consent boundaries", () => {
+  const post = (path: string, body: string, consent?: string) =>
+    app.fetch(
+      new Request(`https://api.fidexa.org${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(consent ? { "X-Rishi-Data-Use-Consent": consent } : {}),
+        },
+        body,
+      }),
+      env,
+      ctx,
+    )
+
+  it.each([
+    "/api/text/completions",
+    "/api/embed",
+  ])("rejects missing consent on %s before body parsing", async (path) => {
+    const res = await post(path, "not-json")
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+  })
+
+  it.each([
+    "/api/text/completions",
+    "/api/embed",
+  ])("rejects unsupported consent on %s before body parsing", async (path) => {
+    const res = await post(path, "not-json", "2026-01-01")
+    expect(res.status).toBe(428)
+    expect(await res.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" })
+  })
+
+  it("allows current consent through text completions and embed validation", async () => {
+    const completions = await post(
+      "/api/text/completions",
+      JSON.stringify({ input: "" }),
+      "2026-07-29",
+    )
+    const embed = await post(
+      "/api/embed",
+      JSON.stringify({ texts: [] }),
+      "2026-07-29",
+    )
+
+    expect(completions.status).toBe(400)
+    expect(embed.status).toBe(400)
+  })
+
+  it("keeps the removed realtime client-secrets endpoint unavailable", async () => {
+    const res = await post(
+      "/api/realtime/client_secrets",
+      JSON.stringify({ language: "en" }),
+      "2026-07-29",
+    )
+    expect(res.status).toBe(404)
   })
 })
