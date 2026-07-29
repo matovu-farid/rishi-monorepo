@@ -40,4 +40,10 @@ public actor ConversationLookup {
         ])
         return convo
     }
+
+    /// Persists conversation metadata updates for chat turns. Keeping this
+    /// operation beside find-or-create ensures chat has one persistence seam.
+    public func upsert(_ conversation: Conversation) async throws {
+        try await store.upsert(conversation)
+    }
 }

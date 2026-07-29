@@ -32,7 +32,7 @@ two separate threads.
 | Chat service (actor) | `Packages/RishiChat/Sources/RishiChat/Service/ChatService.swift` |
 | SSE parser | `Packages/RishiChat/Sources/RishiChat/Service/SSEParser.swift` |
 | Server endpoint | `Packages/RishiChat/Sources/RishiChat/Service/ChatStreamEndpoint.swift` |
-| Persistence | `ConversationStore`, `MessageStore` from `RishiDB` |
+| Persistence | `ConversationLookup` for conversation lifecycle, plus `MessageStore`; both are backed by the app's stores |
 
 ## What it depends on
 
@@ -40,7 +40,7 @@ two separate threads.
   `ChatService` protocol shape.
 - `RishiAPI` — `WorkerClient` for the streaming request to the
   Cloudflare Worker's `/api/chat` endpoint.
-- `RishiDB` — conversation and message stores.
+- `RishiDB` — the underlying conversation and message stores.
 - `RishiUIKit`, `RishiLogging` for tokens and breadcrumbs.
 
 It does not depend on `RishiReader`. The reader presents the sheet via
@@ -61,6 +61,10 @@ a small protocol seam wired in the app's composition root.
 - The dirty hook (`ChatDirtyHook`) is optional and is wired at the app
   layer to the sync engine. The chat package does not import the sync
   package; it just emits "this conversation changed" events.
+- `ConversationLookup` is the chat service's canonical conversation
+  persistence seam. It owns find-or-create and metadata updates over the
+  shared `ConversationStore`, so the service does not inject that store
+  separately.
 
 ## Gotchas
 

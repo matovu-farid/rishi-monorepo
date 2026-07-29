@@ -5,7 +5,7 @@ import Foundation
 /// Phase 9 covers:
 ///   - SSEParser (line-by-line parsing of `data: { ... }\n\n` frames)
 ///   - ChatStreamEndpoint (POST /api/chat) — cloud RAG; no on-device embeddings
-///   - ChatService actor — wires WorkerClient → ConversationStore + MessageStore
+///   - ChatService actor — wires WorkerClient → ConversationLookup + MessageStore
 ///     and exposes an `AsyncThrowingStream<ChatEvent, Error>` plus a cancel handle
 ///   - ChatPanelView — sheet presented from the reader, scoped to the open book
 ///   - ConversationsListView — root-tab list with search + delete + empty state

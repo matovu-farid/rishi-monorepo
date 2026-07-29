@@ -110,7 +110,6 @@ struct RishiChatServiceTests {
             userIdProvider: { userId },
             workerClient: worker,
             conversationLookup: lookup,
-            conversationStore: conversationStore,
             messageStore: messageStore,
             dirtyHook: hook
         )
@@ -256,7 +255,6 @@ struct RishiChatServiceTests {
             userIdProvider: { nil },
             workerClient: worker,
             conversationLookup: lookup,
-            conversationStore: convoStore,
             messageStore: msgStore
         )
 

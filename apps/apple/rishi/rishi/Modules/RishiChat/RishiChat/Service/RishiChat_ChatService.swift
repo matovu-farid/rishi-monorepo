@@ -25,11 +25,29 @@ public actor RishiChatService: ChatService {
     private let userIdProvider: @Sendable () async -> UserID?
     private let workerClient: WorkerClient
     private let conversationLookup: ConversationLookup
-    private let conversationStore: any ConversationStore
+    private let legacyConversationStore: (any ConversationStore)?
     private let messageStore: any MessageStore
     private let dirtyHook: (any ChatDirtyHook)?
     private let clock: @Sendable () -> Date
 
+    public init(
+        userIdProvider: @escaping @Sendable () async -> UserID?,
+        workerClient: WorkerClient,
+        conversationLookup: ConversationLookup,
+        messageStore: any MessageStore,
+        dirtyHook: (any ChatDirtyHook)? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.userIdProvider = userIdProvider
+        self.workerClient = workerClient
+        self.conversationLookup = conversationLookup
+        self.legacyConversationStore = nil
+        self.messageStore = messageStore
+        self.dirtyHook = dirtyHook
+        self.clock = clock
+    }
+
+    @available(*, deprecated, message: "Use the initializer without conversationStore; ConversationLookup is now the canonical persistence seam.")
     public init(
         userIdProvider: @escaping @Sendable () async -> UserID?,
         workerClient: WorkerClient,
@@ -42,7 +60,7 @@ public actor RishiChatService: ChatService {
         self.userIdProvider = userIdProvider
         self.workerClient = workerClient
         self.conversationLookup = conversationLookup
-        self.conversationStore = conversationStore
+        self.legacyConversationStore = conversationStore
         self.messageStore = messageStore
         self.dirtyHook = dirtyHook
         self.clock = clock
@@ -232,6 +250,10 @@ public actor RishiChatService: ChatService {
     private func bumpConversation(_ convo: Conversation) async throws {
         var updated = convo
         updated.updatedAt = clock()
-        try await conversationStore.upsert(updated)
+        if let legacyConversationStore {
+            try await legacyConversationStore.upsert(updated)
+        } else {
+            try await conversationLookup.upsert(updated)
+        }
     }
 }

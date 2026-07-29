@@ -185,7 +185,6 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { userId },
             workerClient: worker,
             conversationLookup: lookup,
-            conversationStore: convoStore,
             messageStore: msgStore
         )
 
@@ -232,7 +231,6 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { userId },
             workerClient: worker,
             conversationLookup: lookup,
-            conversationStore: convoStore,
             messageStore: msgStore,
             dirtyHook: hook
         )
@@ -300,7 +298,6 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { UUID() },
             workerClient: worker,
             conversationLookup: lookup,
-            conversationStore: convoStore,
             messageStore: msgStore
         )
 
@@ -339,7 +336,6 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { userId },
             workerClient: worker,
             conversationLookup: lookup,
-            conversationStore: convoStore,
             messageStore: msgStore
         )
 

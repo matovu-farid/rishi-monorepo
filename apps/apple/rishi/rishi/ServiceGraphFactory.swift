@@ -311,7 +311,6 @@ enum ServiceGraphFactory {
             },
             workerClient: workerClient,
             conversationLookup: conversationLookup,
-            conversationStore: conversationStore,
             messageStore: messageStore,
             dirtyHook: voiceDirtyAdapter
         )
