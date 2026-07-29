@@ -15,163 +15,85 @@ import SwiftUI
     import UIKit
 #endif
 
+struct SignedInContentDependencies {
+    let library: LibraryTabDependencies
+    let chatService: any ChatService
+    let messageStore: any MessageStore
+    let voicePresenter: VoiceSessionPresenter
+    let entitlementSnapshotStore: EntitlementSnapshotStore
+
+    @MainActor
+    static func make(services: BootstrappedServices) -> Self {
+        Self(
+            library: LibraryTabDependencies(
+                bookStore: services.library.bookStore,
+                positionStore: services.library.positionStore,
+                bookFileStorage: services.library.bookFileStorage,
+                importCoordinator: services.library.importCoordinator,
+                sampleBookInstaller: services.library.sampleBookInstaller,
+                sampleReaderInstaller: services.library.sampleReaderInstaller,
+                conversationStore: services.chat.conversationStore,
+                messageStore: services.chat.messageStore,
+                readerDefaults: services.settings.readerDefaults,
+                syncEngine: services.sync.engine,
+                entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+                entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                groupID: services.billing.groupID,
+                settings: SettingsContentDependencies(
+                    readerDefaults: services.settings.readerDefaults,
+                    ttsSettingsStore: services.audio.ttsSettingsStore,
+                    syncStatus: services.sync.status,
+                    syncEngine: services.sync.engine,
+                    telemetryStore: services.settings.telemetryStore,
+                    footerDetectionStore: services.settings.footerDetectionStore,
+                    entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+                    entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                    restoreService: services.billing.restoreService,
+                    manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
+                    groupID: services.billing.groupID
+                )
+            ),
+            chatService: services.chat.service,
+            messageStore: services.chat.messageStore,
+            voicePresenter: services.voice.presenter,
+            entitlementSnapshotStore: services.billing.entitlementSnapshotStore
+        )
+    }
+}
+
 struct SignedInView: View {
     let onLibraryReadyForTrial: () -> Void
 
-    @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw:
-    String = ""
-    @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw:
-    String = ""
-  
-    @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var appDependencies
-    #if targetEnvironment(macCatalyst)
-        @Environment(ReaderWindowCoordinator.self) private var readerWindows
-    #endif
-
     @Environment(CurrentUserBox.self) private var currentUserBox
     @Environment(\.signOut) private var signOut
 
-    var services: BootstrappedServices? {appDependencies?.services}
-    var user: User? {
-        guard case .signedIn(user: let user) = currentUserBox.state else {return nil}
+    private var services: BootstrappedServices? { appDependencies?.services }
+    private var user: User? {
+        guard case .signedIn(user: let user) = currentUserBox.state else { return nil }
         return user
     }
-    
-    @State private var model = SignedInViewModel()
 
     init(onLibraryReadyForTrial: @escaping () -> Void = {}) {
         self.onLibraryReadyForTrial = onLibraryReadyForTrial
     }
 
     var body: some View {
-        if let services, let user  {
-            
-            @Bindable var model = model
-            LibraryTabView(
-                dependencies: LibraryTabDependencies(
-                    bookStore: services.library.bookStore,
-                    positionStore: services.library.positionStore,
-                    bookFileStorage: services.library.bookFileStorage,
-                    importCoordinator: services.library.importCoordinator,
-                    sampleBookInstaller: services.library.sampleBookInstaller,
-                    sampleReaderInstaller: services.library.sampleReaderInstaller,
-                    conversationStore: services.chat.conversationStore,
-                    messageStore: services.chat.messageStore,
-                    readerDefaults: services.settings.readerDefaults,
-                    syncEngine: services.sync.engine,
-                    entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
-                    entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
-                    groupID: services.billing.groupID,
-                    settings: SettingsContentDependencies(
-                        readerDefaults: services.settings.readerDefaults,
-                        ttsSettingsStore: services.audio.ttsSettingsStore,
-                        syncStatus: services.sync.status,
-                        syncEngine: services.sync.engine,
-                        telemetryStore: services.settings.telemetryStore,
-                        footerDetectionStore: services.settings.footerDetectionStore,
-                        entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
-                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
-                        restoreService: services.billing.restoreService,
-                        manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
-                        groupID: services.billing.groupID
-                    )
-                ),
+        if let services, let user {
+            SignedInContent(
+                dependencies: SignedInContentDependencies.make(services: services),
                 user: user,
-                model: model,
                 onLibraryReadyForTrial: onLibraryReadyForTrial
             )
-
-            #if targetEnvironment(macCatalyst)
-                .task {
-                    router.onCatalystBookResolved = { book in
-                        model.hint(book)
-                        readerWindows.open(book: book, user: user)
-                    }
-                }
-                .onDisappear {
-                    readerWindows.invalidate(userID: user.id)
-                }
-            #endif
-            
-            .sheet(item: $model.selectedConversation) { convo in
-                ConversationChatHost(
-                    vm: ChatPanelViewModel.make(
-                        conversation: convo,
-                        chatService: services.chat.service,
-                        messageStore: services.chat.messageStore
-                    )
-                )
-            }
-            
-            .onChange(of: services.voice.presenter.isPresenting) { _, presenting in
-                if !presenting {
-                    services.voice.presenter.promotePendingFailure()
-                }
-            }
-
-            .alert(
-                voiceFailureTitle,
-                isPresented: Binding(
-                    get: { services.voice.presenter.failure != nil },
-                    set: { presented in
-                        if presented == false {
-                            services.voice.presenter.clearFailure()
-                        }
-                    }
-                ),
-                presenting: services.voice.presenter.failure
-            ) { failure in
-                switch failure.primaryAction {
-                case .openSettings:
-                    Button("Open Settings") {
-                        Self.openSettings()
-                        services.voice.presenter.clearFailure()
-                    }
-                case .retry:
-                    Button("Try again") {
-                        
-                        Task { await services.voice.presenter.retry() }
-                    }
-                case .upgrade:
-                    Button("See plans") {
-                        services.voice.presenter.clearFailure()
-                        model.requestPaywall(
-                            "voice_chat_exhausted",
-                            serverPaidActive: services.billing.entitlementSnapshotStore
-                                .resolvedSnapshot?.isPaidActive ?? false
-                        )
-                    }
-                case .dismiss:
-                    Button("OK") {
-                        services.voice.presenter.clearFailure()
-                    }
-                }
-                Button("Dismiss", role: .cancel) {
-                    services.voice.presenter.clearFailure()
-                }
-            } message: { failure in
-                Text(failure.message)
-            }
             .macCommandDispatch(readerDefaults: services.settings.readerDefaults)
-
             .readerPrefsMenuPublisher(
                 services: services,
                 user: user,
                 onSignedOut: { signOut() },
                 account: appDependencies?.macAccountMenu
             )
-            
-            #if !targetEnvironment(macCatalyst)
-                .sceneRestoration(
-                    model: model,
-                    tabRaw: $selectedTabRaw,
-                    openBookIdRaw: $openBookIdRaw
-                )
-            #endif
-        }
-        else {
-            VStack{
+        } else {
+            VStack {
 #if DEBUG
                 Text("Services or user are missing")
 #endif
@@ -179,27 +101,99 @@ struct SignedInView: View {
             }
         }
     }
-       
+}
 
-    private var voiceFailureTitle: String {
-        services?.voice.presenter.failure?.title ?? ""
+struct SignedInContent: View {
+    let dependencies: SignedInContentDependencies
+    let user: User
+    let onLibraryReadyForTrial: () -> Void
+
+    @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw: String = ""
+    @SceneStorage(RishiSceneState.openBookIdKey) private var openBookIdRaw: String = ""
+    @Environment(AppRouter.self) private var router
+#if targetEnvironment(macCatalyst)
+    @Environment(ReaderWindowCoordinator.self) private var readerWindows
+#endif
+    @State private var model = SignedInViewModel()
+
+    var body: some View {
+        @Bindable var model = model
+        LibraryTabView(
+            dependencies: dependencies.library,
+            user: user,
+            model: model,
+            onLibraryReadyForTrial: onLibraryReadyForTrial
+        )
+#if targetEnvironment(macCatalyst)
+        .task {
+            router.onCatalystBookResolved = { book in
+                model.hint(book)
+                readerWindows.open(book: book, user: user)
+            }
+        }
+        .onDisappear {
+            readerWindows.invalidate(userID: user.id)
+        }
+#endif
+        .sheet(item: $model.selectedConversation) { convo in
+            ConversationChatHost(
+                vm: ChatPanelViewModel.make(
+                    conversation: convo,
+                    chatService: dependencies.chatService,
+                    messageStore: dependencies.messageStore
+                )
+            )
+        }
+        .onChange(of: dependencies.voicePresenter.isPresenting) { _, presenting in
+            if !presenting { dependencies.voicePresenter.promotePendingFailure() }
+        }
+        .alert(
+            dependencies.voicePresenter.failure?.title ?? "",
+            isPresented: Binding(
+                get: { dependencies.voicePresenter.failure != nil },
+                set: { if !$0 { dependencies.voicePresenter.clearFailure() } }
+            ),
+            presenting: dependencies.voicePresenter.failure
+        ) { failure in
+            switch failure.primaryAction {
+            case .openSettings:
+                Button("Open Settings") {
+                    Self.openSettings()
+                    dependencies.voicePresenter.clearFailure()
+                }
+            case .retry:
+                Button("Try again") { Task { await dependencies.voicePresenter.retry() } }
+            case .upgrade:
+                Button("See plans") {
+                    dependencies.voicePresenter.clearFailure()
+                    model.requestPaywall(
+                        "voice_chat_exhausted",
+                        serverPaidActive: dependencies.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
+                    )
+                }
+            case .dismiss:
+                Button("OK") { dependencies.voicePresenter.clearFailure() }
+            }
+            Button("Dismiss", role: .cancel) { dependencies.voicePresenter.clearFailure() }
+        } message: { failure in
+            Text(failure.message)
+        }
+#if !targetEnvironment(macCatalyst)
+        .sceneRestoration(model: model, tabRaw: $selectedTabRaw, openBookIdRaw: $openBookIdRaw)
+#endif
     }
 
     private static func openSettings() {
-        #if targetEnvironment(macCatalyst)
-            if let url = URL(
-                string:
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-            ) {
-                UIApplication.shared.open(url)
-            }
-        #elseif canImport(UIKit) && os(iOS)
-            if let url = URL(string: UIApplication.openSettingsURLString) {
-                UIApplication.shared.open(url)
-            }
-        #endif
+#if targetEnvironment(macCatalyst)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            UIApplication.shared.open(url)
+        }
+#elseif canImport(UIKit) && os(iOS)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+#endif
     }
-
 }
 
 extension View {
