@@ -27,7 +27,8 @@ import AVFoundation
 
 struct OnboardingHost: View {
 
-    let services: BootstrappedServices
+    let coordinator: OnboardingCoordinator
+    let readerDefaults: AppReaderDefaults
     let onCompleted: () -> Void
 
     var body: some View {
@@ -42,7 +43,7 @@ struct OnboardingHost: View {
         }
 #endif
         OnboardingFlowView(
-            coordinator: services.onboarding.coordinator,
+            coordinator: coordinator,
             onRequestMic: {
                 #if canImport(AVFoundation)
                 if #available(iOS 17.0, macCatalyst 17.0, *) {
@@ -51,8 +52,8 @@ struct OnboardingHost: View {
                 #endif
             },
             voiceLanguage: Binding(
-                get: { services.settings.readerDefaults.voiceLanguage.rawValue },
-                set: { services.settings.readerDefaults.voiceLanguage = VoiceLanguageOption(rawValue: $0) ?? .english }
+                get: { readerDefaults.voiceLanguage.rawValue },
+                set: { readerDefaults.voiceLanguage = VoiceLanguageOption(rawValue: $0) ?? .english }
             ),
             onCompleted: onCompleted
         )
@@ -60,17 +61,19 @@ struct OnboardingHost: View {
 }
 
 #Preview("First step") {
-    PreviewPlaceholder(
-        title: "Welcome to Rishi",
-        subtitle: "Choose how you want to start.",
-        variant: "First step"
+    OnboardingHost(
+        coordinator: OnboardingCoordinator(state: InMemoryOnboardingState()),
+        readerDefaults: AppReaderDefaults(defaults: UserDefaults()),
+        onCompleted: {}
     )
 }
 
 #Preview("Last step") {
-    PreviewPlaceholder(
-        title: "First Reader Hint",
-        subtitle: "Tap any book in the library to start reading.",
-        variant: "Last step"
+    let coordinator = OnboardingCoordinator(state: InMemoryOnboardingState())
+    coordinator.setStageForTest(.firstReaderHint)
+    return OnboardingHost(
+        coordinator: coordinator,
+        readerDefaults: AppReaderDefaults(defaults: UserDefaults()),
+        onCompleted: {}
     )
 }

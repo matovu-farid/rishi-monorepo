@@ -158,7 +158,8 @@ struct RootView: View {
         #if canImport(UIKit)
             .fullScreenCover(isPresented: $showOnboarding) {
                 OnboardingHost(
-                    services: deps.services!,
+                    coordinator: deps.services!.onboarding.coordinator,
+                    readerDefaults: deps.services!.settings.readerDefaults,
                     onCompleted: {
                         showOnboarding = false
                     }
@@ -167,7 +168,8 @@ struct RootView: View {
         #else
             .sheet(isPresented: $showOnboarding) {
                 OnboardingHost(
-                    services: deps.services!,
+                    coordinator: deps.services!.onboarding.coordinator,
+                    readerDefaults: deps.services!.settings.readerDefaults,
                     onCompleted: {
                         showOnboarding = false
                     }
