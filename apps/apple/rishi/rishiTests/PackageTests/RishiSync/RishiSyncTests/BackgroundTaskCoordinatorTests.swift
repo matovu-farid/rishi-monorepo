@@ -69,24 +69,34 @@ struct BackgroundTaskCoordinatorTests {
         let bookUploader = BookUploader(workerClient: client, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
         let positionUploader = PositionUploader(workerClient: client, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: client, highlightStore: highlightStore, metadataStore: metadata)
-        let conversationUploader = ConversationUploader(workerClient: client, conversationStore: NoopConversationStore(), metadataStore: metadata)
-        let messageUploader = MessageUploader(workerClient: client, messageStore: NoopMessageStore(), metadataStore: metadata)
+        let conversationStore = NoopConversationStore()
+        let messageStore = NoopMessageStore()
+        let conversationUploader = ConversationUploader(workerClient: client, conversationStore: conversationStore, metadataStore: metadata)
+        let messageUploader = MessageUploader(workerClient: client, messageStore: messageStore, metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
 
+        let conversationsFetcher = ConversationsFetcher(workerClient: client, metadataStore: metadata)
+        let messagesFetcher = MessagesFetcher(workerClient: client, metadataStore: metadata)
         return SyncEngine(
-            queue: queue,
-            metadataStore: metadata,
-            bookStore: bookStore,
-            bookUploader: bookUploader,
-            positionUploader: positionUploader,
-            highlightUploader: highlightUploader,
-            conversationUploader: conversationUploader,
-            messageUploader: messageUploader,
-            bookmarkUploader: bookmarkUploader,
-            fetcher: fetcher,
-            applier: applier
+            dependencies: .init(
+                queue: queue,
+                metadataStore: metadata,
+                bookStore: bookStore,
+                bookUploader: bookUploader,
+                positionUploader: positionUploader,
+                highlightUploader: highlightUploader,
+                conversationUploader: conversationUploader,
+                messageUploader: messageUploader,
+                bookmarkUploader: bookmarkUploader,
+                fetcher: fetcher,
+                applier: applier,
+                conversationsFetcher: conversationsFetcher,
+                messagesFetcher: messagesFetcher,
+                conversationStore: conversationStore,
+                messageStore: messageStore
+            )
         )
     }
 

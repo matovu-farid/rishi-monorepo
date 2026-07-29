@@ -38,26 +38,28 @@ struct OutboundDrainer: Sendable {
     private let messageUploader: MessageUploader
     private let bookmarkUploader: BookmarkUploader
 
-    init(
-        queue: SyncQueue,
-        bookStore: any BookStore,
-        metadataStore: any SyncMetadataStore,
-        bookUploader: BookUploader,
-        positionUploader: PositionUploader,
-        highlightUploader: HighlightUploader,
-        conversationUploader: ConversationUploader,
-        messageUploader: MessageUploader,
-        bookmarkUploader: BookmarkUploader
-    ) {
-        self.queue = queue
-        self.bookStore = bookStore
-        self.metadataStore = metadataStore
-        self.bookUploader = bookUploader
-        self.positionUploader = positionUploader
-        self.highlightUploader = highlightUploader
-        self.conversationUploader = conversationUploader
-        self.messageUploader = messageUploader
-        self.bookmarkUploader = bookmarkUploader
+    struct Dependencies {
+        let queue: SyncQueue
+        let bookStore: any BookStore
+        let metadataStore: any SyncMetadataStore
+        let bookUploader: BookUploader
+        let positionUploader: PositionUploader
+        let highlightUploader: HighlightUploader
+        let conversationUploader: ConversationUploader
+        let messageUploader: MessageUploader
+        let bookmarkUploader: BookmarkUploader
+    }
+
+    init(dependencies: Dependencies) {
+        self.queue = dependencies.queue
+        self.bookStore = dependencies.bookStore
+        self.metadataStore = dependencies.metadataStore
+        self.bookUploader = dependencies.bookUploader
+        self.positionUploader = dependencies.positionUploader
+        self.highlightUploader = dependencies.highlightUploader
+        self.conversationUploader = dependencies.conversationUploader
+        self.messageUploader = dependencies.messageUploader
+        self.bookmarkUploader = dependencies.bookmarkUploader
     }
 
     /// Drain up to `limit` queue items and push them by kind.

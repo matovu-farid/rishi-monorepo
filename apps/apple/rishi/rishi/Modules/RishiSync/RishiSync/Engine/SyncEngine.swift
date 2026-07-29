@@ -46,6 +46,61 @@ public actor SyncEngine {
         public init() {}
     }
 
+    /// Composition-only dependency bundle. The engine owns orchestration;
+    /// callers provide one assembled sync graph instead of exposing every
+    /// leaf dependency through the engine initializer.
+    public struct Dependencies {
+        public let queue: SyncQueue
+        public let metadataStore: any SyncMetadataStore
+        public let bookStore: any BookStore
+        public let bookUploader: BookUploader
+        public let positionUploader: PositionUploader
+        public let highlightUploader: HighlightUploader
+        public let conversationUploader: ConversationUploader
+        public let messageUploader: MessageUploader
+        public let bookmarkUploader: BookmarkUploader
+        public let fetcher: RemoteChangeFetcher
+        public let applier: ChangeApplier
+        public let conversationsFetcher: ConversationsFetcher
+        public let messagesFetcher: MessagesFetcher
+        public let conversationStore: any ConversationStore
+        public let messageStore: any MessageStore
+
+        public init(
+            queue: SyncQueue,
+            metadataStore: any SyncMetadataStore,
+            bookStore: any BookStore,
+            bookUploader: BookUploader,
+            positionUploader: PositionUploader,
+            highlightUploader: HighlightUploader,
+            conversationUploader: ConversationUploader,
+            messageUploader: MessageUploader,
+            bookmarkUploader: BookmarkUploader,
+            fetcher: RemoteChangeFetcher,
+            applier: ChangeApplier,
+            conversationsFetcher: ConversationsFetcher,
+            messagesFetcher: MessagesFetcher,
+            conversationStore: any ConversationStore,
+            messageStore: any MessageStore
+        ) {
+            self.queue = queue
+            self.metadataStore = metadataStore
+            self.bookStore = bookStore
+            self.bookUploader = bookUploader
+            self.positionUploader = positionUploader
+            self.highlightUploader = highlightUploader
+            self.conversationUploader = conversationUploader
+            self.messageUploader = messageUploader
+            self.bookmarkUploader = bookmarkUploader
+            self.fetcher = fetcher
+            self.applier = applier
+            self.conversationsFetcher = conversationsFetcher
+            self.messagesFetcher = messagesFetcher
+            self.conversationStore = conversationStore
+            self.messageStore = messageStore
+        }
+    }
+
     private let config: SyncEngineConfig
     private let queue: SyncQueue
     private let metadataStore: any SyncMetadataStore
@@ -81,23 +136,25 @@ public actor SyncEngine {
 
     public init(
         config: SyncEngineConfig = .init(),
-        queue: SyncQueue,
-        metadataStore: any SyncMetadataStore,
-        bookStore: any BookStore,
-        bookUploader: BookUploader,
-        positionUploader: PositionUploader,
-        highlightUploader: HighlightUploader,
-        conversationUploader: ConversationUploader,
-        messageUploader: MessageUploader,
-        bookmarkUploader: BookmarkUploader,
-        fetcher: RemoteChangeFetcher,
-        applier: ChangeApplier,
-        conversationsFetcher: ConversationsFetcher,
-        messagesFetcher: MessagesFetcher,
-        conversationStore: any ConversationStore,
-        messageStore: any MessageStore,
+        dependencies: Dependencies,
         chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil
     ) {
+        let queue = dependencies.queue
+        let metadataStore = dependencies.metadataStore
+        let bookStore = dependencies.bookStore
+        let bookUploader = dependencies.bookUploader
+        let positionUploader = dependencies.positionUploader
+        let highlightUploader = dependencies.highlightUploader
+        let conversationUploader = dependencies.conversationUploader
+        let messageUploader = dependencies.messageUploader
+        let bookmarkUploader = dependencies.bookmarkUploader
+        let fetcher = dependencies.fetcher
+        let applier = dependencies.applier
+        let conversationsFetcher = dependencies.conversationsFetcher
+        let messagesFetcher = dependencies.messagesFetcher
+        let conversationStore = dependencies.conversationStore
+        let messageStore = dependencies.messageStore
+
         self.config = config
         self.queue = queue
         self.metadataStore = metadataStore
@@ -126,7 +183,7 @@ public actor SyncEngine {
             messageStore: messageStore,
             metadataStore: metadataStore
         )
-        self.outboundDrainer = OutboundDrainer(
+        self.outboundDrainer = OutboundDrainer(dependencies: .init(
             queue: queue,
             bookStore: bookStore,
             metadataStore: metadataStore,
@@ -136,7 +193,7 @@ public actor SyncEngine {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             bookmarkUploader: bookmarkUploader
-        )
+        ))
         self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
 
         // PositionDebouncer's commit closure hops back into this actor so

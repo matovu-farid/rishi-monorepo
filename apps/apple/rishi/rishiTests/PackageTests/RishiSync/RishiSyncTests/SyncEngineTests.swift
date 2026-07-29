@@ -172,6 +172,7 @@ struct SyncEngineTests {
         let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
         return SyncEngine(
             config: config,
+            dependencies: .init(
             queue: queue,
             metadataStore: metadata,
             bookStore: bookStore,
@@ -188,6 +189,7 @@ struct SyncEngineTests {
             conversationStore: conversationStore,
             messageStore: messageStore,
             chatRefreshDelegate: chatRefreshDelegate
+            )
         )
     }
 

@@ -237,6 +237,7 @@ enum ServiceGraphFactory {
 
         let syncEngine = SyncEngine(
             config: .init(),
+            dependencies: .init(
             queue: syncQueue,
             metadataStore: syncMetadataStore,
             bookStore: bookStore,
@@ -251,7 +252,8 @@ enum ServiceGraphFactory {
             conversationsFetcher: conversationsFetcher,
             messagesFetcher: messagesFetcher,
             conversationStore: conversationStore,
-            messageStore: messageStore,
+            messageStore: messageStore
+            ),
             chatRefreshDelegate: chatRefreshAdapter
         )
 

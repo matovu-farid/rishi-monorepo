@@ -129,6 +129,7 @@ struct SyncEngineChatDirtyTests {
         let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
         let engine = SyncEngine(
             config: .init(positionDebounceWindow: 0.1, batchLimit: 50, backgroundRefreshInterval: 3600),
+            dependencies: .init(
             queue: queue,
             metadataStore: metadata,
             bookStore: bookStore,
@@ -144,6 +145,7 @@ struct SyncEngineChatDirtyTests {
             messagesFetcher: messagesFetcher,
             conversationStore: conversationStore,
             messageStore: messageStore
+            )
         )
         return (engine, queue)
     }

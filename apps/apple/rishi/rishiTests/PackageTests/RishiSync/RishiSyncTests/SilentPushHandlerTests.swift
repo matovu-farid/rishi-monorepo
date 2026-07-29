@@ -111,18 +111,28 @@ struct SilentPushHandlerTests {
         let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
+        let conversationStore = StubConversationStore()
+        let messageStore = StubMessageStore()
+        let conversationsFetcher = ConversationsFetcher(workerClient: client, metadataStore: metadata)
+        let messagesFetcher = MessagesFetcher(workerClient: client, metadataStore: metadata)
         return SyncEngine(
-            queue: queue,
-            metadataStore: metadata,
-            bookStore: bookStore,
-            bookUploader: bookUploader,
-            positionUploader: positionUploader,
-            highlightUploader: highlightUploader,
-            conversationUploader: conversationUploader,
-            messageUploader: messageUploader,
-            bookmarkUploader: bookmarkUploader,
-            fetcher: fetcher,
-            applier: applier
+            dependencies: .init(
+                queue: queue,
+                metadataStore: metadata,
+                bookStore: bookStore,
+                bookUploader: bookUploader,
+                positionUploader: positionUploader,
+                highlightUploader: highlightUploader,
+                conversationUploader: conversationUploader,
+                messageUploader: messageUploader,
+                bookmarkUploader: bookmarkUploader,
+                fetcher: fetcher,
+                applier: applier,
+                conversationsFetcher: conversationsFetcher,
+                messagesFetcher: messagesFetcher,
+                conversationStore: conversationStore,
+                messageStore: messageStore
+            )
         )
     }
 
