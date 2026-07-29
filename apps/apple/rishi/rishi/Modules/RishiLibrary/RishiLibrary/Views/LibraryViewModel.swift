@@ -70,23 +70,57 @@ public final class LibraryViewModel {
 
     private var searchTask: Task<Void, Never>? = nil
 
-    /// `positionLoader` / `coverResolver` are defaulted so existing call
-    /// sites keep the stable five-argument init; production constructs them
-    /// from the injected `positionStore` / `storage`. Tests may inject
-    /// custom collaborators.
-    public init(bookStore: any BookStore,
+    private init(bookStore: any BookStore,
+                 storage: BookFileStorage,
+                 currentUserId: @escaping @MainActor () -> UserID?,
+                 importCoordinator: ImportCoordinator,
+                 positionLoader: PositionLoader,
+                 coverResolver: BookCoverResolver) {
+        self.bookStore = bookStore
+        self.storage = storage
+        self.currentUserId = currentUserId
+        self.importCoordinator = importCoordinator
+        self.positionLoader = positionLoader
+        self.coverResolver = coverResolver
+    }
+
+    /// Production initializer. Position and cover helpers are owned by the
+    /// view model because they are derived directly from the storage
+    /// dependencies already required for library refresh/delete behavior.
+    public convenience init(bookStore: any BookStore,
+                positionStore: any PositionStore,
+                storage: BookFileStorage,
+                currentUserId: @escaping @MainActor () -> UserID?,
+                importCoordinator: ImportCoordinator) {
+        self.init(
+            bookStore: bookStore,
+            storage: storage,
+            currentUserId: currentUserId,
+            importCoordinator: importCoordinator,
+            positionLoader: PositionLoader(positionStore: positionStore),
+            coverResolver: BookCoverResolver(storage: storage)
+        )
+    }
+
+    /// Compatibility initializer for external consumers that provide custom
+    /// helper implementations. New production code should use the primary
+    /// initializer and let the view model derive these helpers.
+    @available(*, deprecated, message: "Use the initializer without helper overrides for production construction.")
+    public convenience init(bookStore: any BookStore,
                 positionStore: any PositionStore,
                 storage: BookFileStorage,
                 currentUserId: @escaping @MainActor () -> UserID?,
                 importCoordinator: ImportCoordinator,
                 positionLoader: PositionLoader? = nil,
                 coverResolver: BookCoverResolver? = nil) {
-        self.bookStore = bookStore
-        self.storage = storage
-        self.currentUserId = currentUserId
-        self.importCoordinator = importCoordinator
-        self.positionLoader = positionLoader ?? PositionLoader(positionStore: positionStore)
-        self.coverResolver = coverResolver ?? BookCoverResolver(storage: storage)
+        self.init(
+            bookStore: bookStore,
+            storage: storage,
+            currentUserId: currentUserId,
+            importCoordinator: importCoordinator,
+            positionLoader: positionLoader ?? PositionLoader(positionStore: positionStore),
+            coverResolver: coverResolver ?? BookCoverResolver(storage: storage)
+        )
     }
 
     /// Imports picker-vended URLs through `ImportCoordinator` (security-scoped
