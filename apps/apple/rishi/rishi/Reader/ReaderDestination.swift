@@ -37,16 +37,6 @@ struct ReaderDestination: View {
         let peeked = services.library.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? services.settings.readerDefaults.theme
         vm.theme = initial
-        if peeked == nil {
-            let store = services.library.readerSettingsStore
-            let bookId = vm.book.id
-            let seed = initial
-            Task {
-                if store.peekPersistedTheme(for: bookId) == nil {
-                    await store.setTheme(seed, for: bookId)
-                }
-            }
-        }
 
         self._vm = State(initialValue: vm)
         self.services = services
