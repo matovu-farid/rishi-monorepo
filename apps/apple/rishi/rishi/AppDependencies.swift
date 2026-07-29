@@ -118,12 +118,6 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let syncMetadataStore: any SyncMetadataStore
     let syncStatus: SyncStatus
-    let bookUploader: BookUploader
-    let positionUploader: PositionUploader
-    let highlightUploader: HighlightUploader
-    let bookmarkUploader: BookmarkUploader
-    let remoteChangeFetcher: RemoteChangeFetcher
-    let changeApplier: ChangeApplier
     let syncEngine: SyncEngine
     let backgroundTaskCoordinator: BackgroundTaskCoordinator
     let apnsDeviceRegistrar: APNsDeviceRegistrar
