@@ -25,3 +25,7 @@ apps/mobile/__tests__/rag/chunker-parity.test.ts
 # Test runner artifacts
 **/test-results/
 **/e2e/screenshots/
+
+# Local build and brainstorming artifacts
+/.build-*/
+/.superpowers/brainstorm/
