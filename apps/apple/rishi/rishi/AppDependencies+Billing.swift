@@ -17,10 +17,10 @@ extension AppDependencies {
     /// Clear cached entitlement state for the outgoing account. Callable from
     /// any sign-out host before `CurrentUserBox.signout()`.
     func clearEntitlementState(for userId: String?) async {
-        await entitlementService.clearSnapshotCache(for: userId)
-        await entitlementService.clearCache()
+        await services!.entitlementService.clearSnapshotCache(for: userId)
+        await services!.entitlementService.clearCache()
         await MainActor.run {
-            entitlementReconciler.reset()
+            services!.entitlementReconciler.reset()
         }
     }
 
@@ -29,7 +29,7 @@ extension AppDependencies {
     func performSignOut(currentUserBox: CurrentUserBox) async {
         let outgoing = try? Keychain.load(.userId)
         await clearEntitlementState(for: outgoing)
-        await syncEngine.resetForAccountSwitch()
+        await services!.syncEngine.resetForAccountSwitch()
         userIdBox.value = nil
         if let metadataStore = services?.syncMetadataStore as? SwiftDataSyncMetadataStore {
             do {

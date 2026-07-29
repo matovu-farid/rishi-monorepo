@@ -10,7 +10,7 @@ struct SignedOutView: View {
     
     @Environment(\.appDependencies) private var deps
     
-    var workerClient: WorkerClient? {deps?.workerClient}
+    var workerClient: WorkerClient? { deps?.services!.workerClient }
     var onSignedIn: (User) -> Void = { _ in }
     @State var currentUser:User? = nil
     @State var isSignedIn:Bool = false
@@ -174,7 +174,7 @@ struct SignedOutView: View {
                         
                     }
                     currentUserBox.signIn(user: auth.user)
-                    await deps?.entitlementRefreshCoordinator.refreshIfSignedIn(
+                    await deps?.services!.entitlementRefreshCoordinator.refreshIfSignedIn(
                         reason: .signIn
                     )
                 }

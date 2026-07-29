@@ -142,7 +142,7 @@ struct rishiApp: App {
         reason: EntitlementRefreshCoordinator.RefreshReason
     ) async {
         guard deps.services != nil else { return }
-        await deps.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason)
+        await deps.services!.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason)
     }
 }
 
