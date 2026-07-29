@@ -117,7 +117,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let ttsPrewarmer: TTSPrewarmer
 
     let syncMetadataStore: any SyncMetadataStore
-    let syncQueue: SyncQueue
     let syncStatus: SyncStatus
     let bookUploader: BookUploader
     let positionUploader: PositionUploader

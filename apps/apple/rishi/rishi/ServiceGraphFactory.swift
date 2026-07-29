@@ -424,7 +424,6 @@ enum ServiceGraphFactory {
             ttsPresenceController: audioStack.presence,
             ttsPrewarmer: audioStack.prewarmer,
             syncMetadataStore: syncMetadataStore,
-            syncQueue: syncQueue,
             syncStatus: syncStatus,
             bookUploader: bookUploader,
             positionUploader: positionUploader,
