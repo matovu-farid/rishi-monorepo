@@ -98,7 +98,6 @@ struct ReaderDestination: View {
             voicePresenter: dependencies.voicePresenter,
             voiceLanguageProvider: { dependencies.readerDefaults.voiceLanguage },
             entitlementSnapshotStore: dependencies.entitlementSnapshotStore,
-            entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
             onRequestPaywall: onRequestPaywall
         ))
     }

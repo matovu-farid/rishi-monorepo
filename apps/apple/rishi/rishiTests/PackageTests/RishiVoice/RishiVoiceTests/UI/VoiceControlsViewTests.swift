@@ -63,4 +63,50 @@ struct VoiceControlsViewTests {
             _ = VoiceControlsView(state: state, onEnd: {}, onOpenReadAloud: {}).body
         }
     }
+
+    @Test("pre-live statuses use the compact progress visual")
+    func preLiveStatusesUseProgressVisual() {
+        for status in [
+            VoiceSessionStatus.idle,
+            .requestingMic,
+            .fetchingKey,
+            .creatingSession,
+            .connecting,
+            .registeringCall,
+        ] {
+            #expect(VoiceControlsView.usesProgressVisual(for: status))
+        }
+
+        #expect(!VoiceControlsView.usesProgressVisual(for: .live))
+        #expect(!VoiceControlsView.usesProgressVisual(for: .reconnecting(attempt: 1)))
+    }
+
+    @Test("live confirmation cue plays only on the first transition to live")
+    func liveConfirmationCuePolicy() {
+        #expect(VoiceControlsView.shouldPlayLiveConfirmation(
+            from: .connecting,
+            to: .live,
+            hasPlayed: false
+        ))
+        #expect(!VoiceControlsView.shouldPlayLiveConfirmation(
+            from: .reconnecting(attempt: 1),
+            to: .live,
+            hasPlayed: false
+        ))
+        #expect(!VoiceControlsView.shouldPlayLiveConfirmation(
+            from: .live,
+            to: .live,
+            hasPlayed: false
+        ))
+        #expect(!VoiceControlsView.shouldPlayLiveConfirmation(
+            from: .connecting,
+            to: .live,
+            hasPlayed: true
+        ))
+        #expect(!VoiceControlsView.shouldPlayLiveConfirmation(
+            from: nil,
+            to: .live,
+            hasPlayed: false
+        ))
+    }
 }

@@ -29,22 +29,17 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     /// production always passes `services.billing.entitlementSnapshotStore`.
     private let entitlementSnapshotStore: EntitlementSnapshotStore?
 
-    /// Coalesced refresh path for tap-time gating. `nil` only in tests.
-    private let entitlementRefreshCoordinator: EntitlementRefreshCoordinator?
-
     private let onRequestPaywall: (String) -> Void
 
     init(
         voicePresenter: VoiceSessionPresenter,
         voiceLanguageProvider: @escaping @MainActor () -> VoiceLanguageOption,
         entitlementSnapshotStore: EntitlementSnapshotStore? = nil,
-        entitlementRefreshCoordinator: EntitlementRefreshCoordinator? = nil,
         onRequestPaywall: @escaping (String) -> Void
     ) {
         self.voicePresenter = voicePresenter
         self.voiceLanguageProvider = voiceLanguageProvider
         self.entitlementSnapshotStore = entitlementSnapshotStore
-        self.entitlementRefreshCoordinator = entitlementRefreshCoordinator
         self.onRequestPaywall = onRequestPaywall
     }
 
@@ -57,13 +52,7 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
             isCheckingEntitlement = true
             defer { isCheckingEntitlement = false }
 
-            if let store = entitlementSnapshotStore,
-               let coordinator = entitlementRefreshCoordinator,
-               let reason = await EntitlementAIGate.gateAIFeature(
-                   .voiceChat,
-                   store: store,
-                   coordinator: coordinator
-               ) {
+            if let reason = entitlementSnapshotStore?.blockReason(for: .voiceChat) {
                 pendingUpgradePrompt = reason
                 return
             }

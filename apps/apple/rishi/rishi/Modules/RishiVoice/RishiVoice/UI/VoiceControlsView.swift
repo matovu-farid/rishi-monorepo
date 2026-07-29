@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 
@@ -9,11 +10,14 @@ public struct VoiceControlsView: View {
     nonisolated public static let endAccessibilityIdentifier = "voice-end"
     nonisolated public static let openTextChatAccessibilityIdentifier = "voice.openTextChat"
     nonisolated public static let iconButtonSize: CGFloat = 48
+    private static let connectionCueResourceName = "voice-chat-started"
 
     @Bindable private var state: VoiceSessionState
     @State private var buttonHapticTick = 0
     @State private var transientStatus: String?
     @State private var transientStatusGeneration = 0
+    @State private var hasPlayedLiveConfirmation = false
+    @State private var connectionCuePlayer: AVAudioPlayer?
 
     private let onEnd: () -> Void
     private let onOpenReadAloud: () -> Void
@@ -51,9 +55,12 @@ public struct VoiceControlsView: View {
             .padding(RishiSpacing.l)
             .sensoryFeedback(.impact(weight: .light), trigger: buttonHapticTick)
             .accessibilityElement(children: .contain)
-            .onAppear(perform: updateStatusPresentation)
-            .onChange(of: state.status) { _, _ in
+            .onAppear {
                 updateStatusPresentation()
+            }
+            .onChange(of: state.status) { oldStatus, newStatus in
+                updateStatusPresentation()
+                handleStatusTransition(from: oldStatus, to: newStatus)
             }
             .onChange(of: state.activityPhase) { _, _ in
                 updateStatusPresentation()
@@ -75,7 +82,7 @@ public struct VoiceControlsView: View {
     private var controlsRow: some View {
         HStack(spacing: RishiSpacing.m) {
             leadingControls
-            waveform
+            centerVisual
             trailingControls
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -114,6 +121,18 @@ public struct VoiceControlsView: View {
         }
     }
 
+    @ViewBuilder
+    private var centerVisual: some View {
+        if Self.usesProgressVisual(for: state.status) {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 56, height: 40)
+                .accessibilityHidden(true)
+        } else {
+            waveform
+        }
+    }
+
     private var waveform: some View {
         VoiceWaveformView(phase: displayPhase)
             .frame(width: 56, height: 40)
@@ -133,11 +152,30 @@ public struct VoiceControlsView: View {
     }
 
     private var isConnectingStatus: Bool {
-        switch state.status {
+        Self.usesProgressVisual(for: state.status)
+    }
+
+    static func usesProgressVisual(for status: VoiceSessionStatus) -> Bool {
+        switch status {
         case .idle, .requestingMic, .fetchingKey, .creatingSession, .connecting, .registeringCall:
             return true
         default:
             return false
+        }
+    }
+
+    static func shouldPlayLiveConfirmation(
+        from oldStatus: VoiceSessionStatus?,
+        to newStatus: VoiceSessionStatus,
+        hasPlayed: Bool
+    ) -> Bool {
+        guard !hasPlayed, newStatus == .live else { return false }
+        guard let oldStatus else { return false }
+        switch oldStatus {
+        case .reconnecting, .live:
+            return false
+        default:
+            return true
         }
     }
 
@@ -196,6 +234,49 @@ public struct VoiceControlsView: View {
     private func updateStatusPresentation() {
         transientStatusGeneration &+= 1
         transientStatus = transientStatusLabel
+    }
+
+    private func handleStatusTransition(
+        from oldStatus: VoiceSessionStatus?,
+        to newStatus: VoiceSessionStatus
+    ) {
+        if newStatus == .idle {
+            hasPlayedLiveConfirmation = false
+            return
+        }
+
+        guard Self.shouldPlayLiveConfirmation(
+            from: oldStatus,
+            to: newStatus,
+            hasPlayed: hasPlayedLiveConfirmation
+        ) else { return }
+
+        hasPlayedLiveConfirmation = true
+        playConnectionCue()
+    }
+
+    private func playConnectionCue() {
+        guard let url = AppResourceBundle.bundle.url(
+            forResource: Self.connectionCueResourceName,
+            withExtension: "mp3"
+        ) else {
+            Log.event("voice.connection_cue.missing", level: .warning)
+            return
+        }
+
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.volume = 0.65
+            player.prepareToPlay()
+            connectionCuePlayer = player
+            player.play()
+        } catch {
+            Log.event(
+                "voice.connection_cue.failed",
+                level: .warning,
+                data: ["error": String(describing: error)]
+            )
+        }
     }
 
     private func performButtonAction(_ action: @escaping () -> Void) -> () -> Void {
