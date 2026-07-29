@@ -151,9 +151,10 @@ The recommended low-risk simplifications were applied on branch `codex/apple-arc
 - removed the `ReaderDestination` initializer’s fire-and-forget side effect while preserving first-frame theme hydration and keeping `ReaderScreen` as the sole theme-seeding owner;
 - made OnboardingHost, subscription sheets, SettingsContent, SettingsSheet, LibraryTabView, and ReaderDestination consume focused dependency bundles;
 - replaced Onboarding placeholder previews with real flow previews backed by in-memory onboarding state;
+- split SignedInView into an environment/session container and a self-contained SignedInContent, keeping only account/session coordination and Mac menu publishing at the outer boundary;
 - retained the materialization, dirty/refresh, `WorkerAPI`, platform, and external-library seams because they contain meaningful behavior or package boundaries.
 
-The Apple app simulator build passes after each implementation step, including the latest ReaderDestination dependency boundary. Tests were deferred by request; stale production/test property references found during review were repaired as part of the migration. Remaining follow-ups are the separately scoped configuration/terminology drift, global hook lifecycle, account-switching race scenario, and the intentionally environment-aware SignedIn/Mac session shell.
+The Apple app simulator build passes after each implementation step, including the latest SignedInView container/content boundary. Tests were deferred by request; stale production/test property references found during review were repaired as part of the migration. Remaining follow-ups are the separately scoped configuration/terminology drift, global hook lifecycle, account-switching race scenario, and the intentionally environment-aware Mac reader-preferences modifier.
 
 ## Adversarial review loop
 
