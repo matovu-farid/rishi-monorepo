@@ -434,10 +434,12 @@ enum ServiceGraphFactory {
                 apnsDeviceRegistrar: apnsDeviceRegistrar,
                 chatRefreshAdapter: chatRefreshAdapter
             ),
-            conversationStore: conversationStore,
-            messageStore: messageStore,
-            conversationLookup: conversationLookup,
-            chatService: chatService,
+            chat: ChatRuntime(
+                conversationStore: conversationStore,
+                messageStore: messageStore,
+                conversationLookup: conversationLookup,
+                service: chatService
+            ),
             voicePresenter: voicePresenter,
             voiceSessionRegistry: voiceSessionRegistry,
             billing: BillingRuntime(

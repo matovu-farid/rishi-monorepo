@@ -32,7 +32,7 @@ struct DeepLinkHandlingModifier: ViewModifier {
                 router.handle(
                     url: url,
                     bookStore: services.library.bookStore,
-                    conversationStore: services.conversationStore
+                    conversationStore: services.chat.conversationStore
                 )
             }
     }

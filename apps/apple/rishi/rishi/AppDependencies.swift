@@ -109,10 +109,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let sync: SyncRuntime
 
-    let conversationStore: any ConversationStore
-    let messageStore: any MessageStore
-    let conversationLookup: ConversationLookup
-    let chatService: RishiChatService
+    let chat: ChatRuntime
 
     let voicePresenter: VoiceSessionPresenter
     let voiceSessionRegistry: VoiceSessionRegistry
@@ -126,6 +123,13 @@ struct BootstrappedServices: @unchecked Sendable {
     let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+}
+
+struct ChatRuntime: @unchecked Sendable {
+    let conversationStore: any ConversationStore
+    let messageStore: any MessageStore
+    let conversationLookup: ConversationLookup
+    let service: RishiChatService
 }
 
 struct LibraryRuntime: @unchecked Sendable {

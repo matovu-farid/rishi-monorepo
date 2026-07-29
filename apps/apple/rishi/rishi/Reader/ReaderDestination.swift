@@ -226,7 +226,7 @@ struct ReaderDestination: View {
             }
             .task(id: services.voicePresenter.currentBookId) {
                 voiceTextVM = nil
-                if let convo = try? await services.conversationLookup.findOrCreate(
+                if let convo = try? await services.chat.conversationLookup.findOrCreate(
                     userId: userId,
                     bookId: services.voicePresenter.currentBookId
                 ) {
