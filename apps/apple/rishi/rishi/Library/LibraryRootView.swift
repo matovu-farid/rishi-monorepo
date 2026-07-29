@@ -311,13 +311,14 @@ private enum LibraryRootPreviewFixtures {
         let capturedUserId = userId
         let vm = LibraryViewModel(
             bookStore: bookStore,
-            positionStore: positionStore,
-            storage: storage,
             currentUserId: { userId },
             importCoordinator: ImportCoordinator(
                 storage: storage,
                 currentUserId: { capturedUserId }
-            )
+            ),
+            positionLoader: PositionLoader(positionStore: positionStore),
+            coverResolver: BookCoverResolver(storage: storage),
+            deleteBook: { book in try await storage.delete(book) }
         )
         return vm
     }

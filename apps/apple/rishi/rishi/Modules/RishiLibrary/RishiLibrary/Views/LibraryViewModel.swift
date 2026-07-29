@@ -62,31 +62,35 @@ public final class LibraryViewModel {
     public var debounceDuration: Duration = .milliseconds(150)
 
     private let bookStore: any BookStore
-    private let storage: BookFileStorage
     private let currentUserId: @MainActor () -> UserID?
     private let importCoordinator: ImportCoordinator
     private let positionLoader: PositionLoader
     private let coverResolver: BookCoverResolver
+    private let deleteBook: @Sendable (Book) async throws -> Void
 
     private var searchTask: Task<Void, Never>? = nil
 
-    private init(bookStore: any BookStore,
-                 storage: BookFileStorage,
-                 currentUserId: @escaping @MainActor () -> UserID?,
-                 importCoordinator: ImportCoordinator,
-                 positionLoader: PositionLoader,
-                 coverResolver: BookCoverResolver) {
+    /// Composed initializer for production callers that already own the
+    /// library helpers. The view model does not need to know the concrete file
+    /// storage used to implement deletion.
+    public init(
+        bookStore: any BookStore,
+        currentUserId: @escaping @MainActor () -> UserID?,
+        importCoordinator: ImportCoordinator,
+        positionLoader: PositionLoader,
+        coverResolver: BookCoverResolver,
+        deleteBook: @escaping @Sendable (Book) async throws -> Void
+    ) {
         self.bookStore = bookStore
-        self.storage = storage
         self.currentUserId = currentUserId
         self.importCoordinator = importCoordinator
         self.positionLoader = positionLoader
         self.coverResolver = coverResolver
+        self.deleteBook = deleteBook
     }
 
-    /// Production initializer. Position and cover helpers are owned by the
-    /// view model because they are derived directly from the storage
-    /// dependencies already required for library refresh/delete behavior.
+    /// Compatibility initializer for callers that still provide raw storage.
+    /// New production construction should use the composed helper initializer.
     public convenience init(bookStore: any BookStore,
                 positionStore: any PositionStore,
                 storage: BookFileStorage,
@@ -94,11 +98,11 @@ public final class LibraryViewModel {
                 importCoordinator: ImportCoordinator) {
         self.init(
             bookStore: bookStore,
-            storage: storage,
             currentUserId: currentUserId,
             importCoordinator: importCoordinator,
             positionLoader: PositionLoader(positionStore: positionStore),
-            coverResolver: BookCoverResolver(storage: storage)
+            coverResolver: BookCoverResolver(storage: storage),
+            deleteBook: { book in try await storage.delete(book) }
         )
     }
 
@@ -115,11 +119,11 @@ public final class LibraryViewModel {
                 coverResolver: BookCoverResolver? = nil) {
         self.init(
             bookStore: bookStore,
-            storage: storage,
             currentUserId: currentUserId,
             importCoordinator: importCoordinator,
             positionLoader: positionLoader ?? PositionLoader(positionStore: positionStore),
-            coverResolver: coverResolver ?? BookCoverResolver(storage: storage)
+            coverResolver: coverResolver ?? BookCoverResolver(storage: storage),
+            deleteBook: { book in try await storage.delete(book) }
         )
     }
 
@@ -192,7 +196,7 @@ public final class LibraryViewModel {
     public func delete(_ book: Book) async {
         cancelSearchDebounce()
         do {
-            try await storage.delete(book)
+            try await deleteBook(book)
             books.removeAll { existing in existing.id == book.id }
             positionsByBookId[book.id] = nil
             coverURLs[book.id] = nil
