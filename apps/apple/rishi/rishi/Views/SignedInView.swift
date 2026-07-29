@@ -49,7 +49,34 @@ struct SignedInView: View {
             
             @Bindable var model = model
             LibraryTabView(
-                services: services,
+                dependencies: LibraryTabDependencies(
+                    bookStore: services.library.bookStore,
+                    positionStore: services.library.positionStore,
+                    bookFileStorage: services.library.bookFileStorage,
+                    importCoordinator: services.library.importCoordinator,
+                    sampleBookInstaller: services.library.sampleBookInstaller,
+                    sampleReaderInstaller: services.library.sampleReaderInstaller,
+                    conversationStore: services.chat.conversationStore,
+                    messageStore: services.chat.messageStore,
+                    readerDefaults: services.settings.readerDefaults,
+                    syncEngine: services.sync.engine,
+                    entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+                    entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                    groupID: services.billing.groupID,
+                    settings: SettingsContentDependencies(
+                        readerDefaults: services.settings.readerDefaults,
+                        ttsSettingsStore: services.audio.ttsSettingsStore,
+                        syncStatus: services.sync.status,
+                        syncEngine: services.sync.engine,
+                        telemetryStore: services.settings.telemetryStore,
+                        footerDetectionStore: services.settings.footerDetectionStore,
+                        entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                        restoreService: services.billing.restoreService,
+                        manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
+                        groupID: services.billing.groupID
+                    )
+                ),
                 user: user,
                 model: model,
                 onLibraryReadyForTrial: onLibraryReadyForTrial

@@ -9,9 +9,26 @@
 import SwiftUI
 import StoreKit
 
+struct LibraryTabDependencies {
+    let bookStore: any BookStore
+    let positionStore: any PositionStore
+    let bookFileStorage: BookFileStorage
+    let importCoordinator: ImportCoordinator
+    let sampleBookInstaller: SampleBookInstaller
+    let sampleReaderInstaller: SampleReaderInstaller
+    let conversationStore: any ConversationStore
+    let messageStore: any MessageStore
+    let readerDefaults: AppReaderDefaults
+    let syncEngine: SyncEngine
+    let entitlementSnapshotStore: EntitlementSnapshotStore
+    let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
+    let groupID: GroupId?
+    let settings: SettingsContentDependencies
+}
+
 struct LibraryTabView: View {
 
-    let services: BootstrappedServices
+    let dependencies: LibraryTabDependencies
     let user: User
     let model: SignedInViewModel
     let onLibraryReadyForTrial: () -> Void
@@ -30,21 +47,21 @@ struct LibraryTabView: View {
     @State private var showSubscriptionConfirmation = false
 
     init(
-        services: BootstrappedServices,
+        dependencies: LibraryTabDependencies,
         user: User,
         model: SignedInViewModel,
         onLibraryReadyForTrial: @escaping () -> Void = {},
     ) {
-        self.services = services
+        self.dependencies = dependencies
         self.user = user
         self.model = model
         self.onLibraryReadyForTrial = onLibraryReadyForTrial
         _vm = State(initialValue: LibraryViewModel.make(
-            bookStore: services.library.bookStore,
+            bookStore: dependencies.bookStore,
             userId: user.id,
-            importCoordinator: services.library.importCoordinator,
-            positionStore: services.library.positionStore,
-            bookFileStorage: services.library.bookFileStorage
+            importCoordinator: dependencies.importCoordinator,
+            positionStore: dependencies.positionStore,
+            bookFileStorage: dependencies.bookFileStorage
         ))
     }
 
@@ -59,7 +76,7 @@ struct LibraryTabView: View {
             LibraryRootView(
           
                 path: bindableRouter.path,
-                importCoordinator: services.library.importCoordinator,
+                importCoordinator: dependencies.importCoordinator,
                 onOpenBook: { book in
                     model.hint(book)
                     #if targetEnvironment(macCatalyst)
@@ -90,7 +107,7 @@ struct LibraryTabView: View {
                     route: route,
                     hint: model.hint(for: route.bookId),
                     onRequestPaywall: { name in
-                        let paid = services.billing.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
+                        let paid = dependencies.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
                         model.requestPaywall(name, serverPaidActive: paid)
                     }
                 )
@@ -98,8 +115,8 @@ struct LibraryTabView: View {
             .navigationDestination(for: ConversationsRoute.self) { _ in
                 ConversationsListHost(
                     vm: ConversationsListViewModel.make(
-                        conversationStore: services.chat.conversationStore,
-                        messageStore: services.chat.messageStore
+                        conversationStore: dependencies.conversationStore,
+                        messageStore: dependencies.messageStore
                     ),
                     userId: user.id,
                     onSelect: { convo in model.present(conversation: convo) }
@@ -124,8 +141,8 @@ struct LibraryTabView: View {
                 await model.performInitialLibrarySync(
                     refresh: { await vm.refresh() },
                     sync: {
-                        if services.settings.readerDefaults.autoSync {
-                            _ = await services.sync.engine.runOnce()
+                        if dependencies.readerDefaults.autoSync {
+                            _ = await dependencies.syncEngine.runOnce()
                         }
                     }
                 )
@@ -164,7 +181,7 @@ struct LibraryTabView: View {
                     hasSeenFirstBookPrompt = true
                     showFirstBookPrompt = false
                     Task {
-                        _ = await services.library.sampleBookInstaller.installIfNeeded(
+                        _ = await dependencies.sampleBookInstaller.installIfNeeded(
                             ownerId: user.id
                         )
                         await vm.refresh()
@@ -191,17 +208,17 @@ struct LibraryTabView: View {
             .sheet(isPresented: Bindable(model).showSettings) {
                 SettingsSheet(
                     dependencies: SettingsContentDependencies(
-                        readerDefaults: services.settings.readerDefaults,
-                        ttsSettingsStore: services.audio.ttsSettingsStore,
-                        syncStatus: services.sync.status,
-                        syncEngine: services.sync.engine,
-                        telemetryStore: services.settings.telemetryStore,
-                        footerDetectionStore: services.settings.footerDetectionStore,
-                        entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
-                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
-                        restoreService: services.billing.restoreService,
-                        manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
-                        groupID: services.billing.groupID
+                        readerDefaults: dependencies.settings.readerDefaults,
+                        ttsSettingsStore: dependencies.settings.ttsSettingsStore,
+                        syncStatus: dependencies.settings.syncStatus,
+                        syncEngine: dependencies.settings.syncEngine,
+                        telemetryStore: dependencies.settings.telemetryStore,
+                        footerDetectionStore: dependencies.settings.footerDetectionStore,
+                        entitlementSnapshotStore: dependencies.settings.entitlementSnapshotStore,
+                        entitlementRefreshCoordinator: dependencies.settings.entitlementRefreshCoordinator,
+                        restoreService: dependencies.settings.restoreService,
+                        manageSubscriptionPresenter: dependencies.settings.manageSubscriptionPresenter,
+                        groupID: dependencies.settings.groupID
                     ),
                     user: user
                 )
@@ -212,7 +229,7 @@ struct LibraryTabView: View {
             // Best-effort: purchase/restore via SubscriptionStoreView may have
             // synced entitlements while the sheet was up.
             Task {
-                await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+                await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground
                 )
                 guard pendingSubscriptionConfirmation else { return }
@@ -222,12 +239,12 @@ struct LibraryTabView: View {
                 }
             }
         }) { _ in
-            if services.billing.groupID != nil {
+            if dependencies.groupID != nil {
                 SubscriptionsView(
                     dependencies: SubscriptionDependencies(
-                        groupID: services.billing.groupID,
-                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
-                        restoreService: services.billing.restoreService
+                        groupID: dependencies.groupID,
+                        entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
+                        restoreService: dependencies.settings.restoreService
                     ),
                     onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
@@ -248,7 +265,7 @@ struct LibraryTabView: View {
                 }
             }
         }
-        .onChange(of: services.billing.entitlementSnapshotStore.resolution) { old, new in
+        .onChange(of: dependencies.entitlementSnapshotStore.resolution) { old, new in
             let oldPaid = old.resolvedSnapshot?.isPaidActive ?? false
             let newPaid = new.resolvedSnapshot?.isPaidActive ?? false
             // Dismiss only when crossing into paid-active (verified grant).
@@ -273,7 +290,7 @@ struct LibraryTabView: View {
 
     @MainActor
     private func installSampleReaderIfNeeded() async {
-        _ = await services.library.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+        _ = await dependencies.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
         await vm.refresh()
     }
 }
