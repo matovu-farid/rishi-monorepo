@@ -56,14 +56,14 @@ public struct SubscriptionsView: View {
 
     private var isPaidActive: Bool {
         let serverPaid = entitlementStore.resolvedSnapshot?.isPaidActive == true
-        let storeKitPaid = services?.groupID.map {
+        let storeKitPaid = services?.billing.groupID.map {
             customerEntitlements.hasActiveSubscription(in: $0.value)
         } ?? false
         return serverPaid || storeKitPaid
     }
 
     private var activeProductID: Product.ID? {
-        guard let productID = services?.groupID.flatMap({
+        guard let productID = services?.billing.groupID.flatMap({
             customerEntitlements.activeProductID(in: $0.value)
         }) else { return nil }
         #if targetEnvironment(macCatalyst)
@@ -268,7 +268,7 @@ public struct SubscriptionsView: View {
 
         await store.process(purchaseResult: purchaseResult)
         if let services {
-            await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+            await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                 reason: .foreground
             )
         }
@@ -283,8 +283,8 @@ public struct SubscriptionsView: View {
         isRestoring = true
         defer { isRestoring = false }
         do {
-            let outcome = try await services.restoreService.restore()
-            await services.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
+            let outcome = try await services.billing.restoreService.restore()
+            await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
             restoreMessage = RestoreMessage.forOutcome(outcome)
         } catch let error as RestoreError {
             Log.event("iap.restore.user_facing_failure", level: .warning)

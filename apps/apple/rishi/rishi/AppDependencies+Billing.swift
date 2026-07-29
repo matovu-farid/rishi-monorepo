@@ -4,23 +4,23 @@ import Foundation
 
 extension AppDependencies {
 
-    var entitlementService: EntitlementService { services!.entitlementService }
-    var entitlementSnapshotStore: EntitlementSnapshotStore { services!.entitlementSnapshotStore }
+    var entitlementService: EntitlementService { services!.billing.entitlementService }
+    var entitlementSnapshotStore: EntitlementSnapshotStore { services!.billing.entitlementSnapshotStore }
     var entitlementRefreshCoordinator: EntitlementRefreshCoordinator {
-        services!.entitlementRefreshCoordinator
+        services!.billing.entitlementRefreshCoordinator
     }
-    var entitlementReconciler: EntitlementReconciler { services!.entitlementReconciler }
-    var readerAppEntitlementFlag: ReaderAppEntitlementFlag { services!.readerAppEntitlementFlag }
-    var restoreService: RestoreService { services!.restoreService }
-    var workerReceiptVerifier: any ReceiptVerifier { services!.workerReceiptVerifier }
+    var entitlementReconciler: EntitlementReconciler { services!.billing.entitlementReconciler }
+    var readerAppEntitlementFlag: ReaderAppEntitlementFlag { services!.billing.readerAppEntitlementFlag }
+    var restoreService: RestoreService { services!.billing.restoreService }
+    var workerReceiptVerifier: any ReceiptVerifier { services!.billing.workerReceiptVerifier }
 
     /// Clear cached entitlement state for the outgoing account. Callable from
     /// any sign-out host before `CurrentUserBox.signout()`.
     func clearEntitlementState(for userId: String?) async {
-        await services!.entitlementService.clearSnapshotCache(for: userId)
-        await services!.entitlementService.clearCache()
+        await services!.billing.entitlementService.clearSnapshotCache(for: userId)
+        await services!.billing.entitlementService.clearCache()
         await MainActor.run {
-            services!.entitlementReconciler.reset()
+            services!.billing.entitlementReconciler.reset()
         }
     }
 

@@ -84,7 +84,7 @@ struct LibraryTabView: View {
                     route: route,
                     hint: model.hint(for: route.bookId),
                     onRequestPaywall: { name in
-                        let paid = services.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
+                        let paid = services.billing.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
                         model.requestPaywall(name, serverPaidActive: paid)
                     }
                 )
@@ -191,7 +191,7 @@ struct LibraryTabView: View {
             // Best-effort: purchase/restore via SubscriptionStoreView may have
             // synced entitlements while the sheet was up.
             Task {
-                await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+                await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground
                 )
                 guard pendingSubscriptionConfirmation else { return }
@@ -201,7 +201,7 @@ struct LibraryTabView: View {
                 }
             }
         }) { _ in
-            if services.groupID != nil {
+            if services.billing.groupID != nil {
                 SubscriptionsView(onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     model.dismissPaywall()
@@ -221,7 +221,7 @@ struct LibraryTabView: View {
                 }
             }
         }
-        .onChange(of: services.entitlementSnapshotStore.resolution) { old, new in
+        .onChange(of: services.billing.entitlementSnapshotStore.resolution) { old, new in
             let oldPaid = old.resolvedSnapshot?.isPaidActive ?? false
             let newPaid = new.resolvedSnapshot?.isPaidActive ?? false
             // Dismiss only when crossing into paid-active (verified grant).

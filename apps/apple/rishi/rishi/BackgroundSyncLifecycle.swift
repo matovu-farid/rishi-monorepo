@@ -158,7 +158,7 @@ final class BackgroundSyncLifecycle {
                 completion(.noData)
                 return
             }
-            //        let entitlementService = services.entitlementService
+            //        let entitlementService = services.billing.entitlementService
             SilentPushHandler.handle(
                 userInfo,
                 engine: services.syncEngine,

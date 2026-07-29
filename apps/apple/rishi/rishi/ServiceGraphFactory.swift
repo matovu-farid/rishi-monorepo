@@ -444,21 +444,23 @@ enum ServiceGraphFactory {
             voiceSessionRegistry: voiceSessionRegistry,
             bookSearch: bookSearch,
             indexingHook: indexingHook,
-            entitlementService: entitlementService,
-            entitlementSnapshotStore: entitlementSnapshotStore,
-            entitlementRefreshCoordinator: entitlementRefreshCoordinator,
-            manageSubscriptionPresenter: manageSubscriptionPresenter,
-            entitlementReconciler: reconciler,
-            readerAppEntitlementFlag: entitlementFlag,
-            restoreService: restoreService,
-            workerReceiptVerifier: receiptVerifier,
+            billing: BillingRuntime(
+                entitlementService: entitlementService,
+                entitlementSnapshotStore: entitlementSnapshotStore,
+                entitlementRefreshCoordinator: entitlementRefreshCoordinator,
+                manageSubscriptionPresenter: manageSubscriptionPresenter,
+                entitlementReconciler: reconciler,
+                readerAppEntitlementFlag: entitlementFlag,
+                restoreService: restoreService,
+                workerReceiptVerifier: receiptVerifier,
+                groupID: groupID
+            ),
             telemetryStore: telemetryStore,
             footerDetectionStore: footerDetectionStore,
             onboardingState: onboardingState,
             trialOnboardingState: trialOnboardingState,
             onboardingCoordinator: onboardingCoordinator,
-            readerDefaults: readerDefaults,
-            groupID: groupID
+            readerDefaults: readerDefaults
         )
     }
 

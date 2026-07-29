@@ -142,17 +142,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let indexingHook: any BookIndexingHook
 
-    let entitlementService: EntitlementService
-    let entitlementSnapshotStore: EntitlementSnapshotStore
-    let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
-    let manageSubscriptionPresenter: ManageSubscriptionPresenter
-    //    let storeKitProductService: StoreKitProductService
-    //    let purchaseService: PurchaseService
-    //   let transactionListener: TransactionListener
-    let entitlementReconciler: EntitlementReconciler
-    let readerAppEntitlementFlag: ReaderAppEntitlementFlag
-    let restoreService: RestoreService
-    let workerReceiptVerifier: any ReceiptVerifier
+    let billing: BillingRuntime
 
     let telemetryStore: any TelemetryStore
 
@@ -161,6 +151,17 @@ struct BootstrappedServices: @unchecked Sendable {
     let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+}
+
+struct BillingRuntime: @unchecked Sendable {
+    let entitlementService: EntitlementService
+    let entitlementSnapshotStore: EntitlementSnapshotStore
+    let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
+    let manageSubscriptionPresenter: ManageSubscriptionPresenter
+    let entitlementReconciler: EntitlementReconciler
+    let readerAppEntitlementFlag: ReaderAppEntitlementFlag
+    let restoreService: RestoreService
+    let workerReceiptVerifier: any ReceiptVerifier
     let groupID: Optional<GroupId>
 }
 

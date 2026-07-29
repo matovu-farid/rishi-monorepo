@@ -26,7 +26,7 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
 
     /// The live entitlement snapshot store (plan 12). `nil` only to keep
     /// `ReaderVoiceEntryLanguageTests.swift`'s 3-arg construction compiling —
-    /// production always passes `services.entitlementSnapshotStore`.
+    /// production always passes `services.billing.entitlementSnapshotStore`.
     private let entitlementSnapshotStore: EntitlementSnapshotStore?
 
     /// Coalesced refresh path for tap-time gating. `nil` only in tests.

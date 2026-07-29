@@ -110,7 +110,7 @@ struct SignedInView: View {
                         services.voicePresenter.clearFailure()
                         model.requestPaywall(
                             "voice_chat_exhausted",
-                            serverPaidActive: services.entitlementSnapshotStore
+                            serverPaidActive: services.billing.entitlementSnapshotStore
                                 .resolvedSnapshot?.isPaidActive ?? false
                         )
                     }
@@ -242,7 +242,7 @@ extension View {
                 .task(id: user.id) { await vm.seed() }
 
                 .onAppear { updateAccountPayload() }
-                .onChange(of: services.entitlementSnapshotStore.resolution) { _, _ in
+                .onChange(of: services.billing.entitlementSnapshotStore.resolution) { _, _ in
                     updateAccountPayload()
                 }
                 .onDisappear { account?.clear() }
@@ -250,7 +250,7 @@ extension View {
 
         private func updateAccountPayload() {
             let action: MacAccountMenuModel.SubscriptionAction
-            if let snapshot = services.entitlementSnapshotStore.resolvedSnapshot {
+            if let snapshot = services.billing.entitlementSnapshotStore.resolvedSnapshot {
                 action = snapshot.isPaidActive ? .manage : .subscribe
             } else {
                 action = .unavailable

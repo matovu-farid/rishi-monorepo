@@ -35,7 +35,7 @@ private struct CustomerEntitlementsViewModifier: ViewModifier {
             // Observe updates to the user's status for SKDemo+.
             .onChange(of: customerEntitlements.subscriptionStatuses) { _, subscriptionStatuses in
                 do {
-                    if  let groupID = services?.groupID{
+                    if  let groupID = services?.billing.groupID{
                         let subscriptionStatuses = subscriptionStatuses[groupID.value]
                         let highestSubcription = try subscriptionStatuses?.activeSubscriptionStatuses.highestSubscriptionStatus
                         
@@ -45,7 +45,7 @@ private struct CustomerEntitlementsViewModifier: ViewModifier {
                             // Entitlement-sync may have just landed; refresh
                             // so Settings/gates update without waiting for
                             // the next foreground.
-                            if let coordinator = services?.entitlementRefreshCoordinator {
+                            if let coordinator = services?.billing.entitlementRefreshCoordinator {
                                 Task {
                                     await coordinator.refreshIfSignedIn(reason: .foreground)
                                 }
@@ -174,8 +174,8 @@ private struct ErrorObserverViewModifier: ViewModifier {
                         )
                         return
                     }
-                    let outcome = try await services.restoreService.restore()
-                    await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+                    let outcome = try await services.billing.restoreService.restore()
+                    await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                         reason: .foreground
                     )
                     switch outcome {

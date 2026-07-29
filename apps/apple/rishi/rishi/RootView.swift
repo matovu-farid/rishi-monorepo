@@ -44,8 +44,8 @@ struct RootView: View {
 
         realBodyContent(deps: deps)
             .environment(\.services, deps.services)
-            .environment(deps.services!.entitlementSnapshotStore)
-            .environment(deps.services!.manageSubscriptionPresenter)
+            .environment(deps.services!.billing.entitlementSnapshotStore)
+            .environment(deps.services!.billing.manageSubscriptionPresenter)
             .environment(Store.shared)
             .checkCustomerEntitlements()
 
@@ -81,7 +81,7 @@ struct RootView: View {
                             UserGetEndpoint()
                         )
                         currentUserBox.signIn(user: user)
-                        await deps.services!.entitlementRefreshCoordinator.refreshIfSignedIn(
+                        await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                             reason: .signIn
                         )
                     } catch {
@@ -98,7 +98,7 @@ struct RootView: View {
             }
             .sheet(isPresented: $showSubscriptions, onDismiss: {
                 Task {
-                    await deps.services!.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
+                    await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
                     guard pendingSubscriptionConfirmation else { return }
                     await MainActor.run {
                         pendingSubscriptionConfirmation = false
@@ -111,8 +111,8 @@ struct RootView: View {
                     showSubscriptions = false
                 })
                 .environment(\.services, deps.services)
-                .environment(deps.services!.entitlementSnapshotStore)
-                .environment(deps.services!.manageSubscriptionPresenter)
+                .environment(deps.services!.billing.entitlementSnapshotStore)
+                .environment(deps.services!.billing.manageSubscriptionPresenter)
                 .environment(Store.shared)
             }
             .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
@@ -195,7 +195,7 @@ struct RootView: View {
         let alreadySeen = await deps.services!.trialOnboardingState.hasSeenNoCardIntro(userId: user.id)
         guard !alreadySeen else { return }
         await deps.services!.trialOnboardingState.setHasSeenNoCardIntro(true, userId: user.id)
-        await deps.services!.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn)
+        await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn)
         showNoCardTrialIntro = true
     }
 }

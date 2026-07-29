@@ -174,7 +174,7 @@ struct SignedOutView: View {
                         
                     }
                     currentUserBox.signIn(user: auth.user)
-                    await deps?.services!.entitlementRefreshCoordinator.refreshIfSignedIn(
+                    await deps?.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                         reason: .signIn
                     )
                 }

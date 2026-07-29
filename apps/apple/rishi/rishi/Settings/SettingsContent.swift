@@ -25,7 +25,7 @@ struct SettingsContent: View {
     @State private var showSubscriptionConfirmation = false
 
     private var hasActiveStoreKitSubscription: Bool {
-        guard let groupID = services.groupID?.value else { return false }
+        guard let groupID = services.billing.groupID?.value else { return false }
         return customerEntitlements.hasActiveSubscription(in: groupID)
     }
 
@@ -99,7 +99,7 @@ struct SettingsContent: View {
         }
         .sheet(isPresented: $showSubscriptions, onDismiss: {
             Task {
-                await services.entitlementRefreshCoordinator.refreshIfSignedIn(
+                await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground
                 )
                 guard pendingSubscriptionConfirmation else { return }
@@ -109,14 +109,14 @@ struct SettingsContent: View {
                 }
             }
         }) {
-            if services.groupID != nil {
+            if services.billing.groupID != nil {
                 SubscriptionsView(onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
                 .environment(\.services, services)
-                .environment(services.entitlementSnapshotStore)
-                .environment(services.manageSubscriptionPresenter)
+                .environment(services.billing.entitlementSnapshotStore)
+                .environment(services.billing.manageSubscriptionPresenter)
                 .environment(Store.shared)
             } else {
                 NavigationStack {

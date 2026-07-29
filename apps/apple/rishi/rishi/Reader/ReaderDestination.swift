@@ -56,8 +56,8 @@ struct ReaderDestination: View {
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voicePresenter,
             voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
-            entitlementSnapshotStore: services.entitlementSnapshotStore,
-            entitlementRefreshCoordinator: services.entitlementRefreshCoordinator,
+            entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+            entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -76,8 +76,8 @@ struct ReaderDestination: View {
                 Task {
                     if let reason = await EntitlementAIGate.gateAIFeature(
                         .narration,
-                        store: services.entitlementSnapshotStore,
-                        coordinator: services.entitlementRefreshCoordinator
+                        store: services.billing.entitlementSnapshotStore,
+                        coordinator: services.billing.entitlementRefreshCoordinator
                     ) {
                         pendingNarrationUpgradePrompt = reason
                         return

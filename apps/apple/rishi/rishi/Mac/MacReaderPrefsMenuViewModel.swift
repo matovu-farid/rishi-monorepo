@@ -181,7 +181,7 @@ extension MacReaderPrefsMenuViewModel {
         let defaults = services.readerDefaults
         let store = services.ttsSettingsStore
         let syncEngine = services.syncEngine
-        let presenter = services.manageSubscriptionPresenter
+        let presenter = services.billing.manageSubscriptionPresenter
         let userId = user.id
         self.init(
             theme: Binding(
