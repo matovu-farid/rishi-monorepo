@@ -32,18 +32,10 @@ struct SettingsSheet: View {
 }
 
 #Preview("Default") {
-    PreviewPlaceholder(
-        title: "Settings",
-        subtitle: "Account, Subscription, Reader Defaults, Audio, Sync, Privacy.",
-        variant: "Default"
-    )
+    SettingsScreenPreviewHost()
 }
 
 #Preview("Dark") {
-    PreviewPlaceholder(
-        title: "Settings",
-        subtitle: "Account, Subscription, Reader Defaults, Audio, Sync, Privacy.",
-        variant: "Dark"
-    )
-    .preferredColorScheme(.dark)
+    SettingsScreenPreviewHost()
+        .preferredColorScheme(.dark)
 }

@@ -294,3 +294,31 @@ struct LibraryTabView: View {
         await vm.refresh()
     }
 }
+
+@MainActor
+private struct LibraryTabPreviewHost: View {
+    private let user = User(
+        id: LibraryRootPreviewFixtures.userId,
+        email: "reader@example.com",
+        name: "Preview Reader"
+    )
+    @State private var vm = LibraryRootPreviewFixtures.makeViewModel(
+        books: LibraryRootPreviewFixtures.populated
+    )
+
+    var body: some View {
+        NavigationStack {
+            LibraryRootView(
+                importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
+                onOpenBook: { _ in },
+                onShowSettings: {},
+                documentPickerPresented: nil
+            )
+        }
+        .environment(vm)
+    }
+}
+
+#Preview("Library tab — populated") {
+    LibraryTabPreviewHost()
+}

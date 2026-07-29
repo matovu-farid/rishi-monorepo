@@ -216,7 +216,7 @@ public struct SettingsScreen: View {
 }
 
 @available(iOS 18.4, *)
-private struct SettingsScreenPreviewHost: View {
+struct SettingsScreenPreviewHost: View {
     @State private var theme: ReaderTheme = .light
     @State private var font: ReaderFontFamily = .system
     @State private var voiceLanguage: VoiceLanguageOption = .english

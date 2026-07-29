@@ -196,6 +196,50 @@ struct SignedInContent: View {
     }
 }
 
+@MainActor
+private struct SignedInContentPreviewHost: View {
+    private let user = User(
+        id: LibraryRootPreviewFixtures.userId,
+        email: "reader@example.com",
+        name: "Preview Reader"
+    )
+    @State private var libraryVM = LibraryRootPreviewFixtures.makeViewModel(
+        books: LibraryRootPreviewFixtures.populated
+    )
+    @State private var conversationsVM = ConversationsListViewModel.make(
+        conversationStore: InMemoryConversationStore(),
+        messageStore: InMemoryMessageStore()
+    )
+
+    var body: some View {
+        TabView {
+            NavigationStack {
+                LibraryRootView(
+                    importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
+                    onOpenBook: { _ in },
+                    onShowSettings: {},
+                    documentPickerPresented: nil
+                )
+            }
+            .environment(libraryVM)
+            .tabItem { Label("Library", systemImage: "books.vertical") }
+
+            NavigationStack {
+                ConversationsListView(
+                    viewModel: conversationsVM,
+                    userId: user.id,
+                    onSelect: { _ in }
+                )
+            }
+            .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+        }
+    }
+}
+
+#Preview("Signed-in content") {
+    SignedInContentPreviewHost()
+}
+
 extension View {
 
     @ViewBuilder

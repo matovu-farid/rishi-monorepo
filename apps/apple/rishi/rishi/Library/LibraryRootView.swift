@@ -250,7 +250,7 @@ private actor LibraryRootPreviewPositionStore: PositionStore {
 }
 
 @MainActor
-private enum LibraryRootPreviewFixtures {
+enum LibraryRootPreviewFixtures {
     static let userId: UserID = UUID()
 
     static func book(_ title: String, author: String? = "Preview Author")

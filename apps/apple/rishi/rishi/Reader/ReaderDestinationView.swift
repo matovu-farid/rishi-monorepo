@@ -59,3 +59,32 @@ struct ReaderDestinationView: View {
         }
     }
 }
+
+private actor ReaderDestinationPreviewPositionStore: PositionStore {
+    func position(for bookId: BookID) async throws -> Position? { nil }
+    func upsert(_ position: Position) async throws {}
+    func delete(_ id: PositionID) async throws {}
+}
+
+@MainActor
+private func makeReaderDestinationPreviewViewModel() -> ReaderViewModel {
+    let url = AppResourceBundle.bundle.url(forResource: "alice", withExtension: "epub")
+        ?? URL(fileURLWithPath: "/dev/null")
+    let book = Book(
+        userId: UUID(),
+        title: "Alice's Adventures in Wonderland",
+        author: "Lewis Carroll",
+        formatType: .epub,
+        fileURL: url.path
+    )
+    return ReaderViewModel(
+        book: book,
+        userId: book.userId,
+        documentURL: url,
+        positionStore: ReaderDestinationPreviewPositionStore()
+    )
+}
+
+#Preview("Reader destination — EPUB") {
+    ReaderScreen(viewModel: makeReaderDestinationPreviewViewModel())
+}

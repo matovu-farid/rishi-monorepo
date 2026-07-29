@@ -156,6 +156,10 @@ The recommended low-risk simplifications were applied on branch `codex/apple-arc
 
 The Apple app simulator build passes after each implementation step, including the latest SignedInView container/content boundary. Tests were deferred by request; stale production/test property references found during review were repaired as part of the migration. Remaining follow-ups are the separately scoped configuration/terminology drift, global hook lifecycle, account-switching race scenario, and the intentionally environment-aware Mac reader-preferences modifier.
 
+## Preview coverage
+
+The feature-level preview audit added real, local-content previews for the settings screen, library tab content, EPUB reader destination content, and signed-in content. These harnesses use in-memory stores, temporary file roots, local EPUB data, and no-op actions; they do not bootstrap production services, network, StoreKit, or session state. The composite app/session wrappers remain intentionally unpreviewed as full graphs: `SettingsSheet`/`SettingsContent`, `LibraryTabView`, `ReaderDestinationView`, and `SignedInContent` still own routing, lifecycle, StoreKit, voice, and environment wiring that should be covered by integration/UI tests rather than a preview graph. This distinction is recorded to avoid treating content previews as proof of production composition behavior.
+
 ## Adversarial review loop
 
 Each round: review → log findings → update report → re-review.
