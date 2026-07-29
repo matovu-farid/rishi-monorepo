@@ -112,10 +112,14 @@ struct BootstrappedServices: @unchecked Sendable {
     let telemetryStore: any TelemetryStore
 
     let footerDetectionStore: any FooterDetectionStore
-    let onboardingState: any OnboardingState
-    let trialOnboardingState: any TrialOnboardingState
-    let onboardingCoordinator: OnboardingCoordinator
+    let onboarding: OnboardingRuntime
     let readerDefaults: AppReaderDefaults
+}
+
+struct OnboardingRuntime: @unchecked Sendable {
+    let state: any OnboardingState
+    let trialState: any TrialOnboardingState
+    let coordinator: OnboardingCoordinator
 }
 
 struct VoiceRuntime: @unchecked Sendable {

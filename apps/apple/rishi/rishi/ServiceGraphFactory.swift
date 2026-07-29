@@ -459,9 +459,11 @@ enum ServiceGraphFactory {
             ),
             telemetryStore: telemetryStore,
             footerDetectionStore: footerDetectionStore,
-            onboardingState: onboardingState,
-            trialOnboardingState: trialOnboardingState,
-            onboardingCoordinator: onboardingCoordinator,
+            onboarding: OnboardingRuntime(
+                state: onboardingState,
+                trialState: trialOnboardingState,
+                coordinator: onboardingCoordinator
+            ),
             readerDefaults: readerDefaults
         )
     }

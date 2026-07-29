@@ -42,7 +42,7 @@ struct OnboardingHost: View {
         }
 #endif
         OnboardingFlowView(
-            coordinator: services.onboardingCoordinator,
+            coordinator: services.onboarding.coordinator,
             onRequestMic: {
                 #if canImport(AVFoundation)
                 if #available(iOS 17.0, macCatalyst 17.0, *) {
