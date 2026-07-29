@@ -125,7 +125,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let conversationStore: any ConversationStore
     let messageStore: any MessageStore
     let conversationLookup: ConversationLookup
-    let voiceDirtyAdapter: AppVoiceDirtyAdapter
     let chatService: RishiChatService
 
     let voicePresenter: VoiceSessionPresenter

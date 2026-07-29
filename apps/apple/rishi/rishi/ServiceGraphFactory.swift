@@ -431,7 +431,6 @@ enum ServiceGraphFactory {
             conversationStore: conversationStore,
             messageStore: messageStore,
             conversationLookup: conversationLookup,
-            voiceDirtyAdapter: voiceDirtyAdapter,
             chatService: chatService,
             voicePresenter: voicePresenter,
             voiceSessionRegistry: voiceSessionRegistry,
