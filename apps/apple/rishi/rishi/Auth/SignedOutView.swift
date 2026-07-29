@@ -160,6 +160,16 @@ struct SignedOutView: View {
                     
                     if let userId = UUID(uuidString: auth.userId){
                         deps?.setUserId(userId)
+                        await deps?.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
+                            platform: {
+                                #if targetEnvironment(macCatalyst)
+                                    "macos-catalyst"
+                                #else
+                                    "ios"
+                                #endif
+                            }(),
+                            appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+                        )
                         isSignedIn = true
                         
                     }

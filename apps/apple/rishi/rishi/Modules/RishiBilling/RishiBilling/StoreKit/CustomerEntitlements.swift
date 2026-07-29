@@ -46,6 +46,17 @@ public final class CustomerEntitlements {
     public func hasActiveSubscription(in groupID: SubscriptionGroupID) -> Bool {
         subscriptionStatuses[groupID]?.activeSubscriptionStatuses.isEmpty == false
     }
+
+    /// The product currently active in a subscription group, if StoreKit has
+    /// reported current status for that group.
+    public func activeProductID(in groupID: SubscriptionGroupID) -> Product.ID? {
+        subscriptionStatuses[groupID]?.activeSubscriptionStatuses
+            .sorted { $0.transaction.unsafePayloadValue.purchaseDate > $1.transaction.unsafePayloadValue.purchaseDate }
+            .first?
+            .transaction
+            .unsafePayloadValue
+            .productID
+    }
     
     /// Sync entitlement with the worker, then finish on any successful HTTP
     /// (verified or business reject). On transport failure the transaction

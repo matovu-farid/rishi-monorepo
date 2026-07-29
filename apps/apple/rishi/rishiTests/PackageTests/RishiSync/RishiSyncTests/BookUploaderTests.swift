@@ -84,7 +84,7 @@ struct BookUploaderTests {
 
     // MARK: - Tests
 
-    @Test("Happy path: presigned URL request → PUT to R2 → markClean with ETag")
+    @Test("Happy path: R2 bytes → separate book metadata push → markClean")
     func happyPath() async throws {
         BookUploaderMockURLProtocol.reset()
         let session = makeSession()
@@ -114,6 +114,9 @@ struct BookUploaderTests {
             if request.url?.absoluteString == presignedURL {
                 return (200, Data(), ["ETag": "\"abc123\""])
             }
+            if request.url?.path == "/api/sync/push" {
+                return (200, Data("{\"accepted_at\": 946684800}".utf8), nil)
+            }
             return (404, Data(), nil)
         }
 
@@ -121,11 +124,19 @@ struct BookUploaderTests {
 
         // Two HTTP calls: presign POST + R2 PUT.
         let captured = BookUploaderMockURLProtocol.capturedSnapshot()
-        #expect(captured.count == 2)
+        #expect(captured.count == 3)
         #expect(captured[0].url?.path == "/api/sync/upload-url")
         #expect(captured[0].httpMethod == "POST")
         #expect(captured[1].httpMethod == "PUT")
         #expect(captured[1].url?.absoluteString == presignedURL)
+        #expect(captured[2].url?.path == "/api/sync/push")
+        let pushed = try #require(captured[2].httpBody)
+        let pushJSON = try #require(try JSONSerialization.jsonObject(with: pushed) as? [String: Any])
+        let changes = try #require(pushJSON["changes"] as? [[String: Any]])
+        let payload = try #require(changes.first?["payload"] as? [String: Any])
+        #expect(changes.first?["kind"] as? String == "book")
+        #expect(payload["file_url"] == nil)
+        #expect(payload["file_r2_key"] as? String == BookUploader.r2Key(for: book, userId: "001234.abcdef0123456789.1234"))
 
         // markClean called exactly once with .book kind + remote ETag.
         let calls = await metadata.calls()

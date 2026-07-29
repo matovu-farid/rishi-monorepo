@@ -231,6 +231,12 @@ vi.mock("@rishi/shared/schema", () => ({
   subscription: {},
 }))
 
+vi.mock("../db/schema", () => ({
+  books: BOOK_COLS,
+  highlights: HIGHLIGHT_COLS,
+  bookmarks: BOOKMARK_COLS,
+}))
+
 // ─── Mock drizzle-orm helpers as predicate descriptors ────────────────────────
 type ColRef = { __table: "books" | "highlights" | "bookmarks"; __col: string }
 type Pred =
@@ -565,6 +571,44 @@ describe("GET /api/sync/changes", () => {
     expect(cfiField).toBe("cfi:1")
     expect(textField).toBe("quote")
     expect(colorField).toBe("yellow")
+  })
+
+  it("normalizes pulled book payloads to SyncPayloadCodec snake_case and includes sync metadata", async () => {
+    seedBook({
+      id: UUID_BOOK_A,
+      userId: "user_alice",
+      title: "X",
+      author: "Y",
+      format: "pdf",
+      currentCfi: "epubcfi(/6/4)",
+      currentPage: 7,
+      lastProgressPercent: 0.42,
+      fileR2Key: "books/user_alice/hash.pdf",
+      coverR2Key: "covers/user_alice/hash.jpg",
+      updatedAt: 1_700_000_000_000,
+    })
+
+    const res = await callChanges()
+    expect(res.status).toBe(200)
+    const env = await parseEnvelope(res)
+    const payload = env.changes.find((c) => c.kind === "book")!.payload
+
+    expect(payload).toMatchObject({
+      id: UUID_BOOK_A,
+      title: "X",
+      author: "Y",
+      format_type: "pdf",
+      current_cfi: "epubcfi(/6/4)",
+      current_page: 7,
+      last_progress_percent: 0.42,
+      file_r2_key: "books/user_alice/hash.pdf",
+      cover_r2_key: "covers/user_alice/hash.jpg",
+    })
+    expect(payload).not.toHaveProperty("user_id")
+    expect(payload).not.toHaveProperty("userId")
+    expect(payload).not.toHaveProperty("currentCfi")
+    expect(payload).not.toHaveProperty("filePath")
+    expect(payload).not.toHaveProperty("coverPath")
   })
 
   it("rows ordered by updatedAt ASC", async () => {

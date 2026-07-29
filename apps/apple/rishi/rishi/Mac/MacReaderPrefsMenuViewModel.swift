@@ -43,6 +43,7 @@ final class MacReaderPrefsMenuViewModel {
     private let saveSettings: (TTSSettings) async -> Void
     private let runManualSync: () async -> Void
     private let presentManageSubscription: () async -> Void
+    private let presentAppleManageSubscription: () async -> Void
     private let presentSubscriptions: () -> Void
     private let signOut: () async -> Void
     private let openURL: (URL) -> Void
@@ -62,6 +63,7 @@ final class MacReaderPrefsMenuViewModel {
         saveSettings: @escaping (TTSSettings) async -> Void,
         runManualSync: @escaping () async -> Void,
         presentManageSubscription: @escaping () async -> Void,
+        presentAppleManageSubscription: @escaping () async -> Void = {},
         presentSubscriptions: @escaping () -> Void = {},
         signOut: @escaping () async -> Void,
         openURL: @escaping (URL) -> Void
@@ -76,6 +78,7 @@ final class MacReaderPrefsMenuViewModel {
         self.saveSettings = saveSettings
         self.runManualSync = runManualSync
         self.presentManageSubscription = presentManageSubscription
+        self.presentAppleManageSubscription = presentAppleManageSubscription
         self.presentSubscriptions = presentSubscriptions
         self.signOut = signOut
         self.openURL = openURL
@@ -141,6 +144,9 @@ final class MacReaderPrefsMenuViewModel {
             onManageSubscription: { [presentManageSubscription] in
                 Task { @MainActor in await presentManageSubscription() }
             },
+            onAppleManageSubscription: { [presentAppleManageSubscription] in
+                Task { @MainActor in await presentAppleManageSubscription() }
+            },
             onSignOut: { [signOut] in
                 Task { @MainActor in await signOut() }
             },
@@ -200,7 +206,13 @@ extension MacReaderPrefsMenuViewModel {
             runManualSync: { await syncEngine.syncNow() },
             
             
-            presentManageSubscription: { await presenter.present() },
+            presentManageSubscription: {
+                NotificationCenter.default.post(
+                    name: .rishiPresentSubscriptions,
+                    object: nil
+                )
+            },
+            presentAppleManageSubscription: { await presenter.present() },
             presentSubscriptions: {
                 NotificationCenter.default.post(name: .rishiPresentSubscriptions, object: nil)
             },

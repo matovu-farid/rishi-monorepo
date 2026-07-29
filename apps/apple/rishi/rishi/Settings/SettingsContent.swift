@@ -114,6 +114,10 @@ struct SettingsContent: View {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
+                .environment(\.services, services)
+                .environment(services.entitlementSnapshotStore)
+                .environment(services.manageSubscriptionPresenter)
+                .environment(Store.shared)
             } else {
                 NavigationStack {
                     ContentUnavailableView(

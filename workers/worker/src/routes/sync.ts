@@ -47,6 +47,17 @@ const PushBodySchema = z.object({
   changes: z.array(SyncChangeSchema).max(5000),
 });
 
+class SyncOwnershipConflict extends Error {}
+class InvalidBookR2Key extends Error {}
+
+function isOwnedBookR2Key(key: string, userId: string, bookId: string): boolean {
+  const prefix = `books/${userId}/${bookId}.`;
+  return (
+    key.startsWith(prefix) &&
+    ["epub", "pdf", "mobi", "azw3"].includes(key.slice(prefix.length))
+  );
+}
+
 export const syncRoutes = new Hono<{
   Bindings: Env;
   Variables: { userId: string };
@@ -86,7 +97,8 @@ syncRoutes.post("/push", requireAuth, async (c) => {
   // Apply changes sequentially instead (each statement autocommits). Push is
   // idempotent and last-write-wins, and the client re-pushes dirty records every
   // wave, so a mid-loop failure is reconciled on the next sync, not rolled back.
-  await (async (tx) => {
+  try {
+    await (async (tx) => {
     for (const change of body.changes) {
       // ── book ─────────────────────────────────────────────────────────────
       if (change.kind === "book") {
@@ -108,6 +120,14 @@ syncRoutes.post("/push", requireAuth, async (c) => {
           fields.currentPage = p.current_page;
         if (typeof p.last_progress_percent === "number")
           fields.lastProgressPercent = p.last_progress_percent;
+        if (typeof p.file_hash === "string") fields.fileHash = p.file_hash;
+        if (typeof p.file_r2_key === "string") {
+          if (!isOwnedBookR2Key(p.file_r2_key, userId, bookId)) {
+            throw new InvalidBookR2Key();
+          }
+          fields.fileR2Key = p.file_r2_key;
+        }
+        if (typeof p.file_size === "number") fields.fileSize = p.file_size;
 
         const existing = await tx
           .select()
@@ -116,6 +136,14 @@ syncRoutes.post("/push", requireAuth, async (c) => {
           .get();
 
         if (!existing) {
+          const ownedByAnotherUser = await tx
+            .select({ userId: books.userId })
+            .from(books)
+            .where(eq(books.id, bookId))
+            .get();
+          if (ownedByAnotherUser && ownedByAnotherUser.userId !== userId) {
+            throw new SyncOwnershipConflict();
+          }
           await tx.insert(books).values({
             ...fields,
             id: bookId,
@@ -156,10 +184,44 @@ syncRoutes.post("/push", requireAuth, async (c) => {
         if (typeof p.percent_complete === "number")
           patch.lastProgressPercent = p.percent_complete;
 
-        await tx
-          .update(books)
-          .set(patch as Partial<typeof books.$inferInsert>)
-          .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+        const existing = await tx
+          .select()
+          .from(books)
+          .where(and(eq(books.id, bookId), eq(books.userId, userId)))
+          .get();
+
+        if (existing) {
+          if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+            await tx
+              .update(books)
+              .set(patch as Partial<typeof books.$inferInsert>)
+              .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+          }
+        } else {
+          const ownedByAnotherUser = await tx
+            .select({ userId: books.userId })
+            .from(books)
+            .where(eq(books.id, bookId))
+            .get();
+          if (ownedByAnotherUser && ownedByAnotherUser.userId !== userId) {
+            throw new SyncOwnershipConflict();
+          }
+          await tx.insert(books).values({
+            id: bookId,
+            userId,
+            title: "Untitled",
+            author: "Unknown",
+            format: "epub",
+            filePath: "",
+            coverPath: null,
+            currentCfi: (patch.currentCfi as string | undefined) ?? null,
+            lastProgressPercent:
+              (patch.lastProgressPercent as number | undefined) ?? null,
+            isDeleted: change.deleted,
+            createdAt: pushedUpdatedAtMs,
+            updatedAt: pushedUpdatedAtMs,
+          } as typeof books.$inferInsert);
+        }
         continue;
       }
 
@@ -401,7 +463,16 @@ syncRoutes.post("/push", requireAuth, async (c) => {
         continue;
       }
     }
-  })(db);
+    })(db);
+  } catch (error) {
+    if (error instanceof SyncOwnershipConflict) {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    if (error instanceof InvalidBookR2Key) {
+      return c.json({ error: "invalid_file_r2_key" }, 400);
+    }
+    throw error;
+  }
 
   // High-water-mark cursor: the max wire updated_at across all accepted
   // changes. Already in seconds-since-2001 — pass through unmodified so iOS

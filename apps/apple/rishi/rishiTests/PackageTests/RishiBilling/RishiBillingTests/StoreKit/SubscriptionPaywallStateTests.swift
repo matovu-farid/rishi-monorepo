@@ -10,6 +10,7 @@ struct SubscriptionPaywallStateTests {
 
         #expect(state.action == .subscribe)
         #expect(state.visibleRelationships == .all)
+        #expect(state.showsRestorePurchases)
     }
 
     @Test("paid users see management and upgrade relationships")
@@ -18,6 +19,7 @@ struct SubscriptionPaywallStateTests {
 
         #expect(state.action == .manage)
         #expect(state.visibleRelationships == .upgrade)
+        #expect(state.showsRestorePurchases == false)
     }
 
     @Test("paywall catalog is platform-scoped")
@@ -30,6 +32,46 @@ struct SubscriptionPaywallStateTests {
             }
         )
         #endif
+    }
+
+    @Test("Catalyst paywall catalog contains only Mac products")
+    func catalystPaywallCatalogIsMacOnly() {
+        #expect(RishiProductID.macCatalystReaderAndVoiceProductIDs.count == 4)
+        #expect(RishiProductID.macCatalystReaderAndVoiceProductIDs.allSatisfy {
+            $0.hasSuffix(".macos")
+        })
+        #expect(Set(RishiProductID.macCatalystReaderAndVoiceProductIDs).isDisjoint(
+            with: Set(RishiProductID.iosReaderAndVoiceProductIDs)
+        ))
+    }
+
+    @Test("active plan is first when the paywall reopens")
+    func activePlanIsMerchandisedFirst() {
+        let active = RishiProductID.voiceAnnualMacCatalyst
+        let ids = RishiProductID.paywallProductIDs(activeProductID: active)
+
+        #expect(ids.first == active)
+        #expect(Set(ids) == Set(RishiProductID.currentPlatformPaywallProductIDs))
+    }
+
+    @Test("iOS active products map to equivalent Catalyst products")
+    func iosProductsMapToCatalystProducts() {
+        #expect(
+            RishiProductID.macCatalystEquivalentProductID(for: RishiProductID.readerMonthly)
+                == RishiProductID.readerMonthlyMacCatalyst
+        )
+        #expect(
+            RishiProductID.macCatalystEquivalentProductID(for: RishiProductID.readerAnnual)
+                == RishiProductID.readerAnnualMacCatalyst
+        )
+        #expect(
+            RishiProductID.macCatalystEquivalentProductID(for: RishiProductID.voiceMonthly)
+                == RishiProductID.voiceMonthlyMacCatalyst
+        )
+        #expect(
+            RishiProductID.macCatalystEquivalentProductID(for: RishiProductID.voiceAnnual)
+                == RishiProductID.voiceAnnualMacCatalyst
+        )
     }
 
     @Test("StoreKit-active users never see stale trial credits")

@@ -110,25 +110,34 @@ changesRoutes.get("/", requireAuth, async (c) => {
   const changes: Change[] = [];
 
   for (const row of bookRows as unknown as Array<Record<string, unknown>>) {
-    // STRIP file_path + cover_path — local-only paths, same rule as the
-    // existing sync.ts /pull handler at line 396-400.
-    const {
-      filePath: _fp,
-      coverPath: _cp,
-      id,
-      updatedAt,
-      isDeleted,
-      ...rest
-    } = row;
-    void _fp;
-    void _cp;
+    // Explicitly map the worker's Drizzle keys to the iOS wire contract.
+    // file_path/cover_path are local-only and must never cross this boundary.
+    const id = row.id as string;
+    const updatedAt = row.updatedAt as number;
+    const isDeleted = !!row.isDeleted;
     changes.push({
       kind: "book",
-      id: id as string,
-      payload: rest,
-      updated_at: toSecondsSinceRefDate(updatedAt as number),
-      deleted: !!isDeleted,
-      __sortKey: updatedAt as number,
+      id,
+      payload: {
+        id,
+        title: row.title,
+        author: row.author,
+        format_type: row.format,
+        current_cfi: row.currentCfi,
+        current_page: row.currentPage,
+        last_progress_percent: row.lastProgressPercent,
+        file_hash: row.fileHash,
+        file_r2_key: row.fileR2Key,
+        cover_r2_key: row.coverR2Key,
+        file_size: row.fileSize,
+        created_at:
+          typeof row.createdAt === "number"
+            ? new Date(row.createdAt).toISOString()
+            : null,
+      },
+      updated_at: toSecondsSinceRefDate(updatedAt),
+      deleted: isDeleted,
+      __sortKey: updatedAt,
     });
   }
 
@@ -179,15 +188,29 @@ changesRoutes.get("/", requireAuth, async (c) => {
     });
   }
 
-  // Sort ASC by updatedAt across BOTH kinds so the iOS ChangeApplier sees
+  // Sort ASC by updatedAt across ALL kinds so the iOS ChangeApplier sees
   // a stable, monotonically-increasing iteration order. Within-kind order
   // already comes from the .orderBy(asc(...)) clauses above; this final
   // sort interleaves books + highlights correctly.
   changes.sort((a, b) => a.__sortKey - b.__sortKey);
-  const sanitized = changes.map(({ __sortKey: _s, ...rest }) => {
+  const truncatedTypes = [
+    bookRows.length >= PULL_LIMIT ? bookRows.at(-1)?.updatedAt : undefined,
+    highlightRows.length >= PULL_LIMIT ? highlightRows.at(-1)?.updatedAt : undefined,
+    bookmarkRows.length >= PULL_LIMIT ? bookmarkRows.at(-1)?.updatedAt : undefined,
+  ].filter((value): value is number => typeof value === "number");
+  // The client has a single timestamp cursor. If one type was truncated, do
+  // not return another type beyond that type's safe boundary; otherwise the
+  // client could advance past omitted rows. Include the boundary row so the
+  // legacy timestamp cursor can advance.
+  const safeCutoff = truncatedTypes.length > 0
+    ? Math.min(...truncatedTypes)
+    : Number.POSITIVE_INFINITY;
+  const sanitized = changes
+    .filter((change) => change.__sortKey <= safeCutoff)
+    .map(({ __sortKey: _s, ...rest }) => {
     void _s;
     return rest;
-  });
+    });
 
   return c.json({ changes: sanitized });
 });

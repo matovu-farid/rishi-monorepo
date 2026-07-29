@@ -83,6 +83,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     private let documentURL: URL
     private let debounceSeconds: Double
     private let documentLoader: @Sendable (URL) async -> PDFDocument?
+    private let onPositionChanged: (@Sendable (BookID) async -> Void)?
     private var pendingPositionTask: Task<Void, Never>?
     private var currentReadAloudParagraphText: String?
 
@@ -92,7 +93,8 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         documentURL: URL,
         positionStore: any PositionStore,
         debounceSeconds: Double = 1.0,
-        documentLoader: (@Sendable (URL) async -> PDFDocument?)? = nil
+        documentLoader: (@Sendable (URL) async -> PDFDocument?)? = nil,
+        onPositionChanged: (@Sendable (BookID) async -> Void)? = nil
     ) {
         self.book = book
         self.userId = userId
@@ -100,6 +102,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         self.positionStore = positionStore
         self.debounceSeconds = debounceSeconds
         self.documentLoader = documentLoader ?? { url in PDFDocument(url: url) }
+        self.onPositionChanged = onPositionChanged
     }
 
     // MARK: - Lifecycle
@@ -366,6 +369,9 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         )
         do {
             try await positionStore.upsert(position)
+            if let onPositionChanged {
+                await onPositionChanged(book.id)
+            }
         } catch {
             Log.reader.error("Failed to persist PDF position page=\(pageIndex, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }

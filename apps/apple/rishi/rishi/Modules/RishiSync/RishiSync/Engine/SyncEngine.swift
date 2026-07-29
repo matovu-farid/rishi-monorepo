@@ -77,6 +77,7 @@ public actor SyncEngine {
 
     private var debouncer: PositionDebouncer!
     private var status: SyncStatus?
+    private var accountGeneration = 0
 
     public init(
         config: SyncEngineConfig = .init(),
@@ -254,6 +255,7 @@ public actor SyncEngine {
         let signpostState = syncSignposter.beginInterval("sync.wave")
         defer { syncSignposter.endInterval("sync.wave", signpostState) }
         var wave = Wave()
+        let waveGeneration = accountGeneration
         statusReporter.setRunning(true, on: status)
 
         // 0. Hydrate the in-memory queue from sync_metadata.
@@ -266,6 +268,10 @@ public actor SyncEngine {
         // 1. Inbound — fetch + apply remote changes.
         do {
             let changes = try await fetcher.fetch()
+            guard !Task.isCancelled else {
+                statusReporter.setRunning(false, on: status)
+                return wave
+            }
             wave.fetched = changes.count
             if !changes.isEmpty {
                 let result = await applier.apply(changes)
@@ -289,6 +295,16 @@ public actor SyncEngine {
         wave.conflicts += chatMerge.conflicts
         wave.errors.append(contentsOf: chatMerge.errors)
         let chatRowsApplied = chatMerge.chatRowsApplied
+
+        guard !Task.isCancelled else {
+            statusReporter.setRunning(false, on: status)
+            return wave
+        }
+
+        guard waveGeneration == accountGeneration else {
+            statusReporter.setRunning(false, on: status)
+            return wave
+        }
 
         // 2. Outbound — drain the queue by kind, delegated to OutboundDrainer
         //    (plan 34-10). Per-kind buckets keep a book-only drain from
@@ -339,6 +355,15 @@ public actor SyncEngine {
     /// (engine shutdown / app background path).
     public func flushDebounce() async {
         await debouncer.flush()
+    }
+
+    /// Invalidates queued and in-flight account work before auth state changes.
+    /// A generation check prevents a wave that was suspended in network I/O
+    /// from draining old-account records after sign-out.
+    public func resetForAccountSwitch() async {
+        accountGeneration += 1
+        await debouncer.cancelAll()
+        await queue.clear()
     }
 
     // MARK: - Status mutations

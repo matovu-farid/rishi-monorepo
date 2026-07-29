@@ -49,15 +49,16 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     public func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {
         let id = entityId.uuidString
         let type = kind.rawValue
+        let key = Self.storageId(entityId: id, kind: type)
         try await MainActor.run {
             let context = ModelContext(container)
-            if let row = try Self.fetchRow(entityId: id, in: context) {
+            if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 row.entityType = type
                 row.dirty = true
             } else {
                 context.insert(
                     SyncMetadataRow(
-                        entityId: id,
+                        entityId: key,
                         entityType: type,
                         dirty: true
                     )
@@ -70,9 +71,10 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     public func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
         let id = entityId.uuidString
         let type = kind.rawValue
+        let key = Self.storageId(entityId: id, kind: type)
         try await MainActor.run {
             let context = ModelContext(container)
-            if let row = try Self.fetchRow(entityId: id, in: context) {
+            if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 row.entityType = type
                 row.remoteEtag = remoteEtag
                 row.lastSyncedAt = lastSyncedAt
@@ -80,7 +82,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             } else {
                 context.insert(
                     SyncMetadataRow(
-                        entityId: id,
+                        entityId: key,
                         entityType: type,
                         remoteEtag: remoteEtag,
                         lastSyncedAt: lastSyncedAt,
@@ -150,10 +152,11 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     public func forget(entityId: UUID, kind: SyncEntityKind) async throws {
         let id = entityId.uuidString
         let type = kind.rawValue
+        let key = Self.storageId(entityId: id, kind: type)
         try await MainActor.run {
             let context = ModelContext(container)
             let descriptor = FetchDescriptor<SyncMetadataRow>(
-                predicate: #Predicate { $0.entityId == id && $0.entityType == type }
+                predicate: #Predicate { $0.entityId == key && $0.entityType == type }
             )
             for row in try context.fetch(descriptor) {
                 context.delete(row)
@@ -162,18 +165,36 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         }
     }
 
-    private static func fetchRow(entityId: String, in context: ModelContext) throws -> SyncMetadataRow? {
+    /// Clears account-scoped sync cursors and dirty flags during sign-out so
+    /// the next account cannot inherit the previous account's high-water mark.
+    public func resetAll() async throws {
+        try await MainActor.run {
+            let context = ModelContext(container)
+            let descriptor = FetchDescriptor<SyncMetadataRow>()
+            for row in try context.fetch(descriptor) {
+                context.delete(row)
+            }
+            try context.save()
+        }
+    }
+
+    private static func storageId(entityId: String, kind: String) -> String {
+        "(kind):(entityId)"
+    }
+
+    private static func fetchRow(entityId: String, kind: String, in context: ModelContext) throws -> SyncMetadataRow? {
+        let namespaced = storageId(entityId: entityId, kind: kind)
         let descriptor = FetchDescriptor<SyncMetadataRow>(
-            predicate: #Predicate { $0.entityId == entityId }
+            predicate: #Predicate { $0.entityId == namespaced }
         )
         return try context.fetch(descriptor).first
     }
 
     private static func decodePending(_ row: SyncMetadataRow) -> SyncPendingItem? {
-        guard
-            let id = UUID(uuidString: row.entityId),
-            let kind = SyncEntityKind(rawValue: row.entityType)
-        else { return nil }
+        let rawId = row.entityId.hasPrefix("(row.entityType):")
+            ? String(row.entityId.dropFirst(row.entityType.count + 1))
+            : row.entityId
+        guard let id = UUID(uuidString: rawId), let kind = SyncEntityKind(rawValue: row.entityType) else { return nil }
         return SyncPendingItem(entityId: id, kind: kind)
     }
 

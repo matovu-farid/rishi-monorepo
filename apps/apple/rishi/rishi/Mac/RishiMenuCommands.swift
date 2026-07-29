@@ -301,6 +301,7 @@ private struct AccountMenuItems: View {
                 Button("Subscribe…") { payload?.onSubscribe() }
             case .manage:
                 Button("Manage Subscription…") { payload?.onManageSubscription() }
+                Button("Manage with Apple…") { payload?.onAppleManageSubscription() }
             case .unavailable, nil:
                 Button("Subscription…") {}
             }

@@ -110,6 +110,10 @@ struct RootView: View {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
+                .environment(\.services, deps.services)
+                .environment(deps.services!.entitlementSnapshotStore)
+                .environment(deps.services!.manageSubscriptionPresenter)
+                .environment(Store.shared)
             }
             .alert("Subscription active", isPresented: $showSubscriptionConfirmation) {
                 Button("OK", role: .cancel) {}

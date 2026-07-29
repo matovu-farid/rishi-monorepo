@@ -19,6 +19,7 @@ final class MacAccountMenuModel {
         var subscriptionAction: SubscriptionAction = .unavailable
         var onSubscribe: () -> Void = {}
         var onManageSubscription: () -> Void
+        var onAppleManageSubscription: () -> Void = {}
         var onSignOut: () -> Void
         var onOpenPrivacy: () -> Void
         var onOpenTerms: () -> Void

@@ -82,20 +82,24 @@ enum SyncPayloadCodec {
         }
     }
 
-    public static func decodeBook(_ payload: SyncOpaqueJSON, fallbackAddedAt: Date) throws -> Book {
+    public static func decodeBook(
+        _ payload: SyncOpaqueJSON,
+        fallbackAddedAt: Date,
+        fallbackUserId: UserID = UUID()
+    ) throws -> Book {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
             let wire = try decoder.decode(WireBook.self, from: payload.data)
             return Book(
                 id: wire.id,
-                userId: wire.userId,
+                userId: wire.userId ?? fallbackUserId,
                 title: wire.title,
                 author: wire.author,
                 formatType: wire.formatType,
-                addedAt: wire.addedAt ?? fallbackAddedAt,
+                addedAt: wire.addedAt ?? wire.createdAt ?? fallbackAddedAt,
                 openedAt: wire.openedAt,
-                fileURL: wire.fileURL,
+                fileURL: wire.fileURL ?? "",
                 coverPath: wire.coverPath,
                 positionId: wire.positionId,
                 conversationId: wire.conversationId
@@ -103,6 +107,27 @@ enum SyncPayloadCodec {
         } catch {
             throw CodecError.decodeFailed(kind: "book", underlying: String(describing: error))
         }
+    }
+
+    public static func decodeBookPosition(
+        _ payload: SyncOpaqueJSON,
+        bookId: BookID,
+        fallbackUpdatedAt: Date
+    ) throws -> Position? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let wire = try decoder.decode(WireBook.self, from: payload.data)
+        guard let locator = wire.currentCfi, !locator.isEmpty else { return nil }
+        return Position(
+            bookId: bookId,
+            locator: locator,
+            percentComplete: wire.lastProgressPercent ?? 0,
+            updatedAt: fallbackUpdatedAt
+        )
+    }
+
+    public static func decodeBookR2Key(_ payload: SyncOpaqueJSON) throws -> String? {
+        try JSONDecoder().decode(WireBook.self, from: payload.data).fileR2Key
     }
 
     // MARK: - Encoders (outbound push)
@@ -150,7 +175,7 @@ enum SyncPayloadCodec {
         return SyncOpaqueJSON(data: try encoder.encode(wire))
     }
 
-    public static func encodeBook(_ book: Book) throws -> SyncOpaqueJSON {
+    public static func encodeBook(_ book: Book, r2Key: String? = nil) throws -> SyncOpaqueJSON {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let wire = WireBook(
@@ -160,11 +185,15 @@ enum SyncPayloadCodec {
             author: book.author,
             formatType: book.formatType,
             addedAt: book.addedAt,
+            createdAt: nil,
             openedAt: book.openedAt,
-            fileURL: book.fileURL,
-            coverPath: book.coverPath,
+            fileURL: r2Key == nil ? book.fileURL : nil,
+            coverPath: r2Key == nil ? book.coverPath : nil,
             positionId: book.positionId,
-            conversationId: book.conversationId
+            conversationId: book.conversationId,
+            fileR2Key: r2Key,
+            currentCfi: nil,
+            lastProgressPercent: nil
         )
         return SyncOpaqueJSON(data: try encoder.encode(wire))
     }
@@ -229,16 +258,20 @@ enum SyncPayloadCodec {
 
     private struct WireBook: Codable {
         let id: BookID
-        let userId: UserID
+        let userId: UserID?
         let title: String
         let author: String?
         let formatType: BookFormat
         let addedAt: Date?
+        let createdAt: Date?
         let openedAt: Date?
-        let fileURL: String
+        let fileURL: String?
         let coverPath: String?
         let positionId: PositionID?
         let conversationId: ConversationID?
+        let fileR2Key: String?
+        let currentCfi: String?
+        let lastProgressPercent: Double?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -247,11 +280,15 @@ enum SyncPayloadCodec {
             case author
             case formatType = "format_type"
             case addedAt = "added_at"
+            case createdAt = "created_at"
             case openedAt = "opened_at"
             case fileURL = "file_url"
             case coverPath = "cover_path"
             case positionId = "position_id"
             case conversationId = "conversation_id"
+            case fileR2Key = "file_r2_key"
+            case currentCfi = "current_cfi"
+            case lastProgressPercent = "last_progress_percent"
         }
     }
 }

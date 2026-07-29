@@ -69,24 +69,41 @@ public final class BackgroundTaskCoordinator {
     /// successfully.
     @discardableResult
     public func register() -> Bool {
-        let processingOk = surface.register(forTaskWithIdentifier: Self.processingIdentifier, using: nil) { [weak self] task in
+        let result = Self.register(surface: surface) { [weak self] task in
             guard let self else { task.setTaskCompleted(success: false); return }
-            self.handleProcessing(task: task)
-        }
-        let refreshOk = surface.register(forTaskWithIdentifier: Self.refreshIdentifier, using: nil) { [weak self] task in
-            guard let self else { task.setTaskCompleted(success: false); return }
-            self.handleRefresh(task: task)
+            self.handle(task: task)
         }
         Log.event("sync.bg.registered", level: .info, data: [
-            "processing": String(processingOk),
-            "refresh": String(refreshOk),
+            "processing": String(result.processing),
+            "refresh": String(result.refresh),
         ])
-        return processingOk && refreshOk
+        return result.processing && result.refresh
+    }
+
+    public static func register(
+        surface: any Surface,
+        handler: @MainActor @escaping (BGTask) -> Void
+    ) -> (processing: Bool, refresh: Bool) {
+        let processing = surface.register(
+            forTaskWithIdentifier: processingIdentifier,
+            using: nil,
+            launchHandler: handler
+        )
+        let refresh = surface.register(
+            forTaskWithIdentifier: refreshIdentifier,
+            using: nil,
+            launchHandler: handler
+        )
+        return (processing, refresh)
     }
 
     /// Submit one BGProcessingTaskRequest + one BGAppRefreshTaskRequest.
     /// Re-call after every successful wave so the OS has a fresh budget.
     public func scheduleAll() {
+        Self.scheduleAll(surface: surface, config: config)
+    }
+
+    public static func scheduleAll(surface: any Surface, config: SyncEngineConfig = .init()) {
         do {
             let processing = BGProcessingTaskRequest(identifier: Self.processingIdentifier)
             processing.requiresNetworkConnectivity = true   // book uploads need network
@@ -106,7 +123,7 @@ public final class BackgroundTaskCoordinator {
 
     // MARK: - Launch handlers
 
-    private func handleProcessing(task: BGTask) {
+    private func handle(task: BGTask) {
         // KEEP: runTask is the off-main sync wave; `engine` is an actor so the
         // body runs on the engine's executor, not main. The coordinator itself
         // is @MainActor so we need main only for the BGTask completion call.
@@ -119,27 +136,12 @@ public final class BackgroundTaskCoordinator {
         // both require MainActor isolation; explicit hop after awaiting the
         // off-main runTask.value.
         Task { @MainActor in
-            let ok = (try? await runTask.value) ?? false
+            let ok = await runTask.value
             task.setTaskCompleted(success: ok)
             self.scheduleAll() // re-arm
         }
     }
 
-    private func handleRefresh(task: BGTask) {
-        // KEEP: same shape as handleProcessing — off-main engine wave; BGTask
-        // completion must land on @MainActor.
-        let runTask = Task { [engine] in
-            let wave = await engine.runOnce()
-            return wave.errors.isEmpty
-        }
-        task.expirationHandler = { runTask.cancel() }
-        // KEEP: @MainActor needed for BGTask.setTaskCompleted + scheduleAll.
-        Task { @MainActor in
-            let ok = (try? await runTask.value) ?? false
-            task.setTaskCompleted(success: ok)
-            self.scheduleAll()
-        }
-    }
 }
 
 #else

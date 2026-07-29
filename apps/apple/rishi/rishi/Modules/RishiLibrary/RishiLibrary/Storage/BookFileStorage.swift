@@ -158,6 +158,31 @@ public struct BookFileStorage:Sendable {
         rootURL.appendingPathComponent(book.fileURL)
     }
 
+    /// Materializes a book downloaded from the sync service into the same
+    /// platform-local layout used by imports. The returned value points at the
+    /// local relative path; callers should persist it only after this method
+    /// succeeds.
+    public func materializeDownloadedBook(_ book: Book, data: Data) throws -> Book {
+        let directory = booksDirURL.appendingPathComponent(book.id.uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("\(book.id.uuidString).\(book.formatType.rawValue)")
+        try data.write(to: fileURL, options: .atomic)
+        let relative = "Books/\(book.id.uuidString)/\(fileURL.lastPathComponent)"
+        return Book(
+            id: book.id,
+            userId: book.userId,
+            title: book.title,
+            author: book.author,
+            formatType: book.formatType,
+            addedAt: book.addedAt,
+            openedAt: book.openedAt,
+            fileURL: relative,
+            coverPath: book.coverPath,
+            positionId: book.positionId,
+            conversationId: book.conversationId
+        )
+    }
+
     private struct PassthroughDataExtractor: CoverExtractor {
         let sourceURL: URL
 

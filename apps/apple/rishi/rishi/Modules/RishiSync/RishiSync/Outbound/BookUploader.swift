@@ -11,7 +11,8 @@ import Foundation
 /// Wire pattern:
 ///   1. POST /api/sync/upload-url { key, content_type } → { url, expires_at }
 ///   2. PUT <url> (raw bytes; Content-Type matches)
-///   3. SyncMetadataStore.markClean(bookId, .book, now, etag)
+    ///   3. POST /api/sync/push { kind: "book", payload: metadata }
+    ///   4. SyncMetadataStore.markClean(bookId, .book, now, etag)
 ///
 /// Errors at step 1 or 2 leave the row dirty so the next sync wave retries.
 /// The uploader does NOT touch SyncQueue — `SyncEngine` (07-04) is the only
@@ -98,6 +99,24 @@ public final class BookUploader: Sendable {
                 "r2_error": String(r2Error.prefix(500)),
             ])
             throw UploadError.uploadFailed(status: status)
+        }
+
+        // Persist metadata only after the bytes are safely in R2. This makes a
+        // pulled book downloadable as soon as its D1 row becomes visible.
+        do {
+            let payload = try SyncPayloadCodec.encodeBook(book, r2Key: key)
+            _ = try await workerClient.send(
+                SyncPushEndpoint(body: .init(changes: [SyncChange(
+                    kind: SyncEntityKind.book.rawValue,
+                    id: book.id,
+                    payload: payload,
+                    updatedAt: Date(),
+                    deleted: false
+                )]))
+            )
+        } catch {
+            Log.error("sync.book.metadata.push.failed", error: error)
+            throw UploadError.presignedRequestFailed("metadata push failed: \(error)")
         }
 
         // 4. markClean with the server's ETag for future change-detection.

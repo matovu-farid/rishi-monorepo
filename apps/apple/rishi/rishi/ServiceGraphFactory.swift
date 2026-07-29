@@ -201,12 +201,28 @@ enum ServiceGraphFactory {
             workerClient: workerClient,
             metadataStore: syncMetadataStore
         )
+        let syncUserIdProvider: @Sendable () async -> String? = { [keychain] in
+            if let session = try? await keychain.load() {
+                return session.userId
+            }
+            return try? Keychain.load(.userId)
+        }
+        let bookDownloadCoordinator = BookDownloadCoordinator(
+            workerClient: workerClient,
+            fileStorage: bookFileStorage,
+            userIdProvider: syncUserIdProvider
+        )
         let changeApplier = ChangeApplier(
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
             bookmarkStore: bookmarkStore,
-            metadataStore: syncMetadataStore
+            metadataStore: syncMetadataStore,
+            currentUserId: { await userIdBox.value },
+            accountIsActive: { await userIdBox.value != nil },
+            bookMaterializer: { book, r2Key in
+                try await bookDownloadCoordinator.downloadAndMaterialize(book, r2Key: r2Key)
+            }
         )
         let conversationsFetcher = ConversationsFetcher(
             workerClient: workerClient,

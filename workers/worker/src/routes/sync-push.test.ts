@@ -497,6 +497,7 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
             added_at: 0,
             file_url: "/local/path/that/MUST/NOT/persist.epub",
             cover_path: "/local/cover/MUST/NOT/persist.jpg",
+            file_r2_key: `books/user_alice/${UUID_BOOK}.epub`,
           },
           updated_at: updatedAt,
           deleted: false,
@@ -513,10 +514,11 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     // file_url / cover_path MUST be stripped — they are local-only paths.
     expect(row.filePath).toBe("")
     expect(row.coverPath).toBeNull()
+    expect(row.fileR2Key).toBe(`books/user_alice/${UUID_BOOK}.epub`)
   })
 
   it("position kind: updates existing books row currentCfi, no new table", async () => {
-    seedBook({ id: UUID_BOOK, currentCfi: null })
+    seedBook({ id: UUID_BOOK, currentCfi: null, updatedAt: 0 })
     const res = await callPush({
       changes: [
         {
@@ -539,6 +541,59 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     // No new books row — the existing one was mutated.
     expect(booksStore.length).toBe(1)
     expect(booksStore[0].currentCfi).toBe("epubcfi(/6/4!/4/2)")
+  })
+
+  it("position kind: creates a book for the authenticated user when metadata is absent", async () => {
+    const res = await callPush({
+      changes: [
+        {
+          kind: "position",
+          id: UUID_POS,
+          payload: {
+            id: UUID_POS,
+            book_id: UUID_BOOK,
+            locator: "epubcfi(/6/4!/4/2)",
+            percent_complete: 0.42,
+          },
+          updated_at: 3.0,
+          deleted: false,
+        },
+      ],
+    })
+
+    expect(res.status).toBe(200)
+    expect(booksStore).toHaveLength(1)
+    expect(booksStore[0]).toMatchObject({
+      id: UUID_BOOK,
+      userId: "user_alice",
+      currentCfi: "epubcfi(/6/4!/4/2)",
+      lastProgressPercent: 0.42,
+      filePath: "",
+      coverPath: null,
+    })
+  })
+
+  it("position kind: rejects another user's book id instead of crossing ownership", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_bob", currentCfi: null })
+    const res = await callPush({
+      changes: [
+        {
+          kind: "position",
+          id: UUID_POS,
+          payload: {
+            book_id: UUID_BOOK,
+            locator: "epubcfi(/6/4!/4/9)",
+            percent_complete: 0.9,
+          },
+          updated_at: 4.0,
+          deleted: false,
+        },
+      ],
+    })
+
+    expect(res.status).toBe(403)
+    expect(booksStore).toHaveLength(1)
+    expect(booksStore.find((book) => book.userId === "user_bob")?.currentCfi).toBeNull()
   })
 
   it("deleted=true highlight tombstone: flips existing isDeleted", async () => {

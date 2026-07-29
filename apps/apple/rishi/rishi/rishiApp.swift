@@ -188,7 +188,11 @@ struct rishiApp: App {
             let version =
                 (Bundle.main.infoDictionary?["CFBundleShortVersionString"]
                     as? String) ?? "1.0.0"
-            let platform = "ios"
+            #if targetEnvironment(macCatalyst)
+                let platform = "macos-catalyst"
+            #else
+                let platform = "ios"
+            #endif
 
             Task { @MainActor in
                 await deps.backgroundSyncLifecycle.registerDeviceToken(

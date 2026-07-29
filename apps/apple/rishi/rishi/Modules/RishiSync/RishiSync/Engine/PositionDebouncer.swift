@@ -53,6 +53,11 @@ public actor PositionDebouncer {
         }
     }
 
+    public func cancelAll() {
+        for task in tasks.values { task.cancel() }
+        tasks.removeAll()
+    }
+
     public func pendingCount() -> Int { tasks.count }
 
     private func clear(_ bookId: BookID) {

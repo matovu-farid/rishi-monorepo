@@ -10,6 +10,10 @@ struct SubscriptionPaywallPresentation: Equatable {
     let action: Action
     let visibleRelationships: Product.SubscriptionRelationship
 
+    var showsRestorePurchases: Bool {
+        action == .subscribe
+    }
+
     init(isPaidActive: Bool) {
         action = isPaidActive ? .manage : .subscribe
         visibleRelationships = isPaidActive ? .upgrade : .all
@@ -56,6 +60,17 @@ public struct SubscriptionsView: View {
             customerEntitlements.hasActiveSubscription(in: $0.value)
         } ?? false
         return serverPaid || storeKitPaid
+    }
+
+    private var activeProductID: Product.ID? {
+        guard let productID = services?.groupID.flatMap({
+            customerEntitlements.activeProductID(in: $0.value)
+        }) else { return nil }
+        #if targetEnvironment(macCatalyst)
+        return RishiProductID.macCatalystEquivalentProductID(for: productID)
+        #else
+        return productID
+        #endif
     }
 
     public init(onPurchaseCompleted: @escaping () -> Void = {}) {
@@ -137,16 +152,20 @@ public struct SubscriptionsView: View {
         // platform-scoped, so an iPhone never sees macOS upgrade options.
         configuredSubscriptionStore(
             SubscriptionStoreView(
-                productIDs: RishiProductID.currentPlatformPaywallProductIDs
+                productIDs: RishiProductID.paywallProductIDs(
+                    activeProductID: activeProductID
+                )
             ) {
-                marketingContent(isPaidActive: presentation.action == .manage)
+                marketingContent(presentation: presentation)
             },
             token: token
         )
     }
 
     @ViewBuilder
-    private func marketingContent(isPaidActive: Bool) -> some View {
+    private func marketingContent(
+        presentation: SubscriptionPaywallPresentation
+    ) -> some View {
         VStack {
             Image("rishi")
                 .resizable()
@@ -167,13 +186,11 @@ public struct SubscriptionsView: View {
             .padding(10)
             .multilineTextAlignment(.center)
 
-            if isPaidActive {
+            if presentation.action == .manage {
                 VStack(spacing: 8) {
                     Label("Your current plan is active", systemImage: "checkmark.seal.fill")
                         .font(.headline)
                         .foregroundStyle(RishiColor.accent)
-                    AppleManageSubscriptionRow()
-                        .accessibilityLabel("Cancel your subscription through Apple")
                     Text("Choose an upgrade below if you want more narration or voice chat.")
                         .font(.footnote)
                         .multilineTextAlignment(.center)
@@ -184,7 +201,7 @@ public struct SubscriptionsView: View {
             // Active subscribers are restored automatically from
             // Transaction.currentEntitlements. Keep the explicit sync
             // fallback visible for users who are not yet recognized as paid.
-            if !isPaidActive {
+            if presentation.showsRestorePurchases {
                 Button("Restore Purchases") {
                     Task { await restorePurchases() }
                 }
@@ -245,14 +262,15 @@ public struct SubscriptionsView: View {
             return
         }
 
+        await MainActor.run {
+            onPurchaseCompleted()
+        }
+
         await store.process(purchaseResult: purchaseResult)
         if let services {
             await services.entitlementRefreshCoordinator.refreshIfSignedIn(
                 reason: .foreground
             )
-        }
-        await MainActor.run {
-            onPurchaseCompleted()
         }
     }
 

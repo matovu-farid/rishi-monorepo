@@ -15,6 +15,7 @@ final class BackgroundSyncLifecycle {
 
     private weak var dependencies: AppDependencies?
     private var userIdBox: UserIdBox
+    private var pendingDeviceToken: Data?
 
     init(dependencies: AppDependencies, userIdBox: UserIdBox) {
         self.dependencies = dependencies
@@ -34,67 +35,48 @@ final class BackgroundSyncLifecycle {
         if deps.services == nil {
             await deps.bootstrap()
         }
+        guard userIdBox.value == userId else { return nil }
         return deps.services
     }
 
     func registerSynchronously() {
         #if canImport(BackgroundTasks) && (os(iOS) || targetEnvironment(macCatalyst))
-            let processing = BGTaskScheduler.shared.register(
-                forTaskWithIdentifier: BackgroundTaskCoordinator
-                    .processingIdentifier,
-                using: nil
+            let registration = BackgroundTaskCoordinator.register(
+                surface: BackgroundTaskCoordinator.SystemSurface()
             ) { [weak self] task in
-
-                Task { @MainActor in
-                    await self?.driveBGTask(task)
+                guard let self else {
+                    task.setTaskCompleted(success: false)
+                    return
                 }
-            }
-            let refresh = BGTaskScheduler.shared.register(
-                forTaskWithIdentifier: BackgroundTaskCoordinator
-                    .refreshIdentifier,
-                using: nil
-            ) { [weak self] task in
-
                 Task { @MainActor in
-                    await self?.driveBGTask(task)
+                    await self.driveBGTask(task)
                 }
             }
             Log.event(
                 "sync.bg.registered",
                 level: .info,
                 data: [
-                    "processing": String(processing),
-                    "refresh": String(refresh),
+                    "processing": String(registration.processing),
+                    "refresh": String(registration.refresh),
                     "via": "BackgroundSyncLifecycle.registerSynchronously",
                 ]
             )
 
-            do {
-                let processingRequest = BGProcessingTaskRequest(
-                    identifier: BackgroundTaskCoordinator.processingIdentifier
-                )
-                processingRequest.requiresNetworkConnectivity = true
-                processingRequest.requiresExternalPower = false
-                try BGTaskScheduler.shared.submit(processingRequest)
-
-                let refreshRequest = BGAppRefreshTaskRequest(
-                    identifier: BackgroundTaskCoordinator.refreshIdentifier
-                )
-                refreshRequest.earliestBeginDate = Date(
-                    timeIntervalSinceNow: 60 * 60
-                )
-                try BGTaskScheduler.shared.submit(refreshRequest)
-                Log.event("sync.bg.scheduled", level: .info)
-            } catch {
-                Log.error("sync.bg.schedule.failed", error: error)
-            }
+            BackgroundTaskCoordinator.scheduleAll(
+                surface: BackgroundTaskCoordinator.SystemSurface(),
+                config: SyncEngineConfig(backgroundRefreshInterval: 60 * 60)
+            )
+            Log.event("sync.bg.scheduled", level: .info)
         #endif
     }
 
     #if canImport(BackgroundTasks) && (os(iOS) || targetEnvironment(macCatalyst))
 
         func driveBGTask(_ task: BGTask) async {
-            guard let userId = userIdBox.value else {return}
+            guard let userId = userIdBox.value else {
+                task.setTaskCompleted(success: false)
+                return
+            }
             guard let services = await resolveServices(userId: userId) else {
                 task.setTaskCompleted(success: false)
                 return
@@ -124,7 +106,10 @@ final class BackgroundSyncLifecycle {
         platform: String,
         appVersion: String
     ) async {
-        guard let userId = userIdBox.value else {return}
+        guard let userId = userIdBox.value else {
+            pendingDeviceToken = token
+            return
+        }
         guard let registrar = await resolveServices(userId: userId)?.apnsDeviceRegistrar
         else { return }
         do {
@@ -133,9 +118,18 @@ final class BackgroundSyncLifecycle {
                 platform: platform,
                 appVersion: appVersion
             )
+            pendingDeviceToken = nil
         } catch {
 
         }
+    }
+
+    func retryPendingDeviceTokenIfAvailable(
+        platform: String,
+        appVersion: String
+    ) async {
+        guard let token = pendingDeviceToken else { return }
+        await registerDeviceToken(token, platform: platform, appVersion: appVersion)
     }
 
     #if canImport(UIKit)
@@ -144,7 +138,10 @@ final class BackgroundSyncLifecycle {
             _ userInfo: [AnyHashable: Any],
             completion: @escaping @Sendable (UIBackgroundFetchResult) -> Void
         ) async {
-            guard let userId = userIdBox.value else {return}
+            guard let userId = userIdBox.value else {
+                completion(.noData)
+                return
+            }
             guard let services = await resolveServices(userId: userId) else {
                 completion(.noData)
                 return

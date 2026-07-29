@@ -87,4 +87,24 @@ struct SyncMetadataStoreTests {
         let afterCount = try await store.pendingCount()
         #expect(afterCount == 0)
     }
+
+    @Test("book and position dirtiness remain independent for one book")
+    func bookAndPositionRowsAreIndependent() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markDirty(entityId: id, kind: .book)
+        try await store.markDirty(entityId: id, kind: .position)
+
+        #expect(try await store.pendingCount() == 2)
+        #expect(try await store.pending(kind: .book, limit: 10).count == 1)
+        #expect(try await store.pending(kind: .position, limit: 10).count == 1)
+
+        try await store.markClean(
+            entityId: id,
+            kind: .book,
+            lastSyncedAt: Date(),
+            remoteEtag: nil
+        )
+        #expect(try await store.pending(kind: .position, limit: 10).count == 1)
+    }
 }

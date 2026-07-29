@@ -52,6 +52,11 @@ public actor SyncQueue {
 
     public func isLoaded() -> Bool { loaded }
 
+    public func clear() {
+        items.removeAll()
+        loaded = false
+    }
+
     /// Test/diagnostic only — DO NOT call from production paths.
     public func _drainForTests() -> [SyncQueueItem] {
         let copy = items

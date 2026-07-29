@@ -76,6 +76,24 @@ public enum RishiProductID {
         }
     }
 
+    /// Returns the equivalent Catalyst product for an iOS or Catalyst
+    /// subscription. The Catalyst paywall uses this only to identify the
+    /// matching Mac plan; iOS products remain excluded from its catalog.
+    public static func macCatalystEquivalentProductID(for productID: String) -> String? {
+        switch productID {
+        case readerMonthly, readerMonthlyMacCatalyst:
+            return readerMonthlyMacCatalyst
+        case readerAnnual, readerAnnualMacCatalyst:
+            return readerAnnualMacCatalyst
+        case voiceMonthly, voiceMonthlyMacCatalyst:
+            return voiceMonthlyMacCatalyst
+        case voiceAnnual, voiceAnnualMacCatalyst:
+            return voiceAnnualMacCatalyst
+        default:
+            return nil
+        }
+    }
+
     /// Explicit current-platform merchandising order for
     /// `SubscriptionStoreView(productIDs:)`.
     public static let currentPlatformPaywallProductIDs: [String] = {
@@ -95,6 +113,16 @@ public enum RishiProductID {
         ]
         #endif
     }()
+
+    /// Keep the active plan first so StoreKit reopens the paywall on the
+    /// customer’s actual plan instead of the first merchandising item.
+    public static func paywallProductIDs(activeProductID: String?) -> [String] {
+        let ids = currentPlatformPaywallProductIDs
+        guard let activeProductID,
+              ids.contains(activeProductID)
+        else { return ids }
+        return [activeProductID] + ids.filter { $0 != activeProductID }
+    }
 
     // Kept as a compatibility alias for existing billing callers.
     public static let paywallDisplayOrder = currentPlatformPaywallProductIDs

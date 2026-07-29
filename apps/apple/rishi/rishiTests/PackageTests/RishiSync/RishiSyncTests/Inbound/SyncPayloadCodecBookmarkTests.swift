@@ -20,6 +20,19 @@ import Foundation
 @Suite("SyncPayloadCodec — bookmark", .serialized)
 struct SyncPayloadCodecBookmarkTests {
 
+    @Test("decodeBook accepts normalized pull metadata without a local file path")
+    func decodeBookPullPayload() throws {
+        let id = UUID()
+        let owner = UUID()
+        let body = """
+        {"id":"\(id.uuidString)","user_id":"\(owner.uuidString)","title":"Remote","author":"A","format_type":"pdf","added_at":"2026-07-29T00:00:00Z","file_r2_key":"books/session/\(id.uuidString).pdf","current_page":7,"last_progress_percent":0.5}
+        """
+        let book = try SyncPayloadCodec.decodeBook(SyncOpaqueJSON(data: Data(body.utf8)), fallbackAddedAt: Date())
+        #expect(book.id == id)
+        #expect(book.formatType == .pdf)
+        #expect(book.fileURL == "")
+    }
+
     @Test("encodeBookmark -> decodeBookmark round-trips all fields")
     func roundTripAllFields() throws {
         let bookmark = Bookmark(

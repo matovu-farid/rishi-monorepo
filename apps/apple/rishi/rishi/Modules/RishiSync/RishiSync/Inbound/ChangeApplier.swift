@@ -38,25 +38,38 @@ public final class ChangeApplier: Sendable {
     private let highlightStore: any HighlightStore
     private let bookmarkStore: any BookmarkStore
     private let metadataStore: any SyncMetadataStore
+    private let currentUserId: @Sendable () async -> UserID?
+    private let accountIsActive: @Sendable () async -> Bool
+    private let bookMaterializer: (@Sendable (Book, String?) async throws -> Book)?
 
     public init(
         bookStore: any BookStore,
         positionStore: any PositionStore,
         highlightStore: any HighlightStore,
         bookmarkStore: any BookmarkStore,
-        metadataStore: any SyncMetadataStore
+        metadataStore: any SyncMetadataStore,
+        currentUserId: @escaping @Sendable () async -> UserID? = { nil },
+        accountIsActive: @escaping @Sendable () async -> Bool = { true },
+        bookMaterializer: (@Sendable (Book, String?) async throws -> Book)? = nil
     ) {
         self.bookStore = bookStore
         self.positionStore = positionStore
         self.highlightStore = highlightStore
         self.bookmarkStore = bookmarkStore
         self.metadataStore = metadataStore
+        self.currentUserId = currentUserId
+        self.accountIsActive = accountIsActive
+        self.bookMaterializer = bookMaterializer
     }
 
     public func apply(_ changes: [SyncChange]) async -> ApplyResult {
         var result = ApplyResult()
 
         for change in changes {
+            guard await accountIsActive() else {
+                result.errors.append("account switched during inbound sync")
+                break
+            }
             guard let kind = SyncEntityKind(rawValue: change.kind) else {
                 result.errors.append("unknown kind \(change.kind)")
                 continue
@@ -84,6 +97,9 @@ public final class ChangeApplier: Sendable {
             } catch {
                 result.errors.append(String(describing: error))
                 Log.error("sync.apply.failed", error: error)
+                // Preserve the failed change as the cursor boundary. A later
+                // successful change must not advance globalLastSyncedAt past it.
+                break
             }
         }
         Log.event("sync.apply.completed", level: .info, data: [
@@ -164,14 +180,46 @@ public final class ChangeApplier: Sendable {
     }
 
     private func applyBook(_ change: SyncChange, into result: inout ApplyResult) async throws {
+        if try await metadataStore.pending(kind: .book, limit: 10_000).contains(where: { $0.entityId == change.id }) {
+            result.conflicts += 1
+            return
+        }
         if change.deleted {
             try await bookStore.delete(change.id)
             try await metadataStore.forget(entityId: change.id, kind: .book)
             result.applied += 1
             return
         }
-        let remote = try SyncPayloadCodec.decodeBook(change.payload, fallbackAddedAt: change.updatedAt)
-        try await bookStore.upsert(remote)
+        let remote = try SyncPayloadCodec.decodeBook(
+            change.payload,
+            fallbackAddedAt: change.updatedAt,
+            fallbackUserId: await currentUserId() ?? UUID()
+        )
+        let r2Key = try SyncPayloadCodec.decodeBookR2Key(change.payload)
+        let materialized = if let bookMaterializer, r2Key != nil {
+            try await bookMaterializer(remote, r2Key)
+        } else {
+            remote
+        }
+        try await bookStore.upsert(materialized)
+        if let position = try SyncPayloadCodec.decodeBookPosition(
+            change.payload,
+            bookId: remote.id,
+            fallbackUpdatedAt: change.updatedAt
+        ) {
+            if let local = try await positionStore.position(for: position.bookId),
+               local.updatedAt >= position.updatedAt {
+                result.conflicts += 1
+            } else {
+                try await positionStore.upsert(position)
+                try await metadataStore.markClean(
+                    entityId: position.bookId,
+                    kind: .position,
+                    lastSyncedAt: change.updatedAt,
+                    remoteEtag: nil
+                )
+            }
+        }
         try await metadataStore.markClean(
             entityId: remote.id,
             kind: .book,
