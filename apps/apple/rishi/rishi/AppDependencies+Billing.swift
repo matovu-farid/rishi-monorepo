@@ -4,16 +4,6 @@ import Foundation
 
 extension AppDependencies {
 
-    var entitlementService: EntitlementService { services!.billing.entitlementService }
-    var entitlementSnapshotStore: EntitlementSnapshotStore { services!.billing.entitlementSnapshotStore }
-    var entitlementRefreshCoordinator: EntitlementRefreshCoordinator {
-        services!.billing.entitlementRefreshCoordinator
-    }
-    var entitlementReconciler: EntitlementReconciler { services!.billing.entitlementReconciler }
-    var readerAppEntitlementFlag: ReaderAppEntitlementFlag { services!.billing.readerAppEntitlementFlag }
-    var restoreService: RestoreService { services!.billing.restoreService }
-    var workerReceiptVerifier: any ReceiptVerifier { services!.billing.workerReceiptVerifier }
-
     /// Clear cached entitlement state for the outgoing account. Callable from
     /// any sign-out host before `CurrentUserBox.signout()`.
     func clearEntitlementState(for userId: String?) async {

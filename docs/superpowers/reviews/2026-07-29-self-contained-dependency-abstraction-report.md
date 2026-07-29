@@ -1,6 +1,6 @@
 # Self-Contained Dependencies Hidden Behind Abstraction Layers
 
-> **Status:** Adversarial review loop complete — **PASS** (2 rounds, 0 open Critical/High issues)
+> **Status:** Adversarial review loop and Apple implementation pass complete — **PASS** (2 report rounds plus final implementation review; 0 open Critical/High issues)
 
 ## Executive summary
 
@@ -136,6 +136,20 @@ These are not good simplification targets based on this review:
 - Add boundary tests before collapsing sync, chat, or library construction.
 - Verify sign-out, account switching, foreground refresh, background sync, and app relaunch after any graph/lifecycle change. In particular, test account switching during an upload: generation/cancellation must be checked before and after outbound side effects, or reset must cancel and await the active wave.
 - Treat global hook cleanup as a separate change from constructor simplification.
+
+## Apple implementation outcome
+
+The recommended low-risk simplifications were applied on branch `codex/apple-architecture-refactor`:
+
+- grouped runtime dependencies under feature capabilities (`library`, `audio`, `sync`, `chat`, `voice`, `billing`, `settings`, and `onboarding`);
+- removed unused `BootstrappedServices` locator fields while preserving the locally constructed instances and their injection into active services;
+- reduced `SyncEngine` and related construction fan-out with dependency bundles;
+- made `LibraryViewModel` construction capability-oriented while preserving storage-backed compatibility initializers;
+- centralized chat conversation find-or-create behavior while preserving a compatibility initializer;
+- removed pure `AppDependencies+*.swift` forwarding accessors, including the seven Billing accessors, while preserving Billing sign-out and entitlement-cache lifecycle methods;
+- retained the materialization, dirty/refresh, `WorkerAPI`, platform, and external-library seams because they contain meaningful behavior or package boundaries.
+
+The Apple app simulator build passes after each implementation step, including the final Billing accessor removal. Tests were deferred by request; stale production/test property references found during review were repaired as part of the migration. Remaining follow-ups are the separately scoped configuration/terminology drift, global hook lifecycle, and account-switching race scenario listed above.
 
 ## Adversarial review loop
 
