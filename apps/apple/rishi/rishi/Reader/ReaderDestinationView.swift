@@ -36,7 +36,7 @@ struct ReaderDestinationView: View {
                         userId: userId,
                         positionStore: services.library.positionStore
                     ),
-                    services: services,
+                    dependencies: ReaderDestinationDependencies.make(services: services),
                     userId: userId,
                     onRequestPaywall: onRequestPaywall,
                     pdfViewMode: pdfViewMode

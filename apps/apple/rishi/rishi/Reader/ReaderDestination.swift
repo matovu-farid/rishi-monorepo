@@ -1,6 +1,57 @@
 import SwiftUI
 import ReadiumShared
 
+struct ReaderDestinationDependencies {
+    let readerDefaults: AppReaderDefaults
+    let readerSettingsStore: any ReaderSettingsStore
+    let highlightStore: any HighlightStore
+    let bookmarkStore: any BookmarkStore
+    let bookFileStorage: BookFileStorage
+    let bookSearch: any BookSearch
+    let indexingHook: any BookIndexingHook
+    let syncEngine: SyncEngine
+    let conversationLookup: ConversationLookup
+    let messageStore: any MessageStore
+    let chatService: any ChatService
+    let entitlementSnapshotStore: EntitlementSnapshotStore
+    let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
+    let voicePresenter: VoiceSessionPresenter
+    let ttsCoordinator: AudioSessionCoordinator
+    let ttsState: TTSPlaybackState
+    let ttsEngine: any TTSPlaying
+    let ttsSettingsStore: any TTSSettingsStore
+    let nowPlayingController: NowPlayingController
+    let ttsPresenceController: TTSPresenceController
+    let ttsPrewarmer: TTSPrewarmer
+
+    @MainActor
+    static func make(services: BootstrappedServices) -> Self {
+        Self(
+            readerDefaults: services.settings.readerDefaults,
+            readerSettingsStore: services.library.readerSettingsStore,
+            highlightStore: services.library.highlightStore,
+            bookmarkStore: services.library.bookmarkStore,
+            bookFileStorage: services.library.bookFileStorage,
+            bookSearch: services.library.bookSearch,
+            indexingHook: services.library.indexingHook,
+            syncEngine: services.sync.engine,
+            conversationLookup: services.chat.conversationLookup,
+            messageStore: services.chat.messageStore,
+            chatService: services.chat.service,
+            entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+            entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+            voicePresenter: services.voice.presenter,
+            ttsCoordinator: services.audio.coordinator,
+            ttsState: services.audio.ttsState,
+            ttsEngine: services.audio.ttsEngine,
+            ttsSettingsStore: services.audio.ttsSettingsStore,
+            nowPlayingController: services.audio.nowPlayingController,
+            ttsPresenceController: services.audio.ttsPresenceController,
+            ttsPrewarmer: services.audio.ttsPrewarmer
+        )
+    }
+}
+
 
 
 
@@ -13,7 +64,7 @@ import ReadiumShared
 
 
 struct ReaderDestination: View {
-    let services: BootstrappedServices
+    let dependencies: ReaderDestinationDependencies
     let userId: UserID
     let onRequestPaywall: (String) -> Void
     let pdfViewMode: Binding<PDFViewModeSetting>?
@@ -29,25 +80,25 @@ struct ReaderDestination: View {
 
     init(
         vm: ReaderViewModel,
-        services: BootstrappedServices,
+        dependencies: ReaderDestinationDependencies,
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void,
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) {
-        let peeked = services.library.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
-        let initial = peeked ?? services.settings.readerDefaults.theme
+        let peeked = dependencies.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
+        let initial = peeked ?? dependencies.readerDefaults.theme
         vm.theme = initial
 
         self._vm = State(initialValue: vm)
-        self.services = services
+        self.dependencies = dependencies
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
         self.pdfViewMode = pdfViewMode
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
-            voicePresenter: services.voice.presenter,
-            voiceLanguageProvider: { services.settings.readerDefaults.voiceLanguage },
-            entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
-            entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+            voicePresenter: dependencies.voicePresenter,
+            voiceLanguageProvider: { dependencies.readerDefaults.voiceLanguage },
+            entitlementSnapshotStore: dependencies.entitlementSnapshotStore,
+            entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
             onRequestPaywall: onRequestPaywall
         ))
     }
@@ -55,19 +106,19 @@ struct ReaderDestination: View {
     var body: some View {
         ReaderScreen(
             viewModel: vm,
-            appDefaultTheme: services.settings.readerDefaults.theme,
-            readerSettingsStore: services.library.readerSettingsStore,
-            highlightStore: services.library.highlightStore,
-            bookmarkStore: services.library.bookmarkStore,
+            appDefaultTheme: dependencies.readerDefaults.theme,
+            readerSettingsStore: dependencies.readerSettingsStore,
+            highlightStore: dependencies.highlightStore,
+            bookmarkStore: dependencies.bookmarkStore,
 
 
-            bookmarkMarkDirty: { [services] id in await services.sync.engine.markBookmarkDirty(id) },
+            bookmarkMarkDirty: { [dependencies] id in await dependencies.syncEngine.markBookmarkDirty(id) },
             onReadAloud: {
                 Task {
                     if let reason = await EntitlementAIGate.gateAIFeature(
                         .narration,
-                        store: services.billing.entitlementSnapshotStore,
-                        coordinator: services.billing.entitlementRefreshCoordinator
+                        store: dependencies.entitlementSnapshotStore,
+                        coordinator: dependencies.entitlementRefreshCoordinator
                     ) {
                         pendingNarrationUpgradePrompt = reason
                         return
@@ -75,15 +126,15 @@ struct ReaderDestination: View {
 
                     if readAloud == nil {
                         readAloud = ReadAloudController(
-                            ttsEngine: services.audio.ttsEngine,
-                            ttsState: services.audio.ttsState,
-                            ttsSettingsStore: services.audio.ttsSettingsStore,
-                            ttsPrewarmer: services.audio.ttsPrewarmer,
-                            ttsPresence: services.audio.ttsPresenceController,
-                            coordidator: services.audio.coordinator,
+                            ttsEngine: dependencies.ttsEngine,
+                            ttsState: dependencies.ttsState,
+                            ttsSettingsStore: dependencies.ttsSettingsStore,
+                            ttsPrewarmer: dependencies.ttsPrewarmer,
+                            ttsPresence: dependencies.ttsPresenceController,
+                            coordidator: dependencies.ttsCoordinator,
                             userId: userId,
-                            nowPlayingController: services.audio.nowPlayingController,
-                            bookFileStorage: services.library.bookFileStorage
+                            nowPlayingController: dependencies.nowPlayingController,
+                            bookFileStorage: dependencies.bookFileStorage
                         )
                     }
                     await readAloud?.startReader(vm: vm)
@@ -92,12 +143,12 @@ struct ReaderDestination: View {
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
-            pdfViewMode: pdfViewMode?.wrappedValue ?? services.settings.readerDefaults.pdfViewMode,
+            pdfViewMode: pdfViewMode?.wrappedValue ?? dependencies.readerDefaults.pdfViewMode,
             pdfViewModeBinding: pdfViewMode
         )
 
 
-        .ttsErrorAlert(state: services.audio.ttsState)
+        .ttsErrorAlert(state: dependencies.ttsState)
         .task {
 
 
@@ -133,37 +184,37 @@ struct ReaderDestination: View {
             }
             syncBinding = ReaderPositionSyncBinding(
                 viewModel: vm,
-                syncEngine: services.sync.engine
+                syncEngine: dependencies.syncEngine
             )
 
 
 
 
-            if await services.library.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
-                let url =  services.library.bookFileStorage.absoluteFileURL(for: vm.book)
-                await services.library.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
+            if await dependencies.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
+                let url = dependencies.bookFileStorage.absoluteFileURL(for: vm.book)
+                await dependencies.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
             }
         }
         .onDisappear {
             syncBinding = nil
 
             Task {
-                await services.voice.presenter.parkSession()
+                await dependencies.voicePresenter.parkSession()
                 await readAloud?.stop()
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if !services.voice.presenter.isPresenting {
+            if !dependencies.voicePresenter.isPresenting {
                 IndexingIndicatorChip(
                     bookId: vm.book.id,
-                    bookSearch: services.library.bookSearch
+                    bookSearch: dependencies.bookSearch
                 )
                 .padding(.trailing, RishiSpacing.m)
                 .padding(.bottom, RishiSpacing.s)
             }
         }
         .overlay {
-            let voiceActive = services.voice.presenter.isPresenting
+            let voiceActive = dependencies.voicePresenter.isPresenting
             let ttsVisible = readAloud?.showControls == true
             if ReaderAudioChromeVisibility.shouldShow(
                 voiceActive: voiceActive,
@@ -172,8 +223,8 @@ struct ReaderDestination: View {
                 ReaderAudioChromeOverlay(
                     isVisible: true,
                     mode: voiceActive ? .voice : .tts,
-                    ttsState: services.audio.ttsState,
-                    voiceState: services.voice.presenter.state,
+                    ttsState: dependencies.ttsState,
+                    voiceState: dependencies.voicePresenter.state,
                     readAloud: readAloud,
                     onOpenVoiceChat: {
                         Task {
@@ -188,13 +239,13 @@ struct ReaderDestination: View {
                     },
                     onOpenReadAloud: {
                         Task {
-                            await services.voice.presenter.requestEnd()
+                            await dependencies.voicePresenter.requestEnd()
                             await ensureReadAloudController().openReadAloudFromVoice(vm: vm)
                         }
                     },
                     onEndVoice: {
                         Task {
-                            await services.voice.presenter.dismissVoiceChrome()
+                            await dependencies.voicePresenter.dismissVoiceChrome()
                             await readAloud?.resumeAfterVoiceIfNeeded()
                         }
                     },
@@ -207,28 +258,28 @@ struct ReaderDestination: View {
                 if let voiceTextVM {
                     ChatPanelView(
                         viewModel: voiceTextVM,
-                        initialQuote: services.voice.presenter.pendingInitialQuote
+                        initialQuote: dependencies.voicePresenter.pendingInitialQuote
                     )
                 } else {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .task(id: services.voice.presenter.currentBookId) {
+            .task(id: dependencies.voicePresenter.currentBookId) {
                 voiceTextVM = nil
-                if let convo = try? await services.chat.conversationLookup.findOrCreate(
+                if let convo = try? await dependencies.conversationLookup.findOrCreate(
                     userId: userId,
-                    bookId: services.voice.presenter.currentBookId
+                    bookId: dependencies.voicePresenter.currentBookId
                 ) {
                     voiceTextVM = ChatPanelViewModel.make(
                         conversation: convo,
-                        chatService: services.chat.service,
-                        messageStore: services.chat.messageStore
+                        chatService: dependencies.chatService,
+                        messageStore: dependencies.messageStore
                     )
                 }
             }
         }
-        .onChange(of: services.voice.presenter.pendingInitialQuote) { _, quote in
+        .onChange(of: dependencies.voicePresenter.pendingInitialQuote) { _, quote in
             if quote != nil {
                 showVoiceTextChat = true
             }
@@ -241,7 +292,7 @@ struct ReaderDestination: View {
                 VoiceAndSpeedPicker(
                     initial: ra.pickerInitial,
                     userId: userId,
-                    store: services.audio.ttsSettingsStore,
+                    store: dependencies.ttsSettingsStore,
                     onDismiss: { settings in
                         ra.pickerInitial = settings
                         Task { await ra.applySettings(settings) }
@@ -280,15 +331,15 @@ struct ReaderDestination: View {
     private func ensureReadAloudController() -> ReadAloudController {
         if let readAloud { return readAloud }
         let controller = ReadAloudController(
-            ttsEngine: services.audio.ttsEngine,
-            ttsState: services.audio.ttsState,
-            ttsSettingsStore: services.audio.ttsSettingsStore,
-            ttsPrewarmer: services.audio.ttsPrewarmer,
-            ttsPresence: services.audio.ttsPresenceController,
-            coordidator: services.audio.coordinator,
+            ttsEngine: dependencies.ttsEngine,
+            ttsState: dependencies.ttsState,
+            ttsSettingsStore: dependencies.ttsSettingsStore,
+            ttsPrewarmer: dependencies.ttsPrewarmer,
+            ttsPresence: dependencies.ttsPresenceController,
+            coordidator: dependencies.ttsCoordinator,
             userId: userId,
-            nowPlayingController: services.audio.nowPlayingController,
-            bookFileStorage: services.library.bookFileStorage
+            nowPlayingController: dependencies.nowPlayingController,
+            bookFileStorage: dependencies.bookFileStorage
         )
         readAloud = controller
         return controller
