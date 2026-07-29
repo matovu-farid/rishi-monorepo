@@ -406,7 +406,6 @@ enum ServiceGraphFactory {
 
         return BootstrappedServices(
             workerClient: workerClient,
-            dbStore: dbStore,
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,

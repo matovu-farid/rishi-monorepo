@@ -97,7 +97,6 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let workerClient: WorkerClient
 
-    let dbStore: RishiDBStore
     let bookStore: any BookStore
     let positionStore: any PositionStore
     let highlightStore: any HighlightStore
