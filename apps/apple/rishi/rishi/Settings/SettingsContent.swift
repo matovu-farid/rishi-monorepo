@@ -6,16 +6,29 @@
 
 import SwiftUI
 
+struct SettingsContentDependencies {
+    let readerDefaults: AppReaderDefaults
+    let ttsSettingsStore: any TTSSettingsStore
+    let syncStatus: SyncStatus
+    let syncEngine: SyncEngine
+    let telemetryStore: any TelemetryStore
+    let footerDetectionStore: any FooterDetectionStore
+    let entitlementSnapshotStore: EntitlementSnapshotStore
+    let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
+    let restoreService: RestoreService
+    let manageSubscriptionPresenter: ManageSubscriptionPresenter
+    let groupID: GroupId?
+}
+
 struct SettingsContent: View {
 
-    let services: BootstrappedServices
+    let dependencies: SettingsContentDependencies
     let user: User
 
     let onDismiss: () -> Void
 
     @Environment(\.signOut) private var signOut
     @Environment(CurrentUserBox.self) private var currentUserBox
-    @Environment(EntitlementSnapshotStore.self) private var entitlementStore
     @State private var customerEntitlements = CustomerEntitlements.shared
 
     @State private var initialAudio: TTSSettings = .default
@@ -25,15 +38,15 @@ struct SettingsContent: View {
     @State private var showSubscriptionConfirmation = false
 
     private var hasActiveStoreKitSubscription: Bool {
-        guard let groupID = services.billing.groupID?.value else { return false }
+        guard let groupID = dependencies.groupID?.value else { return false }
         return customerEntitlements.hasActiveSubscription(in: groupID)
     }
 
     var body: some View {
         Group {
             if audioLoaded {
-                let defaults = services.settings.readerDefaults
-                let sync = services.sync.engine
+                let defaults = dependencies.readerDefaults
+                let sync = dependencies.syncEngine
                 SettingsScreen(
                     user: user,
                     readerTheme: Binding(
@@ -54,15 +67,15 @@ struct SettingsContent: View {
                     ),
                     audioUserId: user.id,
                     audioInitial: initialAudio,
-                    audioStore: services.audio.ttsSettingsStore,
+                    audioStore: dependencies.ttsSettingsStore,
                     onAudioChange: { _ in },
-                    syncStatus: services.sync.status,
+                    syncStatus: dependencies.syncStatus,
 
                     onSyncNow: { Task { await sync.syncNow() } },
-                    telemetryStore: services.settings.telemetryStore,
-                    footerDetectionStore: services.settings.footerDetectionStore,
-                    entitlementSnapshot: entitlementStore.resolvedSnapshot,
-                    allowanceLoading: entitlementStore.isLoading,
+                    telemetryStore: dependencies.telemetryStore,
+                    footerDetectionStore: dependencies.footerDetectionStore,
+                    entitlementSnapshot: dependencies.entitlementSnapshotStore.resolvedSnapshot,
+                    allowanceLoading: dependencies.entitlementSnapshotStore.isLoading,
                     onSubscribe: { showSubscriptions = true },
                     storeKitIsSubscribed: hasActiveStoreKitSubscription,
                     onSignOut: {
@@ -94,12 +107,12 @@ struct SettingsContent: View {
         }
         .task {
 
-            initialAudio = await services.audio.ttsSettingsStore.load(userId: user.id)
+            initialAudio = await dependencies.ttsSettingsStore.load(userId: user.id)
             audioLoaded = true
         }
         .sheet(isPresented: $showSubscriptions, onDismiss: {
             Task {
-                await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+            await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground
                 )
                 guard pendingSubscriptionConfirmation else { return }
@@ -109,19 +122,19 @@ struct SettingsContent: View {
                 }
             }
         }) {
-            if services.billing.groupID != nil {
+            if dependencies.groupID != nil {
                 SubscriptionsView(
                     dependencies: SubscriptionDependencies(
-                        groupID: services.billing.groupID,
-                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
-                        restoreService: services.billing.restoreService
+                        groupID: dependencies.groupID,
+                        entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
+                        restoreService: dependencies.restoreService
                     ),
                     onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
-                .environment(services.billing.entitlementSnapshotStore)
-                .environment(services.billing.manageSubscriptionPresenter)
+                .environment(dependencies.entitlementSnapshotStore)
+                .environment(dependencies.manageSubscriptionPresenter)
                 .environment(Store.shared)
             } else {
                 NavigationStack {

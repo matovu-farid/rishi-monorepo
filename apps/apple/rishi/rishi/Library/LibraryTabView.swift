@@ -190,7 +190,19 @@ struct LibraryTabView: View {
         #if !targetEnvironment(macCatalyst)
             .sheet(isPresented: Bindable(model).showSettings) {
                 SettingsSheet(
-                    services: services,
+                    dependencies: SettingsContentDependencies(
+                        readerDefaults: services.settings.readerDefaults,
+                        ttsSettingsStore: services.audio.ttsSettingsStore,
+                        syncStatus: services.sync.status,
+                        syncEngine: services.sync.engine,
+                        telemetryStore: services.settings.telemetryStore,
+                        footerDetectionStore: services.settings.footerDetectionStore,
+                        entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
+                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                        restoreService: services.billing.restoreService,
+                        manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
+                        groupID: services.billing.groupID
+                    ),
                     user: user
                 )
             }

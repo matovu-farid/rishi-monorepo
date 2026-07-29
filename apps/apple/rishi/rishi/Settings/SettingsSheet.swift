@@ -17,14 +17,14 @@ import SwiftUI
 
 struct SettingsSheet: View {
 
-    let services: BootstrappedServices
+    let dependencies: SettingsContentDependencies
     let user: User
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         SettingsContent(
-            services: services,
+            dependencies: dependencies,
             user: user,
             onDismiss: { dismiss() }
         )
