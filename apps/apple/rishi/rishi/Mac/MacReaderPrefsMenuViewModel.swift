@@ -179,7 +179,7 @@ extension MacReaderPrefsMenuViewModel {
         onSignedOut: @escaping () -> Void
     ) {
         let defaults = services.readerDefaults
-        let store = services.ttsSettingsStore
+        let store = services.audio.ttsSettingsStore
         let syncEngine = services.sync.engine
         let presenter = services.billing.manageSubscriptionPresenter
         let userId = user.id

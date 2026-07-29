@@ -99,13 +99,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let library: LibraryRuntime
 
-    let audioCoordinator: AudioSessionCoordinator
-    let ttsState: TTSPlaybackState
-    let ttsEngine: any TTSPlaying
-    let ttsSettingsStore: any TTSSettingsStore
-    let nowPlayingController: NowPlayingController
-    let ttsPresenceController: TTSPresenceController
-    let ttsPrewarmer: TTSPrewarmer
+    let audio: AudioRuntime
 
     let sync: SyncRuntime
 
@@ -123,6 +117,16 @@ struct BootstrappedServices: @unchecked Sendable {
     let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+}
+
+struct AudioRuntime: @unchecked Sendable {
+    let coordinator: AudioSessionCoordinator
+    let ttsState: TTSPlaybackState
+    let ttsEngine: any TTSPlaying
+    let ttsSettingsStore: any TTSSettingsStore
+    let nowPlayingController: NowPlayingController
+    let ttsPresenceController: TTSPresenceController
+    let ttsPrewarmer: TTSPrewarmer
 }
 
 struct ChatRuntime: @unchecked Sendable {

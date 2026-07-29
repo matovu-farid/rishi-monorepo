@@ -57,8 +57,8 @@ struct AppDependenciesBootstrapTests {
         await deps.bootstrap()
         let svcs = deps.services
         #expect(svcs != nil)
-        #expect(svcs?.bookStore != nil)
-        #expect((svcs?.ttsEngine as AnyObject?) != nil)
-        #expect((svcs?.audioCoordinator as AnyObject?) != nil)
+        #expect(svcs?.library.bookStore != nil)
+        #expect((svcs?.audio.ttsEngine as AnyObject?) != nil)
+        #expect((svcs?.audio.coordinator as AnyObject?) != nil)
     }
 }

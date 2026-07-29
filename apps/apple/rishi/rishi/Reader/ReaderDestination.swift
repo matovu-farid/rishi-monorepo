@@ -85,14 +85,14 @@ struct ReaderDestination: View {
 
                     if readAloud == nil {
                         readAloud = ReadAloudController(
-                            ttsEngine: services.ttsEngine,
-                            ttsState: services.ttsState,
-                            ttsSettingsStore: services.ttsSettingsStore,
-                            ttsPrewarmer: services.ttsPrewarmer,
-                            ttsPresence: services.ttsPresenceController,
-                            coordidator: services.audioCoordinator,
+                            ttsEngine: services.audio.ttsEngine,
+                            ttsState: services.audio.ttsState,
+                            ttsSettingsStore: services.audio.ttsSettingsStore,
+                            ttsPrewarmer: services.audio.ttsPrewarmer,
+                            ttsPresence: services.audio.ttsPresenceController,
+                            coordidator: services.audio.coordinator,
                             userId: userId,
-                            nowPlayingController: services.nowPlayingController,
+                            nowPlayingController: services.audio.nowPlayingController,
                             bookFileStorage: services.library.bookFileStorage
                         )
                     }
@@ -107,7 +107,7 @@ struct ReaderDestination: View {
         )
 
 
-        .ttsErrorAlert(state: services.ttsState)
+        .ttsErrorAlert(state: services.audio.ttsState)
         .task {
 
 
@@ -182,7 +182,7 @@ struct ReaderDestination: View {
                 ReaderAudioChromeOverlay(
                     isVisible: true,
                     mode: voiceActive ? .voice : .tts,
-                    ttsState: services.ttsState,
+                    ttsState: services.audio.ttsState,
                     voiceState: services.voicePresenter.state,
                     readAloud: readAloud,
                     onOpenVoiceChat: {
@@ -250,7 +250,7 @@ struct ReaderDestination: View {
                 VoiceAndSpeedPicker(
                     initial: ra.pickerInitial,
                     userId: userId,
-                    store: services.ttsSettingsStore,
+                    store: services.audio.ttsSettingsStore,
                     onDismiss: { settings in
                         ra.pickerInitial = settings
                         Task { await ra.applySettings(settings) }
@@ -289,14 +289,14 @@ struct ReaderDestination: View {
     private func ensureReadAloudController() -> ReadAloudController {
         if let readAloud { return readAloud }
         let controller = ReadAloudController(
-            ttsEngine: services.ttsEngine,
-            ttsState: services.ttsState,
-            ttsSettingsStore: services.ttsSettingsStore,
-            ttsPrewarmer: services.ttsPrewarmer,
-            ttsPresence: services.ttsPresenceController,
-            coordidator: services.audioCoordinator,
+            ttsEngine: services.audio.ttsEngine,
+            ttsState: services.audio.ttsState,
+            ttsSettingsStore: services.audio.ttsSettingsStore,
+            ttsPrewarmer: services.audio.ttsPrewarmer,
+            ttsPresence: services.audio.ttsPresenceController,
+            coordidator: services.audio.coordinator,
             userId: userId,
-            nowPlayingController: services.nowPlayingController,
+            nowPlayingController: services.audio.nowPlayingController,
             bookFileStorage: services.library.bookFileStorage
         )
         readAloud = controller

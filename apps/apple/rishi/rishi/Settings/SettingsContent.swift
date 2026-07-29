@@ -54,7 +54,7 @@ struct SettingsContent: View {
                     ),
                     audioUserId: user.id,
                     audioInitial: initialAudio,
-                    audioStore: services.ttsSettingsStore,
+                    audioStore: services.audio.ttsSettingsStore,
                     onAudioChange: { _ in },
                     syncStatus: services.sync.status,
 
@@ -94,7 +94,7 @@ struct SettingsContent: View {
         }
         .task {
 
-            initialAudio = await services.ttsSettingsStore.load(userId: user.id)
+            initialAudio = await services.audio.ttsSettingsStore.load(userId: user.id)
             audioLoaded = true
         }
         .sheet(isPresented: $showSubscriptions, onDismiss: {

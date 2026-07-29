@@ -419,13 +419,15 @@ enum ServiceGraphFactory {
                 bookSearch: bookSearch,
                 indexingHook: indexingHook
             ),
-            audioCoordinator: audioStack.coordinator,
-            ttsState: audioStack.state,
-            ttsEngine: audioStack.engine,
-            ttsSettingsStore: audioStack.settingsStore,
-            nowPlayingController: audioStack.nowPlaying,
-            ttsPresenceController: audioStack.presence,
-            ttsPrewarmer: audioStack.prewarmer,
+            audio: AudioRuntime(
+                coordinator: audioStack.coordinator,
+                ttsState: audioStack.state,
+                ttsEngine: audioStack.engine,
+                ttsSettingsStore: audioStack.settingsStore,
+                nowPlayingController: audioStack.nowPlaying,
+                ttsPresenceController: audioStack.presence,
+                ttsPrewarmer: audioStack.prewarmer
+            ),
             sync: SyncRuntime(
                 metadataStore: syncMetadataStore,
                 status: syncStatus,

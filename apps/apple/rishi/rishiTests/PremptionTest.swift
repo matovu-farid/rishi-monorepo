@@ -29,23 +29,23 @@ struct PremptionTest {
 
        // arrange
         let bridge = await ReaderTTSBridge(
-            engine: services.ttsEngine,
-            state: services.ttsState,
+            engine: services.audio.ttsEngine,
+            state: services.audio.ttsState,
             tracker: tracker,
-            prewarmer: services.ttsPrewarmer,
-            settingsStore: services.ttsSettingsStore,
+            prewarmer: services.audio.ttsPrewarmer,
+            settingsStore: services.audio.ttsSettingsStore,
             userId: UUID(),
-            coordinator: services.audioCoordinator,
+            coordinator: services.audio.coordinator,
             onPassageChange: {_ in})
        // act
         //assert
         
         let voicePresenter = services.voicePresenter
-        //let mode = await services.audioCoordinator.currentMode
+        //let mode = await services.audio.coordinator.currentMode
         await bridge.start(paragraphs: paragraphs)
-        #expect(await services.audioCoordinator.currentMode == .tts)
+        #expect(await services.audio.coordinator.currentMode == .tts)
         await voicePresenter.start(bookId: nil)
-        #expect(await services.audioCoordinator.currentMode == .voice)
+        #expect(await services.audio.coordinator.currentMode == .voice)
    
         #expect(await bridge.currentState.status == .paused)
         
