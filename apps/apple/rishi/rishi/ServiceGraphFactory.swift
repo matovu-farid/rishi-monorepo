@@ -70,10 +70,7 @@ enum ServiceGraphFactory {
             )
         }
 
-        let siwaPresenter = await MainActor.run { SystemSiwaPresenter() }
-    
         let groupID = try? await GroupIDEndpoint().send()
-        
 
         let documentsURL = FileManager.default.urls(
             for: .documentDirectory,
@@ -408,11 +405,7 @@ enum ServiceGraphFactory {
         }
 
         return BootstrappedServices(
-            keychain: keychain,
-            tokenProvider: tokenProvider,
             workerClient: workerClient,
-            siwaPresenter: siwaPresenter,
-       
             dbStore: dbStore,
             bookStore: bookStore,
             positionStore: positionStore,

@@ -95,11 +95,7 @@ final class AppDependencies {
 
 struct BootstrappedServices: @unchecked Sendable {
 
-    let keychain: KeychainSessionStore
-    let tokenProvider: RishiAuthTokenProvider
     let workerClient: WorkerClient
-    let siwaPresenter: SystemSiwaPresenter
-   
 
     let dbStore: RishiDBStore
     let bookStore: any BookStore
