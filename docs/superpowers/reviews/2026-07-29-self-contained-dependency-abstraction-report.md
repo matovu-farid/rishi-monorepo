@@ -1,6 +1,6 @@
 # Self-Contained Dependencies Hidden Behind Abstraction Layers
 
-> **Status:** Adversarial review loop and Apple implementation pass complete — **PASS** (2 report rounds plus final implementation review; 0 open Critical/High issues)
+> **Status:** Adversarial review loop and Apple implementation passes complete — **PASS** (0 open Critical/High issues; final follow-up audit recorded below)
 
 ## Executive summary
 
@@ -147,9 +147,13 @@ The recommended low-risk simplifications were applied on branch `codex/apple-arc
 - made `LibraryViewModel` construction capability-oriented while preserving storage-backed compatibility initializers;
 - centralized chat conversation find-or-create behavior while preserving a compatibility initializer;
 - removed pure `AppDependencies+*.swift` forwarding accessors, including the seven Billing accessors, while preserving Billing sign-out and entitlement-cache lifecycle methods;
+- narrowed view-model factories to explicit stores and services instead of `BootstrappedServices`;
+- removed the `ReaderDestination` initializer’s fire-and-forget side effect while preserving first-frame theme hydration and keeping `ReaderScreen` as the sole theme-seeding owner;
+- made OnboardingHost, subscription sheets, SettingsContent, SettingsSheet, LibraryTabView, and ReaderDestination consume focused dependency bundles;
+- replaced Onboarding placeholder previews with real flow previews backed by in-memory onboarding state;
 - retained the materialization, dirty/refresh, `WorkerAPI`, platform, and external-library seams because they contain meaningful behavior or package boundaries.
 
-The Apple app simulator build passes after each implementation step, including the final Billing accessor removal. Tests were deferred by request; stale production/test property references found during review were repaired as part of the migration. Remaining follow-ups are the separately scoped configuration/terminology drift, global hook lifecycle, and account-switching race scenario listed above.
+The Apple app simulator build passes after each implementation step, including the latest ReaderDestination dependency boundary. Tests were deferred by request; stale production/test property references found during review were repaired as part of the migration. Remaining follow-ups are the separately scoped configuration/terminology drift, global hook lifecycle, account-switching race scenario, and the intentionally environment-aware SignedIn/Mac session shell.
 
 ## Adversarial review loop
 
