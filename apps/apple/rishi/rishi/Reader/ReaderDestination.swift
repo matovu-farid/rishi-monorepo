@@ -35,7 +35,7 @@ struct ReaderDestination: View {
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) {
         let peeked = services.library.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
-        let initial = peeked ?? services.readerDefaults.theme
+        let initial = peeked ?? services.settings.readerDefaults.theme
         vm.theme = initial
         if peeked == nil {
             let store = services.library.readerSettingsStore
@@ -55,7 +55,7 @@ struct ReaderDestination: View {
         self.pdfViewMode = pdfViewMode
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: services.voice.presenter,
-            voiceLanguageProvider: { services.readerDefaults.voiceLanguage },
+            voiceLanguageProvider: { services.settings.readerDefaults.voiceLanguage },
             entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
             entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
             onRequestPaywall: onRequestPaywall
@@ -65,7 +65,7 @@ struct ReaderDestination: View {
     var body: some View {
         ReaderScreen(
             viewModel: vm,
-            appDefaultTheme: services.readerDefaults.theme,
+            appDefaultTheme: services.settings.readerDefaults.theme,
             readerSettingsStore: services.library.readerSettingsStore,
             highlightStore: services.library.highlightStore,
             bookmarkStore: services.library.bookmarkStore,
@@ -102,7 +102,7 @@ struct ReaderDestination: View {
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
-            pdfViewMode: pdfViewMode?.wrappedValue ?? services.readerDefaults.pdfViewMode,
+            pdfViewMode: pdfViewMode?.wrappedValue ?? services.settings.readerDefaults.pdfViewMode,
             pdfViewModeBinding: pdfViewMode
         )
 

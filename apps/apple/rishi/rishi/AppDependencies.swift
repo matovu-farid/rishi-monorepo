@@ -109,11 +109,14 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let billing: BillingRuntime
 
-    let telemetryStore: any TelemetryStore
-
-    let footerDetectionStore: any FooterDetectionStore
+    let settings: SettingsRuntime
     let onboarding: OnboardingRuntime
+}
+
+struct SettingsRuntime: @unchecked Sendable {
     let readerDefaults: AppReaderDefaults
+    let telemetryStore: any TelemetryStore
+    let footerDetectionStore: any FooterDetectionStore
 }
 
 struct OnboardingRuntime: @unchecked Sendable {

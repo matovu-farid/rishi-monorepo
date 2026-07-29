@@ -83,7 +83,7 @@ final class BackgroundSyncLifecycle {
             }
 
             guard
-                Self.shouldRunBGTask(autoSync: services.readerDefaults.autoSync)
+                Self.shouldRunBGTask(autoSync: services.settings.readerDefaults.autoSync)
             else {
                 task.setTaskCompleted(success: true)
                 services.sync.backgroundTaskCoordinator.scheduleAll()
@@ -152,7 +152,7 @@ final class BackgroundSyncLifecycle {
                 == "entitlement.changed"
             if !isEntitlementChange,
                 !Self.shouldRunSilentPush(
-                    autoSync: services.readerDefaults.autoSync
+                    autoSync: services.settings.readerDefaults.autoSync
                 )
             {
                 completion(.noData)

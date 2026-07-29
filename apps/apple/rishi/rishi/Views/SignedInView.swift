@@ -125,7 +125,7 @@ struct SignedInView: View {
             } message: { failure in
                 Text(failure.message)
             }
-            .macCommandDispatch(readerDefaults: services.readerDefaults)
+            .macCommandDispatch(readerDefaults: services.settings.readerDefaults)
 
             .readerPrefsMenuPublisher(
                 services: services,

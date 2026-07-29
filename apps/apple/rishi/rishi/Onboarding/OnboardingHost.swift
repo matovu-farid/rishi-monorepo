@@ -51,8 +51,8 @@ struct OnboardingHost: View {
                 #endif
             },
             voiceLanguage: Binding(
-                get: { services.readerDefaults.voiceLanguage.rawValue },
-                set: { services.readerDefaults.voiceLanguage = VoiceLanguageOption(rawValue: $0) ?? .english }
+                get: { services.settings.readerDefaults.voiceLanguage.rawValue },
+                set: { services.settings.readerDefaults.voiceLanguage = VoiceLanguageOption(rawValue: $0) ?? .english }
             ),
             onCompleted: onCompleted
         )

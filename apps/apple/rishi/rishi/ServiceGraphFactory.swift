@@ -457,14 +457,16 @@ enum ServiceGraphFactory {
                 workerReceiptVerifier: receiptVerifier,
                 groupID: groupID
             ),
-            telemetryStore: telemetryStore,
-            footerDetectionStore: footerDetectionStore,
+            settings: SettingsRuntime(
+                readerDefaults: readerDefaults,
+                telemetryStore: telemetryStore,
+                footerDetectionStore: footerDetectionStore
+            ),
             onboarding: OnboardingRuntime(
                 state: onboardingState,
                 trialState: trialOnboardingState,
                 coordinator: onboardingCoordinator
             ),
-            readerDefaults: readerDefaults
         )
     }
 

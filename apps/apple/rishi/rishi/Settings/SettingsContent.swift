@@ -32,7 +32,7 @@ struct SettingsContent: View {
     var body: some View {
         Group {
             if audioLoaded {
-                let defaults = services.readerDefaults
+                let defaults = services.settings.readerDefaults
                 let sync = services.sync.engine
                 SettingsScreen(
                     user: user,
@@ -59,8 +59,8 @@ struct SettingsContent: View {
                     syncStatus: services.sync.status,
 
                     onSyncNow: { Task { await sync.syncNow() } },
-                    telemetryStore: services.telemetryStore,
-                    footerDetectionStore: services.footerDetectionStore,
+                    telemetryStore: services.settings.telemetryStore,
+                    footerDetectionStore: services.settings.footerDetectionStore,
                     entitlementSnapshot: entitlementStore.resolvedSnapshot,
                     allowanceLoading: entitlementStore.isLoading,
                     onSubscribe: { showSubscriptions = true },

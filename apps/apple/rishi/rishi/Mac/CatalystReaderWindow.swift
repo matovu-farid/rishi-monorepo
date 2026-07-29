@@ -56,8 +56,8 @@ struct CatalystReaderWindow: View {
                 .onAppear {
                     coordinator.activate(
                         input,
-                        theme: services.readerDefaults.theme,
-                        pdfViewMode: isPDFReader ? services.readerDefaults.pdfViewMode : nil
+                        theme: services.settings.readerDefaults.theme,
+                        pdfViewMode: isPDFReader ? services.settings.readerDefaults.pdfViewMode : nil
                     )
                 }
                 .onDisappear { coordinator.unregister(input) }
@@ -65,8 +65,8 @@ struct CatalystReaderWindow: View {
                     if phase == .active {
                         coordinator.activate(
                             input,
-                            theme: services.readerDefaults.theme,
-                            pdfViewMode: isPDFReader ? services.readerDefaults.pdfViewMode : nil
+                            theme: services.settings.readerDefaults.theme,
+                            pdfViewMode: isPDFReader ? services.settings.readerDefaults.pdfViewMode : nil
                         )
                     } else {
                         coordinator.deactivate(input)
@@ -75,13 +75,13 @@ struct CatalystReaderWindow: View {
                 .environment(\.services, services)
                 .task {
                     guard case .pdf = input.route else { return }
-                    presentation.requestedMode = services.readerDefaults.pdfViewMode
+                    presentation.requestedMode = services.settings.readerDefaults.pdfViewMode
                     presentation.didApply(mode: presentation.requestedMode)
                 }
                 .onChange(of: presentation.requestedMode) { _, mode in
                     guard isPDFReader else { return }
                     presentation.beginTransition(to: mode)
-                    services.readerDefaults.pdfViewMode = mode
+                    services.settings.readerDefaults.pdfViewMode = mode
                     coordinator.updateActivePDFViewMode(mode)
                     presentation.didApply(mode: mode)
                 }

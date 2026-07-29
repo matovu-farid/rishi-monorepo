@@ -128,7 +128,7 @@ struct ReaderWindowMenuCommands: Commands {
         Binding(
             get: { readerWindows.activeTheme },
             set: { theme in
-                guard let defaults = dependencies.services?.readerDefaults else { return }
+                guard let defaults = dependencies.services?.settings.readerDefaults else { return }
                 defaults.theme = theme
                 readerWindows.updateActiveTheme(theme)
                 NotificationCenter.default.post(
@@ -143,7 +143,7 @@ struct ReaderWindowMenuCommands: Commands {
         Binding(
             get: { readerWindows.activePDFViewMode },
             set: { mode in
-                guard let defaults = dependencies.services?.readerDefaults else { return }
+                guard let defaults = dependencies.services?.settings.readerDefaults else { return }
                 defaults.pdfViewMode = mode
                 readerWindows.updateActivePDFViewMode(mode)
                 NotificationCenter.default.post(
