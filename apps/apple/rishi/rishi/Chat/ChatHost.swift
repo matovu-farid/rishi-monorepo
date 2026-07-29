@@ -38,10 +38,10 @@ struct ConversationsListHost: View {
         
         
         .task {
-            servicesEnv?.chatRefreshAdapter.setActive(viewModel: vm, userId: userId)
+            servicesEnv?.sync.chatRefreshAdapter.setActive(viewModel: vm, userId: userId)
         }
         .onDisappear {
-            servicesEnv?.chatRefreshAdapter.clearActive()
+            servicesEnv?.sync.chatRefreshAdapter.clearActive()
         }
     }
 }

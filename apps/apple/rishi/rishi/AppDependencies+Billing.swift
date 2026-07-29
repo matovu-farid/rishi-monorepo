@@ -29,9 +29,9 @@ extension AppDependencies {
     func performSignOut(currentUserBox: CurrentUserBox) async {
         let outgoing = try? Keychain.load(.userId)
         await clearEntitlementState(for: outgoing)
-        await services!.syncEngine.resetForAccountSwitch()
+        await services!.sync.engine.resetForAccountSwitch()
         userIdBox.value = nil
-        if let metadataStore = services?.syncMetadataStore as? SwiftDataSyncMetadataStore {
+        if let metadataStore = services?.sync.metadataStore as? SwiftDataSyncMetadataStore {
             do {
                 try await metadataStore.resetAll()
             } catch {

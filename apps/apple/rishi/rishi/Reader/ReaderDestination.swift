@@ -71,7 +71,7 @@ struct ReaderDestination: View {
             bookmarkStore: services.bookmarkStore,
 
 
-            bookmarkMarkDirty: { [services] id in await services.syncEngine.markBookmarkDirty(id) },
+            bookmarkMarkDirty: { [services] id in await services.sync.engine.markBookmarkDirty(id) },
             onReadAloud: {
                 Task {
                     if let reason = await EntitlementAIGate.gateAIFeature(
@@ -143,7 +143,7 @@ struct ReaderDestination: View {
             }
             syncBinding = ReaderPositionSyncBinding(
                 viewModel: vm,
-                syncEngine: services.syncEngine
+                syncEngine: services.sync.engine
             )
 
 

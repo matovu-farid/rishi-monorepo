@@ -180,7 +180,7 @@ extension MacReaderPrefsMenuViewModel {
     ) {
         let defaults = services.readerDefaults
         let store = services.ttsSettingsStore
-        let syncEngine = services.syncEngine
+        let syncEngine = services.sync.engine
         let presenter = services.billing.manageSubscriptionPresenter
         let userId = user.id
         self.init(
@@ -197,7 +197,7 @@ extension MacReaderPrefsMenuViewModel {
             pdfViewMode: Binding(get: { defaults.pdfViewMode }, set: { defaults.pdfViewMode = $0 }),
             fontFamily: Binding(get: { defaults.fontFamily }, set: { defaults.fontFamily = $0 }),
             autoSync: Binding(get: { defaults.autoSync }, set: { defaults.autoSync = $0 }),
-            syncStatus: services.syncStatus,
+            syncStatus: services.sync.status,
             userEmail: user.email,
             loadSettings: { await store.load(userId: userId) },
             saveSettings: { settings in await store.save(settings, userId: userId) },

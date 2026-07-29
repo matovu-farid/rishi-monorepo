@@ -116,7 +116,7 @@ struct LibraryTabView: View {
                     refresh: { await vm.refresh() },
                     sync: {
                         if services.readerDefaults.autoSync {
-                            _ = await services.syncEngine.runOnce()
+                            _ = await services.sync.engine.runOnce()
                         }
                     }
                 )

@@ -115,12 +115,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let ttsPresenceController: TTSPresenceController
     let ttsPrewarmer: TTSPrewarmer
 
-    let syncMetadataStore: any SyncMetadataStore
-    let syncStatus: SyncStatus
-    let syncEngine: SyncEngine
-    let backgroundTaskCoordinator: BackgroundTaskCoordinator
-    let apnsDeviceRegistrar: APNsDeviceRegistrar
-    let chatRefreshAdapter: AppChatRefreshAdapter
+    let sync: SyncRuntime
 
     let conversationStore: any ConversationStore
     let messageStore: any MessageStore
@@ -143,6 +138,15 @@ struct BootstrappedServices: @unchecked Sendable {
     let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+}
+
+struct SyncRuntime: @unchecked Sendable {
+    let metadataStore: any SyncMetadataStore
+    let status: SyncStatus
+    let engine: SyncEngine
+    let backgroundTaskCoordinator: BackgroundTaskCoordinator
+    let apnsDeviceRegistrar: APNsDeviceRegistrar
+    let chatRefreshAdapter: AppChatRefreshAdapter
 }
 
 struct BillingRuntime: @unchecked Sendable {

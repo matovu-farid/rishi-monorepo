@@ -14,7 +14,7 @@ extension PDFReaderViewModel {
     static func make(book: Book, userId: UserID, services: BootstrappedServices) -> PDFReaderViewModel {
         PDFReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
                            positionStore: services.positionStore,
-                           onPositionChanged: { [syncEngine = services.syncEngine] bookId in
+                           onPositionChanged: { [syncEngine = services.sync.engine] bookId in
                                await syncEngine.markPositionDirty(bookId)
                            })
     }

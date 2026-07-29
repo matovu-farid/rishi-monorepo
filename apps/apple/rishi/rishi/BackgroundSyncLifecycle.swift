@@ -86,18 +86,18 @@ final class BackgroundSyncLifecycle {
                 Self.shouldRunBGTask(autoSync: services.readerDefaults.autoSync)
             else {
                 task.setTaskCompleted(success: true)
-                services.backgroundTaskCoordinator.scheduleAll()
+                services.sync.backgroundTaskCoordinator.scheduleAll()
                 return
             }
 
-            let runTask = Task { [engine = services.syncEngine] in
+            let runTask = Task { [engine = services.sync.engine] in
                 let wave = await engine.runOnce()
                 return wave.errors.isEmpty
             }
             task.expirationHandler = { runTask.cancel() }
             let ok = await runTask.value
             task.setTaskCompleted(success: ok)
-            services.backgroundTaskCoordinator.scheduleAll()
+            services.sync.backgroundTaskCoordinator.scheduleAll()
         }
     #endif
 
@@ -110,7 +110,7 @@ final class BackgroundSyncLifecycle {
             pendingDeviceToken = token
             return
         }
-        guard let registrar = await resolveServices(userId: userId)?.apnsDeviceRegistrar
+        guard let registrar = await resolveServices(userId: userId)?.sync.apnsDeviceRegistrar
         else { return }
         do {
             try await registrar.register(
@@ -161,7 +161,7 @@ final class BackgroundSyncLifecycle {
             //        let entitlementService = services.billing.entitlementService
             SilentPushHandler.handle(
                 userInfo,
-                engine: services.syncEngine,
+                engine: services.sync.engine,
                 //     onEntitlementChanged: { await entitlementService.refresh() },
                 completion: completion
             )

@@ -34,9 +34,9 @@ struct AppDependenciesBootstrapTests {
     func test_bootstrap_idempotent() async {
         let deps = AppDependencies()
         await deps.bootstrap()
-        let firstEngine = deps.services?.syncEngine as AnyObject?
+        let firstEngine = deps.services?.sync.engine as AnyObject?
         await deps.bootstrap()
-        let secondEngine = deps.services?.syncEngine as AnyObject?
+        let secondEngine = deps.services?.sync.engine as AnyObject?
 
         #expect(firstEngine === secondEngine)
     }

@@ -33,7 +33,7 @@ struct SettingsContent: View {
         Group {
             if audioLoaded {
                 let defaults = services.readerDefaults
-                let sync = services.syncEngine
+                let sync = services.sync.engine
                 SettingsScreen(
                     user: user,
                     readerTheme: Binding(
@@ -56,7 +56,7 @@ struct SettingsContent: View {
                     audioInitial: initialAudio,
                     audioStore: services.ttsSettingsStore,
                     onAudioChange: { _ in },
-                    syncStatus: services.syncStatus,
+                    syncStatus: services.sync.status,
 
                     onSyncNow: { Task { await sync.syncNow() } },
                     telemetryStore: services.telemetryStore,
