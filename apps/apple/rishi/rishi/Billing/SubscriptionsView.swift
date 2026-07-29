@@ -38,10 +38,27 @@ enum RestoreMessage {
     }
 }
 
+public struct SubscriptionDependencies {
+    public let groupID: GroupId?
+    public let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
+    public let restoreService: RestoreService
+
+    public init(
+        groupID: GroupId?,
+        entitlementRefreshCoordinator: EntitlementRefreshCoordinator,
+        restoreService: RestoreService
+    ) {
+        self.groupID = groupID
+        self.entitlementRefreshCoordinator = entitlementRefreshCoordinator
+        self.restoreService = restoreService
+    }
+}
+
 public struct SubscriptionsView: View {
     @Environment(Store.self) private var store
     @Environment(\.services) private var services
     @Environment(EntitlementSnapshotStore.self) private var entitlementStore
+    private let dependencies: SubscriptionDependencies?
     @State private var customerEntitlements = CustomerEntitlements.shared
     @State private var hasSession: Bool?
     @State private var tokenError = false
@@ -56,14 +73,14 @@ public struct SubscriptionsView: View {
 
     private var isPaidActive: Bool {
         let serverPaid = entitlementStore.resolvedSnapshot?.isPaidActive == true
-        let storeKitPaid = services?.billing.groupID.map {
+        let storeKitPaid = groupID.map {
             customerEntitlements.hasActiveSubscription(in: $0.value)
         } ?? false
         return serverPaid || storeKitPaid
     }
 
     private var activeProductID: Product.ID? {
-        guard let productID = services?.billing.groupID.flatMap({
+        guard let productID = groupID.flatMap({
             customerEntitlements.activeProductID(in: $0.value)
         }) else { return nil }
         #if targetEnvironment(macCatalyst)
@@ -73,8 +90,29 @@ public struct SubscriptionsView: View {
         #endif
     }
 
-    public init(onPurchaseCompleted: @escaping () -> Void = {}) {
+    public init(
+        dependencies: SubscriptionDependencies,
+        onPurchaseCompleted: @escaping () -> Void = {}
+    ) {
+        self.dependencies = dependencies
         self.onPurchaseCompleted = onPurchaseCompleted
+    }
+
+    public init(onPurchaseCompleted: @escaping () -> Void = {}) {
+        self.dependencies = nil
+        self.onPurchaseCompleted = onPurchaseCompleted
+    }
+
+    private var groupID: GroupId? {
+        dependencies?.groupID ?? services?.billing.groupID
+    }
+
+    private var entitlementRefreshCoordinator: EntitlementRefreshCoordinator? {
+        dependencies?.entitlementRefreshCoordinator ?? services?.billing.entitlementRefreshCoordinator
+    }
+
+    private var restoreService: RestoreService? {
+        dependencies?.restoreService ?? services?.billing.restoreService
     }
 
     public var body: some View {
@@ -267,15 +305,15 @@ public struct SubscriptionsView: View {
         }
 
         await store.process(purchaseResult: purchaseResult)
-        if let services {
-            await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+        if let entitlementRefreshCoordinator {
+            await entitlementRefreshCoordinator.refreshIfSignedIn(
                 reason: .foreground
             )
         }
     }
 
     private func restorePurchases() async {
-        guard let services else {
+        guard let restoreService, let entitlementRefreshCoordinator else {
             restoreMessage = "Restore is unavailable until you are signed in."
             return
         }
@@ -283,8 +321,8 @@ public struct SubscriptionsView: View {
         isRestoring = true
         defer { isRestoring = false }
         do {
-            let outcome = try await services.billing.restoreService.restore()
-            await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
+            let outcome = try await restoreService.restore()
+            await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
             restoreMessage = RestoreMessage.forOutcome(outcome)
         } catch let error as RestoreError {
             Log.event("iap.restore.user_facing_failure", level: .warning)

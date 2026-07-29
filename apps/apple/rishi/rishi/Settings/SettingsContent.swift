@@ -110,11 +110,16 @@ struct SettingsContent: View {
             }
         }) {
             if services.billing.groupID != nil {
-                SubscriptionsView(onPurchaseCompleted: {
+                SubscriptionsView(
+                    dependencies: SubscriptionDependencies(
+                        groupID: services.billing.groupID,
+                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                        restoreService: services.billing.restoreService
+                    ),
+                    onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
-                .environment(\.services, services)
                 .environment(services.billing.entitlementSnapshotStore)
                 .environment(services.billing.manageSubscriptionPresenter)
                 .environment(Store.shared)

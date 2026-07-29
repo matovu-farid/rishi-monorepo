@@ -211,7 +211,13 @@ struct LibraryTabView: View {
             }
         }) { _ in
             if services.billing.groupID != nil {
-                SubscriptionsView(onPurchaseCompleted: {
+                SubscriptionsView(
+                    dependencies: SubscriptionDependencies(
+                        groupID: services.billing.groupID,
+                        entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                        restoreService: services.billing.restoreService
+                    ),
+                    onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     model.dismissPaywall()
                 })

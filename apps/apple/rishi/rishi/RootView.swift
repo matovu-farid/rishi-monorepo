@@ -106,11 +106,16 @@ struct RootView: View {
                     }
                 }
             }) {
-                SubscriptionsView(onPurchaseCompleted: {
+                SubscriptionsView(
+                    dependencies: SubscriptionDependencies(
+                        groupID: deps.services!.billing.groupID,
+                        entitlementRefreshCoordinator: deps.services!.billing.entitlementRefreshCoordinator,
+                        restoreService: deps.services!.billing.restoreService
+                    ),
+                    onPurchaseCompleted: {
                     pendingSubscriptionConfirmation = true
                     showSubscriptions = false
                 })
-                .environment(\.services, deps.services)
                 .environment(deps.services!.billing.entitlementSnapshotStore)
                 .environment(deps.services!.billing.manageSubscriptionPresenter)
                 .environment(Store.shared)
