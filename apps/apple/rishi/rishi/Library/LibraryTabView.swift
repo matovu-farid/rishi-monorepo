@@ -39,7 +39,13 @@ struct LibraryTabView: View {
         self.user = user
         self.model = model
         self.onLibraryReadyForTrial = onLibraryReadyForTrial
-        _vm = State(initialValue: LibraryViewModel.make(services: services, user: user))
+        _vm = State(initialValue: LibraryViewModel.make(
+            bookStore: services.library.bookStore,
+            userId: user.id,
+            importCoordinator: services.library.importCoordinator,
+            positionStore: services.library.positionStore,
+            bookFileStorage: services.library.bookFileStorage
+        ))
     }
 
     private var settingsHandler: (() -> Void) {
@@ -91,7 +97,10 @@ struct LibraryTabView: View {
             }
             .navigationDestination(for: ConversationsRoute.self) { _ in
                 ConversationsListHost(
-                    vm: ConversationsListViewModel.make(services: services),
+                    vm: ConversationsListViewModel.make(
+                        conversationStore: services.chat.conversationStore,
+                        messageStore: services.chat.messageStore
+                    ),
                     userId: user.id,
                     onSelect: { convo in model.present(conversation: convo) }
                 )

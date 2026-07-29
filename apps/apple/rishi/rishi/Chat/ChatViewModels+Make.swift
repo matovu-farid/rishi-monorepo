@@ -3,16 +3,29 @@
 
 extension ConversationsListViewModel {
     @MainActor
-    static func make(services: BootstrappedServices) -> ConversationsListViewModel {
-        ConversationsListViewModel(conversationStore: services.chat.conversationStore,
-                                   messageStore: services.chat.messageStore)
+    static func make(
+        conversationStore: ConversationStore,
+        messageStore: MessageStore
+    ) -> ConversationsListViewModel {
+        ConversationsListViewModel(
+            conversationStore: conversationStore,
+            messageStore: messageStore
+        )
     }
 }
 
 extension ChatPanelViewModel {
     @MainActor
-    static func make(conversation: Conversation, services: BootstrappedServices) -> ChatPanelViewModel {
-        ChatPanelViewModel(conversation: conversation, bookId: conversation.bookId,
-                           chatService: services.chat.service, messageStore: services.chat.messageStore)
+    static func make(
+        conversation: Conversation,
+        chatService: any ChatService,
+        messageStore: any MessageStore
+    ) -> ChatPanelViewModel {
+        ChatPanelViewModel(
+            conversation: conversation,
+            bookId: conversation.bookId,
+            chatService: chatService,
+            messageStore: messageStore
+        )
     }
 }

@@ -11,10 +11,15 @@ enum ReaderDocumentURL {
 
 extension PDFReaderViewModel {
     @MainActor
-    static func make(book: Book, userId: UserID, services: BootstrappedServices) -> PDFReaderViewModel {
+    static func make(
+        book: Book,
+        userId: UserID,
+        positionStore: any PositionStore,
+        syncEngine: SyncEngine
+    ) -> PDFReaderViewModel {
         PDFReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
-                           positionStore: services.library.positionStore,
-                           onPositionChanged: { [syncEngine = services.sync.engine] bookId in
+                           positionStore: positionStore,
+                           onPositionChanged: { [syncEngine] bookId in
                                await syncEngine.markPositionDirty(bookId)
                            })
     }
@@ -22,8 +27,12 @@ extension PDFReaderViewModel {
 
 extension ReaderViewModel {
     @MainActor
-    static func make(book: Book, userId: UserID, services: BootstrappedServices) -> ReaderViewModel {
+    static func make(
+        book: Book,
+        userId: UserID,
+        positionStore: any PositionStore
+    ) -> ReaderViewModel {
         ReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
-                            positionStore: services.library.positionStore)
+                            positionStore: positionStore)
     }
 }

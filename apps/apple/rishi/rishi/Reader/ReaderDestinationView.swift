@@ -34,7 +34,7 @@ struct ReaderDestinationView: View {
                     vm: ReaderViewModel.make(
                         book: book,
                         userId: userId,
-                        services: services
+                        positionStore: services.library.positionStore
                     ),
                     services: services,
                     userId: userId,

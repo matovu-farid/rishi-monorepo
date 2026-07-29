@@ -71,7 +71,8 @@ struct SignedInView: View {
                 ConversationChatHost(
                     vm: ChatPanelViewModel.make(
                         conversation: convo,
-                        services: services
+                        chatService: services.chat.service,
+                        messageStore: services.chat.messageStore
                     )
                 )
             }

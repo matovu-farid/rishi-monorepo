@@ -3,16 +3,20 @@
 
 extension LibraryViewModel {
     @MainActor
-    static func make(services: BootstrappedServices, user: User) -> LibraryViewModel {
-        let userId = user.id
-        let storage = services.library.bookFileStorage
+    static func make(
+        bookStore: any BookStore,
+        userId: UserID,
+        importCoordinator: ImportCoordinator,
+        positionStore: any PositionStore,
+        bookFileStorage: BookFileStorage
+    ) -> LibraryViewModel {
         return LibraryViewModel(
-            bookStore: services.library.bookStore,
+            bookStore: bookStore,
             currentUserId: { userId },
-            importCoordinator: services.library.importCoordinator,
-            positionLoader: PositionLoader(positionStore: services.library.positionStore),
-            coverResolver: BookCoverResolver(storage: storage),
-            deleteBook: { book in try await storage.delete(book) }
+            importCoordinator: importCoordinator,
+            positionLoader: PositionLoader(positionStore: positionStore),
+            coverResolver: BookCoverResolver(storage: bookFileStorage),
+            deleteBook: { book in try await bookFileStorage.delete(book) }
         )
     }
 }
