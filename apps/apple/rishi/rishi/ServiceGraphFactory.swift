@@ -406,15 +406,19 @@ enum ServiceGraphFactory {
 
         return BootstrappedServices(
             workerClient: workerClient,
-            bookStore: bookStore,
-            positionStore: positionStore,
-            highlightStore: highlightStore,
-            bookmarkStore: bookmarkStore,
-            bookFileStorage: bookFileStorage,
-            importCoordinator: importCoordinator,
-            sampleBookInstaller: sampleBookInstaller,
-            sampleReaderInstaller: sampleReaderInstaller,
-            readerSettingsStore: readerSettingsStore,
+            library: LibraryRuntime(
+                bookStore: bookStore,
+                positionStore: positionStore,
+                highlightStore: highlightStore,
+                bookmarkStore: bookmarkStore,
+                bookFileStorage: bookFileStorage,
+                importCoordinator: importCoordinator,
+                sampleBookInstaller: sampleBookInstaller,
+                sampleReaderInstaller: sampleReaderInstaller,
+                readerSettingsStore: readerSettingsStore,
+                bookSearch: bookSearch,
+                indexingHook: indexingHook
+            ),
             audioCoordinator: audioStack.coordinator,
             ttsState: audioStack.state,
             ttsEngine: audioStack.engine,
@@ -436,8 +440,6 @@ enum ServiceGraphFactory {
             chatService: chatService,
             voicePresenter: voicePresenter,
             voiceSessionRegistry: voiceSessionRegistry,
-            bookSearch: bookSearch,
-            indexingHook: indexingHook,
             billing: BillingRuntime(
                 entitlementService: entitlementService,
                 entitlementSnapshotStore: entitlementSnapshotStore,

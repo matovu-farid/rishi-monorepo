@@ -13,7 +13,7 @@ extension PDFReaderViewModel {
     @MainActor
     static func make(book: Book, userId: UserID, services: BootstrappedServices) -> PDFReaderViewModel {
         PDFReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
-                           positionStore: services.positionStore,
+                           positionStore: services.library.positionStore,
                            onPositionChanged: { [syncEngine = services.sync.engine] bookId in
                                await syncEngine.markPositionDirty(bookId)
                            })
@@ -24,6 +24,6 @@ extension ReaderViewModel {
     @MainActor
     static func make(book: Book, userId: UserID, services: BootstrappedServices) -> ReaderViewModel {
         ReaderViewModel(book: book, userId: userId, documentURL: ReaderDocumentURL.url(for: book),
-                            positionStore: services.positionStore)
+                            positionStore: services.library.positionStore)
     }
 }

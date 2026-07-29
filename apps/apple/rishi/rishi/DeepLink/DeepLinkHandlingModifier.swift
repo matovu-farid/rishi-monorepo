@@ -25,13 +25,13 @@ struct DeepLinkHandlingModifier: ViewModifier {
                 }
                 router.onFileURL = { fileURL in
                     Task {
-                        _ = await services.importCoordinator.importBooks([fileURL])
+                        _ = await services.library.importCoordinator.importBooks([fileURL])
                         await refreshLibrary()
                     }
                 }
                 router.handle(
                     url: url,
-                    bookStore: services.bookStore,
+                    bookStore: services.library.bookStore,
                     conversationStore: services.conversationStore
                 )
             }

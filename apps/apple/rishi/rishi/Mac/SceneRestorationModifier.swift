@@ -38,7 +38,7 @@ struct SceneRestorationModifier: ViewModifier {
                 await router.applyRestored(
                     tabRaw: tabRaw,
                     openBookIdRaw: openBookIdRaw,
-                    bookStore: services.bookStore
+                    bookStore: services.library.bookStore
                 )
             }
             

@@ -97,15 +97,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let workerClient: WorkerClient
 
-    let bookStore: any BookStore
-    let positionStore: any PositionStore
-    let highlightStore: any HighlightStore
-    let bookmarkStore: any BookmarkStore
-    let bookFileStorage: BookFileStorage
-    let importCoordinator: ImportCoordinator
-    let sampleBookInstaller: SampleBookInstaller
-    let sampleReaderInstaller: SampleReaderInstaller
-    let readerSettingsStore: any ReaderSettingsStore
+    let library: LibraryRuntime
 
     let audioCoordinator: AudioSessionCoordinator
     let ttsState: TTSPlaybackState
@@ -125,10 +117,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let voicePresenter: VoiceSessionPresenter
     let voiceSessionRegistry: VoiceSessionRegistry
 
-    let bookSearch: any BookSearch
-
-    let indexingHook: any BookIndexingHook
-
     let billing: BillingRuntime
 
     let telemetryStore: any TelemetryStore
@@ -138,6 +126,20 @@ struct BootstrappedServices: @unchecked Sendable {
     let trialOnboardingState: any TrialOnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults
+}
+
+struct LibraryRuntime: @unchecked Sendable {
+    let bookStore: any BookStore
+    let positionStore: any PositionStore
+    let highlightStore: any HighlightStore
+    let bookmarkStore: any BookmarkStore
+    let bookFileStorage: BookFileStorage
+    let importCoordinator: ImportCoordinator
+    let sampleBookInstaller: SampleBookInstaller
+    let sampleReaderInstaller: SampleReaderInstaller
+    let readerSettingsStore: any ReaderSettingsStore
+    let bookSearch: any BookSearch
+    let indexingHook: any BookIndexingHook
 }
 
 struct SyncRuntime: @unchecked Sendable {

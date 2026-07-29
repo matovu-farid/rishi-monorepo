@@ -34,11 +34,11 @@ struct ReaderDestination: View {
         onRequestPaywall: @escaping (String) -> Void,
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) {
-        let peeked = services.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
+        let peeked = services.library.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? services.readerDefaults.theme
         vm.theme = initial
         if peeked == nil {
-            let store = services.readerSettingsStore
+            let store = services.library.readerSettingsStore
             let bookId = vm.book.id
             let seed = initial
             Task {
@@ -66,9 +66,9 @@ struct ReaderDestination: View {
         ReaderScreen(
             viewModel: vm,
             appDefaultTheme: services.readerDefaults.theme,
-            readerSettingsStore: services.readerSettingsStore,
-            highlightStore: services.highlightStore,
-            bookmarkStore: services.bookmarkStore,
+            readerSettingsStore: services.library.readerSettingsStore,
+            highlightStore: services.library.highlightStore,
+            bookmarkStore: services.library.bookmarkStore,
 
 
             bookmarkMarkDirty: { [services] id in await services.sync.engine.markBookmarkDirty(id) },
@@ -93,7 +93,7 @@ struct ReaderDestination: View {
                             coordidator: services.audioCoordinator,
                             userId: userId,
                             nowPlayingController: services.nowPlayingController,
-                            bookFileStorage: services.bookFileStorage
+                            bookFileStorage: services.library.bookFileStorage
                         )
                     }
                     await readAloud?.startReader(vm: vm)
@@ -149,9 +149,9 @@ struct ReaderDestination: View {
 
 
 
-            if await services.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
-                let url =  services.bookFileStorage.absoluteFileURL(for: vm.book)
-                await services.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
+            if await services.library.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
+                let url =  services.library.bookFileStorage.absoluteFileURL(for: vm.book)
+                await services.library.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
             }
         }
         .onDisappear {
@@ -166,7 +166,7 @@ struct ReaderDestination: View {
             if !services.voicePresenter.isPresenting {
                 IndexingIndicatorChip(
                     bookId: vm.book.id,
-                    bookSearch: services.bookSearch
+                    bookSearch: services.library.bookSearch
                 )
                 .padding(.trailing, RishiSpacing.m)
                 .padding(.bottom, RishiSpacing.s)
@@ -297,7 +297,7 @@ struct ReaderDestination: View {
             coordidator: services.audioCoordinator,
             userId: userId,
             nowPlayingController: services.nowPlayingController,
-            bookFileStorage: services.bookFileStorage
+            bookFileStorage: services.library.bookFileStorage
         )
         readAloud = controller
         return controller

@@ -53,7 +53,7 @@ struct LibraryTabView: View {
             LibraryRootView(
           
                 path: bindableRouter.path,
-                importCoordinator: services.importCoordinator,
+                importCoordinator: services.library.importCoordinator,
                 onOpenBook: { book in
                     model.hint(book)
                     #if targetEnvironment(macCatalyst)
@@ -155,7 +155,7 @@ struct LibraryTabView: View {
                     hasSeenFirstBookPrompt = true
                     showFirstBookPrompt = false
                     Task {
-                        _ = await services.sampleBookInstaller.installIfNeeded(
+                        _ = await services.library.sampleBookInstaller.installIfNeeded(
                             ownerId: user.id
                         )
                         await vm.refresh()
@@ -246,7 +246,7 @@ struct LibraryTabView: View {
 
     @MainActor
     private func installSampleReaderIfNeeded() async {
-        _ = await services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+        _ = await services.library.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
         await vm.refresh()
     }
 }

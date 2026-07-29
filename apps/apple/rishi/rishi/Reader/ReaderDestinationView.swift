@@ -28,7 +28,7 @@ struct ReaderDestinationView: View {
             NavigationLazyBook(
                 bookId: bookId,
                 hint: hint,
-                bookStore: services.bookStore
+                bookStore: services.library.bookStore
             ) { book in
                 ReaderDestination(
                     vm: ReaderViewModel.make(
@@ -46,7 +46,7 @@ struct ReaderDestinationView: View {
             NavigationLazyBook(
                 bookId: bookId,
                 hint: hint,
-                bookStore: services.bookStore
+                bookStore: services.library.bookStore
             ) { book in
                 EpubPlaceholderView(book: book) {
                     #if targetEnvironment(macCatalyst)
