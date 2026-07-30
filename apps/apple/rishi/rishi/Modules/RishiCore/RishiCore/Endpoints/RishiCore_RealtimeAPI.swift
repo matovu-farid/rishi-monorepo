@@ -25,15 +25,13 @@ public struct BookOutlineDTO: Sendable, Equatable, Codable {
 
 /// Snapshot of the iOS reader's state at the moment a voice session starts.
 ///
-/// The reader passes whatever it knows: which book, which page, the visible
-/// page text, the outline, the active paragraph the user is reading. All
+/// The reader passes startup metadata: which book, which page, and the
+/// outline. Visible page text and the active paragraph stay on-device. All
 /// fields except `bookId` are optional — a session can start before a page
-/// is open (e.g. from the library shell) and the snapshot then contains only
-/// the book identifier.
+/// is open (e.g. from the library shell).
 ///
 /// Sent in the body of `POST /api/realtime/client_secrets`. The wire shape
-/// uses snake_case (`book_id`, `current_page`, `page_text`,
-/// `active_paragraph_text`); the Swift surface stays camelCase.
+/// uses snake_case for startup metadata; the Swift surface stays camelCase.
 public struct BookContextSnapshot: Sendable, Equatable, Codable {
     public let bookId: UUID
     public let currentPage: Int?
@@ -95,9 +93,7 @@ public struct RealtimeClientSecretsEndpoint: WorkerEndpointWithBody {
             language: language,
             bookId: bookContext?.bookId,
             currentPage: bookContext?.currentPage,
-            pageText: bookContext?.pageText,
             outline: bookContext?.outline,
-            activeParagraphText: bookContext?.activeParagraphText
         )
     }
 
@@ -109,17 +105,13 @@ public struct RealtimeClientSecretsEndpoint: WorkerEndpointWithBody {
         public let language: String?
         public let bookId: UUID?
         public let currentPage: Int?
-        public let pageText: String?
         public let outline: BookOutlineDTO?
-        public let activeParagraphText: String?
 
         enum CodingKeys: String, CodingKey {
             case language
             case bookId = "book_id"
             case currentPage = "current_page"
-            case pageText = "page_text"
             case outline
-            case activeParagraphText = "active_paragraph_text"
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -130,11 +122,7 @@ public struct RealtimeClientSecretsEndpoint: WorkerEndpointWithBody {
             if let language { try container.encode(language, forKey: .language) }
             if let bookId { try container.encode(bookId, forKey: .bookId) }
             if let currentPage { try container.encode(currentPage, forKey: .currentPage) }
-            if let pageText { try container.encode(pageText, forKey: .pageText) }
             if let outline { try container.encode(outline, forKey: .outline) }
-            if let activeParagraphText {
-                try container.encode(activeParagraphText, forKey: .activeParagraphText)
-            }
         }
     }
 

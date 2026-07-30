@@ -8,12 +8,8 @@ import Foundation
 /// session cap, and mints an OpenAI Realtime client secret — all in one
 /// synchronous round trip (`2026-07-17-voice-sessions-route.md`).
 ///
-/// Body fields are the same optional book-context shape
-/// `RealtimeClientSecretsEndpoint` (`RealtimeAPI.swift`) already sends —
-/// duplicated here (rather than shared) because the two endpoints are
-/// independent wire contracts on the worker side (separate Hono routes,
-/// separate Zod schemas) even though the payload shape happens to match
-/// today.
+/// Body carries only startup metadata. Visible page text is intentionally
+/// excluded; Apple resolves it locally when OpenAI invokes its page tool.
 public struct CreateVoiceSessionEndpoint: WorkerEndpointWithBody {
     public typealias Response = CreatedVoiceSession
 
@@ -27,9 +23,7 @@ public struct CreateVoiceSessionEndpoint: WorkerEndpointWithBody {
             language: language,
             bookId: bookContext?.bookId,
             currentPage: bookContext?.currentPage,
-            pageText: bookContext?.pageText,
             outline: bookContext?.outline,
-            activeParagraphText: bookContext?.activeParagraphText
         )
     }
 
@@ -40,17 +34,13 @@ public struct CreateVoiceSessionEndpoint: WorkerEndpointWithBody {
         public let language: String?
         public let bookId: UUID?
         public let currentPage: Int?
-        public let pageText: String?
         public let outline: BookOutlineDTO?
-        public let activeParagraphText: String?
 
         enum CodingKeys: String, CodingKey {
             case language
             case bookId = "book_id"
             case currentPage = "current_page"
-            case pageText = "page_text"
             case outline
-            case activeParagraphText = "active_paragraph_text"
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -58,11 +48,7 @@ public struct CreateVoiceSessionEndpoint: WorkerEndpointWithBody {
             if let language { try container.encode(language, forKey: .language) }
             if let bookId { try container.encode(bookId, forKey: .bookId) }
             if let currentPage { try container.encode(currentPage, forKey: .currentPage) }
-            if let pageText { try container.encode(pageText, forKey: .pageText) }
             if let outline { try container.encode(outline, forKey: .outline) }
-            if let activeParagraphText {
-                try container.encode(activeParagraphText, forKey: .activeParagraphText)
-            }
         }
     }
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   BOOK_CONTEXT_TOOL_SPEC,
+  CURRENT_PAGE_CONTEXT_TOOL_SPEC,
   renderRealtimeInstructions,
 } from "@rishi/shared/voice-chat/build-realtime-agent";
 import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
@@ -37,7 +38,7 @@ export function coerceLanguage(raw: string | undefined): string {
  * optional so a voice session started without an open book still works.
  *
  * Notes
- * - When `outline` / `pageText` / `activeParagraphText` are absent,
+ * - When `outline` is absent,
  *   `renderRealtimeInstructions` still produces a coherent generic prompt
  *   (no "undefined"/"null" leakage) — see packages/shared tests for that
  *   string-rendering contract.
@@ -58,13 +59,11 @@ export interface BuildClientSecretsInput {
   language: string;
   bookId?: string;
   currentPage?: number;
-  pageText?: string;
   outline?: {
     title: string;
     author?: string;
     chapters: string[];
   };
-  activeParagraphText?: string;
 }
 
 export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
@@ -80,10 +79,10 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
       }
     : undefined;
   const instructions = renderRealtimeInstructions({
-    pageText: input.pageText ?? "",
+    pageText: "",
     language: input.language,
     outline,
-    activeParagraphText: input.activeParagraphText,
+    includePageContent: false,
   });
   return {
     expires_after: {
@@ -100,6 +99,12 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
           name: BOOK_CONTEXT_TOOL_SPEC.name,
           description: BOOK_CONTEXT_TOOL_SPEC.description,
           parameters: BOOK_CONTEXT_TOOL_SPEC.parameters,
+        },
+        {
+          type: "function",
+          name: CURRENT_PAGE_CONTEXT_TOOL_SPEC.name,
+          description: CURRENT_PAGE_CONTEXT_TOOL_SPEC.description,
+          parameters: CURRENT_PAGE_CONTEXT_TOOL_SPEC.parameters,
         },
       ],
       // Keep the complete realtime session configuration on the ephemeral

@@ -48,7 +48,6 @@ public actor RealtimeVoiceSession {
 
     public typealias BookContextResponderFactory = @Sendable (UUID) -> BookContextResponder
 
-    private let micGate: any MicPermissionGate
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let coordinator: AudioSessionCoordinator
     private let keyFetcher: any EphemeralKeyFetching
@@ -69,6 +68,8 @@ public actor RealtimeVoiceSession {
     /// `ControlWebSocketClient`'s reconnect loop, not here.
     private let controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)?
     private let responderFactory: BookContextResponderFactory?
+    private let currentPageProvider: CurrentPageContextProvider?
+    public let readerSessionIdentity: ReaderSessionIdentity?
     private let embedderPrewarm: (@Sendable () async -> Void)?
     private let backoff: @Sendable (Int) -> Duration
     private let maxReconnects: Int
@@ -97,9 +98,6 @@ public actor RealtimeVoiceSession {
     /// Current voice language used for prompt + transcription + reconnects.
     private var currentLanguage: String?
 
-    /// Optional activation coordinator for pre-connect PCM capture + handoff.
-    private let activation: (any VoiceActivationCoordinating)?
-
     /// Set once `startTrialVoiceSession` successfully creates a Rishi voice
     /// session. Cleared on every teardown path (start failure, `end()`, or
     /// a control-WS terminal signal) so a stale id/nonce never leaks into a
@@ -118,7 +116,6 @@ public actor RealtimeVoiceSession {
     private var registrationTask: Task<Void, Never>?
 
     public init(
-        micGate: any MicPermissionGate,
         coordinator: AudioSessionCoordinator,
         keyFetcher: any EphemeralKeyFetching,
         client: any RealtimeClientAPI,
@@ -127,8 +124,9 @@ public actor RealtimeVoiceSession {
         sessionCoordinator: (any VoiceSessionCoordinating)? = nil,
         controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
         responderFactory: BookContextResponderFactory? = nil,
+        currentPageProvider: CurrentPageContextProvider? = nil,
+        readerSessionIdentity: ReaderSessionIdentity? = nil,
         embedderPrewarm: (@Sendable () async -> Void)? = nil,
-        activation: (any VoiceActivationCoordinating)? = nil,
         backoff: @escaping @Sendable (Int) -> Duration = { attempt in
             // Spike B pattern: 1s, 2s, 4s exponential backoff.
             switch attempt {
@@ -141,7 +139,6 @@ public actor RealtimeVoiceSession {
         disconnectConfirmations: Int = 3,
         confirmationInterval: Duration = .milliseconds(150)
     ) {
-        self.micGate = micGate
         self.dataUseConsentProvider = dataUseConsentProvider
         self.coordinator = coordinator
         self.keyFetcher = keyFetcher
@@ -150,8 +147,9 @@ public actor RealtimeVoiceSession {
         self.sessionCoordinator = sessionCoordinator
         self.controlSocketFactory = controlSocketFactory
         self.responderFactory = responderFactory
+        self.currentPageProvider = currentPageProvider
+        self.readerSessionIdentity = readerSessionIdentity
         self.embedderPrewarm = embedderPrewarm
-        self.activation = activation
         self.backoff = backoff
         self.maxReconnects = maxReconnects
         self.disconnectConfirmations = disconnectConfirmations
@@ -162,8 +160,8 @@ public actor RealtimeVoiceSession {
 
     /// Start a voice session. Branches into `startLegacyFlow` or
     /// `startTrialVoiceSession` depending on whether `sessionCoordinator`
-    /// was injected; both share this mic-permission + audio-mode-claim
-    /// prefix and the optional embedder prewarm.
+    /// was injected; both share the app audio-mode claim and optional
+    /// embedder prewarm. The realtime SDK owns microphone permission.
     public func start(
         language: String? = "en",
         bookId: UUID? = nil,
@@ -178,14 +176,6 @@ public actor RealtimeVoiceSession {
             return
         }
         await update(.requestingMic)
-
-        if !preflighted {
-            let decision = await micGate.request()
-            guard decision == .granted else {
-                await fail(reason: .micDenied, message: "Microphone permission denied")
-                return
-            }
-        }
         guard !isEnding else {
             if preflighted {
                 await coordinator.releaseActiveMode(.voice)
@@ -282,18 +272,16 @@ public actor RealtimeVoiceSession {
                 ephemeralKey: key.secret,
                 bookContext: snapshot,
                 language: language,
-                deferMicCapture: activation != nil
+                deferMicCapture: false
             )
         } catch {
             prewarmTask?.cancel()
-            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
             await fail(reason: .connect)
             return
         }
 
-        await completeActivationHandoffIfNeeded()
         await update(.live)
         Log.event("voice.session.live", level: .info, data: ["bookId": bookId?.uuidString ?? "<none>"])
         spawnResponderIfNeeded(bookId: bookId)
@@ -341,11 +329,10 @@ public actor RealtimeVoiceSession {
                 ephemeralKey: started.clientSecret,
                 bookContext: snapshot,
                 language: language,
-                deferMicCapture: activation != nil
+                deferMicCapture: false
             )
         } catch {
             prewarmTask?.cancel()
-            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
@@ -355,7 +342,6 @@ public actor RealtimeVoiceSession {
         guard !isEnding else {
             await client.disconnect()
             prewarmTask?.cancel()
-            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             return
@@ -364,7 +350,6 @@ public actor RealtimeVoiceSession {
         guard let callId = await client.providerCallId else {
             await client.disconnect()
             prewarmTask?.cancel()
-            await cancelActivation()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             await fail(
@@ -374,7 +359,6 @@ public actor RealtimeVoiceSession {
             return
         }
 
-        await completeActivationHandoffIfNeeded()
         await update(.live)
         spawnResponderIfNeeded(bookId: bookId)
         openControlSocket(rishiSessionId: started.rishiSessionId)
@@ -427,7 +411,6 @@ public actor RealtimeVoiceSession {
             controlMessageTask?.cancel(); controlMessageTask = nil
             responderTask?.cancel(); responderTask = nil
             prewarmTask?.cancel()
-            await cancelActivation()
             await client.disconnect()
             await controlSocket?.disconnect()
             await coordinator.releaseActiveMode(.voice)
@@ -455,12 +438,15 @@ public actor RealtimeVoiceSession {
         let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
 
         await update(.ending)
-        await cancelActivation()
         await reconnect?.cancel()
         registrationTask?.cancel(); registrationTask = nil
         controlMessageTask?.cancel(); controlMessageTask = nil
         responderTask?.cancel(); responderTask = nil
 
+        // Stop an in-flight assistant response before tearing down WebRTC.
+        // Disconnecting alone closes the transport but can leave already
+        // buffered assistant audio playing through the SDK.
+        await client.cancelCurrentResponse()
         await client.disconnect()
         await controlSocket?.disconnect()
         await coordinator.releaseActiveMode(.voice)
@@ -481,7 +467,6 @@ public actor RealtimeVoiceSession {
         await reconnect?.cancel()
         await client.cancelCurrentResponse()
         await client.setMicCaptureEnabled(false)
-        await client.setAssistantOutputEnabled(false)
     }
 
     /// Show the reader chrome again after ``parkForBackground()``.
@@ -489,7 +474,6 @@ public actor RealtimeVoiceSession {
         guard isParked else { return }
         isParked = false
         await client.setMicCaptureEnabled(true)
-        await client.setAssistantOutputEnabled(true)
         let connection = await client.currentStatus()
         if connection == .connected {
             await update(.live)
@@ -734,10 +718,12 @@ public actor RealtimeVoiceSession {
     private func spawnResponderIfNeeded(bookId: UUID?) {
         if let bookId, let factory = responderFactory {
             let responder = factory(bookId)
+            let provider = currentPageProvider
             Log.event("voice.session.tool_responder.started", level: .info, data: [
                 "bookId": bookId.uuidString,
             ])
             responderTask = Task {
+                await responder.setCurrentPageProvider(provider)
                 await responder.consume(stream: client.toolCallStream())
             }
         } else {
@@ -835,74 +821,12 @@ public actor RealtimeVoiceSession {
         var data = ["reason": String(describing: reason)]
         if let message { data["message"] = message }
         Log.event("voice.session.failed", level: .error, data: data)
-        await cancelActivation()
         await MainActor.run {
             state.apply(status: .failed(reason: reason))
             if let message { state.recordError(message) }
         }
     }
 
-    private struct ActivationHandoffTimeout: Error {}
-
-    private static let handoffWallClockLimit: Duration = .seconds(4)
-
-    /// Blocks until activation PCM handoff finishes and live mic is armed.
-    /// Must complete before `.live` and reconnect observation — reconnect
-    /// `connect()` without `deferMicCapture` races dual capture if the activation
-    /// recorder is still running.
-    private func completeActivationHandoffIfNeeded() async {
-        guard let activation else { return }
-        Log.event("voice.activation.handoff.started", level: .info)
-
-        let outcome: HandoffOutcome
-        do {
-            outcome = try await withThrowingTaskGroup(of: HandoffOutcome.self) { group in
-                group.addTask {
-                    try await activation.completeHandoff(client: self.client)
-                }
-                group.addTask {
-                    try await Task.sleep(for: Self.handoffWallClockLimit)
-                    throw ActivationHandoffTimeout()
-                }
-                guard let first = try await group.next() else {
-                    throw ActivationHandoffTimeout()
-                }
-                group.cancelAll()
-                return first
-            }
-        } catch {
-            Log.event("voice.activation.handoff.timeout", level: .warning, data: [
-                "error": String(describing: error),
-            ])
-            await cancelActivation()
-            await client.setMicCaptureEnabled(true)
-            await client.setAssistantOutputEnabled(true)
-            Log.event("voice.activation.handoff.completed", level: .info, data: ["result": "timeout_fallback"])
-            return
-        }
-
-        switch outcome {
-        case .recoveredLiveMic(let notice):
-            await MainActor.run { state.recordError(notice) }
-        case .unavailable(let reason):
-            Log.event("voice.activation.handoff.unavailable", level: .warning, data: ["reason": reason])
-            await client.setMicCaptureEnabled(true)
-            await client.setAssistantOutputEnabled(true)
-        case .interrupted:
-            Log.event("voice.activation.handoff.interrupted", level: .info)
-            await client.setMicCaptureEnabled(true)
-            await client.setAssistantOutputEnabled(true)
-        case .liveMicOnly, .accepted:
-            break
-        }
-        Log.event("voice.activation.handoff.completed", level: .info, data: [
-            "result": String(describing: outcome),
-        ])
-    }
-
-    private func cancelActivation() async {
-        await activation?.cancel()
-    }
 }
 
 /// Reconnect credential source for the trial voice-session flow.

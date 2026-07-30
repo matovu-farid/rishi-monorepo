@@ -273,6 +273,21 @@ public final class ReaderViewModel: @unchecked Sendable {
         )
     }
 
+    @MainActor
+    public func liveVoiceContext() async -> ReaderVoiceContext {
+        let base = voiceContext()
+        let paragraphs = await paragraphsForReadAloud()
+        let text = paragraphs.isEmpty ? nil : paragraphs.joined(separator: "\n\n")
+        return ReaderVoiceContext(
+            title: base.title,
+            author: base.author,
+            chapters: base.chapters,
+            currentPage: base.currentPage,
+            pageText: text,
+            activeParagraphText: base.activeParagraphText
+        )
+    }
+
     // MARK: - Read-aloud
 
     /// Returns the navigator's current visible locator, falling back to the

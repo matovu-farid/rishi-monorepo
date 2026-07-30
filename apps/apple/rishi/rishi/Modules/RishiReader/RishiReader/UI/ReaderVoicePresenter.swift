@@ -60,6 +60,8 @@ public struct ReaderVoiceContext: Sendable, Equatable {
     }
 }
 
+public typealias ReaderVoiceContextProvider = @MainActor @Sendable () async throws -> ReaderVoiceContext
+
 /// Protocol seam letting the reader launch the voice session without
 /// depending on RishiVoice.
 ///
@@ -84,5 +86,10 @@ public protocol ReaderVoicePresenter: AnyObject {
     /// model. When `initialQuote` is non-nil the voice surface opens its
     /// text-chat sheet prefilled with the quote so the user can add a
     /// question beneath it.
-    func presentVoice(bookId: BookID, context: ReaderVoiceContext, initialQuote: String?)
+    func presentVoice(
+        bookId: BookID,
+        context: ReaderVoiceContext,
+        contextProvider: @escaping ReaderVoiceContextProvider,
+        initialQuote: String?
+    )
 }

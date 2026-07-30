@@ -26,6 +26,8 @@ import Foundation
 /// `inspectCurrentPage`) are logged + ignored; no tool result is written.
 public actor BookContextResponder {
 
+    public static let currentPageToolName = "currentPageContext"
+
     /// Sentinel returned to the LLM when the per-book index isn't ready.
     /// VERBATIM string — keep in sync with Electron's `buildRealtimeAgent.ts`
     /// and the CONTEXT.md decision for Phase 25.
@@ -45,20 +47,40 @@ public actor BookContextResponder {
     public static let lookupFailedMessage = "I couldn’t check the book right now. I’ll answer from what I already know if I can."
 
     private let client: any RealtimeClientAPI
-    private let search: any BookSearch
+    private let search: (any BookSearch)?
     private let bookId: UUID
     private let timeoutSeconds: Double
+    private var currentPageProvider: CurrentPageContextProvider?
 
     public init(
         client: any RealtimeClientAPI,
         search: any BookSearch,
         bookId: UUID,
-        timeoutSeconds: Double = 8
+        timeoutSeconds: Double = 8,
+        currentPageProvider: CurrentPageContextProvider? = nil
     ) {
         self.client = client
         self.search = search
         self.bookId = bookId
         self.timeoutSeconds = timeoutSeconds
+        self.currentPageProvider = currentPageProvider
+    }
+
+    public init(
+        client: any RealtimeClientAPI,
+        bookId: UUID,
+        timeoutSeconds: Double = 8,
+        currentPageProvider: CurrentPageContextProvider? = nil
+    ) {
+        self.client = client
+        self.search = nil
+        self.bookId = bookId
+        self.timeoutSeconds = timeoutSeconds
+        self.currentPageProvider = currentPageProvider
+    }
+
+    public func setCurrentPageProvider(_ provider: CurrentPageContextProvider?) {
+        currentPageProvider = provider
     }
 
     /// Drive the responder by consuming a tool-call stream. Returns when the
@@ -73,6 +95,11 @@ public actor BookContextResponder {
     // MARK: - Internals
 
     private func handle(_ event: RealtimeToolCallEvent) async {
+        if event.name == Self.currentPageToolName {
+            await handleCurrentPage(event)
+            return
+        }
+
         guard event.name == Self.toolName else {
             Log.event("voice.tool.unknown", level: .warning, data: [
                 "name": event.name,
@@ -104,6 +131,16 @@ public actor BookContextResponder {
                 payload: Self.lookupFailedMessage,
                 logEvent: "voice.tool.error.sent",
                 reason: "arg_decode_failed"
+            )
+            return
+        }
+
+        guard let search else {
+            await sendPayload(
+                callId: event.callId,
+                payload: Self.lookupFailedMessage,
+                logEvent: "voice.tool.error.sent",
+                reason: "book_search_unavailable"
             )
             return
         }
@@ -215,6 +252,47 @@ public actor BookContextResponder {
         } catch {
             Log.event("voice.tool.send.failed", level: .error, data: [
                 "callId": event.callId,
+                "error": String(describing: error),
+            ])
+        }
+    }
+
+    private func handleCurrentPage(_ event: RealtimeToolCallEvent) async {
+        guard let provider = currentPageProvider else {
+            await sendCurrentPageResult(
+                callId: event.callId,
+                result: CurrentPageContextResult(availability: .unavailable)
+            )
+            return
+        }
+
+        do {
+            let result = try await provider()
+            await sendCurrentPageResult(callId: event.callId, result: result)
+        } catch {
+            Log.event("voice.current_page.failed", level: .warning, data: [
+                "callId": event.callId,
+                "error": String(describing: error),
+            ])
+            await sendCurrentPageResult(
+                callId: event.callId,
+                result: CurrentPageContextResult(availability: .unavailable)
+            )
+        }
+    }
+
+    private func sendCurrentPageResult(
+        callId: String,
+        result: CurrentPageContextResult
+    ) async {
+        guard !Task.isCancelled else { return }
+        do {
+            let data = try JSONEncoder().encode(result)
+            let payload = String(data: data, encoding: .utf8) ?? "{\"availability\":\"unavailable\"}"
+            try await client.sendToolResult(callId: callId, payload: payload)
+        } catch {
+            Log.event("voice.current_page.send_failed", level: .warning, data: [
+                "callId": callId,
                 "error": String(describing: error),
             ])
         }

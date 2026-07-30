@@ -12,6 +12,7 @@ import Observation
 @MainActor
 @Observable
 final class ReaderVoiceEntry: ReaderVoicePresenter {
+    private let readerSessionIdentity = ReaderSessionIdentity()
 
     /// Set by `presentVoice` when the tap is intercepted. `ReaderDestination`
     /// observes this to drive its upgrade-prompt sheet; `dismissUpgradePrompt()`
@@ -46,6 +47,7 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     func presentVoice(
         bookId: BookID,
         context: ReaderVoiceContext,
+        contextProvider: @escaping ReaderVoiceContextProvider,
         initialQuote: String?
     ) {
         Task {
@@ -60,20 +62,34 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
             let contextSnapshot = BookContextSnapshot(
                 bookId: bookId,
                 currentPage: context.currentPage,
-                pageText: context.pageText,
+                pageText: nil,
                 outline: BookOutlineDTO(
                     title: context.title,
                     author: context.author,
                     chapters: context.chapters
                 ),
-                activeParagraphText: context.activeParagraphText
+                activeParagraphText: nil
             )
+
+            let currentPageProvider: CurrentPageContextProvider = { @MainActor in
+                let latest = try await contextProvider()
+                let availability: CurrentPageContextAvailability =
+                    latest.pageText?.isEmpty == false ? .available : .noText
+                return CurrentPageContextResult(
+                    availability: availability,
+                    page: latest.currentPage,
+                    pageText: latest.pageText,
+                    activeParagraphText: latest.activeParagraphText
+                )
+            }
 
             await voicePresenter.start(
                 bookId: bookId,
                 language: voiceLanguageProvider().rawValue,
                 initialQuote: initialQuote,
-                bookContext: contextSnapshot
+                bookContext: contextSnapshot,
+                currentPageProvider: currentPageProvider,
+                readerSessionIdentity: readerSessionIdentity
             )
         }
     }

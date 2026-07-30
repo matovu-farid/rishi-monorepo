@@ -63,7 +63,6 @@ const CreateVoiceSessionBodySchema = z
     language: z.string().optional(),
     bookId: z.string().optional(),
     currentPage: z.number().optional(),
-    pageText: z.string().optional(),
     outline: z
       .object({
         title: z.string(),
@@ -71,7 +70,6 @@ const CreateVoiceSessionBodySchema = z
         chapters: z.array(z.string()),
       })
       .optional(),
-    activeParagraphText: z.string().optional(),
   })
   .partial();
 
@@ -152,9 +150,7 @@ voiceSessionsRoutes.post(
       language: coerceLanguage(body.language),
       bookId: body.bookId,
       currentPage: body.currentPage,
-      pageText: body.pageText,
       outline: body.outline,
-      activeParagraphText: body.activeParagraphText,
     }).then(
       (minted) => {
         emitPhase("openai_mint", mintStartedAt);

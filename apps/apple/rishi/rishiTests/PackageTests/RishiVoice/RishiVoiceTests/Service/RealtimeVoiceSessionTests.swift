@@ -62,6 +62,7 @@ struct RealtimeVoiceSessionTests {
         let firstId = await fakes.session.end()
         #expect(firstId == nil) // legacy flow has no Rishi session id
         #expect(fakes.state.status == .ended)
+        #expect(fakes.client.cancelCurrentResponseCalls == 1)
         #expect(fakes.client.disconnectCalls == 1)
         #expect(await fakes.coordinator.currentMode == .idle)
     }
@@ -261,17 +262,6 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.client.connectCalls == ["k"])
     }
 
-    @Test("Activation handoff defers mic on connect and enables mic before live")
-    func activationHandoffOrdering() async throws {
-        let activation = FakeActivationCoordinator()
-        let fakes = makeSession(micDecision: .granted, activation: activation)
-        await fakes.session.start()
-        #expect(fakes.state.status == .live)
-        #expect(fakes.client.connectDeferMicCapture == [true])
-        #expect(fakes.client.micCaptureEnabledCalls == [true])
-        #expect(await activation.completeHandoffCount == 1)
-    }
-
     @Test("Trial startup exposes live transport before ledger registration completes")
     func trialStartupDoesNotBlockOnCallRegistration() async throws {
         let registrationGate = DelayedTrialRegistrationGate()
@@ -325,8 +315,7 @@ struct RealtimeVoiceSessionTests {
     @MainActor
     private func makeSession(
         micDecision: MicPermissionDecision,
-        keyFetchResult: Result<EphemeralKey, Error> = .success(.init(secret: "k", sessionId: "s")),
-        activation: (any VoiceActivationCoordinating)? = nil
+        keyFetchResult: Result<EphemeralKey, Error> = .success(.init(secret: "k", sessionId: "s"))
     ) -> Fakes {
         let state = VoiceSessionState()
         let configurator = FakeAudioSessionConfigurator()
@@ -341,7 +330,6 @@ struct RealtimeVoiceSessionTests {
             keyFetcher: fetcher,
             client: client,
             state: state,
-            activation: activation,
             backoff: { _ in .zero },     // tests don't wait
             maxReconnects: 3,
             confirmationInterval: .zero  // confirm drops without real delay
@@ -408,18 +396,4 @@ final class FakeMicPermissionGate: MicPermissionGate, @unchecked Sendable {
         requestCount += 1
         return decision
     }
-}
-
-private actor FakeActivationCoordinator: VoiceActivationCoordinating {
-    private(set) var completeHandoffCount = 0
-    var currentActivationID: ActivationID? { nil }
-
-    func beginActivation() async {}
-    func completeHandoff(client: any RealtimeClientAPI) async throws -> HandoffOutcome {
-        completeHandoffCount += 1
-        await client.setMicCaptureEnabled(true)
-        await client.setAssistantOutputEnabled(true)
-        return .liveMicOnly
-    }
-    func cancel() async {}
 }

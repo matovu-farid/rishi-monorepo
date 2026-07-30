@@ -58,7 +58,7 @@ struct RealtimeAPIEndpointTests {
         #expect(json.count == 1)
     }
 
-    @Test("full body uses snake_case wire keys")
+    @Test("full body sends metadata-only wire keys")
     func fullBodyWireKeys() throws {
         let uuid = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let outline = BookOutlineDTO(
@@ -79,8 +79,8 @@ struct RealtimeAPIEndpointTests {
         #expect(json["language"] as? String == "en")
         #expect((json["book_id"] as? String)?.uppercased() == uuid.uuidString.uppercased())
         #expect(json["current_page"] as? Int == 3)
-        #expect(json["page_text"] as? String == "hi")
-        #expect(json["active_paragraph_text"] as? String == "para")
+        #expect(json["page_text"] == nil)
+        #expect(json["active_paragraph_text"] == nil)
 
         let outlineJSON = try #require(json["outline"] as? [String: Any])
         #expect(outlineJSON["title"] as? String == "T")

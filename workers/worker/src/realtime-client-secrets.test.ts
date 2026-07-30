@@ -90,13 +90,11 @@ interface ClientSecretsRequestBody {
   language?: string
   bookId?: string
   currentPage?: number
-  pageText?: string
   outline?: {
     title: string
     author?: string
     chapters: string[]
   }
-  activeParagraphText?: string
 }
 
 async function callClientSecretsPOST(body?: ClientSecretsRequestBody) {
@@ -319,6 +317,20 @@ describe("POST /api/realtime/client_secrets handler", () => {
     expect(capturedBody.session.tools[0].type).toBe("function")
   })
 
+  it("bakes the currentPageContext tool into session.tools", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    await callClientSecretsPOST({ language: "en" })
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    expect(capturedBody.session.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "function",
+          name: "currentPageContext",
+        }),
+      ]),
+    )
+  })
+
   it("pins the bookContext tool's required parameters to ['queryText']", async () => {
     setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
     await callClientSecretsPOST({ language: "en" })
@@ -326,18 +338,18 @@ describe("POST /api/realtime/client_secrets handler", () => {
     expect(capturedBody.session.tools[0].parameters.required).toEqual(["queryText"])
   })
 
-  it("renders book-aware instructions when outline + pageText provided", async () => {
+  it("renders metadata-only instructions when outline is provided", async () => {
     setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
     await callClientSecretsPOST({
       language: "en",
       outline: { title: "Moby Dick", chapters: ["Loomings"] },
-      pageText: "Call me Ishmael.",
     })
     const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
     const instructions = capturedBody.session.instructions
     expect(typeof instructions).toBe("string")
     expect(instructions).toContain("Moby Dick")
-    expect(instructions).toContain("Call me Ishmael.")
+    expect(instructions).not.toContain("Current Page Content")
+    expect(instructions).toContain("currentPageContext")
   })
 
   it("renders non-empty instructions when no book context provided (no undefined/null)", async () => {
@@ -360,6 +372,7 @@ describe("POST /api/realtime/client_secrets handler", () => {
     const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
     expect(capturedBody.session.audio.input.transcription.language).toBe("en")
     expect(capturedBody.session.tools[0].name).toBe("bookContext")
+    expect(capturedBody.session.tools[1].name).toBe("currentPageContext")
   })
 
   it("GET /api/realtime/client_secrets is not registered (returns 404)", async () => {

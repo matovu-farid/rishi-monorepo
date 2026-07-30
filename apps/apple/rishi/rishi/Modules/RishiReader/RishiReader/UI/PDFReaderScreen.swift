@@ -233,6 +233,7 @@ public struct PDFReaderScreen: View {
                                     presenter.presentVoice(
                                         bookId: viewModel.book.id,
                                         context: viewModel.voiceContext(),
+                                        contextProvider: { viewModel.voiceContext() },
                                         initialQuote: quote.isEmpty
                                             ? nil : quote
                                     )

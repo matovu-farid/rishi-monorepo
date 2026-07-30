@@ -232,6 +232,7 @@ struct ReaderDestination: View {
                             voiceEntry.presentVoice(
                                 bookId: vm.book.id,
                                 context: vm.voiceContext(),
+                                contextProvider: { await vm.liveVoiceContext() },
                                 initialQuote: nil
                             )
                         }

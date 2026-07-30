@@ -46,6 +46,8 @@ final class VoiceSessionPresenter {
 
     private(set) var currentBookContext: BookContextSnapshot?
     private(set) var currentLanguage: String = "en"
+    private var currentPageProvider: CurrentPageContextProvider?
+    private var currentReaderSessionIdentity: ReaderSessionIdentity?
 
     private let coordinator: AudioSessionCoordinator
     private let workerClient: WorkerClient
@@ -53,7 +55,6 @@ final class VoiceSessionPresenter {
     private let conversationLookup: ConversationLookup
     private let userIdProvider: @MainActor () -> UserID?
     private let dirtyHook: any VoiceTranscriptDirtyHook
-    private let micGate: any MicPermissionGate
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
     private let bookSearch: (any BookSearch)?
@@ -114,15 +115,6 @@ final class VoiceSessionPresenter {
     /// be created. Survives `clearFailure()` so Try again can unblock the server.
     private var staleRishiSessionId: String?
 
-    /// Owns local PCM capture + VAD during session bootstrap; reused across sessions.
-    private let activationCoordinator = VoiceActivationCoordinator()
-
-    /// Temporarily disable pre-session recorder/VAD capture while keeping the
-    /// realtime session connection and registry lifecycle intact. When this is
-    /// re-enabled, the existing coordinator can be passed back into
-    /// `RealtimeVoiceSession` to restore the PCM handoff path.
-    nonisolated private static let isPreSessionAudioActivationEnabled = false
-
     init(
         coordinator: AudioSessionCoordinator,
         workerClient: WorkerClient,
@@ -157,7 +149,6 @@ final class VoiceSessionPresenter {
         self.conversationLookup = conversationLookup
         self.userIdProvider = userIdProvider
         self.dirtyHook = dirtyHook
-        self.micGate = micGate
         self.dataUseConsentProvider = dataUseConsentProvider
         self.bookSearch = bookSearch
         self.embedderPrewarm = embedderPrewarm
@@ -194,7 +185,9 @@ final class VoiceSessionPresenter {
         bookId: BookID?,
         language: String = "en",
         initialQuote: String? = nil,
-        bookContext: BookContextSnapshot? = nil
+        bookContext: BookContextSnapshot? = nil,
+        currentPageProvider: CurrentPageContextProvider? = nil,
+        readerSessionIdentity: ReaderSessionIdentity? = nil
     ) async {
 
         guard !isStarting else { return }
@@ -216,7 +209,9 @@ final class VoiceSessionPresenter {
             bookId: bookId,
             language: language,
             initialQuote: initialQuote,
-            bookContext: bookContext
+            bookContext: bookContext,
+            currentPageProvider: currentPageProvider,
+            readerSessionIdentity: readerSessionIdentity
         ) {
             return
         }
@@ -241,8 +236,11 @@ final class VoiceSessionPresenter {
         pendingFailure = nil
         currentBookId = bookId
         pendingInitialQuote = initialQuote
-        currentBookContext = bookContext
+        let metadataContext = Self.metadataOnly(bookContext)
+        currentBookContext = metadataContext
         currentLanguage = language
+        self.currentPageProvider = currentPageProvider
+        self.currentReaderSessionIdentity = readerSessionIdentity
 
         // Consent can be revoked while stale-session cleanup and other
         // asynchronous startup work is in flight. Re-check immediately before
@@ -264,24 +262,10 @@ final class VoiceSessionPresenter {
             await self?.requestEnd()
         }
 
-        let micDecision = await micGate.request()
-        guard micDecision == .granted else {
-            startupTrace.mark("mic_permission_denied")
-            state.recordError("Microphone permission denied")
-            enterFailure(reason: .micDenied)
-            return
-        }
-        startupTrace.mark("mic_permission_granted")
-
-        // Acquire audio session BEFORE fetching the key. If the key fetch
-        // fails we already own the session and must release it cleanly.
+        // The realtime SDK requests microphone permission inside connect().
+        // Claim app-level audio ownership before starting session setup.
         await coordinator.requestActiveMode(.voice)
         startupTrace.mark("audio_mode_acquired")
-        let preSessionActivation: (any VoiceActivationCoordinating)? =
-            Self.isPreSessionAudioActivationEnabled ? activationCoordinator : nil
-        if let preSessionActivation {
-            await preSessionActivation.beginActivation()
-        }
 
         async let conversationTask = conversationLookup.findOrCreate(
             userId: userId,
@@ -292,20 +276,20 @@ final class VoiceSessionPresenter {
         let adapter = clientFactory()
         let fetcher = keyFetcherFactory()
 
-        let responderFactory:
-            RealtimeVoiceSession.BookContextResponderFactory? = bookSearch.map {
-                search in
-                return { @Sendable bookId in
-                    BookContextResponder(
-                        client: adapter,
-                        search: search,
-                        bookId: bookId
-                    )
-                }
+        let responderFactory: RealtimeVoiceSession.BookContextResponderFactory?
+        if let bookSearch {
+            responderFactory = { @Sendable bookId in
+                BookContextResponder(client: adapter, search: bookSearch, bookId: bookId)
             }
+        } else if currentPageProvider != nil {
+            responderFactory = { @Sendable bookId in
+                BookContextResponder(client: adapter, bookId: bookId)
+            }
+        } else {
+            responderFactory = nil
+        }
 
         let session = RealtimeVoiceSession(
-            micGate: micGate,
             coordinator: coordinator,
             keyFetcher: fetcher,
             client: adapter,
@@ -314,8 +298,9 @@ final class VoiceSessionPresenter {
             sessionCoordinator: sessionCoordinatorFactory(),
             controlSocketFactory: controlSocketFactory,
             responderFactory: responderFactory,
-            embedderPrewarm: embedderPrewarm,
-            activation: preSessionActivation
+            currentPageProvider: currentPageProvider,
+            readerSessionIdentity: readerSessionIdentity,
+            embedderPrewarm: embedderPrewarm
         )
         self.session = session
         await sessionRegistry.register(session)
@@ -329,10 +314,10 @@ final class VoiceSessionPresenter {
         await session.start(
             language: language,
             bookId: bookId,
-            currentPage: bookContext?.currentPage,
-            pageText: bookContext?.pageText,
-            outline: bookContext?.outline,
-            activeParagraphText: bookContext?.activeParagraphText,
+            currentPage: metadataContext?.currentPage,
+            pageText: nil,
+            outline: metadataContext?.outline,
+            activeParagraphText: nil,
             preflighted: true
         )
         startupTrace.mark("transport_start_returned", data: [
@@ -355,7 +340,6 @@ final class VoiceSessionPresenter {
                 bridgeTask = nil
             }
             guard !Task.isCancelled else { return }
-            await activationCoordinator.cancel()
             Log.event(
                 "voice.presenter.lookup.failed",
                 level: .error,
@@ -414,13 +398,14 @@ final class VoiceSessionPresenter {
             ])
             await resolveServerAlreadyActiveConflict()
             state.reset()
+            let metadataContext = Self.metadataOnly(bookContext)
             await session.start(
                 language: language,
                 bookId: bookId,
-                currentPage: bookContext?.currentPage,
-                pageText: bookContext?.pageText,
-                outline: bookContext?.outline,
-                activeParagraphText: bookContext?.activeParagraphText
+                currentPage: metadataContext?.currentPage,
+                pageText: nil,
+                outline: metadataContext?.outline,
+                activeParagraphText: nil
             )
         }
 
@@ -462,10 +447,13 @@ final class VoiceSessionPresenter {
         bookId: BookID?,
         language: String,
         initialQuote: String?,
-        bookContext: BookContextSnapshot?
+        bookContext: BookContextSnapshot?,
+        currentPageProvider: CurrentPageContextProvider?,
+        readerSessionIdentity: ReaderSessionIdentity?
     ) async -> Bool {
         guard let session, !isPresenting else { return false }
         guard sessionRegistry.state == .parked else { return false }
+        guard session.readerSessionIdentity == readerSessionIdentity else { return false }
         if case .failed = state.status { return false }
         if case .ended = state.status { return false }
 
@@ -474,13 +462,27 @@ final class VoiceSessionPresenter {
         pendingFailure = nil
         currentBookId = bookId
         pendingInitialQuote = initialQuote
-        currentBookContext = bookContext
+        let metadataContext = Self.metadataOnly(bookContext)
+        currentBookContext = metadataContext
         currentLanguage = language
+        self.currentPageProvider = currentPageProvider
+        self.currentReaderSessionIdentity = readerSessionIdentity
 
         state.reset()
-        await session.updateReaderContext(language: language, bookContext: bookContext)
+        await session.updateReaderContext(language: language, bookContext: metadataContext)
         await sessionRegistry.resume()
         return true
+    }
+
+    private static func metadataOnly(_ context: BookContextSnapshot?) -> BookContextSnapshot? {
+        guard let context else { return nil }
+        return BookContextSnapshot(
+            bookId: context.bookId,
+            currentPage: context.currentPage,
+            pageText: nil,
+            outline: context.outline,
+            activeParagraphText: nil
+        )
     }
 
     /// Optimistic End: dismiss the cover immediately, tear down local
@@ -494,8 +496,6 @@ final class VoiceSessionPresenter {
         guard !isRequestingEnd else { return }
         isRequestingEnd = true
 
-        await activationCoordinator.cancel()
-
         // Dismiss first — before local teardown / delivery.
         isPresenting = false
 
@@ -508,6 +508,8 @@ final class VoiceSessionPresenter {
         pendingInitialQuote = nil
         currentBookContext = nil
         currentLanguage = "en"
+        currentPageProvider = nil
+        currentReaderSessionIdentity = nil
 
         // Release the End flight before background delivery so a new session
         // can start and End without waiting on hangup retries.
@@ -682,9 +684,18 @@ final class VoiceSessionPresenter {
         let quote = pendingInitialQuote
         let context = currentBookContext
         let language = currentLanguage
+        let pageProvider = currentPageProvider
+        let readerIdentity = currentReaderSessionIdentity
         clearFailure()
         await endStaleServerSessionIfNeeded()
-        await start(bookId: bookId, language: language, initialQuote: quote, bookContext: context)
+        await start(
+            bookId: bookId,
+            language: language,
+            initialQuote: quote,
+            bookContext: context,
+            currentPageProvider: pageProvider,
+            readerSessionIdentity: readerIdentity
+        )
     }
 
     /// Dismiss the consent-specific alert without discarding the failed
@@ -709,7 +720,6 @@ final class VoiceSessionPresenter {
         }
         failure = nil
         pendingFailure = nil
-        Task { await activationCoordinator.cancel() }
         bridgeTask?.cancel()
         bridgeTask = nil
         session = nil

@@ -22,8 +22,6 @@ typealias SDKSession = RealtimeSession
 /// conformer that holds the `Conversation` + stream continuations under the lock
 /// and delegates to four INTERNAL collaborators it constructs itself (so the
 /// public `init()` signature is unchanged and AppDependencies is untouched):
-///   - `WebRTCAudioUnitController` — process-global WebRTC audio-unit control.
-///   - `RealtimeSessionConfigBuilder` — OpenAI session/audio config.
 ///   - `RealtimeEventPump` — the three SDK→stream polling loops + dedupe.
 ///   - `RealtimeToolCallDispatcher` — tool-call readiness + result encoding.
 ///
@@ -64,21 +62,8 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     // Internal collaborators — constructed here so the public `init()` is
     // unchanged. `let` (stateless / handle-holding); behavior identical.
-    private let audioUnit = WebRTCAudioUnitController()
-    private let configBuilder = RealtimeSessionConfigBuilder()
     private let toolDispatcher = RealtimeToolCallDispatcher()
     private let pump = RealtimeEventPump()
-
-    /// When false, handoff is in progress and assistant output should stay gated
-    /// until live mic cutover (VoIP unit remains off until `setMicCaptureEnabled`).
-    private var assistantOutputEnabled = true
-
-    /// Bytes per 100 ms chunk at 24 kHz mono PCM16 (inject Path 0B fallback).
-    private static let pcmAppendChunkBytes = 4_800
-    /// OpenAI rejects `input_audio_buffer.commit` below 100 ms of PCM16 @ 24 kHz.
-    private static let minInputAudioBufferCommitBytes = 4_800
-    /// Path 0A (`conversation.item.create` + audio) — prefer under this size.
-    private static let maxSendUserAudioBytes = 256 * 1024
 
     /// See the `_providerCallId` doc comment above for the full contract.
     public var providerCallId: String? {
@@ -94,7 +79,6 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// never create two peers.
     public func prewarm() async {
         Log.event("voice.adapter.prewarm.begin", level: .info)
-        audioUnit.enableManualModeOnce()
         let task: Task<SDKConversation, Never>? = lock.withLock {
             guard conversation == nil else { return nil }
             if let prewarmTask { return prewarmTask }
@@ -115,10 +99,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         }
     }
 
-    // MARK: - White-box test seams (preserved)
-
-    // These forward to the pump / config builder / dispatcher so the existing
-    // `@testable` tests keep pointing at the same symbols after decomposition.
+    // MARK: - White-box test seams
 
     internal var errorPump: Task<Void, Never>? {
         get { pump.errorPump }
@@ -133,95 +114,6 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     internal var toolCallPump: Task<Void, Never>? {
         get { pump.toolCallPump }
         set { pump.toolCallPump = newValue }
-    }
-
-    static func makePCM24kFormat() -> SDKSession.AudioFormat {
-        RealtimeSessionConfigBuilder.makePCM24kFormat()
-    }
-
-    static var inputNoiseReduction: SDKSession.Audio.Input.NoiseReduction {
-        RealtimeSessionConfigBuilder.inputNoiseReduction
-    }
-
-    /// Build the exact realtime session payload the adapter hands to the SDK.
-    /// Exposed internally so tests can verify adapter wiring without needing a
-    /// live WebRTC peer.
-    internal func makeConfiguredSession(
-        bookContext: BookContextSnapshot?,
-        language: String? = "en"
-    ) -> SDKSession {
-        var session = SDKSession(
-            audio: configBuilder.makeSessionAudio(language: language),
-            instructions: ""
-        )
-        configBuilder.configure(session: &session, bookContext: bookContext, language: language)
-        return session
-    }
-
-    /// Wait for the realtime session to become visible on the conversation and
-    /// confirm that the expected book tool config landed. The prompt text is
-    /// rendered by the Worker and can legitimately differ between clients;
-    /// the tool definition is the stable readiness contract.
-    static func waitUntilConfiguredSession(
-        timeout: Duration = .seconds(5),
-        pollInterval: Duration = .milliseconds(15),
-        sessionSnapshot: @escaping @Sendable () async -> SDKSession?
-    ) async throws -> SDKSession {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-
-        while clock.now < deadline {
-            if let session = await sessionSnapshot(),
-               sessionHasBookContext(session) {
-                return session
-            }
-            try await Task.sleep(for: pollInterval)
-        }
-
-        if let session = await sessionSnapshot(),
-           sessionHasBookContext(session) {
-            return session
-        }
-
-        throw RealtimeClientError(
-            code: "session_not_ready",
-            message: "Realtime session never exposed the configured book tool and instructions"
-        )
-    }
-
-    /// Event-driven counterpart to the legacy snapshot polling seam. The SDK
-    /// buffers session updates, so this remains race-free even when the
-    /// session-created/session-updated events arrive during `connect()`.
-    static func waitUntilConfiguredSession(
-        timeout: Duration = .seconds(5),
-        sessionUpdates: AsyncStream<SDKSession>
-    ) async throws -> SDKSession {
-        try await withThrowingTaskGroup(of: SDKSession.self) { group in
-            group.addTask {
-                for await session in sessionUpdates {
-                    if sessionHasBookContext(session) { return session }
-                }
-                throw RealtimeClientError(
-                    code: "session_not_ready",
-                    message: "Realtime session updates ended before configuration was observed"
-                )
-            }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw RealtimeClientError(
-                    code: "session_not_ready",
-                    message: "Realtime session never exposed the configured book tool and instructions"
-                )
-            }
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else {
-                throw RealtimeClientError(
-                    code: "session_not_ready",
-                    message: "Realtime session readiness task ended without a result"
-                )
-            }
-            return result
-        }
     }
 
     internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
@@ -246,26 +138,19 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // the stream continuations.
         // Ensure WebRTC manual-audio mode is on exactly once (process-global,
         // idempotent), BEFORE any WebRTC audio init.
-        audioUnit.enableManualModeOnce()
-        // A reconnect may carry a newer page/paragraph snapshot than the
-        // ephemeral key was minted with. The first connection can trust the
-        // server-minted configuration (and avoid `session.update`); only a
-        // reconnect needs to re-apply the latest client context.
+        // A reconnect may carry a newer page snapshot than the ephemeral key
+        // was minted with. The SDK update below applies the current
+        // Apple-side tool and instructions in both cases.
         let isReconnect = lock.withLock { conversation != nil }
         await teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info, data: [
             "is_reconnect": String(isReconnect),
-            "defer_mic_capture": String(deferMicCapture),
+            "defer_mic_capture_ignored": String(deferMicCapture),
             "has_book_context": String(bookContext != nil),
         ])
-        // The ephemeral client secret is minted with the complete session
-        // configuration (prompt, tools, VAD, and audio formats) by the
-        // Worker. Passing a session-update callback here would send the same
-        // configuration again after `session.created`, forcing an additional
-        // data-channel round trip before audio can flow. Keep the server's
-        // configuration authoritative for the initial connection; reconnects
-        // re-apply the latest page context above, while `sessionUpdates` below
-        // validates that the resulting configuration arrived.
+        // The Worker supplies server-owned audio/VAD/voice defaults. The SDK
+        // update below starts from that session and changes only the fields
+        // owned by this client.
         // A prewarmed peer is valid only for the first connection. If this is
         // a reconnect, discard the pending task and construct a fresh peer —
         // WebRTC does not permit reusing a closed connection.
@@ -283,25 +168,13 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             convo = await pendingPrewarm.value
         } else {
             Log.event("voice.adapter.peer_source", level: .info, data: ["source": "new"])
-            convo = await MainActor.run { () -> SDKConversation in
-                if isReconnect {
-                    return SDKConversation(debug: false) { [self] session in
-                        session = makeConfiguredSession(bookContext: bookContext, language: language)
-                    }
-                }
-                return SDKConversation(debug: false)
-            }
+            convo = await MainActor.run { SDKConversation(debug: false) }
         }
-        Log.event(
-            isReconnect ? "voice.adapter.session.update.reconnect" : "voice.adapter.session.update.server_minted",
-            level: .info
-        )
         // Capture the SDK's buffered readiness streams before beginning the
         // handshake. The data channel and session events can arrive before
         // `Conversation.connect()` returns, so subscribing afterward would
         // reintroduce a race and force us back to polling snapshots.
         let statusUpdates = await MainActor.run { convo.statusUpdates }
-        let sessionUpdates = await MainActor.run { convo.sessionUpdates }
         lock.withLock { self.conversation = convo }
         let capturedProviderCallId = try await convo.connect(
             ephemeralKey: ephemeralKey
@@ -337,49 +210,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         }
         Log.event("voice.adapter.connected", level: .info)
 
-        // The initial ephemeral secret already contains the complete session
-        // configuration. Waiting for `session.created` here adds avoidable
-        // latency and can strand the UI in Connecting if a provider event is
-        // delayed even though the data channel is usable. Reconnects still
-        // wait for the updated snapshot because they intentionally refresh
-        // page context through `session.update`.
-        let sessionSnapshot: SDKSession?
-        if isReconnect {
-            Log.event("voice.adapter.session.wait.reconnect", level: .info)
-            sessionSnapshot = try await Self.waitUntilConfiguredSession(sessionUpdates: sessionUpdates)
-        } else {
-            Log.event("voice.adapter.session.server_minted_no_wait", level: .info)
-            sessionSnapshot = await MainActor.run { convo.session }
-        }
-        let entryCount = await MainActor.run { convo.entries.count }
-        Log.event("voice.adapter.session.snapshot", level: .info, data: [
-            "hasSession": String(sessionSnapshot != nil),
-            "entryCount": String(entryCount),
-            "toolCount": String(sessionSnapshot?.tools?.count ?? 0),
-            "hasBookTool": String(sessionSnapshot.map(Self.sessionHasBookContext) ?? false),
-            "toolChoice": String(describing: sessionSnapshot?.toolChoice),
-            "instructionsBytes": String(sessionSnapshot?.instructions.utf8.count ?? 0),
-            "instructionsHasBookContext": String(sessionSnapshot?.instructions.contains("bookContext") ?? false),
-        ])
-
-        // Activation handoff: keep the VoIP unit OFF until local AVAudioEngine
-        // has stopped — dual capture (engine + LKRTCAudioSession) drops ICE.
-        // Non-deferred connect (incl. reconnect) initializes audio here.
-        if deferMicCapture {
-            Log.event("voice.adapter.audio.setup.deferred", level: .info)
-            await MainActor.run { convo.muted = true }
-            assistantOutputEnabled = false
-        } else {
-            Log.event("voice.adapter.audio.setup.enabling", level: .info)
-            audioUnit.enableAudioUnit()
-            assistantOutputEnabled = true
-        }
+        // The SDK owns the session configuration and default WebRTC audio
+        // lifecycle. Apple does not send a session.update or manually toggle
+        // the WebRTC audio unit here.
         startPumps(for: convo)
-    }
-
-    public func setAssistantOutputEnabled(_ enabled: Bool) async {
-        assistantOutputEnabled = enabled
-        audioUnit.setAudioEnabled(enabled)
     }
 
     public func setMicCaptureEnabled(_ enabled: Bool) async {
@@ -391,11 +225,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             return
         }
 
-        // First VoIP init happens here for activation handoff — after the
-        // activation recorder has stopped and the input route has settled.
-        audioUnit.enableAudioUnit()
         await MainActor.run { convo.muted = false }
-        assistantOutputEnabled = true
     }
 
     public func cancelCurrentResponse() async {
@@ -406,91 +236,6 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             guard case .connected = convo.status else { return }
             try? convo.send(event: .cancelResponse())
         }
-    }
-
-    public func injectBufferedInputAudio(_ pcm16le24kMono: Data) async throws -> HandoffAcceptance {
-        guard !pcm16le24kMono.isEmpty else { return .noSpeech }
-        let convo: SDKConversation? = lock.withLock { conversation }
-        guard let convo else {
-            throw RealtimeClientError(
-                code: "not_connected",
-                message: "Cannot inject audio: not connected"
-            )
-        }
-
-        if pcm16le24kMono.count <= Self.maxSendUserAudioBytes {
-            try await MainActor.run {
-                try Self.sendPath0A(pcm16le24kMono, on: convo)
-            }
-            return .accepted(path: .path0A)
-        }
-
-        if pcm16le24kMono.count >= Self.minInputAudioBufferCommitBytes {
-            return try await injectPath0B(pcm16le24kMono, on: convo)
-        }
-
-        return .rejected(path: .path0A, code: "inject_audio_too_small")
-    }
-
-    public func injectBufferedInputText(_ text: String) async throws -> HandoffAcceptance {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return .noSpeech }
-        let convo: SDKConversation? = lock.withLock { conversation }
-        guard let convo else {
-            throw RealtimeClientError(
-                code: "not_connected",
-                message: "Cannot inject text: not connected"
-            )
-        }
-        try await MainActor.run {
-            try convo.send(from: .user, text: trimmed)
-        }
-        return .accepted(path: .path0C)
-    }
-
-    @MainActor
-    private static func sendPath0A(_ pcm16le24kMono: Data, on convo: SDKConversation) throws {
-        let itemId = "act_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
-        try convo.send(event: .createConversationItem(after: nil, .message(Item.Message(
-            id: itemId,
-            role: .user,
-            content: [.inputAudio(.init(audio: pcm16le24kMono))]
-        ))))
-        try convo.send(event: .createResponse(using: nil))
-    }
-
-    private func injectPath0B(
-        _ pcm16le24kMono: Data,
-        on convo: SDKConversation
-    ) async throws -> HandoffAcceptance {
-        try await MainActor.run {
-            try Self.injectViaAudioBuffer(pcm16le24kMono, on: convo)
-        }
-        return .accepted(path: .path0B)
-    }
-
-    /// Path 0B: stream PCM into the server input buffer, then commit + respond.
-    @MainActor
-    private static func injectViaAudioBuffer(_ pcm16le24kMono: Data, on convo: SDKConversation) throws {
-        guard pcm16le24kMono.count >= minInputAudioBufferCommitBytes else {
-            throw RealtimeClientError(
-                code: "inject_audio_too_small",
-                message: "Cannot commit input audio buffer shorter than 100ms"
-            )
-        }
-        try convo.send(event: .clearInputAudioBuffer())
-        var offset = pcm16le24kMono.startIndex
-        while offset < pcm16le24kMono.endIndex {
-            let end = pcm16le24kMono.index(
-                offset,
-                offsetBy: pcmAppendChunkBytes,
-                limitedBy: pcm16le24kMono.endIndex
-            ) ?? pcm16le24kMono.endIndex
-            try convo.send(audioDelta: Data(pcm16le24kMono[offset..<end]), commit: false)
-            offset = end
-        }
-        try convo.send(event: .commitInputAudioBuffer())
-        try convo.send(event: .createResponse(using: nil))
     }
 
     /// Polls `isConnected` until it returns true or `timeout` elapses, throwing
@@ -600,15 +345,6 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         txCont?.finish()
         tcCont?.finish()
 
-        // Stop + uninitialize WebRTC's VoIP audio unit on FULL session end so the
-        // next session's connect() forces a clean re-init. Deliberately NOT done
-        // in teardownActiveConversation() — that helper also runs at the top of
-        // connect() on the in-session RECONNECT path, where disabling audio would
-        // kill a live reconnect. Only full disconnect() flips it false. The
-        // AVAudioSession is still active here (the session calls
-        // coordinator.releaseActiveMode(.voice) AFTER client.disconnect()).
-        audioUnit.disableAudioUnit()
-
         Log.event("voice.adapter.disconnected", level: .info)
     }
 
@@ -685,11 +421,4 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         )
     }
 
-    private static func sessionHasBookContext(_ session: SDKSession) -> Bool {
-        session.toolChoice == .auto
-            && session.tools?.contains { tool in
-                guard case let .function(function) = tool else { return false }
-                return function.name == "bookContext"
-            } == true
-    }
 }

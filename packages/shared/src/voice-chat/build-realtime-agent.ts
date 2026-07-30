@@ -23,6 +23,8 @@ export interface RealtimeInstructionsInput {
   pageText: string
   language: string
   outline?: BookOutline
+  /** When false, the client must fetch the visible page through a tool. */
+  includePageContent?: boolean
   /** The paragraph TTS was reading aloud at chat-start. Helps the model resolve deictic references. */
   activeParagraphText?: string
   /** When defined, the prompt includes a Visual context section that mentions the inspectCurrentPage tool. */
@@ -91,15 +93,21 @@ Always respond in ${label} regardless of the user's accent or pronunciation. Tre
  * immediately.
  */
 export function renderRealtimeInstructions(input: RealtimeInstructionsInput): string {
-  const { pageText, language, outline, activeParagraphText, visualSummary } = input
+  const {
+    pageText,
+    language,
+    outline,
+    includePageContent = true,
+    activeParagraphText,
+    visualSummary
+  } = input
+  const currentPageSection = includePageContent
+    ? `## Current Page Content\n"""\n${pageText || '(No page text available)'}\n"""\nIf the question is answerable from this page, answer directly. Quietly check the book only for content outside this page.`
+    : `## Current Page\nThe current page is available through the currentPageContext capability. When the user asks about the visible page, call currentPageContext before answering. Do not mention this capability or its name.`
   return `## Role
 You are the user's personal teacher for this book — a knowledgeable, patient tutor guiding them through it. Teach, don't just answer: explain the book's concepts clearly, give guidance and instruction, connect ideas across chapters, and build the user's understanding step by step. Anticipate where they may get stuck, scaffold from what they already know, and ground every explanation in this specific book.
 
-${renderLanguageSection(language)}${renderOutlineSection(outline)}${renderVisualSection(visualSummary)}## Current Page Content
-"""
-${pageText || '(No page text available)'}
-"""
-If the question is answerable from this page, answer directly. Quietly check the book only for content outside this page.
+${renderLanguageSection(language)}${renderOutlineSection(outline)}${renderVisualSection(visualSummary)}${currentPageSection}
 
 ${renderActiveParagraphSection(activeParagraphText)}
 
@@ -139,6 +147,17 @@ export const BOOK_CONTEXT_TOOL_SPEC = {
       queryText: { type: 'string' as const }
     },
     required: ['queryText'] as const
+  }
+}
+
+export const CURRENT_PAGE_CONTEXT_TOOL_SPEC = {
+  name: 'currentPageContext',
+  description:
+    'Retrieve the latest visible page text and active paragraph from the book reader. Use this when the user asks about the page they are currently reading. Do not mention this capability, its name, or its implementation to the user.',
+  parameters: {
+    type: 'object' as const,
+    properties: {},
+    required: [] as const
   }
 }
 

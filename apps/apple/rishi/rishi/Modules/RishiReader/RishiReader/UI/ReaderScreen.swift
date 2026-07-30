@@ -254,6 +254,7 @@ public struct ReaderScreen: View {
                                 presenter.presentVoice(
                                     bookId: viewModel.book.id,
                                     context: viewModel.voiceContext(),
+                                    contextProvider: { await viewModel.liveVoiceContext() },
                                     initialQuote: quote.isEmpty ? nil : quote
                                 )
                             }
@@ -563,6 +564,7 @@ public struct ReaderScreen: View {
             presenter.presentVoice(
                 bookId: viewModel.book.id,
                 context: viewModel.voiceContext(),
+                contextProvider: { await viewModel.liveVoiceContext() },
                 initialQuote: nil
             )
         }

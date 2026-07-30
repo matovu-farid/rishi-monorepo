@@ -51,7 +51,7 @@ public struct ReaderToolBar: ViewModifier {
                     if let voicePresenter {
                         Button {
                             chrome.userActivity()
-                            voicePresenter.presentVoice(bookId: viewModel.book.id, context: viewModel.voiceContext(), initialQuote: nil)
+                            voicePresenter.presentVoice(bookId: viewModel.book.id, context: viewModel.voiceContext(), contextProvider: { viewModel.voiceContext() }, initialQuote: nil)
                         } label: { Image(systemName: "waveform.circle.fill") }
                             .popoverTip(voiceChatTip)
                             .accessibilityIdentifier("reader.toolbar.voice")
@@ -115,6 +115,7 @@ public struct ReaderToolBar: ViewModifier {
                             voicePresenter.presentVoice(
                                 bookId: viewModel.book.id,
                                 context: viewModel.voiceContext(),
+                                contextProvider: { viewModel.voiceContext() },
                                 initialQuote: nil
                             )
                         } label: {
