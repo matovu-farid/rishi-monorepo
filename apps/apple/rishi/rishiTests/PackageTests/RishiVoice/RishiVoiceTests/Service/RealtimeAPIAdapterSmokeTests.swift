@@ -39,6 +39,34 @@ struct RealtimeAPIAdapterSmokeTests {
         await adapter.disconnect()
     }
 
+    @Test("Tool calls emitted before subscription are replayed")
+    func earlyToolCallIsNotDropped() async {
+        let adapter = RealtimeAPIAdapter()
+        let event = RealtimeToolCallEvent(callId: "early", name: "bookContext", argumentsJSON: "{}")
+        adapter.emitToolCallForTesting(event)
+
+        var iterator = adapter.toolCallStream().makeAsyncIterator()
+        let received = await iterator.next()
+        #expect(received == event)
+    }
+
+    @Test("Early and live tool calls preserve FIFO order")
+    func earlyAndLiveToolCallsPreserveFIFOOrder() async {
+        let adapter = RealtimeAPIAdapter()
+        let earlyOne = RealtimeToolCallEvent(callId: "early-1", name: "bookContext", argumentsJSON: "{}")
+        let earlyTwo = RealtimeToolCallEvent(callId: "early-2", name: "currentPageContext", argumentsJSON: "{}")
+        let live = RealtimeToolCallEvent(callId: "live", name: "chapterIndex", argumentsJSON: "{}")
+
+        adapter.emitToolCallForTesting(earlyOne)
+        adapter.emitToolCallForTesting(earlyTwo)
+        var iterator = adapter.toolCallStream().makeAsyncIterator()
+        adapter.emitToolCallForTesting(live)
+
+        #expect(await iterator.next()?.callId == "early-1")
+        #expect(await iterator.next()?.callId == "early-2")
+        #expect(await iterator.next()?.callId == "live")
+    }
+
     @Test("FakeRealtimeClient records connect call + transitions to connected")
     func fakeRecordsConnect() async throws {
         let fake = FakeRealtimeClient()

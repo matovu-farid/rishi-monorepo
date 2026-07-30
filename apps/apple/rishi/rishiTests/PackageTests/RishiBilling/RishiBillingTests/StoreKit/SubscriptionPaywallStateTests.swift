@@ -1,5 +1,6 @@
 @testable import rishi
 import StoreKit
+import SwiftUI
 import Testing
 
 @Suite("Subscription paywall state")

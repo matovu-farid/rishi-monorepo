@@ -14,7 +14,6 @@ struct RishiAuthTokenProviderTests {
             token: token,
             userId: "001234.abcdef0123456789.1234",
             email: nil,
-            provider: .apple,
             issuedAt: Date(),
             expiresAt: nil
         )

@@ -93,6 +93,36 @@ struct BookContextResponderCancellationTests {
         #expect(sent.count == 1)
         #expect(sent.first?.callId == "c-ok")
     }
+
+    @Test
+    func cancellationDuringChapterIndex_skipsSendToolResult() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let coordinator = ChapterIndexCoordinator(
+            persistence: CancellationChapterIndexPersistence(),
+            source: CancellationChapterSource(),
+            summarizer: CancellationBlockingSummarizer(),
+            timeout: .seconds(10)
+        )
+        let responder = BookContextResponder(
+            client: fake,
+            bookId: UUID(),
+            chapterIndexCoordinator: coordinator,
+            chapterIndexContentVersion: "v1"
+        )
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+
+        fake.inject(toolCall: RealtimeToolCallEvent(
+            callId: "chapter-cancelled",
+            name: "chapterIndex",
+            argumentsJSON: "{}"
+        ))
+        try await Task.sleep(nanoseconds: 80_000_000)
+        consumeTask.cancel()
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        #expect(fake.sentToolResultsSnapshot().isEmpty)
+    }
 }
 
 // MARK: - Test fixtures
@@ -114,4 +144,25 @@ private actor DelayingSearch: BookSearch {
     }
 
     func status(bookId: UUID) async -> BookSearchStatus { .ready }
+}
+
+private actor CancellationChapterIndexPersistence: ChapterIndexPersistence {
+    func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+    func upsertChapterIndex(_ index: ChapterIndex) async throws {}
+}
+
+private struct CancellationChapterSource: ChapterSource {
+    func chapters() async -> ChapterSourceResult {
+        ChapterSourceResult(
+            availability: .available,
+            records: [ChapterSourceRecord(id: "c1", name: "One", locator: .epub(href: "one.xhtml"), text: "text")]
+        )
+    }
+}
+
+private actor CancellationBlockingSummarizer: ChapterSummarizing {
+    func summarize(chapter: ChapterSourceRecord) async throws -> ChapterSummary {
+        try await Task.sleep(for: .seconds(5))
+        return .init(id: chapter.id, name: chapter.name, summary: "Summary")
+    }
 }

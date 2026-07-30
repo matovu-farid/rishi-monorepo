@@ -56,6 +56,7 @@ struct RealtimeVoiceSessionBookContextTests {
         let fakes = makeSession(micDecision: .granted)
         let bookId = UUID()
         await fakes.session.start(language: "en", bookId: bookId)
+        try await Task.sleep(nanoseconds: 100_000_000)
 
         #expect(fakes.state.status == .live)
         #expect(fakes.responderFactoryBox.callCount() == 1)
@@ -105,6 +106,58 @@ struct RealtimeVoiceSessionBookContextTests {
         #expect(fakes.fetcher.lastLanguage() == "en")
         #expect(fakes.client.connectBookContexts.count == 1)
         #expect(fakes.client.connectBookContexts[0] == snapshot)
+
+        await fakes.session.end()
+    }
+
+    @Test("chapter-index responder is constructed with coordinator context")
+    func chapterIndexResponderFactoryReceivesCoordinator() async throws {
+        let construction = ChapterIndexResponderConstructionBox()
+        let chapterCoordinator = ChapterIndexCoordinator(
+            persistence: ConstructionChapterIndexPersistence(),
+            source: ConstructionChapterSource(),
+            summarizer: ConstructionChapterSummarizer()
+        )
+        let fakes = makeSession(
+            micDecision: .granted,
+            chapterIndexResponderFactory: construction.factory(),
+            chapterIndexCoordinatorFactory: { _, _ in chapterCoordinator },
+            chapterIndexContentVersionProvider: { _ in "v1" }
+        )
+        construction.setClient(fakes.client)
+        await fakes.session.start(language: "en", bookId: UUID())
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(construction.receivedCoordinator)
+        #expect(construction.receivedContentVersion == "v1")
+        await fakes.session.end()
+    }
+
+    @Test("book, current-page, and chapter-index events each produce one result")
+    func multipleResponderFactoriesDoNotDuplicateToolResults() async throws {
+        let construction = ChapterIndexResponderConstructionBox()
+        let fakes = makeSession(
+            micDecision: .granted,
+            chapterIndexResponderFactory: construction.factory(),
+            chapterIndexContentVersionProvider: { _ in "v1" }
+        )
+        construction.setClient(fakes.client)
+        await fakes.session.start(language: "en", bookId: UUID())
+
+        fakes.client.inject(toolCall: RealtimeToolCallEvent(
+            callId: "book", name: "bookContext", argumentsJSON: "{\"queryText\":\"hello\"}"
+        ))
+        fakes.client.inject(toolCall: RealtimeToolCallEvent(
+            callId: "page", name: "currentPageContext", argumentsJSON: "{}"
+        ))
+        fakes.client.inject(toolCall: RealtimeToolCallEvent(
+            callId: "chapter", name: "chapterIndex", argumentsJSON: "{}"
+        ))
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let results = fakes.client.sentToolResultsSnapshot()
+        #expect(results.count == 3)
+        #expect(results.map { $0.callId }.sorted() == ["book", "chapter", "page"])
 
         await fakes.session.end()
     }
@@ -199,13 +252,15 @@ struct RealtimeVoiceSessionBookContextTests {
     private func makeSession(
         micDecision: MicPermissionDecision,
         fetcher: (any BookContextCapturingFetcher)? = nil,
-        prewarmBox: PrewarmCallBox? = nil
+        prewarmBox: PrewarmCallBox? = nil,
+        chapterIndexResponderFactory: RealtimeVoiceSession.ChapterIndexBookContextResponderFactory? = nil,
+        chapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory? = nil,
+        chapterIndexContentVersionProvider: (@Sendable (UUID) async -> String?)? = nil
     ) -> Fakes {
         let state = VoiceSessionState()
         let configurator = FakeAudioSessionConfigurator()
         let coordinator = AudioSessionCoordinator(configurator: configurator)
         let client = FakeRealtimeClient()
-        let micGate = FakeMicPermissionGate(decision: micDecision)
         let usedFetcher: any BookContextCapturingFetcher = fetcher ?? CapturingEphemeralKeyFetcher(
             result: .success(.init(secret: "k", sessionId: "s"))
         )
@@ -213,12 +268,14 @@ struct RealtimeVoiceSessionBookContextTests {
         let responderFactoryBox = ResponderFactoryBox(client: client)
 
         let session = RealtimeVoiceSession(
-            micGate: micGate,
             coordinator: coordinator,
             keyFetcher: usedFetcher,
             client: client,
             state: state,
             responderFactory: responderFactoryBox.factory(),
+            chapterIndexResponderFactory: chapterIndexResponderFactory,
+            chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
+            chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
             embedderPrewarm: usedPrewarm.prewarmClosure(),
             backoff: { _ in .zero },
             maxReconnects: 3
@@ -386,5 +443,56 @@ final class ResponderFactoryBox {
                 bookId: bookId
             )
         }
+    }
+}
+
+private final class ChapterIndexResponderConstructionBox: @unchecked Sendable {
+    private var client: FakeRealtimeClient?
+    private let lock = NSLock()
+    private var coordinatorReceived = false
+    private var contentVersion: String?
+
+    init(client: FakeRealtimeClient? = nil) { self.client = client }
+
+    func setClient(_ client: FakeRealtimeClient) {
+        lock.withLock { self.client = client }
+    }
+
+    var receivedCoordinator: Bool { lock.withLock { coordinatorReceived } }
+    var receivedContentVersion: String? { lock.withLock { contentVersion } }
+
+    func factory() -> RealtimeVoiceSession.ChapterIndexBookContextResponderFactory {
+        { [self] bookId, coordinator, contentVersion in
+            lock.withLock {
+                coordinatorReceived = coordinator != nil
+                self.contentVersion = contentVersion
+            }
+            return BookContextResponder(
+                client: client!,
+                bookId: bookId,
+                chapterIndexCoordinator: coordinator,
+                chapterIndexContentVersion: contentVersion
+            )
+        }
+    }
+}
+
+private actor ConstructionChapterIndexPersistence: ChapterIndexPersistence {
+    func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+    func upsertChapterIndex(_ index: ChapterIndex) async throws {}
+}
+
+private struct ConstructionChapterSource: ChapterSource {
+    func chapters() async -> ChapterSourceResult {
+        ChapterSourceResult(
+            availability: .unavailable(diagnostics: ["test"]),
+            records: []
+        )
+    }
+}
+
+private struct ConstructionChapterSummarizer: ChapterSummarizing {
+    func summarize(chapter: ChapterSourceRecord) async throws -> ChapterSummary {
+        .init(id: chapter.id, name: chapter.name, summary: chapter.text)
     }
 }

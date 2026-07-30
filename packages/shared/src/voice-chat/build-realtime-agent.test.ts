@@ -9,6 +9,7 @@ import {
   END_CONVERSATION_TOOL_SPEC,
   INSPECT_CURRENT_PAGE_TOOL_SPEC
 } from './build-realtime-agent'
+import { CHAPTER_INDEX_TOOL_SPEC } from './index'
 
 describe('renderLanguageSection', () => {
   it('uses the label for a known language code', () => {
@@ -206,6 +207,30 @@ describe('tool specs', () => {
   it('bookContext tool spec has the correct shape', () => {
     expect(BOOK_CONTEXT_TOOL_SPEC.name).toBe('bookContext')
     expect(BOOK_CONTEXT_TOOL_SPEC.parameters.required).toEqual(['queryText'])
+  })
+
+  it('chapterIndex tool spec supports bounded pagination arguments', () => {
+    expect(CHAPTER_INDEX_TOOL_SPEC.name).toBe('chapterIndex')
+    expect(CHAPTER_INDEX_TOOL_SPEC.description).toMatch(/complete cached chapter index/i)
+    expect(CHAPTER_INDEX_TOOL_SPEC.description).toMatch(/paginate/i)
+    expect(CHAPTER_INDEX_TOOL_SPEC.parameters).toEqual({
+      type: 'object',
+      properties: {
+        startChapter: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 100_000,
+          description: 'Zero-based chapter offset for this page.'
+        },
+        maxChapters: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 16,
+          description: 'Maximum chapters to return in this page.'
+        }
+      },
+      required: []
+    })
   })
 
   it('endConversation tool spec has the correct shape', () => {

@@ -4,6 +4,10 @@ import SwiftData
 /// Public surface for the RishiDB package.
 public enum RishiDB {
 
+    public enum ContainerError: Error, Sendable {
+        case migrationRequired(String)
+    }
+
     /// Marker for the public RishiDB API version. Bump when the surface breaks.
     static let apiVersion = "0.3.0-swiftdata"
 
@@ -19,7 +23,14 @@ public enum RishiDB {
         } else {
             configuration = ModelConfiguration(url: url)
         }
-        return try ModelContainer(for: schema, configurations: [configuration])
+        do {
+            return try ModelContainer(for: schema, configurations: [configuration])
+        } catch {
+            // Never delete, replace, or silently recreate an existing store. SwiftData
+            // performs its safe additive migration here; incompatible stores surface
+            // an actionable error to the caller instead.
+            throw ContainerError.migrationRequired(String(describing: error))
+        }
     }
 
     /// Create the shared SwiftData-backed persistence facade.

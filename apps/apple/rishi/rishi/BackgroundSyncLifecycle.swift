@@ -82,6 +82,8 @@ final class BackgroundSyncLifecycle {
                 return
             }
 
+            let chapterIndexBookIDs = (try? await services.library.bookStore.books(for: userId))?.map(\.id) ?? []
+
             guard
                 Self.shouldRunBGTask(autoSync: services.settings.readerDefaults.autoSync)
             else {
@@ -90,12 +92,19 @@ final class BackgroundSyncLifecycle {
                 return
             }
 
+            let chapterIndexTask = Task {
+                await services.sync.chapterIndexGenerationDispatcher.run(chapterIndexBookIDs)
+            }
             let runTask = Task { [engine = services.sync.engine] in
                 let wave = await engine.runOnce()
                 return wave.errors.isEmpty
             }
-            task.expirationHandler = { runTask.cancel() }
+            task.expirationHandler = {
+                runTask.cancel()
+                chapterIndexTask.cancel()
+            }
             let ok = await runTask.value
+            await chapterIndexTask.value
             task.setTaskCompleted(success: ok)
             services.sync.backgroundTaskCoordinator.scheduleAll()
         }

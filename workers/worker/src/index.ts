@@ -16,6 +16,7 @@ import { devicesRoutes } from "./routes/devices";
 import { chatRoutes } from "./routes/chat";
 import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
+import { chapterSummariesRoutes } from "./routes/chapter-summaries";
 import { changesRoutes } from "./routes/changes";
 import { testAuthRoutes } from "./routes/test-auth";
 import { opsFlagsRoutes } from "./routes/ops-flags";
@@ -590,6 +591,7 @@ app.route("/api/voice-sessions", voiceSessionsRoutes);
 app.route("/api/devices", devicesRoutes);
 // Quick task 260612-f7p — streaming chat for iOS RishiChat (v1 no RAG).
 app.route("/api/chat", chatRoutes);
+app.route("/api/ai/chapter-summaries", chapterSummariesRoutes);
 // ─── Test-only routes (hard-gated by ENABLE_TEST_AUTH + TEST_AUTH_SECRET) ────
 // All endpoints under /test/* return 404 unless three checks pass — see
 // src/routes/test-auth.ts. Production keeps both env vars unset.

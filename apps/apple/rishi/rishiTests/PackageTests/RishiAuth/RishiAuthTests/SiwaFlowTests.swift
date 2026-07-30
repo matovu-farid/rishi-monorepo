@@ -237,7 +237,6 @@ struct SiwaFlowTests {
         #expect(session.token == "tok-happy")
         #expect(session.userId == "001234.abcdef.5678")
         #expect(session.email == "u@example.com")
-        #expect(session.provider == .apple)
     }
 
     @Test func postsToSignInSocialPath() async throws {
@@ -269,7 +268,6 @@ struct SiwaFlowTests {
 
         let session = try await coordinator.signIn()
         #expect(session.email == "abc123@privaterelay.appleid.com")
-        #expect(session.provider == .apple)
 
         let body = try Self.decodeBody(StubURLProtocol.recordedBodies()[0])
         #expect(body.idToken.user?.email == "abc123@privaterelay.appleid.com")
@@ -341,7 +339,6 @@ struct SiwaFlowTests {
         let session = try await coordinator.signIn()
         #expect(session.email == nil)
         #expect(session.userId == "001234.abcdef.5678")
-        #expect(session.provider == .apple)
 
         // The encoded body must NOT contain the "user" key — assert via raw
         // JSON inspection because Optional fields encode to JSON null when the

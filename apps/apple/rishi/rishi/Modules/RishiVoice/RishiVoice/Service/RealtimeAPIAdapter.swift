@@ -46,6 +46,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     private var errorContinuation: AsyncStream<RealtimeClientError>.Continuation?
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
     private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
+    /// Tool calls can be observed by the SDK before the session responder has
+    /// subscribed. Retain them until the single shared continuation is opened.
+    private var pendingToolCallEvents: [RealtimeToolCallEvent] = []
+    private var toolCallGeneration = 0
+    private var toolCallStreamClosed = false
 
     // The OpenAI-assigned Realtime call ID (the `call_id` from the `Location`
     // header returned by `POST /v1/realtime/calls`), captured on a successful
@@ -120,6 +125,13 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         toolDispatcher.isArgumentsReady(fc: fc)
     }
 
+    internal func emitToolCallForTesting(
+        _ event: RealtimeToolCallEvent,
+        generation: Int? = nil
+    ) {
+        yieldToolCallEvent(event, generation: generation)
+    }
+
     // MARK: - RealtimeClientAPI
 
     public func connect(
@@ -175,37 +187,54 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // `Conversation.connect()` returns, so subscribing afterward would
         // reintroduce a race and force us back to polling snapshots.
         let statusUpdates = await MainActor.run { convo.statusUpdates }
-        lock.withLock { self.conversation = convo }
-        let capturedProviderCallId = try await convo.connect(
-            ephemeralKey: ephemeralKey
-        )
-        Log.event("voice.adapter.sdk_connect.returned", level: .info, data: [
-            "provider_call_id_present": String(capturedProviderCallId != nil),
-            "sdk_status": String(describing: await MainActor.run { convo.status }),
-        ])
-        lock.withLock { self._providerCallId = capturedProviderCallId }
-        // Never log the raw call ID value (spec: "Do not record ... OpenAI
-        // call IDs in general logs") — presence/absence only.
-        if capturedProviderCallId == nil {
-            Log.event("voice.adapter.provider_call_id.missing", level: .warning)
-        } else {
-            Log.event("voice.adapter.provider_call_id.captured", level: .info)
+        let conversationGeneration = lock.withLock { () -> Int in
+            self.conversation = convo
+            self.toolCallGeneration += 1
+            // Pending events belong to the conversation generation that
+            // produced them. Never replay an old generation into this one.
+            self.pendingToolCallEvents.removeAll(keepingCapacity: true)
+            self.toolCallStreamClosed = false
+            return self.toolCallGeneration
         }
-        // The SDK's `connect()` returns after the SDP exchange but BEFORE the
-        // WebRTC data channel opens. Until the data channel opens `convo.status`
-        // reports `.disconnected` (its initial value — the SDK only flips it to
-        // `.connected` on `dataChannelDidChangeState(.open)`). Returning here
-        // would make the session's status observer read `.disconnected`, treat
-        // it as a lost connection, and reconnect — spawning a second overlapping
-        // peer (the "two voices" echo) in an endless loop. Wait for the channel
-        // to actually open so "connected" is honest.
         do {
+            let capturedProviderCallId = try await convo.connect(
+                ephemeralKey: ephemeralKey
+            )
+            Log.event("voice.adapter.sdk_connect.returned", level: .info, data: [
+                "provider_call_id_present": String(capturedProviderCallId != nil),
+                "sdk_status": String(describing: await MainActor.run { convo.status }),
+            ])
+            lock.withLock {
+                guard self.conversation === convo,
+                      self.toolCallGeneration == conversationGeneration else { return }
+                self._providerCallId = capturedProviderCallId
+            }
+            // Never log the raw call ID value (spec: "Do not record ... OpenAI
+            // call IDs in general logs") — presence/absence only.
+            if capturedProviderCallId == nil {
+                Log.event("voice.adapter.provider_call_id.missing", level: .warning)
+            } else {
+                Log.event("voice.adapter.provider_call_id.captured", level: .info)
+            }
+            // The SDK's `connect()` returns after the SDP exchange but BEFORE the
+            // WebRTC data channel opens. Until the data channel opens `convo.status`
+            // reports `.disconnected` (its initial value — the SDK only flips it to
+            // `.connected` on `dataChannelDidChangeState(.open)`). Returning here
+            // would make the session's status observer read `.disconnected`, treat
+            // it as a lost connection, and reconnect — spawning a second overlapping
+            // peer (the "two voices" echo) in an endless loop. Wait for the channel
+            // to actually open so "connected" is honest.
             try await Self.waitUntilConnected(statusUpdates: statusUpdates)
         } catch {
             Log.event("voice.adapter.data_channel.wait_failed", level: .error, data: [
                 "error": String(describing: error),
                 "sdk_status": String(describing: await MainActor.run { convo.status }),
             ])
+            // Every failure after installing `conversation` owns a peer that
+            // must be disconnected before the error escapes. The generation
+            // guard prevents an older failed connect from tearing down a newer
+            // session that won the lifecycle race.
+            await teardownActiveConversation(expectedGeneration: conversationGeneration)
             throw error
         }
         Log.event("voice.adapter.connected", level: .info)
@@ -213,7 +242,13 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // The SDK owns the session configuration and default WebRTC audio
         // lifecycle. Apple does not send a session.update or manually toggle
         // the WebRTC audio unit here.
-        startPumps(for: convo)
+        guard lock.withLock({
+            self.conversation === convo && self.toolCallGeneration == conversationGeneration
+        }) else {
+            await MainActor.run { convo.disconnect() }
+            return
+        }
+        startPumps(for: convo, generation: conversationGeneration)
     }
 
     public func setMicCaptureEnabled(_ enabled: Bool) async {
@@ -312,21 +347,45 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// after we drop our reference. So we explicitly call the vendored
     /// `Conversation.disconnect()` (cancel task + close peer + finish streams)
     /// on the main actor before niling.
-    internal func teardownActiveConversation() async {
-        pump.cancel()
-        let convo: SDKConversation? = lock.withLock { self.conversation }
+    @discardableResult
+    internal func teardownActiveConversation(expectedGeneration: Int? = nil) async -> Bool {
+        let teardown: (conversation: SDKConversation?, generation: Int, matched: Bool) = lock.withLock {
+            if let expectedGeneration,
+               self.toolCallGeneration != expectedGeneration {
+                return (nil, 0, false)
+            }
+            let generation = self.toolCallGeneration
+            self.toolCallGeneration += 1
+            self.pendingToolCallEvents.removeAll(keepingCapacity: true)
+            // Serialize cancellation with conversation installation. A
+            // reconnect cannot publish new pumps while this invalidation is
+            // holding the adapter lock.
+            self.pump.cancel()
+            return (self.conversation, generation, true)
+        }
+        guard teardown.matched else {
+            return false
+        }
+        let convo = teardown.conversation
         if let convo {
             await MainActor.run { convo.disconnect() }
         }
-        lock.withLock {
+        let cleared = lock.withLock { () -> Bool in
+            // Disconnect is awaited, so a newer connect may have installed a
+            // different conversation while the old SDK peer was closing.
+            // Only the owner of this teardown may clear adapter state.
+            guard self.toolCallGeneration == teardown.generation + 1,
+                  self.conversation === convo else { return false }
             self.conversation = nil
             self._providerCallId = nil
+            return true
         }
+        return cleared
     }
 
     public func disconnect() async {
         // Pump + Conversation teardown is the shared single-peer path.
-        await teardownActiveConversation()
+        guard await teardownActiveConversation() else { return }
 
         let pendingPrewarm: Task<SDKConversation, Never>? = lock.withLock {
             let task = prewarmTask
@@ -343,6 +402,8 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             let e = errorContinuation; errorContinuation = nil
             let t = transcriptContinuation; transcriptContinuation = nil
             let tc = toolCallContinuation; toolCallContinuation = nil
+            toolCallStreamClosed = true
+            pendingToolCallEvents.removeAll(keepingCapacity: false)
             return (e, t, tc)
         }
         pump.reset()
@@ -381,7 +442,16 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     public func toolCallStream() -> AsyncStream<RealtimeToolCallEvent> {
         AsyncStream { continuation in
-            lock.withLock { toolCallContinuation = continuation }
+            lock.withLock {
+                toolCallStreamClosed = false
+                toolCallContinuation = continuation
+                // Replay while holding the same lock used by live delivery.
+                // Buffered and live events therefore form one FIFO sequence.
+                for event in pendingToolCallEvents {
+                    continuation.yield(event)
+                }
+                pendingToolCallEvents.removeAll(keepingCapacity: true)
+            }
             Log.event("voice.adapter.tool.stream.opened", level: .info)
         }
     }
@@ -411,19 +481,61 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// Delegates to `RealtimeEventPump`, passing lock-guarded accessors so each
     /// yield reads the adapter's CURRENT continuation under the adapter's lock —
     /// identical to the prior inline pump code.
-    private func startPumps(for convo: SDKConversation) {
-        pump.start(
-            for: convo,
-            errorContinuation: { [weak self] in
-                self?.lock.withLock { self?.errorContinuation }
-            },
-            transcriptContinuation: { [weak self] in
-                self?.lock.withLock { self?.transcriptContinuation }
-            },
-            toolCallContinuation: { [weak self] in
-                self?.lock.withLock { self?.toolCallContinuation }
+    private func startPumps(for convo: SDKConversation, generation: Int) {
+        lock.withLock {
+            guard self.conversation === convo,
+                  self.toolCallGeneration == generation else { return }
+            pump.start(
+                for: convo,
+                errorContinuation: { [weak self] event in
+                    self?.yieldErrorEvent(event, generation: generation)
+                },
+                transcriptContinuation: { [weak self] event in
+                    self?.yieldTranscriptEvent(event, generation: generation)
+                },
+                toolCallContinuation: { [weak self] event in
+                    self?.yieldToolCallEvent(event, generation: generation)
+                }
+            )
+        }
+    }
+
+    internal var eventGeneration: Int {
+        lock.withLock { toolCallGeneration }
+    }
+
+    internal func emitErrorForTesting(_ event: RealtimeClientError, generation: Int) {
+        yieldErrorEvent(event, generation: generation)
+    }
+
+    internal func emitTranscriptForTesting(_ event: RealtimeTranscriptEvent, generation: Int) {
+        yieldTranscriptEvent(event, generation: generation)
+    }
+
+    private func yieldErrorEvent(_ event: RealtimeClientError, generation: Int) {
+        lock.withLock {
+            guard generation == toolCallGeneration else { return }
+            errorContinuation?.yield(event)
+        }
+    }
+
+    private func yieldTranscriptEvent(_ event: RealtimeTranscriptEvent, generation: Int) {
+        lock.withLock {
+            guard generation == toolCallGeneration else { return }
+            transcriptContinuation?.yield(event)
+        }
+    }
+
+    private func yieldToolCallEvent(_ event: RealtimeToolCallEvent, generation: Int? = nil) {
+        lock.withLock {
+            if let generation, generation != toolCallGeneration { return }
+            if toolCallStreamClosed { return }
+            if let toolCallContinuation {
+                toolCallContinuation.yield(event)
+            } else {
+                pendingToolCallEvents.append(event)
             }
-        )
+        }
     }
 
 }

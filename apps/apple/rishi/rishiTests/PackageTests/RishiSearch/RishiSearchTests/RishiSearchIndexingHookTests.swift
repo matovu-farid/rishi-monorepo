@@ -127,6 +127,29 @@ struct RishiSearchIndexingHookTests {
         #expect(ready, "Detached indexing task should produce vectors.hnsw + chunks.db + .ready sidecar")
     }
 
+    @Test("notifies chapter-index generation after the text index is ready")
+    func scheduleIndexing_notifiesChapterIndexTrigger() async throws {
+        let root = Self.makeTempRoot()
+        let bookId = UUID()
+        let builder = IndexBuilder(rootURL: root, embedder: IdentityEmbedder())
+        let trigger = ChapterTriggerRecorder()
+        let hook = RishiSearchIndexingHook(
+            builder: builder,
+            extractors: ["pdf": StubTextExtractor(rows: [(page: 1, text: "alpha")])],
+            onIndexReady: { id in await trigger.record(id) }
+        )
+
+        await hook.scheduleIndexing(
+            for: Self.makeBook(id: bookId),
+            fileURL: URL(fileURLWithPath: "/tmp/fixture.pdf")
+        )
+
+        let notified = await Self.waitUntil {
+            await trigger.ids().contains(bookId)
+        }
+        #expect(notified)
+    }
+
     @Test("scheduleIndexing marks .indexing before extraction finishes")
     func scheduleIndexing_marksIndexingBeforeExtractionCompletes() async throws {
         let root = Self.makeTempRoot()
@@ -371,4 +394,10 @@ struct RishiSearchIndexingHookTests {
         }
         #expect(ready, "Empty paragraphs should still produce a .ready sidecar")
     }
+}
+
+private actor ChapterTriggerRecorder {
+    private var recorded: [UUID] = []
+    func record(_ id: UUID) { recorded.append(id) }
+    func ids() -> [UUID] { recorded }
 }

@@ -41,6 +41,7 @@ public actor SyncEngine {
         public var conversationsPushed: Int = 0
         public var messagesPushed: Int = 0
         public var bookmarksPushed: Int = 0
+        public var chapterIndexesPushed: Int = 0
         public var errors: [String] = []
 
         public init() {}
@@ -59,6 +60,7 @@ public actor SyncEngine {
         public let conversationUploader: ConversationUploader
         public let messageUploader: MessageUploader
         public let bookmarkUploader: BookmarkUploader
+        public let chapterIndexUploader: ChapterIndexUploader
         public let fetcher: RemoteChangeFetcher
         public let applier: ChangeApplier
         public let conversationsFetcher: ConversationsFetcher
@@ -77,6 +79,7 @@ public actor SyncEngine {
             conversationUploader: ConversationUploader,
             messageUploader: MessageUploader,
             bookmarkUploader: BookmarkUploader,
+            chapterIndexUploader: ChapterIndexUploader,
             fetcher: RemoteChangeFetcher,
             applier: ChangeApplier,
             conversationsFetcher: ConversationsFetcher,
@@ -94,6 +97,7 @@ public actor SyncEngine {
             self.conversationUploader = conversationUploader
             self.messageUploader = messageUploader
             self.bookmarkUploader = bookmarkUploader
+            self.chapterIndexUploader = chapterIndexUploader
             self.fetcher = fetcher
             self.applier = applier
             self.conversationsFetcher = conversationsFetcher
@@ -152,6 +156,7 @@ public actor SyncEngine {
         let conversationUploader = dependencies.conversationUploader
         let messageUploader = dependencies.messageUploader
         let bookmarkUploader = dependencies.bookmarkUploader
+        let chapterIndexUploader = dependencies.chapterIndexUploader
         let fetcher = dependencies.fetcher
         let applier = dependencies.applier
         let conversationsFetcher = dependencies.conversationsFetcher
@@ -198,6 +203,7 @@ public actor SyncEngine {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             bookmarkUploader: bookmarkUploader,
+            chapterIndexUploader: chapterIndexUploader,
             dataUseConsentProvider: dependencies.dataUseConsentProvider
         ))
         self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
@@ -264,6 +270,16 @@ public actor SyncEngine {
             await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markBookmarkDirty.failed", error: error)
+        }
+    }
+
+    public func markChapterIndexDirty(_ bookId: BookID) async {
+        do {
+            try await metadataStore.markDirty(entityId: bookId, kind: .chapterIndex)
+            await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .chapterIndex))
+            await statusReporter.refreshPendingCount(on: status)
+        } catch {
+            Log.error("sync.markChapterIndexDirty.failed", error: error)
         }
     }
 
@@ -382,6 +398,7 @@ public actor SyncEngine {
         wave.conversationsPushed = drain.conversationsPushed
         wave.messagesPushed = drain.messagesPushed
         wave.bookmarksPushed = drain.bookmarksPushed
+        wave.chapterIndexesPushed = drain.chapterIndexesPushed
         wave.errors.append(contentsOf: drain.errors)
 
         // 3. Snapshot SyncStatus for the UI.

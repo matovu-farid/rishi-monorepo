@@ -331,6 +331,37 @@ describe("POST /api/realtime/client_secrets handler", () => {
     )
   })
 
+  it("bakes the chapterIndex tool into session.tools with automatic tool choice", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    await callClientSecretsPOST({ language: "en" })
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    expect(capturedBody.session.tool_choice).toBe("auto")
+    expect(capturedBody.session.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "function",
+          name: "chapterIndex",
+          parameters: {
+            type: "object",
+            properties: {
+              startChapter: expect.objectContaining({
+                type: "integer",
+                minimum: 0,
+                maximum: 100_000,
+              }),
+              maxChapters: expect.objectContaining({
+                type: "integer",
+                minimum: 1,
+                maximum: 16,
+              }),
+            },
+            required: [],
+          },
+        }),
+      ]),
+    )
+  })
+
   it("pins the bookContext tool's required parameters to ['queryText']", async () => {
     setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
     await callClientSecretsPOST({ language: "en" })

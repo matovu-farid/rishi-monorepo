@@ -59,6 +59,9 @@ final class VoiceSessionPresenter {
 
     private let bookSearch: (any BookSearch)?
     private let embedderPrewarm: (@Sendable () async -> Void)?
+    private let chapterIndexResponderFactory: RealtimeVoiceSession.ChapterIndexBookContextResponderFactory?
+    private let chapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory?
+    private let chapterIndexContentVersionProvider: (@Sendable (BookID) async -> String?)?
 
     private let clientFactory: @MainActor () -> any RealtimeClientAPI
     private let keyFetcherFactory: @MainActor () -> any EphemeralKeyFetching
@@ -136,6 +139,9 @@ final class VoiceSessionPresenter {
         micGate: any MicPermissionGate = SystemMicPermissionGate(),
         bookSearch: (any BookSearch)? = nil,
         embedderPrewarm: (@Sendable () async -> Void)? = nil,
+        chapterIndexResponderFactory: RealtimeVoiceSession.ChapterIndexBookContextResponderFactory? = nil,
+        chapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory? = nil,
+        chapterIndexContentVersionProvider: (@Sendable (BookID) async -> String?)? = nil,
         clientFactory: (@MainActor () -> any RealtimeClientAPI)? = nil,
         keyFetcherFactory: (@MainActor () -> any EphemeralKeyFetching)? = nil,
         sessionCoordinatorFactory: (@MainActor () -> (any VoiceSessionCoordinating)?)? = nil,
@@ -152,6 +158,9 @@ final class VoiceSessionPresenter {
         self.dataUseConsentProvider = dataUseConsentProvider
         self.bookSearch = bookSearch
         self.embedderPrewarm = embedderPrewarm
+        self.chapterIndexResponderFactory = chapterIndexResponderFactory
+        self.chapterIndexCoordinatorFactory = chapterIndexCoordinatorFactory
+        self.chapterIndexContentVersionProvider = chapterIndexContentVersionProvider
 
         self.clientFactory = clientFactory ?? { RealtimeAPIAdapter() }
         self.keyFetcherFactory =
@@ -276,17 +285,73 @@ final class VoiceSessionPresenter {
         let adapter = clientFactory()
         let fetcher = keyFetcherFactory()
 
+        let chapterDependenciesProvider: (@Sendable (BookID) async -> (ChapterIndexCoordinator?, String?))? =
+            chapterIndexCoordinatorFactory.map { coordinatorFactory in
+                { @Sendable bookId in
+                    let contentVersion = await self.chapterIndexContentVersionProvider?(bookId)
+                    let coordinator: ChapterIndexCoordinator? = if let contentVersion {
+                        await coordinatorFactory(bookId, contentVersion)
+                    } else {
+                        nil
+                    }
+                    return (coordinator, contentVersion)
+                }
+            }
+
         let responderFactory: RealtimeVoiceSession.BookContextResponderFactory?
         if let bookSearch {
             responderFactory = { @Sendable bookId in
-                BookContextResponder(client: adapter, search: bookSearch, bookId: bookId)
+                let dependenciesProvider: (@Sendable () async -> (ChapterIndexCoordinator?, String?))? =
+                    chapterDependenciesProvider.map { provider in
+                        { @Sendable in await provider(bookId) }
+                    }
+                return BookContextResponder(
+                    client: adapter,
+                    search: bookSearch,
+                    bookId: bookId,
+                    chapterIndexDependenciesProvider: dependenciesProvider
+                )
             }
         } else if currentPageProvider != nil {
             responderFactory = { @Sendable bookId in
-                BookContextResponder(client: adapter, bookId: bookId)
+                let dependenciesProvider: (@Sendable () async -> (ChapterIndexCoordinator?, String?))? =
+                    chapterDependenciesProvider.map { provider in
+                        { @Sendable in await provider(bookId) }
+                    }
+                return BookContextResponder(
+                    client: adapter,
+                    bookId: bookId,
+                    chapterIndexDependenciesProvider: dependenciesProvider
+                )
             }
         } else {
             responderFactory = nil
+        }
+
+        let effectiveChapterIndexResponderFactory: RealtimeVoiceSession.ChapterIndexBookContextResponderFactory?
+        if let injected = chapterIndexResponderFactory {
+            effectiveChapterIndexResponderFactory = injected
+        } else if let bookSearch {
+            effectiveChapterIndexResponderFactory = { @Sendable bookId, coordinator, contentVersion in
+                BookContextResponder(
+                    client: adapter,
+                    search: bookSearch,
+                    bookId: bookId,
+                    chapterIndexCoordinator: coordinator,
+                    chapterIndexContentVersion: contentVersion
+                )
+            }
+        } else if currentPageProvider != nil {
+            effectiveChapterIndexResponderFactory = { @Sendable bookId, coordinator, contentVersion in
+                BookContextResponder(
+                    client: adapter,
+                    bookId: bookId,
+                    chapterIndexCoordinator: coordinator,
+                    chapterIndexContentVersion: contentVersion
+                )
+            }
+        } else {
+            effectiveChapterIndexResponderFactory = nil
         }
 
         let session = RealtimeVoiceSession(
@@ -298,6 +363,9 @@ final class VoiceSessionPresenter {
             sessionCoordinator: sessionCoordinatorFactory(),
             controlSocketFactory: controlSocketFactory,
             responderFactory: responderFactory,
+            chapterIndexResponderFactory: responderFactory == nil ? effectiveChapterIndexResponderFactory : nil,
+            chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
+            chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
             currentPageProvider: currentPageProvider,
             readerSessionIdentity: readerSessionIdentity,
             embedderPrewarm: embedderPrewarm

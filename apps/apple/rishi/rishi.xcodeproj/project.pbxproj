@@ -168,7 +168,7 @@
 				1A1111222FD83183008C5ADE /* TTSPresenceWidget.entitlements */,
 			);
 			path = TTSPresenceWidget;
-			sourceTree = "<group>";
+			 sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
@@ -283,9 +283,9 @@
 					092254932FD83183008C5ADE = {
 						CreatedOnToolsVersion = 26.2;
 					};
-					092254A22FD83186008C5ADE = {
+				092254A22FD83186008C5ADE = {
 						CreatedOnToolsVersion = 26.2;
-						TestTargetID = 092254932FD83183008C5ADE;
+					TestTargetID = 092254932FD83183008C5ADE;
 					};
 					092254AC2FD83186008C5ADE = {
 						CreatedOnToolsVersion = 26.2;

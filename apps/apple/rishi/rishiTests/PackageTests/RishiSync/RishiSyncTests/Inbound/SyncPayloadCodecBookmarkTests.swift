@@ -20,6 +20,39 @@ import Foundation
 @Suite("SyncPayloadCodec — bookmark", .serialized)
 struct SyncPayloadCodecBookmarkTests {
 
+    @Test("chapter index codec preserves content version and source order")
+    func chapterIndexRoundTrip() throws {
+        let index = ChapterIndex(
+            bookID: UUID(), contentVersion: "content-v1", status: .ready,
+            modelIdentifier: "model", modelVersion: "1",
+            progress: .init(completed: 2, total: 2),
+            chapters: [
+                .init(id: "chapter-2", name: "Two", summary: "Second", sourcePosition: 1),
+                .init(id: "chapter-1", name: "One", summary: "First", sourcePosition: 0),
+            ], updatedAt: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+        let payload = try SyncPayloadCodec.encodeChapterIndex(index)
+        let decoded = try SyncPayloadCodec.decodeChapterIndex(payload, fallbackUpdatedAt: index.updatedAt)
+        #expect(decoded == index)
+        #expect(decoded.chapters.map(\.sourcePosition) == [1, 0])
+    }
+
+    @Test("chapter index decoder accepts legacy children without source_position")
+    func chapterIndexLegacySourcePosition() throws {
+        let bookID = UUID()
+        let body = """
+        {"id":"\(UUID().uuidString)","book_id":"\(bookID.uuidString)","content_version":"v1","status":"ready","model_identifier":"m","model_version":"1","progress":{"completed":1,"total":1},"chapters":[{"id":"c","name":"C","summary":"S"}]}
+        """
+        let decoded = try SyncPayloadCodec.decodeChapterIndex(SyncOpaqueJSON(data: Data(body.utf8)), fallbackUpdatedAt: Date())
+        #expect(decoded.chapters.first?.sourcePosition == 0)
+    }
+
+    @Test("chapter_index is a first-class sync entity kind")
+    func entityKindChapterIndex() {
+        #expect(SyncEntityKind(rawValue: "chapter_index") == .chapterIndex)
+        #expect(SyncEntityKind.allCases.contains(.chapterIndex))
+    }
+
     @Test("decodeBook accepts normalized pull metadata without a local file path")
     func decodeBookPullPayload() throws {
         let id = UUID()
@@ -31,6 +64,23 @@ struct SyncPayloadCodecBookmarkTests {
         #expect(book.id == id)
         #expect(book.formatType == .pdf)
         #expect(book.fileURL == "")
+    }
+
+    @Test("book chapter index content version round-trips and remains optional")
+    func bookChapterIndexContentVersionRoundTrip() throws {
+        let book = Book(
+            userId: UUID(),
+            title: "Remote",
+            formatType: .epub,
+            fileURL: "Books/book.epub",
+            chapterIndexContentVersion: "chapter-v3"
+        )
+        let payload = try SyncPayloadCodec.encodeBook(book)
+        let decoded = try SyncPayloadCodec.decodeBook(payload, fallbackAddedAt: book.addedAt)
+        #expect(decoded.chapterIndexContentVersion == "chapter-v3")
+
+        let legacy = SyncOpaqueJSON(data: Data("{\"id\":\"\(book.id.uuidString)\",\"title\":\"Legacy\",\"format_type\":\"epub\"}".utf8))
+        #expect(try SyncPayloadCodec.decodeBook(legacy, fallbackAddedAt: book.addedAt).chapterIndexContentVersion == nil)
     }
 
     @Test("encodeBookmark -> decodeBookmark round-trips all fields")

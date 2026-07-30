@@ -25,7 +25,7 @@ struct TTSStreamerTests {
         var thrown: Error?
         do {
             for try await _ in await source.stream(
-                request: TTSStreamRequest(text: "private", voice: "alloy")
+                request: TTSStreamRequest(text: "private", voice: "alloy", speed: 1.0)
             ) {}
         } catch {
             thrown = error

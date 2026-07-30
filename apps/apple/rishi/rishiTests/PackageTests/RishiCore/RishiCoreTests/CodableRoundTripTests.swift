@@ -86,10 +86,7 @@ struct CodableRoundTripTests {
     @Test func userRoundTrips() throws {
         let user = User(
             email: "matovu90@gmail.com",
-            displayName: "Farid",
-            avatarURL: URL(string: "https://example.com/avatar.png"),
-            hasPro: true,
-            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            name: "Farid"
         )
         let decoded = try roundTrip(user)
         #expect(decoded == user)

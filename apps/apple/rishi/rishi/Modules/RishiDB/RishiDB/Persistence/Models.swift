@@ -12,6 +12,8 @@ enum RishiDBModelTypes {
         MessageEntity.self,
         UserEntity.self,
         SyncMetadataEntity.self,
+        ChapterIndexEntity.self,
+        ChapterSummaryEntity.self,
     ]
 }
 
@@ -28,6 +30,7 @@ final class BookEntity {
     var coverPath: String?
     var positionId: UUID?
     var conversationId: UUID?
+    var chapterIndexContentVersion: String?
 
     init(
         id: UUID,
@@ -40,7 +43,8 @@ final class BookEntity {
         fileURL: String,
         coverPath: String?,
         positionId: UUID?,
-        conversationId: UUID?
+        conversationId: UUID?,
+        chapterIndexContentVersion: String? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -53,6 +57,7 @@ final class BookEntity {
         self.coverPath = coverPath
         self.positionId = positionId
         self.conversationId = conversationId
+        self.chapterIndexContentVersion = chapterIndexContentVersion
     }
 
     var bookValue: Book? {
@@ -68,7 +73,8 @@ final class BookEntity {
             fileURL: fileURL,
             coverPath: coverPath,
             positionId: positionId,
-            conversationId: conversationId
+            conversationId: conversationId,
+            chapterIndexContentVersion: chapterIndexContentVersion
         )
     }
 
@@ -83,6 +89,48 @@ final class BookEntity {
         coverPath = book.coverPath
         positionId = book.positionId
         conversationId = book.conversationId
+        chapterIndexContentVersion = book.chapterIndexContentVersion
+    }
+}
+
+@Model
+final class ChapterIndexEntity {
+    @Attribute(.unique) var id: UUID
+    var bookID: UUID
+    var contentVersion: String
+    var statusRawValue: String
+    var modelIdentifier: String
+    var modelVersion: String
+    var completedCount: Int
+    var totalCount: Int
+    var errorMessage: String?
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(id: UUID, bookID: UUID, contentVersion: String, statusRawValue: String, modelIdentifier: String, modelVersion: String, completedCount: Int, totalCount: Int, errorMessage: String?, createdAt: Date, updatedAt: Date) {
+        self.id = id; self.bookID = bookID; self.contentVersion = contentVersion
+        self.statusRawValue = statusRawValue; self.modelIdentifier = modelIdentifier; self.modelVersion = modelVersion
+        self.completedCount = completedCount; self.totalCount = totalCount; self.errorMessage = errorMessage
+        self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
+}
+
+@Model
+final class ChapterSummaryEntity {
+    @Attribute(.unique) var id: UUID
+    var indexID: UUID
+    var chapterID: String
+    var name: String
+    var summary: String
+    /// Optional keeps existing SwiftData stores lightweight-migration-safe.
+    var sourcePosition: Int?
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(id: UUID, indexID: UUID, chapterID: String, name: String, summary: String, sourcePosition: Int? = nil, createdAt: Date, updatedAt: Date) {
+        self.id = id; self.indexID = indexID; self.chapterID = chapterID; self.name = name; self.summary = summary
+        self.sourcePosition = sourcePosition
+        self.createdAt = createdAt; self.updatedAt = updatedAt
     }
 }
 

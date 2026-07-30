@@ -22,13 +22,27 @@ final class RealtimeEventPump: @unchecked Sendable {
 
     // `internal` (not `private`) so the white-box teardown test can assign
     // sentinel pumps and assert they are cancelled + niled.
-    var errorPump: Task<Void, Never>?
-    var transcriptPump: Task<Void, Never>?
-    var toolCallPump: Task<Void, Never>?
+    var errorPump: Task<Void, Never>? {
+        get { lock.withLock { _errorPump } }
+        set { lock.withLock { _errorPump = newValue } }
+    }
+    var transcriptPump: Task<Void, Never>? {
+        get { lock.withLock { _transcriptPump } }
+        set { lock.withLock { _transcriptPump = newValue } }
+    }
+    var toolCallPump: Task<Void, Never>? {
+        get { lock.withLock { _toolCallPump } }
+        set { lock.withLock { _toolCallPump = newValue } }
+    }
+
+    private var _errorPump: Task<Void, Never>?
+    private var _transcriptPump: Task<Void, Never>?
+    private var _toolCallPump: Task<Void, Never>?
 
     /// Tool-call dedupe: tracks which `callId`s have already been emitted to
-    /// the tool-call stream this connection. Cleared on `reset()`.
-    private var emittedCallIds: Set<String> = []
+    /// the tool-call stream this generation. The token check and insertion are
+    /// atomic so a cancelled old pump cannot mutate the next generation's set.
+    private let callIDDeduper = RealtimeEventPumpCallIDDeduper()
     /// Tracks which `callId`s we have already logged as "seen" so we do not
     /// spam the console every 200ms while the SDK is still assembling args.
     private var observedCallIds: Set<String> = []
@@ -44,23 +58,26 @@ final class RealtimeEventPump: @unchecked Sendable {
 
     /// True once any of the three pumps is running (used by tests/teardown).
     var isRunning: Bool {
-        errorPump != nil || transcriptPump != nil || toolCallPump != nil
+        lock.withLock {
+            _errorPump != nil || _transcriptPump != nil || _toolCallPump != nil
+        }
     }
 
-    /// Cancel + nil all three pump Tasks. Does NOT clear `emittedCallIds` — that
-    /// is reset by `reset()` on full disconnect, mirroring the prior adapter
-    /// split (teardown cancels pumps; disconnect clears dedupe).
+    /// Cancel + nil all three pump Tasks. Dedupe state is cleared by `start()`
+    /// for the next generation and by `reset()` on full disconnect.
     func cancel() {
-        errorPump?.cancel(); errorPump = nil
-        transcriptPump?.cancel(); transcriptPump = nil
-        toolCallPump?.cancel(); toolCallPump = nil
+        lock.withLock {
+            _errorPump?.cancel(); _errorPump = nil
+            _transcriptPump?.cancel(); _transcriptPump = nil
+            _toolCallPump?.cancel(); _toolCallPump = nil
+        }
     }
 
     /// Clear the dedupe set. Called from the adapter's `disconnect()` under the
     /// adapter's lock-guarded teardown, matching the prior `emittedCallIds.removeAll()`.
     func reset() {
         lock.withLock {
-            emittedCallIds.removeAll()
+            callIDDeduper.reset()
             observedCallIds.removeAll()
             lastToolScanLogAt = nil
         }
@@ -72,17 +89,28 @@ final class RealtimeEventPump: @unchecked Sendable {
     /// the adapter's own lock — identical to the prior inline code.
     func start(
         for convo: RealtimeConversation,
-        errorContinuation: @escaping @Sendable () -> AsyncStream<RealtimeClientError>.Continuation?,
-        transcriptContinuation: @escaping @Sendable () -> AsyncStream<RealtimeTranscriptEvent>.Continuation?,
-        toolCallContinuation: @escaping @Sendable () -> AsyncStream<RealtimeToolCallEvent>.Continuation?
+        errorContinuation: @escaping @Sendable (RealtimeClientError) -> Void,
+        transcriptContinuation: @escaping @Sendable (RealtimeTranscriptEvent) -> Void,
+        toolCallContinuation: @escaping @Sendable (RealtimeToolCallEvent) -> Void
     ) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Publishing the handles and cancelling the previous generation are
+        // one transaction. This prevents teardown from observing an empty
+        // slot after a Task has been created but before its handle is stored.
+        _errorPump?.cancel()
+        _transcriptPump?.cancel()
+        _toolCallPump?.cancel()
+        let generation = callIDDeduper.beginGeneration()
+
         let dispatcher = self.dispatcher
         let clock = ContinuousClock()
 
         // Error pump — direct forward from the SDK's AsyncStream<ServerError>.
         // The explicit MainActor.run hops are required to read the SDK's
         // @MainActor @Observable `convo.errors` / `convo.entries`.
-        errorPump = Task {
+        let newErrorPump = Task {
             let errors = await MainActor.run { convo.errors }
             for await error in errors {
                 Log.event("voice.adapter.server_error", level: .error, data: [
@@ -95,7 +123,7 @@ final class RealtimeEventPump: @unchecked Sendable {
                     code: error.code ?? "server_error",
                     message: error.message
                 )
-                errorContinuation()?.yield(mapped)
+                errorContinuation(mapped)
                 if Task.isCancelled { return }
             }
         }
@@ -104,7 +132,7 @@ final class RealtimeEventPump: @unchecked Sendable {
         // mutates message content/status in place, so re-scan the full array.
         // Downstream (`VoiceTranscriptBridge`) expects **deltas** (`+=`), so
         // emit only the suffix grown since the last emission for this index.
-        transcriptPump = Task {
+        let newTranscriptPump = Task {
             var lastEmitted: [Int: (text: String, isFinal: Bool)] = [:]
             while !Task.isCancelled {
                 let snapshot: [Item] = await MainActor.run { convo.entries }
@@ -143,7 +171,7 @@ final class RealtimeEventPump: @unchecked Sendable {
                         content: delta,
                         isFinal: isFinal
                     )
-                    transcriptContinuation()?.yield(event)
+                    transcriptContinuation(event)
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
             }
@@ -157,7 +185,7 @@ final class RealtimeEventPump: @unchecked Sendable {
         // the FULL entries array each tick (not just newly-appended items) so we
         // catch status flips / argument completion on previously-seen entries.
         // Per-call dedupe via `emittedCallIds` ensures we emit each call once.
-        toolCallPump = Task { [weak self] in
+        let newToolCallPump = Task { [weak self] in
             while !Task.isCancelled {
                 let snapshot: [Item] = await MainActor.run { convo.entries }
                 if let self {
@@ -190,7 +218,13 @@ final class RealtimeEventPump: @unchecked Sendable {
                     guard case let .functionCall(fc) = item else { continue }
                     guard let self else { return }
                     let (alreadyEmitted, firstObserved): (Bool, Bool) = self.lock.withLock {
-                        let alreadyEmitted = self.emittedCallIds.contains(fc.callId)
+                        guard self.callIDDeduper.isCurrent(generation) else {
+                            return (true, false)
+                        }
+                        let alreadyEmitted = self.callIDDeduper.isEmitted(
+                            fc.callId,
+                            generation: generation
+                        )
                         let firstObserved = self.observedCallIds.insert(fc.callId).inserted
                         return (alreadyEmitted, firstObserved)
                     }
@@ -208,7 +242,10 @@ final class RealtimeEventPump: @unchecked Sendable {
                         "callId": fc.callId,
                         "name": fc.name,
                     ])
-                    self.lock.withLock { _ = self.emittedCallIds.insert(fc.callId) }
+                    guard self.callIDDeduper.markEmittedIfCurrent(
+                        fc.callId,
+                        generation: generation
+                    ) else { continue }
                     let event = RealtimeToolCallEvent(
                         callId: fc.callId,
                         name: fc.name,
@@ -218,10 +255,56 @@ final class RealtimeEventPump: @unchecked Sendable {
                         "callId": event.callId,
                         "name": event.name,
                     ])
-                    toolCallContinuation()?.yield(event)
+                    toolCallContinuation(event)
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
             }
+        }
+
+        _errorPump = newErrorPump
+        _transcriptPump = newTranscriptPump
+        _toolCallPump = newToolCallPump
+    }
+}
+
+/// Generation-scoped call-ID dedupe. Its generation check and insertion must
+/// be one locked operation: cancellation does not guarantee that an old task
+/// stops before its next synchronous statement.
+final class RealtimeEventPumpCallIDDeduper: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation = UUID()
+    private var emittedCallIds: Set<String> = []
+
+    func beginGeneration() -> UUID {
+        lock.withLock {
+            generation = UUID()
+            emittedCallIds.removeAll()
+            return generation
+        }
+    }
+
+    func reset() {
+        lock.withLock {
+            generation = UUID()
+            emittedCallIds.removeAll()
+        }
+    }
+
+    func isCurrent(_ candidate: UUID) -> Bool {
+        lock.withLock { generation == candidate }
+    }
+
+    func isEmitted(_ callId: String, generation candidate: UUID) -> Bool {
+        lock.withLock {
+            guard generation == candidate else { return true }
+            return emittedCallIds.contains(callId)
+        }
+    }
+
+    func markEmittedIfCurrent(_ callId: String, generation candidate: UUID) -> Bool {
+        lock.withLock {
+            guard generation == candidate else { return false }
+            return emittedCallIds.insert(callId).inserted
         }
     }
 }

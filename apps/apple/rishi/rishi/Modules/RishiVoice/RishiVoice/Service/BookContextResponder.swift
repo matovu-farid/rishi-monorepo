@@ -27,6 +27,7 @@ import Foundation
 public actor BookContextResponder {
 
     public static let currentPageToolName = "currentPageContext"
+    public static let chapterIndexToolName = "chapterIndex"
 
     /// Sentinel returned to the LLM when the per-book index isn't ready.
     /// VERBATIM string — keep in sync with Electron's `buildRealtimeAgent.ts`
@@ -50,6 +51,9 @@ public actor BookContextResponder {
     private let search: (any BookSearch)?
     private let bookId: UUID
     private let timeoutSeconds: Double
+    private var chapterIndexCoordinator: ChapterIndexCoordinator?
+    private var chapterIndexContentVersion: String?
+    private var chapterIndexDependenciesProvider: (@Sendable () async -> (ChapterIndexCoordinator?, String?))?
     private var currentPageProvider: CurrentPageContextProvider?
 
     public init(
@@ -57,12 +61,18 @@ public actor BookContextResponder {
         search: any BookSearch,
         bookId: UUID,
         timeoutSeconds: Double = 8,
-        currentPageProvider: CurrentPageContextProvider? = nil
+        currentPageProvider: CurrentPageContextProvider? = nil,
+        chapterIndexCoordinator: ChapterIndexCoordinator? = nil,
+        chapterIndexContentVersion: String? = nil,
+        chapterIndexDependenciesProvider: (@Sendable () async -> (ChapterIndexCoordinator?, String?))? = nil
     ) {
         self.client = client
         self.search = search
         self.bookId = bookId
         self.timeoutSeconds = timeoutSeconds
+        self.chapterIndexCoordinator = chapterIndexCoordinator
+        self.chapterIndexContentVersion = chapterIndexContentVersion
+        self.chapterIndexDependenciesProvider = chapterIndexDependenciesProvider
         self.currentPageProvider = currentPageProvider
     }
 
@@ -70,17 +80,33 @@ public actor BookContextResponder {
         client: any RealtimeClientAPI,
         bookId: UUID,
         timeoutSeconds: Double = 8,
-        currentPageProvider: CurrentPageContextProvider? = nil
+        currentPageProvider: CurrentPageContextProvider? = nil,
+        chapterIndexCoordinator: ChapterIndexCoordinator? = nil,
+        chapterIndexContentVersion: String? = nil,
+        chapterIndexDependenciesProvider: (@Sendable () async -> (ChapterIndexCoordinator?, String?))? = nil
     ) {
         self.client = client
         self.search = nil
         self.bookId = bookId
         self.timeoutSeconds = timeoutSeconds
+        self.chapterIndexCoordinator = chapterIndexCoordinator
+        self.chapterIndexContentVersion = chapterIndexContentVersion
+        self.chapterIndexDependenciesProvider = chapterIndexDependenciesProvider
         self.currentPageProvider = currentPageProvider
     }
 
     public func setCurrentPageProvider(_ provider: CurrentPageContextProvider?) {
         currentPageProvider = provider
+    }
+
+    /// Adds chapter-index dependencies to an existing responder without
+    /// replacing its bookContext/currentPageContext handling.
+    public func setChapterIndexDependencies(
+        coordinator: ChapterIndexCoordinator?,
+        contentVersion: String?
+    ) {
+        chapterIndexCoordinator = coordinator
+        chapterIndexContentVersion = contentVersion
     }
 
     /// Drive the responder by consuming a tool-call stream. Returns when the
@@ -97,6 +123,11 @@ public actor BookContextResponder {
     private func handle(_ event: RealtimeToolCallEvent) async {
         if event.name == Self.currentPageToolName {
             await handleCurrentPage(event)
+            return
+        }
+
+        if event.name == Self.chapterIndexToolName {
+            await handleChapterIndex(event)
             return
         }
 
@@ -257,6 +288,126 @@ public actor BookContextResponder {
         }
     }
 
+    private func handleChapterIndex(_ event: RealtimeToolCallEvent) async {
+        if chapterIndexCoordinator == nil || chapterIndexContentVersion == nil {
+            let dependencies = await chapterIndexDependenciesProvider?()
+            chapterIndexCoordinator = dependencies?.0
+            chapterIndexContentVersion = dependencies?.1
+        }
+
+        let args: ChapterIndexArgs
+        do {
+            let data = Data(event.argumentsJSON.utf8)
+            args = try JSONDecoder().decode(ChapterIndexArgs.self, from: data)
+        } catch {
+            await sendChapterIndexPayload(
+                callId: event.callId,
+                payload: ChapterIndexToolPayload(
+                    status: .failed,
+                    bookID: bookId,
+                    contentVersion: chapterIndexContentVersion ?? "",
+                    chapters: [],
+                    error: "Invalid chapterIndex arguments"
+                )
+            )
+            return
+        }
+
+        let startChapter = args.startChapter ?? 0
+        let maxChapters = args.maxChapters ?? 16
+        guard (0...100_000).contains(startChapter), (1...16).contains(maxChapters) else {
+            await sendChapterIndexPayload(
+                callId: event.callId,
+                payload: ChapterIndexToolPayload(
+                    status: .failed,
+                    bookID: bookId,
+                    contentVersion: chapterIndexContentVersion ?? "",
+                    chapters: [],
+                    error: "Invalid chapterIndex pagination arguments"
+                )
+            )
+            return
+        }
+
+        guard let coordinator = chapterIndexCoordinator,
+              let contentVersion = chapterIndexContentVersion,
+              !contentVersion.isEmpty else {
+            await sendChapterIndexPayload(
+                callId: event.callId,
+                payload: ChapterIndexToolPayload(
+                    status: .unavailable,
+                    bookID: bookId,
+                    contentVersion: chapterIndexContentVersion ?? "",
+                    chapters: [],
+                    error: "Chapter index is unavailable"
+                )
+            )
+            return
+        }
+
+        do {
+            let index = try await coordinator.index(bookID: bookId, contentVersion: contentVersion)
+            guard startChapter <= index.chapters.count else {
+                await sendChapterIndexPayload(
+                    callId: event.callId,
+                    payload: ChapterIndexToolPayload(
+                        status: .failed,
+                        bookID: bookId,
+                        contentVersion: contentVersion,
+                        chapters: [],
+                        error: "startChapter is outside the available chapter index"
+                    )
+                )
+                return
+            }
+            await sendChapterIndexPayload(
+                callId: event.callId,
+                payload: .init(index: index, startChapter: startChapter, maxChapters: maxChapters)
+            )
+        } catch {
+            await sendChapterIndexPayload(
+                callId: event.callId,
+                payload: ChapterIndexToolPayload(
+                    status: .failed,
+                    bookID: bookId,
+                    contentVersion: contentVersion,
+                    chapters: [],
+                    error: String(describing: error).prefix(512).description
+                )
+            )
+        }
+    }
+
+    private func sendChapterIndexPayload(callId: String, payload: ChapterIndexToolPayload) async {
+        guard !Task.isCancelled else { return }
+        do {
+            var data = try JSONEncoder().encode(payload)
+            if data.count > 64 * 1024 {
+                data = try JSONEncoder().encode(
+                    ChapterIndexToolPayload(
+                        status: .failed,
+                        bookID: payload.bookId,
+                        contentVersion: payload.contentVersion,
+                        chapters: [],
+                        error: "Chapter index response exceeded the voice payload limit"
+                    )
+                )
+            }
+            if data.count > 64 * 1024 {
+                data = Data("{\"status\":\"failed\",\"bookId\":\"\(payload.bookId.uuidString)\",\"contentVersion\":\"\",\"chapters\":[],\"error\":\"Chapter index response exceeded the voice payload limit\"}".utf8)
+            }
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw ChapterIndexPayloadError.encodingFailed
+            }
+            try await client.sendToolResult(callId: callId, payload: json)
+        } catch {
+            Log.event("voice.chapter_index.send_failed", level: .warning, data: [
+                "callId": callId,
+                "error": String(describing: error),
+            ])
+        }
+    }
+
     private func handleCurrentPage(_ event: RealtimeToolCallEvent) async {
         guard let provider = currentPageProvider else {
             await sendCurrentPageResult(
@@ -335,6 +486,61 @@ public actor BookContextResponder {
 
     private enum BookContextArgsError: Error {
         case notUTF8
+    }
+
+    private struct ChapterIndexArgs: Decodable {
+        let startChapter: Int?
+        let maxChapters: Int?
+    }
+
+    private struct ChapterIndexToolPayload: Encodable {
+        let status: ChapterIndexStatus
+        let bookId: UUID
+        let contentVersion: String
+        let chapters: [ChapterIndexChapter]
+        let totalChapters: Int
+        let nextStartChapter: Int?
+        let error: String?
+
+        init(index: ChapterIndex, startChapter: Int = 0, maxChapters: Int = 16) {
+            let total = index.chapters.count
+            let start = min(startChapter, total)
+            let end = min(start + maxChapters, total)
+            self.init(
+                status: index.status,
+                bookID: index.bookID,
+                contentVersion: index.contentVersion,
+                chapters: Array(index.chapters[start..<end]),
+                totalChapters: total,
+                nextStartChapter: end < total ? end : nil,
+                error: index.errorMessage
+            )
+        }
+
+        init(status: ChapterIndexStatus, bookID: UUID, contentVersion: String, chapters: [ChapterIndexChapter], totalChapters: Int = 0, nextStartChapter: Int? = nil, error: String?) {
+            self.status = status
+            self.bookId = bookID
+            self.contentVersion = Self.bounded(contentVersion, bytes: 128)
+            self.chapters = chapters.map {
+                ChapterIndexChapter(
+                    id: Self.bounded($0.id, bytes: 256),
+                    name: Self.bounded($0.name, bytes: 256),
+                    summary: Self.bounded($0.summary, bytes: 1_024),
+                    sourcePosition: $0.sourcePosition
+                )
+            }
+            self.totalChapters = totalChapters
+            self.nextStartChapter = nextStartChapter
+            self.error = error.map { Self.bounded($0, bytes: 512) }
+        }
+
+        private static func bounded(_ value: String, bytes: Int) -> String {
+            String(decoding: value.utf8.prefix(bytes), as: UTF8.self)
+        }
+    }
+
+    private enum ChapterIndexPayloadError: Error {
+        case encodingFailed
     }
 }
 

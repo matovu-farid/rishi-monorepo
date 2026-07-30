@@ -167,6 +167,7 @@ struct SyncRuntime: @unchecked Sendable {
     let status: SyncStatus
     let engine: SyncEngine
     let backgroundTaskCoordinator: BackgroundTaskCoordinator
+    let chapterIndexGenerationDispatcher: ChapterIndexGenerationDispatcher
     let apnsDeviceRegistrar: APNsDeviceRegistrar
     let chatRefreshAdapter: AppChatRefreshAdapter
 }

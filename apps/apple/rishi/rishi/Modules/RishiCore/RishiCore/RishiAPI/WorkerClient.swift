@@ -35,6 +35,15 @@ public actor WorkerClient {
         self.devBypassSecret = devBypassSecret
     }
 
+    /// Whether this client can make a consented authenticated AI request.
+    /// This is a probe only; the endpoint still enforces the same headers when
+    /// the request is built and sent.
+    public func hasAuthenticatedAIRequestAccess() async -> Bool {
+        let hasToken = await tokenProvider.token() != nil
+        let hasConsent = await dataUseConsentProvider.hasCurrentDataUseConsent()
+        return hasToken && hasConsent
+    }
+
     // MARK: - Non-streaming send
 
     /// Send a typed endpoint, retrying transient failures with exponential backoff.

@@ -43,7 +43,6 @@ struct SessionTests {
             token: "t",
             userId: "abc",
             email: nil,
-            provider: .apple,
             issuedAt: Date(timeIntervalSince1970: 0),
             expiresAt: nil
         )

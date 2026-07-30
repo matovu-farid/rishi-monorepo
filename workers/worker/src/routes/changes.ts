@@ -4,7 +4,7 @@ import { and, asc, eq, gt } from "drizzle-orm";
 import { requireAuth } from "../index";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { createDb } from "../db/drizzle";
-import { books, highlights, bookmarks } from "../db/schema";
+import { books, highlights, bookmarks, chapterIndexes, chapterIndexChapters } from "../db/schema";
 
 /**
  * GET /api/sync/changes?since=<ISO8601>
@@ -40,6 +40,7 @@ import { books, highlights, bookmarks } from "../db/schema";
 
 const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
 const PULL_LIMIT = 5000;
+const CHAPTER_CHILD_LIMIT = 5000;
 
 function toSecondsSinceRefDate(msEpoch: number): number {
   return (msEpoch - REFERENCE_DATE_OFFSET_MS) / 1000;
@@ -75,6 +76,10 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
     sinceMs === null
       ? eq(bookmarks.userId, userId)
       : and(eq(bookmarks.userId, userId), gt(bookmarks.updatedAt, sinceMs));
+  const chapterIndexWhere =
+    sinceMs === null
+      ? eq(chapterIndexes.userId, userId)
+      : and(eq(chapterIndexes.userId, userId), gt(chapterIndexes.updatedAt, sinceMs));
 
   const bookRows = await db
     .select()
@@ -97,10 +102,26 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
     .orderBy(asc(bookmarks.updatedAt))
     .limit(PULL_LIMIT)
     .all();
+  const chapterIndexRows = await db
+    .select()
+    .from(chapterIndexes)
+    .where(chapterIndexWhere)
+    .orderBy(asc(chapterIndexes.updatedAt))
+    .all();
+
+  const latestChapterByBook = new Map<string, (typeof chapterIndexRows)[number]>();
+  for (const row of chapterIndexRows) {
+    const current = latestChapterByBook.get(row.bookId);
+    if (!current || row.updatedAt > current.updatedAt) latestChapterByBook.set(row.bookId, row);
+  }
+  const latestChapterRows = [...latestChapterByBook.values()]
+    .filter((row) => sinceMs === null || row.updatedAt > sinceMs)
+    .sort((a, b) => a.updatedAt - b.updatedAt)
+    .slice(0, PULL_LIMIT);
 
   // ── Map rows to SyncChange envelopes ────────────────────────────────
   interface Change {
-    kind: "book" | "highlight" | "bookmark";
+    kind: "book" | "highlight" | "bookmark" | "chapter_index";
     id: string;
     payload: Record<string, unknown>;
     updated_at: number;
@@ -189,6 +210,59 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
     });
   }
 
+  const childrenByVersion = new Map<string, Array<Record<string, unknown>>>();
+  let childBudget = CHAPTER_CHILD_LIMIT;
+  for (const row of latestChapterRows) {
+    const key = `${row.bookId}:${row.contentVersion}`;
+    if (childBudget <= 0) continue;
+    const rows = await db
+      .select()
+      .from(chapterIndexChapters)
+      .where(and(
+        eq(chapterIndexChapters.userId, userId),
+        eq(chapterIndexChapters.bookId, row.bookId),
+        eq(chapterIndexChapters.contentVersion, row.contentVersion),
+      ))
+      .orderBy(asc(chapterIndexChapters.sourcePosition))
+      .limit(Math.min(CHAPTER_CHILD_LIMIT + 1, childBudget + 1))
+      .all();
+    childrenByVersion.set(key, rows as unknown as Array<Record<string, unknown>>);
+    childBudget -= Math.min(rows.length, CHAPTER_CHILD_LIMIT);
+  }
+
+  for (const row of latestChapterRows as unknown as Array<Record<string, unknown>>) {
+    const updatedAt = row.updatedAt as number;
+    const allChildRowsForIndex = childrenByVersion.get(`${row.bookId}:${row.contentVersion}`) ?? [];
+    const chaptersTruncated = allChildRowsForIndex.length > CHAPTER_CHILD_LIMIT;
+    const childRowsForIndex = allChildRowsForIndex.slice(0, CHAPTER_CHILD_LIMIT);
+    changes.push({
+      kind: "chapter_index",
+      id: row.bookId as string,
+      payload: {
+        id: row.id as string,
+        book_id: row.bookId as string,
+        content_version: row.contentVersion as string,
+        status: row.status as string,
+        model_identifier: row.modelIdentifier as string,
+        model_version: row.modelVersion as string,
+        progress: { completed: row.completedCount, total: row.totalCount },
+        error_message: row.errorMessage ?? null,
+        created_at: typeof row.createdAt === "number" ? new Date(row.createdAt).toISOString() : null,
+        updated_at: typeof row.updatedAt === "number" ? new Date(row.updatedAt).toISOString() : null,
+        chapters: childRowsForIndex.map((child) => ({
+          id: child.chapterId,
+          name: child.name,
+          summary: child.summary,
+          source_position: child.sourcePosition,
+        })),
+        chapters_truncated: chaptersTruncated,
+      },
+      updated_at: toSecondsSinceRefDate(updatedAt),
+      deleted: false,
+      __sortKey: updatedAt,
+    });
+  }
+
   // Sort ASC by updatedAt across ALL kinds so the iOS ChangeApplier sees
   // a stable, monotonically-increasing iteration order. Within-kind order
   // already comes from the .orderBy(asc(...)) clauses above; this final
@@ -198,6 +272,7 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
     bookRows.length >= PULL_LIMIT ? bookRows.at(-1)?.updatedAt : undefined,
     highlightRows.length >= PULL_LIMIT ? highlightRows.at(-1)?.updatedAt : undefined,
     bookmarkRows.length >= PULL_LIMIT ? bookmarkRows.at(-1)?.updatedAt : undefined,
+    latestChapterRows.length >= PULL_LIMIT ? latestChapterRows.at(-1)?.updatedAt : undefined,
   ].filter((value): value is number => typeof value === "number");
   // The client has a single timestamp cursor. If one type was truncated, do
   // not return another type beyond that type's safe boundary; otherwise the
@@ -208,6 +283,7 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
     : Number.POSITIVE_INFINITY;
   const sanitized = changes
     .filter((change) => change.__sortKey <= safeCutoff)
+    .slice(0, PULL_LIMIT)
     .map(({ __sortKey: _s, ...rest }) => {
     void _s;
     return rest;

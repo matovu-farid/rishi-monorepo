@@ -25,7 +25,12 @@ struct ReaderVoicePresenterTests {
         }
         var calls: [Call] = []
 
-        func presentVoice(bookId: BookID, context: ReaderVoiceContext, initialQuote: String?) {
+        func presentVoice(
+            bookId: BookID,
+            context: ReaderVoiceContext,
+            contextProvider: @escaping ReaderVoiceContextProvider,
+            initialQuote: String?
+        ) {
             calls.append(Call(bookId: bookId, context: context, initialQuote: initialQuote))
         }
     }
@@ -48,7 +53,7 @@ struct ReaderVoicePresenterTests {
         let bookId: BookID = UUID()
         let context = ctx()
 
-        presenter.presentVoice(bookId: bookId, context: context, initialQuote: nil)
+        presenter.presentVoice(bookId: bookId, context: context, contextProvider: { context }, initialQuote: nil)
 
         #expect(presenter.calls == [.init(bookId: bookId, context: context, initialQuote: nil)])
         #expect(presenter.calls.first?.context.title == "Moby Dick")
@@ -61,7 +66,7 @@ struct ReaderVoicePresenterTests {
         let bookId: BookID = UUID()
         let quote = "It was the best of times, it was the worst of times."
 
-        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: quote)
+        presenter.presentVoice(bookId: bookId, context: ctx(), contextProvider: { ctx() }, initialQuote: quote)
 
         #expect(presenter.calls.count == 1)
         #expect(presenter.calls.first?.bookId == bookId)
@@ -73,9 +78,9 @@ struct ReaderVoicePresenterTests {
         let presenter = FakeReaderVoicePresenter()
         let bookId: BookID = UUID()
 
-        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: nil)
-        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: "first quote")
-        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: "second quote")
+        presenter.presentVoice(bookId: bookId, context: ctx(), contextProvider: { ctx() }, initialQuote: nil)
+        presenter.presentVoice(bookId: bookId, context: ctx(), contextProvider: { ctx() }, initialQuote: "first quote")
+        presenter.presentVoice(bookId: bookId, context: ctx(), contextProvider: { ctx() }, initialQuote: "second quote")
 
         #expect(presenter.calls.count == 3)
         #expect(presenter.calls[1].initialQuote == "first quote")

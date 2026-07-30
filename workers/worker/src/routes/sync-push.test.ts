@@ -99,17 +99,49 @@ interface FakeBookmarkRow {
   isDeleted: boolean
 }
 
+interface FakeChapterIndexRow {
+  id: string
+  userId: string
+  bookId: string
+  contentVersion: string
+  status: string
+  modelIdentifier: string
+  modelVersion: string
+  completedCount: number
+  totalCount: number
+  errorMessage: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+interface FakeChapterSummaryRow {
+  id: string
+  userId: string
+  bookId: string
+  contentVersion: string
+  chapterId: string
+  sourcePosition: number
+  name: string
+  summary: string
+  createdAt: number
+  updatedAt: number
+}
+
 const {
   booksStore,
   highlightsStore,
   conversationsStore,
   messagesStore,
   bookmarksStore,
+  chapterIndexesStore,
+  chapterSummariesStore,
   BOOK_COLS,
   HIGHLIGHT_COLS,
   CONV_COLS,
   MSG_COLS,
   BOOKMARK_COLS,
+  CHAPTER_INDEX_COLS,
+  CHAPTER_SUMMARY_COLS,
 } = vi.hoisted(() => {
   function mkCols<T extends string>(table: T, names: string[]) {
     const out: Record<string, { __table: T; __col: string }> = {}
@@ -122,6 +154,8 @@ const {
     conversationsStore: [] as FakeConversationRow[],
     messagesStore: [] as FakeMessageRow[],
     bookmarksStore: [] as FakeBookmarkRow[],
+    chapterIndexesStore: [] as FakeChapterIndexRow[],
+    chapterSummariesStore: [] as FakeChapterSummaryRow[],
     BOOK_COLS: mkCols("books", [
       "id",
       "userId",
@@ -135,6 +169,8 @@ const {
     CONV_COLS: mkCols("conversations", ["id", "userId", "updatedAt", "isDeleted"]),
     MSG_COLS: mkCols("messages", ["id", "conversationId", "updatedAt"]),
     BOOKMARK_COLS: mkCols("bookmarks", ["id", "userId", "updatedAt", "isDeleted"]),
+    CHAPTER_INDEX_COLS: mkCols("chapter_indexes", ["id", "userId", "bookId", "contentVersion", "updatedAt"]),
+    CHAPTER_SUMMARY_COLS: mkCols("chapter_index_chapters", ["id", "userId", "bookId", "contentVersion", "chapterId", "sourcePosition", "updatedAt"]),
   }
 })
 
@@ -144,6 +180,8 @@ function resetStores() {
   conversationsStore.length = 0
   messagesStore.length = 0
   bookmarksStore.length = 0
+  chapterIndexesStore.length = 0
+  chapterSummariesStore.length = 0
 }
 
 // ─── Mock schema so table imports resolve to column-id maps ──────────────────
@@ -154,6 +192,8 @@ vi.mock("@rishi/shared/schema", () => ({
   messages: MSG_COLS,
   devices: {},
   bookmarks: BOOKMARK_COLS,
+  chapterIndexes: CHAPTER_INDEX_COLS,
+  chapterIndexChapters: CHAPTER_SUMMARY_COLS,
   user: {},
   session: {},
   account: {},
@@ -172,6 +212,8 @@ vi.mock("../db/schema", () => ({
   messages: MSG_COLS,
   devices: {},
   bookmarks: BOOKMARK_COLS,
+  chapterIndexes: CHAPTER_INDEX_COLS,
+  chapterIndexChapters: CHAPTER_SUMMARY_COLS,
   user: {},
   session: {},
   account: {},
@@ -188,6 +230,9 @@ type ColRef = { __table: string; __col: string }
 type Pred =
   | { kind: "eq"; table: string; col: string; value: unknown }
   | { kind: "gt"; table: string; col: string; value: number }
+  | { kind: "lt"; table: string; col: string; value: number }
+  | { kind: "in"; table: string; col: string; value: unknown[] }
+  | { kind: "exists" | "notExists"; query: { get: () => unknown } }
   | { kind: "and"; preds: Pred[] }
 
 function matches(row: Record<string, unknown>, p: Pred): boolean {
@@ -197,6 +242,13 @@ function matches(row: Record<string, unknown>, p: Pred): boolean {
     const v = row[p.col]
     return typeof v === "number" && v > (p.value as number)
   }
+  if (p.kind === "lt") {
+    const v = row[p.col]
+    return typeof v === "number" && v < p.value
+  }
+  if (p.kind === "in") return p.value.includes(row[p.col])
+  if (p.kind === "exists") return p.query.get() !== undefined
+  if (p.kind === "notExists") return p.query.get() === undefined
   return false
 }
 
@@ -213,11 +265,15 @@ vi.mock("drizzle-orm", () => ({
     col: col.__col,
     value,
   }),
+  lt: (col: ColRef, value: number): Pred => ({ kind: "lt", table: col.__table, col: col.__col, value }),
+  inArray: (col: ColRef, value: unknown[]): Pred => ({ kind: "in", table: col.__table, col: col.__col, value }),
   and: (...preds: Pred[]): Pred => ({ kind: "and", preds }),
   asc: (col: ColRef) => ({ table: col.__table, col: col.__col, dir: "asc" }),
   desc: (col: ColRef) => ({ table: col.__table, col: col.__col, dir: "desc" }),
   max: (col: ColRef) => ({ __agg: "max", col }),
-  sql: (..._args: unknown[]) => ({ __sql: true }),
+  exists: (query: { get: () => unknown }) => ({ kind: "exists", query }),
+  notExists: (query: { get: () => unknown }) => ({ kind: "notExists", query }),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => values.length === 1 ? values[0] : ({ __sql: true }),
   getTableColumns: (_t: unknown) => ({}),
 }))
 
@@ -232,6 +288,10 @@ function storeFor(table: string): Array<Record<string, unknown>> {
     return messagesStore as unknown as Array<Record<string, unknown>>
   if (table === "bookmarks")
     return bookmarksStore as unknown as Array<Record<string, unknown>>
+  if (table === "chapter_indexes")
+    return chapterIndexesStore as unknown as Array<Record<string, unknown>>
+  if (table === "chapter_index_chapters")
+    return chapterSummariesStore as unknown as Array<Record<string, unknown>>
   return []
 }
 
@@ -246,7 +306,7 @@ function tableTagOf(table: unknown): string {
 
 function makeTx() {
   return {
-    select(_proj?: unknown) {
+    select(projection?: Record<string, unknown>) {
       return {
         from(table: unknown) {
           const tag = tableTagOf(table)
@@ -259,7 +319,13 @@ function makeTx() {
             get() {
               const src = storeFor(tag)
               for (const r of src) {
-                if (!predicate || matches(r, predicate)) return r
+                if (!predicate || matches(r, predicate)) {
+                  if (!projection) return r
+                  return Object.fromEntries(Object.keys(projection).map((key) => {
+                    const value = projection[key] as Partial<ColRef>
+                    return [key, value && value.__col ? r[value.__col] : projection[key]]
+                  }))
+                }
               }
               return undefined
             },
@@ -280,12 +346,31 @@ function makeTx() {
     },
     insert(table: unknown) {
       const tag = tableTagOf(table)
-      return {
-        values(v: Record<string, unknown>) {
-          storeFor(tag).push({ ...v })
-          return { run() {}, get() {} }
+      let values: Record<string, unknown> | undefined
+      let selected: { get: () => Record<string, unknown> | undefined } | undefined
+      let conflict: { set?: Record<string, unknown>; where?: Pred; ignore?: boolean } | undefined
+      const statement = {
+        values(v: Record<string, unknown>) { values = v; return statement },
+        select(query: { get: () => Record<string, unknown> | undefined }) { selected = query; return statement },
+        onConflictDoUpdate(opts: { set: Record<string, unknown>; where?: Pred }) { conflict = opts; return statement },
+        onConflictDoNothing() { conflict = { ignore: true }; return statement },
+        run() {
+          if (!values && selected) values = selected.get()
+          if (!values) return
+          const rows = storeFor(tag)
+          const existing = rows.find((row) => tag === "chapter_index_chapters"
+            ? row.userId === values!.userId && row.bookId === values!.bookId && row.contentVersion === values!.contentVersion && row.chapterId === values!.chapterId
+            : tag === "chapter_indexes"
+              ? row.userId === values!.userId && row.bookId === values!.bookId && row.contentVersion === values!.contentVersion
+              : row.userId === values!.userId && row.bookId === values!.bookId)
+          if (conflict?.ignore && existing) return
+          if (conflict && existing) {
+            if (!conflict.where || matches(existing, conflict.where)) Object.assign(existing, conflict.set ?? {})
+          } else if (!existing || !conflict) rows.push({ ...values })
         },
+        then(resolve: (v: unknown) => void) { statement.run(); resolve(undefined) },
       }
+      return statement
     },
     update(table: unknown) {
       const tag = tableTagOf(table)
@@ -312,6 +397,28 @@ function makeTx() {
       }
       return chain
     },
+    delete(table: unknown) {
+      const tag = tableTagOf(table)
+      let predicate: Pred | null = null
+      const chain = {
+        where(p: Pred) {
+          predicate = p
+          return chain
+        },
+        run() {
+          const src = storeFor(tag)
+          for (let i = src.length - 1; i >= 0; i--) {
+            if (!predicate || matches(src[i], predicate)) src.splice(i, 1)
+          }
+        },
+        then(resolve: (v: unknown) => void) {
+          chain.run()
+          resolve(undefined)
+        },
+      }
+      return chain
+    },
+    batch(statements: Array<{ run: () => void }>) { for (const statement of statements) statement.run() },
     run() {},
     get() {
       return undefined
@@ -384,6 +491,7 @@ const UUID_HL_3 = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const UUID_POS = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 const UUID_BM = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 const UUID_BM_2 = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+const UUID_INDEX = "99999999-9999-4999-8999-999999999999"
 
 interface SyncChange {
   kind: string
@@ -964,5 +1072,74 @@ describe("POST /api/sync/push — bookmark kind", () => {
     expect(highlightsStore.length).toBe(1)
     expect(bookmarksStore.length).toBe(1)
     expect(bookmarksStore[0].location).toBe("epubcfi(/6/4!/4/2)")
+  })
+})
+
+describe("POST /api/sync/push — chapter_index kind", () => {
+  const payload = (version = "content-v1", summary = "Summary") => ({
+    id: UUID_INDEX,
+    book_id: UUID_BOOK,
+    content_version: version,
+    status: "ready",
+    model_identifier: "model",
+    model_version: "1",
+    progress: { completed: 2, total: 2 },
+    chapters: [
+      { id: "chapter-2", name: "Two", summary, source_position: 1 },
+      { id: "chapter-1", name: "One", summary: "First", source_position: 0 },
+    ],
+  })
+
+  it("inserts one parent and ordered children, then safely retries", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_alice" })
+    const change = { kind: "chapter_index", id: UUID_BOOK, payload: payload(), updated_at: 8, deleted: false }
+    expect((await callPush({ changes: [change] })).status).toBe(200)
+    expect((await callPush({ changes: [change] })).status).toBe(200)
+    expect(chapterIndexesStore).toHaveLength(1)
+    expect(chapterSummariesStore.map((row) => row.chapterId)).toEqual(["chapter-2", "chapter-1"])
+    expect(new Set(chapterSummariesStore.map((row) => row.sourcePosition))).toEqual(new Set([0, 1]))
+  })
+
+  it("rejects another user's book and does not write", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_bob" })
+    const res = await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload(), updated_at: 8, deleted: false }] })
+    expect(res.status).toBe(403)
+    expect(chapterIndexesStore).toHaveLength(0)
+  })
+
+  it("rejects stale versions and retains a newer parent snapshot without changing the old key", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_alice" })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v1", "old"), updated_at: 9, deleted: false }] })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v1", "stale"), updated_at: 8, deleted: false }] })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v2", "new"), updated_at: 10, deleted: false }] })
+    expect(chapterIndexesStore).toHaveLength(2)
+    expect(chapterIndexesStore[1].contentVersion).toBe("content-v2")
+    expect(chapterIndexesStore.map((row) => row.contentVersion)).toEqual(["content-v1", "content-v2"])
+    expect(chapterSummariesStore).toHaveLength(4)
+    expect(chapterSummariesStore.filter((row) => row.contentVersion === "content-v2")[0].summary).toBe("new")
+  })
+
+  it("does not write stale children after a newer content version wins", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_alice" })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v2", "new"), updated_at: 10, deleted: false }] })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v1", "stale"), updated_at: 9, deleted: false }] })
+    expect(chapterIndexesStore.map((row) => row.contentVersion)).toEqual(["content-v2"])
+    expect(chapterSummariesStore.map((row) => row.summary)).toEqual(["new", "First"])
+  })
+
+  it("replaces only same-version children for a newer timestamp", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_alice" })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v1", "old"), updated_at: 9, deleted: false }] })
+    await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("content-v1", "new"), updated_at: 10, deleted: false }] })
+    expect(chapterIndexesStore).toHaveLength(1)
+    expect(chapterIndexesStore[0].updatedAt).toBe(978307200000 + 10000)
+    expect(chapterSummariesStore).toHaveLength(2)
+    expect(chapterSummariesStore.every((row) => row.summary === "new" || row.summary === "First")).toBe(true)
+  })
+
+  it("bounds chapter count and summary size", async () => {
+    const tooMany = { ...payload(), chapters: Array.from({ length: 501 }, (_, i) => ({ id: `c-${i}`, name: "x", summary: "x", source_position: i })) }
+    expect((await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: tooMany, updated_at: 8, deleted: false }] })).status).toBe(400)
+    expect((await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("v", "x".repeat(32769)), updated_at: 8, deleted: false }] })).status).toBe(400)
   })
 })

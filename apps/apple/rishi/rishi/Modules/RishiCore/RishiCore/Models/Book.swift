@@ -19,6 +19,9 @@ public struct Book: Codable, Sendable, Hashable, Identifiable {
     public var coverPath: String?           // relative path; nil if no cover extracted
     public var positionId: PositionID?
     public var conversationId: ConversationID?
+    /// Version of the local chapter source used by the latest chapter index.
+    /// Nil keeps books written before chapter indexing fully compatible.
+    public var chapterIndexContentVersion: String?
 
     public init(
         id: BookID = UUID(),
@@ -31,7 +34,8 @@ public struct Book: Codable, Sendable, Hashable, Identifiable {
         fileURL: String,
         coverPath: String? = nil,
         positionId: PositionID? = nil,
-        conversationId: ConversationID? = nil
+        conversationId: ConversationID? = nil,
+        chapterIndexContentVersion: String? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -44,5 +48,6 @@ public struct Book: Codable, Sendable, Hashable, Identifiable {
         self.coverPath = coverPath
         self.positionId = positionId
         self.conversationId = conversationId
+        self.chapterIndexContentVersion = chapterIndexContentVersion
     }
 }

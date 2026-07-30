@@ -6,6 +6,7 @@ import {
   primaryKey,
   index,
   uniqueIndex,
+  foreignKey,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
@@ -106,6 +107,61 @@ export const books = sqliteTable("books", {
   totalPages: integer("total_pages"),
   extractionError: text("extraction_error"),
 });
+
+// ─── Chapter index sync ─────────────────────────────────────────────────────
+// One parent row is the LWW envelope; child rows retain the normalized,
+// ordered chapter summaries for a single content version.
+export const chapterIndexes = sqliteTable(
+  "chapter_indexes",
+  {
+    id: text("id").notNull(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    bookId: text("book_id").notNull().references(() => books.id, { onDelete: "cascade" }),
+    contentVersion: text("content_version").notNull(),
+    status: text("status", { enum: ["building", "ready", "unavailable", "failed"] }).notNull(),
+    modelIdentifier: text("model_identifier").notNull(),
+    modelVersion: text("model_version").notNull(),
+    completedCount: integer("completed_count").notNull().default(0),
+    totalCount: integer("total_count").notNull().default(0),
+    errorMessage: text("error_message"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.bookId, t.contentVersion] }),
+    byUserUpdated: index("chapter_indexes_user_updated_idx").on(t.userId, t.updatedAt),
+    versionKey: uniqueIndex("chapter_indexes_version_key_uniq").on(t.userId, t.bookId, t.contentVersion),
+  }),
+);
+
+export const chapterIndexChapters = sqliteTable(
+  "chapter_index_chapters",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    bookId: text("book_id").notNull(),
+    contentVersion: text("content_version").notNull(),
+    chapterId: text("chapter_id").notNull(),
+    sourcePosition: integer("source_position").notNull(),
+    name: text("name").notNull(),
+    summary: text("summary").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => ({
+    uniqueChapter: uniqueIndex("chapter_index_chapters_version_chapter_uniq").on(
+      t.userId, t.bookId, t.contentVersion, t.chapterId,
+    ),
+    byVersionOrder: index("chapter_index_chapters_version_order_idx").on(
+      t.userId, t.bookId, t.contentVersion, t.sourcePosition,
+    ),
+    parent: foreignKey({
+      columns: [t.userId, t.bookId, t.contentVersion],
+      foreignColumns: [chapterIndexes.userId, chapterIndexes.bookId, chapterIndexes.contentVersion],
+      name: "chapter_index_chapters_parent_fk",
+    }),
+  }),
+);
 
 // ─── Sync metadata table ───────────────────────────────────────────────────────
 // Tracks sync state on the client. Single row with id='default'.

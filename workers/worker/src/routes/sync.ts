@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, and, max, asc, getTableColumns } from "drizzle-orm";
+import { eq, gt, and, max, asc, getTableColumns, lt, desc, exists, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { requireAuth } from "../middleware";
@@ -11,6 +11,8 @@ import {
   conversations,
   messages,
   bookmarks,
+  chapterIndexes,
+  chapterIndexChapters,
 } from "../db/schema";
 import type { PullResponse } from "@rishi/shared/sync-types";
 
@@ -37,6 +39,7 @@ const SyncChangeSchema = z.object({
     "conversation",
     "message",
     "bookmark",
+    "chapter_index",
   ]),
   id: z.string(),
   payload: z.record(z.string(), z.unknown()),
@@ -50,6 +53,39 @@ const PushBodySchema = z.object({
 
 class SyncOwnershipConflict extends Error {}
 class InvalidBookR2Key extends Error {}
+class InvalidChapterIndex extends Error {}
+
+const ChapterIndexPayloadSchema = z.object({
+  id: z.string().min(1).max(256),
+  book_id: z.string().min(1).max(256),
+  content_version: z.string().min(1).max(256),
+  status: z.enum(["building", "ready", "unavailable", "failed"]),
+  model_identifier: z.string().max(256).default(""),
+  model_version: z.string().max(256).default(""),
+  progress: z.object({
+    completed: z.number().int().min(0).max(500),
+    total: z.number().int().min(0).max(500),
+  }).default({ completed: 0, total: 0 }),
+  error_message: z.string().max(8192).nullable().optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+  chapters: z.array(z.object({
+    id: z.string().min(1).max(256),
+    name: z.string().min(1).max(8192),
+    summary: z.string().max(32768),
+    source_position: z.number().int().min(0).max(500),
+  })).max(500),
+});
+
+function parseChapterIndexPayload(payload: Record<string, unknown>, bookId: string) {
+  const parsed = ChapterIndexPayloadSchema.safeParse(payload);
+  if (!parsed.success || parsed.data.book_id !== bookId) throw new InvalidChapterIndex();
+  const ids = new Set(parsed.data.chapters.map((chapter) => chapter.id));
+  if (ids.size !== parsed.data.chapters.length || JSON.stringify(payload).length > 2 * 1024 * 1024) {
+    throw new InvalidChapterIndex();
+  }
+  return parsed.data;
+}
 
 function isOwnedBookR2Key(key: string, userId: string, bookId: string): boolean {
   const prefix = `books/${userId}/${bookId}.`;
@@ -101,6 +137,109 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
   try {
     await (async (tx) => {
     for (const change of body.changes) {
+      // ── chapter_index (atomic parent envelope + normalized children) ────
+      if (change.kind === "chapter_index") {
+        const bookId = change.id;
+        const p = parseChapterIndexPayload(change.payload, bookId);
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
+
+        const ownedBook = await tx
+          .select({ userId: books.userId })
+          .from(books)
+          .where(eq(books.id, bookId))
+          .get();
+        if (!ownedBook) throw new SyncOwnershipConflict();
+        if (ownedBook.userId !== userId) throw new SyncOwnershipConflict();
+
+        const parent = {
+          id: p.id,
+          userId,
+          bookId,
+          contentVersion: p.content_version,
+          status: p.status,
+          modelIdentifier: p.model_identifier,
+          modelVersion: p.model_version,
+          completedCount: p.progress.completed,
+          totalCount: p.progress.total,
+          errorMessage: p.error_message ?? null,
+          createdAt: p.created_at ? Date.parse(p.created_at) : pushedUpdatedAtMs,
+          updatedAt: pushedUpdatedAtMs,
+        } as typeof chapterIndexes.$inferInsert;
+        const newerParent = tx.select({ id: chapterIndexes.id }).from(chapterIndexes).where(and(
+          eq(chapterIndexes.userId, userId),
+          eq(chapterIndexes.bookId, bookId),
+          gt(chapterIndexes.updatedAt, pushedUpdatedAtMs),
+        ));
+        const acceptedParent = tx.select({ id: chapterIndexes.id }).from(chapterIndexes).where(and(
+          eq(chapterIndexes.userId, userId),
+          eq(chapterIndexes.bookId, bookId),
+          eq(chapterIndexes.contentVersion, p.content_version),
+          eq(chapterIndexes.updatedAt, pushedUpdatedAtMs),
+        ));
+        // Gate both insertion of a new version and replacement of an existing
+        // version on the same cross-version LWW check. Child statements below
+        // are in this D1 batch and independently require the accepted parent.
+        const parentUpsert = tx.insert(chapterIndexes).select(tx.select({
+          id: sql`${parent.id}`,
+          userId: sql`${userId}`,
+          bookId: sql`${bookId}`,
+          contentVersion: sql`${parent.contentVersion}`,
+          status: sql`${parent.status}`,
+          modelIdentifier: sql`${parent.modelIdentifier}`,
+          modelVersion: sql`${parent.modelVersion}`,
+          completedCount: sql`${parent.completedCount}`,
+          totalCount: sql`${parent.totalCount}`,
+          errorMessage: sql`${parent.errorMessage}`,
+          createdAt: sql`${parent.createdAt}`,
+          updatedAt: sql`${parent.updatedAt}`,
+        }).from(books).where(and(
+          eq(books.id, bookId),
+          eq(books.userId, userId),
+          notExists(newerParent),
+        )).limit(1)).onConflictDoUpdate({
+          target: [chapterIndexes.userId, chapterIndexes.bookId, chapterIndexes.contentVersion],
+          set: {
+            id: parent.id,
+            status: parent.status,
+            modelIdentifier: parent.modelIdentifier,
+            modelVersion: parent.modelVersion,
+            completedCount: parent.completedCount,
+            totalCount: parent.totalCount,
+            errorMessage: parent.errorMessage,
+            createdAt: parent.createdAt,
+            updatedAt: parent.updatedAt,
+          },
+          where: and(
+            eq(chapterIndexes.userId, userId),
+            eq(chapterIndexes.bookId, bookId),
+            lt(chapterIndexes.updatedAt, pushedUpdatedAtMs),
+            notExists(newerParent),
+          ),
+        });
+        const childDeletes = tx.delete(chapterIndexChapters).where(and(
+          eq(chapterIndexChapters.userId, userId),
+          eq(chapterIndexChapters.bookId, bookId),
+          eq(chapterIndexChapters.contentVersion, p.content_version),
+          exists(acceptedParent),
+        ));
+        const childStatements = p.chapters.map((chapter) => tx.insert(chapterIndexChapters).select(tx.select({
+          id: sql`${`${userId}/${bookId}/${p.content_version}/${chapter.id}`}`,
+          userId: sql`${userId}`,
+          bookId: sql`${bookId}`,
+          contentVersion: sql`${p.content_version}`,
+          chapterId: sql`${chapter.id}`,
+          sourcePosition: sql`${chapter.source_position}`,
+          name: sql`${chapter.name}`,
+          summary: sql`${chapter.summary}`,
+          createdAt: sql`${pushedUpdatedAtMs}`,
+          updatedAt: sql`${pushedUpdatedAtMs}`,
+        }).from(chapterIndexes).where(exists(acceptedParent)).limit(1)).onConflictDoNothing());
+        await tx.batch(
+          [parentUpsert, childDeletes, ...childStatements] as Parameters<typeof tx.batch>[0],
+        );
+        continue;
+      }
+
       // ── book ─────────────────────────────────────────────────────────────
       if (change.kind === "book") {
         const p = change.payload as Record<string, unknown>;
@@ -471,6 +610,9 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
     }
     if (error instanceof InvalidBookR2Key) {
       return c.json({ error: "invalid_file_r2_key" }, 400);
+    }
+    if (error instanceof InvalidChapterIndex) {
+      return c.json({ error: "invalid_chapter_index" }, 400);
     }
     throw error;
   }

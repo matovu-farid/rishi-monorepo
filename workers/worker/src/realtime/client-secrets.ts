@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   BOOK_CONTEXT_TOOL_SPEC,
+  CHAPTER_INDEX_TOOL_SPEC,
   CURRENT_PAGE_CONTEXT_TOOL_SPEC,
   renderRealtimeInstructions,
 } from "@rishi/shared/voice-chat/build-realtime-agent";
@@ -105,6 +106,12 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
           name: CURRENT_PAGE_CONTEXT_TOOL_SPEC.name,
           description: CURRENT_PAGE_CONTEXT_TOOL_SPEC.description,
           parameters: CURRENT_PAGE_CONTEXT_TOOL_SPEC.parameters,
+        },
+        {
+          type: "function",
+          name: CHAPTER_INDEX_TOOL_SPEC.name,
+          description: CHAPTER_INDEX_TOOL_SPEC.description,
+          parameters: CHAPTER_INDEX_TOOL_SPEC.parameters,
         },
       ],
       // Keep the complete realtime session configuration on the ephemeral

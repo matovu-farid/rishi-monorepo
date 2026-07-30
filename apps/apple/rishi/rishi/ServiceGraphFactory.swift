@@ -5,7 +5,9 @@
 //
 
 import Foundation
+import CryptoKit
 import OSLog
+@preconcurrency import PDFKit
 
 
 
@@ -131,12 +133,16 @@ enum ServiceGraphFactory {
             )
             ? .enabled
             : .disabled
+        let chapterIndexGenerationDispatcher = ChapterIndexGenerationDispatcher()
         let indexingHook = RishiSearchIndexingHook(
             builder: indexBuilder,
             extractors: [
                 "pdf": PdfTextExtractor(footerPolicy: pdfFooterPolicy),
                 "epub": EpubTextExtractor(),
-            ]
+            ],
+            onIndexReady: { bookID in
+                await chapterIndexGenerationDispatcher.refresh(bookID)
+            }
         )
         let bookFileStorage = BookFileStorage(
             rootURL: documentsURL,
@@ -189,6 +195,13 @@ enum ServiceGraphFactory {
             bookmarkStore: bookmarkStore,
             metadataStore: syncMetadataStore
         )
+        let chapterIndexPersistence = ServiceGraphChapterIndexPersistence(store: bookStore, metadataStore: syncMetadataStore, queue: syncQueue)
+        let chapterIndexUploader = ChapterIndexUploader(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            persistence: chapterIndexPersistence,
+            metadataStore: syncMetadataStore
+        )
 
         let conversationStore = SwiftDataConversationStore(dbStore: dbStore)
         let messageStore = SwiftDataMessageStore(dbStore: dbStore)
@@ -224,6 +237,7 @@ enum ServiceGraphFactory {
             positionStore: positionStore,
             highlightStore: highlightStore,
             bookmarkStore: bookmarkStore,
+            chapterIndexPersistence: chapterIndexPersistence,
             metadataStore: syncMetadataStore,
             currentUserId: { await userIdBox.value },
             accountIsActive: { await userIdBox.value != nil },
@@ -254,6 +268,7 @@ enum ServiceGraphFactory {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             bookmarkUploader: bookmarkUploader,
+            chapterIndexUploader: chapterIndexUploader,
             fetcher: remoteChangeFetcher,
             applier: changeApplier,
             conversationsFetcher: conversationsFetcher,
@@ -335,6 +350,48 @@ enum ServiceGraphFactory {
         }
 
         let voiceSessionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+        let chapterIndexCache = ServiceGraphChapterIndexCoordinatorCache()
+        let chapterIndexContentVersionProvider: @Sendable (BookID) async -> String? = { bookId in
+            guard let book = try? await bookStore.book(bookId) else { return nil }
+            let url = bookFileStorage.absoluteFileURL(for: book)
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            return String("chapter-source-v1-\(digest)".prefix(128))
+        }
+        let chapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory = { bookId, contentVersion in
+            guard let book = try? await bookStore.book(bookId) else { return nil }
+            return await chapterIndexCache.coordinator(bookID: bookId, contentVersion: contentVersion) {
+                ChapterIndexCoordinator(
+                    persistence: chapterIndexPersistence,
+                    source: ServiceGraphChapterSource(book: book, storage: bookFileStorage),
+                    summarizer: ChapterSummarizer(
+                        local: {
+                            #if canImport(FoundationModels)
+                            if #available(iOS 26.0, macCatalyst 26.0, *) {
+                                AppleFoundationModelsChapterSummarizerProvider()
+                            } else {
+                                nil
+                            }
+                            #else
+                            nil
+                            #endif
+                        }(),
+                        fallback: WorkerChapterSummarizerProvider(workerClient: workerClient)
+                    )
+                )
+            }
+        }
+        await chapterIndexGenerationDispatcher.configure { bookID in
+            guard
+                let book = try? await bookStore.book(bookID),
+                let contentVersion = await chapterIndexContentVersionProvider(bookID),
+                let coordinator = await chapterIndexCoordinatorFactory(bookID, contentVersion)
+            else { return }
+            _ = try? await coordinator.waitForCompletion(
+                bookID: book.id,
+                contentVersion: contentVersion
+            )
+        }
         let voiceSessionRegistry = await MainActor.run {
             VoiceSessionRegistry(
                 endServerSession: { id in
@@ -357,6 +414,8 @@ enum ServiceGraphFactory {
                 dirtyHook: voiceDirtyAdapter,
                 bookSearch: bookSearch,
                 embedderPrewarm: embedderPrewarm,
+                chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
+                chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
                 sessionCoordinatorFactory: { voiceSessionCoordinator },
                 sessionRegistry: voiceSessionRegistry,
             )
@@ -447,6 +506,7 @@ enum ServiceGraphFactory {
                 status: syncStatus,
                 engine: syncEngine,
                 backgroundTaskCoordinator: backgroundTaskCoordinator,
+                chapterIndexGenerationDispatcher: chapterIndexGenerationDispatcher,
                 apnsDeviceRegistrar: apnsDeviceRegistrar,
                 chatRefreshAdapter: chatRefreshAdapter
             ),
@@ -495,6 +555,83 @@ enum ServiceGraphFactory {
             return try RishiDB.makeStore(at: dbURL)
         } catch {
             fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
+        }
+    }
+}
+
+private struct ServiceGraphChapterIndexPersistence: ChapterIndexPersistence {
+    let store: SwiftDataBookStore
+    let metadataStore: SwiftDataSyncMetadataStore
+    let queue: SyncQueue
+
+    func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? {
+        try await store.chapterIndex(bookID: bookID, contentVersion: contentVersion)
+    }
+
+    func upsertChapterIndex(_ index: ChapterIndex) async throws {
+        try await store.upsertChapterIndex(index)
+    }
+
+    func markChapterIndexDirty(bookID: BookID) async throws {
+        try await metadataStore.markDirty(entityId: bookID, kind: .chapterIndex)
+        await queue.enqueue(SyncQueueItem(entityId: bookID, kind: .chapterIndex))
+    }
+}
+
+private actor ServiceGraphChapterIndexCoordinatorCache {
+    private struct Entry: Sendable {
+        let contentVersion: String
+        let coordinator: ChapterIndexCoordinator
+    }
+
+    private var values: [BookID: Entry] = [:]
+
+    func coordinator(
+        bookID: BookID,
+        contentVersion: String,
+        make: @Sendable () -> ChapterIndexCoordinator
+    ) -> ChapterIndexCoordinator {
+        if let existing = values[bookID], existing.contentVersion == contentVersion {
+            return existing.coordinator
+        }
+        let created = make()
+        // A new content version supersedes the previous generation for this
+        // book, keeping the service-graph cache bounded.
+        values[bookID] = Entry(contentVersion: contentVersion, coordinator: created)
+        return created
+    }
+}
+
+private struct ServiceGraphChapterSource: ChapterSource {
+    let book: Book
+    let storage: BookFileStorage
+
+    func chapters() async -> ChapterSourceResult {
+        let fileURL = storage.absoluteFileURL(for: book)
+        switch book.formatType {
+        case .epub:
+            do {
+                let publication = try await PublicationLoader().open(fileURL: fileURL)
+                return await EPUBChapterSource.snapshot(from: publication)
+            } catch {
+                return ChapterSourceResult(
+                    availability: .unavailable(diagnostics: ["EPUB could not be opened: \(error)"]),
+                    records: []
+                )
+            }
+        case .pdf:
+            guard let document = PDFDocument(url: fileURL) else {
+                return ChapterSourceResult(
+                    availability: .unavailable(diagnostics: ["PDF could not be opened"]),
+                    records: []
+                )
+            }
+            return await PDFChapterSource.snapshot(from: document)
+        case .mobi, .azw3:
+            return ChapterSourceResult(
+                availability: .unavailable(diagnostics: ["This book format has no chapter source adapter"]),
+                records: []
+            )
         }
     }
 }

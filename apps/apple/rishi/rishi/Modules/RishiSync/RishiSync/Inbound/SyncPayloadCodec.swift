@@ -82,6 +82,29 @@ enum SyncPayloadCodec {
         }
     }
 
+    public static func decodeChapterIndex(_ payload: SyncOpaqueJSON, fallbackUpdatedAt: Date) throws -> ChapterIndex {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            let wire = try decoder.decode(WireChapterIndex.self, from: payload.data)
+            return ChapterIndex(
+                id: wire.id,
+                bookID: wire.bookID,
+                contentVersion: wire.contentVersion,
+                status: wire.status,
+                modelIdentifier: wire.modelIdentifier,
+                modelVersion: wire.modelVersion,
+                progress: .init(completed: wire.progress.completed, total: wire.progress.total),
+                chapters: wire.chapters.map { $0.value },
+                errorMessage: wire.errorMessage,
+                createdAt: wire.createdAt ?? fallbackUpdatedAt,
+                updatedAt: wire.updatedAt ?? fallbackUpdatedAt
+            )
+        } catch {
+            throw CodecError.decodeFailed(kind: "chapter_index", underlying: String(describing: error))
+        }
+    }
+
     public static func decodeBook(
         _ payload: SyncOpaqueJSON,
         fallbackAddedAt: Date,
@@ -102,7 +125,8 @@ enum SyncPayloadCodec {
                 fileURL: wire.fileURL ?? "",
                 coverPath: wire.coverPath,
                 positionId: wire.positionId,
-                conversationId: wire.conversationId
+                conversationId: wire.conversationId,
+                chapterIndexContentVersion: wire.chapterIndexContentVersion
             )
         } catch {
             throw CodecError.decodeFailed(kind: "book", underlying: String(describing: error))
@@ -175,6 +199,24 @@ enum SyncPayloadCodec {
         return SyncOpaqueJSON(data: try encoder.encode(wire))
     }
 
+    public static func encodeChapterIndex(_ index: ChapterIndex) throws -> SyncOpaqueJSON {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return SyncOpaqueJSON(data: try encoder.encode(WireChapterIndex(
+            id: index.id,
+            bookID: index.bookID,
+            contentVersion: index.contentVersion,
+            status: index.status,
+            modelIdentifier: index.modelIdentifier,
+            modelVersion: index.modelVersion,
+            progress: .init(completed: index.progress.completed, total: index.progress.total),
+            chapters: index.chapters.map(WireChapter.init),
+            errorMessage: index.errorMessage,
+            createdAt: index.createdAt,
+            updatedAt: index.updatedAt
+        )))
+    }
+
     public static func encodeBook(_ book: Book, r2Key: String? = nil) throws -> SyncOpaqueJSON {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -191,6 +233,7 @@ enum SyncPayloadCodec {
             coverPath: r2Key == nil ? book.coverPath : nil,
             positionId: book.positionId,
             conversationId: book.conversationId,
+            chapterIndexContentVersion: book.chapterIndexContentVersion,
             fileR2Key: r2Key,
             currentCfi: nil,
             lastProgressPercent: nil
@@ -269,6 +312,7 @@ enum SyncPayloadCodec {
         let coverPath: String?
         let positionId: PositionID?
         let conversationId: ConversationID?
+        let chapterIndexContentVersion: String?
         let fileR2Key: String?
         let currentCfi: String?
         let lastProgressPercent: Double?
@@ -286,9 +330,64 @@ enum SyncPayloadCodec {
             case coverPath = "cover_path"
             case positionId = "position_id"
             case conversationId = "conversation_id"
+            case chapterIndexContentVersion = "chapter_index_content_version"
             case fileR2Key = "file_r2_key"
             case currentCfi = "current_cfi"
             case lastProgressPercent = "last_progress_percent"
+        }
+    }
+
+    private struct WireChapterIndex: Codable {
+        let id: UUID
+        let bookID: UUID
+        let contentVersion: String
+        let status: ChapterIndexStatus
+        let modelIdentifier: String
+        let modelVersion: String
+        let progress: ChapterIndexProgress
+        let chapters: [WireChapter]
+        let errorMessage: String?
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id, status, progress, chapters
+            case bookID = "book_id"
+            case contentVersion = "content_version"
+            case modelIdentifier = "model_identifier"
+            case modelVersion = "model_version"
+            case errorMessage = "error_message"
+            case createdAt = "created_at"
+            case updatedAt = "updated_at"
+        }
+    }
+
+    private struct WireChapter: Codable {
+        let value: ChapterIndexChapter
+
+        init(_ value: ChapterIndexChapter) { self.value = value }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            value = ChapterIndexChapter(
+                id: try c.decode(String.self, forKey: .id),
+                name: try c.decode(String.self, forKey: .name),
+                summary: try c.decode(String.self, forKey: .summary),
+                sourcePosition: try c.decodeIfPresent(Int.self, forKey: .sourcePosition) ?? 0
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(value.id, forKey: .id)
+            try c.encode(value.name, forKey: .name)
+            try c.encode(value.summary, forKey: .summary)
+            try c.encode(value.sourcePosition, forKey: .sourcePosition)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, summary
+            case sourcePosition = "source_position"
         }
     }
 }

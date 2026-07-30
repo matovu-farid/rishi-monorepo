@@ -24,6 +24,7 @@ struct OutboundDrainer: Sendable {
         var conversationsPushed: Int = 0
         var messagesPushed: Int = 0
         var bookmarksPushed: Int = 0
+        var chapterIndexesPushed: Int = 0
         var errors: [String] = []
         init() {}
     }
@@ -37,6 +38,7 @@ struct OutboundDrainer: Sendable {
     private let conversationUploader: ConversationUploader
     private let messageUploader: MessageUploader
     private let bookmarkUploader: BookmarkUploader
+    private let chapterIndexUploader: ChapterIndexUploader
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
 
     struct Dependencies {
@@ -49,6 +51,7 @@ struct OutboundDrainer: Sendable {
         let conversationUploader: ConversationUploader
         let messageUploader: MessageUploader
         let bookmarkUploader: BookmarkUploader
+        let chapterIndexUploader: ChapterIndexUploader
         let dataUseConsentProvider: any WorkerDataUseConsentProvider
     }
 
@@ -62,6 +65,7 @@ struct OutboundDrainer: Sendable {
         self.conversationUploader = dependencies.conversationUploader
         self.messageUploader = dependencies.messageUploader
         self.bookmarkUploader = dependencies.bookmarkUploader
+        self.chapterIndexUploader = dependencies.chapterIndexUploader
         self.dataUseConsentProvider = dependencies.dataUseConsentProvider
     }
 
@@ -82,6 +86,7 @@ struct OutboundDrainer: Sendable {
         var conversationsBucket: [SyncQueueItem] = []
         var messagesBucket: [SyncQueueItem] = []
         var bookmarksBucket: [SyncQueueItem] = []
+        var chapterIndexesBucket: [SyncQueueItem] = []
         for item in drained {
             switch item.kind {
             case .book:         booksBucket.append(item)
@@ -90,6 +95,7 @@ struct OutboundDrainer: Sendable {
             case .conversation: conversationsBucket.append(item)
             case .message:      messagesBucket.append(item)
             case .bookmark:     bookmarksBucket.append(item)
+            case .chapterIndex: chapterIndexesBucket.append(item)
             }
         }
 
@@ -156,6 +162,15 @@ struct OutboundDrainer: Sendable {
             } catch {
                 result.errors.append("bookmark.push: \(error)")
                 for item in bookmarksBucket { await queue.enqueue(item) }
+            }
+        }
+
+        if !chapterIndexesBucket.isEmpty {
+            do {
+                result.chapterIndexesPushed = try await chapterIndexUploader.pushPending(items: chapterIndexesBucket)
+            } catch {
+                result.errors.append("chapter_index.push: \(error)")
+                for item in chapterIndexesBucket { await queue.enqueue(item) }
             }
         }
 

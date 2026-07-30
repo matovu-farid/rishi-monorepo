@@ -179,7 +179,8 @@ public struct BookFileStorage:Sendable {
             fileURL: relative,
             coverPath: book.coverPath,
             positionId: book.positionId,
-            conversationId: book.conversationId
+            conversationId: book.conversationId,
+            chapterIndexContentVersion: book.chapterIndexContentVersion
         )
     }
 

@@ -11,8 +11,7 @@ struct KeychainSessionStoreTests {
 
     private func makeSession(
         token: String = "tok-1",
-        email: String? = "u@example.com",
-        provider: SignInProvider = .apple
+        email: String? = "u@example.com"
     ) -> Session {
         // Plan 15-02: Session.userId is `String` (Better Auth `user.id`).
         // Tests use a stable literal so equality assertions are deterministic.
@@ -20,7 +19,6 @@ struct KeychainSessionStoreTests {
             token: token,
             userId: "001234.abcdef0123456789.1234",
             email: email,
-            provider: provider,
             issuedAt: Date(timeIntervalSince1970: 1_700_000_000),
             expiresAt: nil
         )
@@ -50,7 +48,6 @@ struct KeychainSessionStoreTests {
 
         let loaded = try await store.load()
         #expect(loaded?.token == "second")
-        #expect(loaded?.provider == .apple)
         let count = backend.snapshotItemCount()
         #expect(count == 1, "Expected exactly one keychain item; got \(count)")
     }
@@ -98,7 +95,7 @@ struct KeychainSessionStoreTests {
         let backend = InMemoryKeychainBackend()
         let store = KeychainSessionStore(backend: backend)
         let relayEmail = "abc123@privaterelay.appleid.com"
-        let session = makeSession(token: "relay-tok", email: relayEmail, provider: .apple)
+        let session = makeSession(token: "relay-tok", email: relayEmail)
 
         try await store.save(session)
         let loaded = try await store.load()

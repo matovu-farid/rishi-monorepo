@@ -46,7 +46,7 @@ jobs:
         run: bunx tsc --noEmit
 
       - name: Deploy
-        run: bunx wrangler deploy --minify
+        run: bunx wrangler d1 execute rishi --remote --file=drizzle/migrations/0004_chapter_index.sql && bunx wrangler deploy --minify
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 

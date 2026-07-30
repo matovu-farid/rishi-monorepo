@@ -140,7 +140,12 @@ struct ReaderVoiceEntryLanguageTests {
             pageText: nil,
             activeParagraphText: nil
         )
-        entry.presentVoice(bookId: bookId, context: context, initialQuote: nil)
+        entry.presentVoice(
+            bookId: bookId,
+            context: context,
+            contextProvider: { context },
+            initialQuote: nil
+        )
 
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {

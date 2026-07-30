@@ -1,5 +1,6 @@
 @testable import rishi
 import Foundation
+import SwiftData
 import Testing
 
 

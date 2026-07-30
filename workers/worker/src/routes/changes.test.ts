@@ -92,7 +92,18 @@ interface FakeBookmarkRow {
   isDeleted: boolean
 }
 
-const { booksStore, highlightsStore, bookmarksStore, BOOK_COLS, HIGHLIGHT_COLS, BOOKMARK_COLS } =
+interface FakeChapterIndexRow {
+  id: string; userId: string; bookId: string; contentVersion: string; status: string
+  modelIdentifier: string; modelVersion: string; completedCount: number; totalCount: number
+  errorMessage: string | null; createdAt: number; updatedAt: number
+}
+
+interface FakeChapterSummaryRow {
+  id: string; userId: string; bookId: string; contentVersion: string; chapterId: string
+  sourcePosition: number; name: string; summary: string; createdAt: number; updatedAt: number
+}
+
+const { booksStore, highlightsStore, bookmarksStore, chapterIndexesStore, chapterSummariesStore, BOOK_COLS, HIGHLIGHT_COLS, BOOKMARK_COLS, CHAPTER_INDEX_COLS, CHAPTER_SUMMARY_COLS } =
   vi.hoisted(() => {
     const BOOK_COLS = {
       id: { __table: "books" as const, __col: "id" } as const,
@@ -119,9 +130,23 @@ const { booksStore, highlightsStore, bookmarksStore, BOOK_COLS, HIGHLIGHT_COLS, 
       booksStore: [] as FakeBookRow[],
       highlightsStore: [] as FakeHighlightRow[],
       bookmarksStore: [] as FakeBookmarkRow[],
+      chapterIndexesStore: [] as FakeChapterIndexRow[],
+      chapterSummariesStore: [] as FakeChapterSummaryRow[],
       BOOK_COLS,
       HIGHLIGHT_COLS,
       BOOKMARK_COLS,
+      CHAPTER_INDEX_COLS: {
+        id: { __table: "chapter_indexes" as const, __col: "id" },
+        userId: { __table: "chapter_indexes" as const, __col: "userId" },
+        updatedAt: { __table: "chapter_indexes" as const, __col: "updatedAt" },
+      },
+      CHAPTER_SUMMARY_COLS: {
+        id: { __table: "chapter_index_chapters" as const, __col: "id" },
+        userId: { __table: "chapter_index_chapters" as const, __col: "userId" },
+        bookId: { __table: "chapter_index_chapters" as const, __col: "bookId" },
+        contentVersion: { __table: "chapter_index_chapters" as const, __col: "contentVersion" },
+        sourcePosition: { __table: "chapter_index_chapters" as const, __col: "sourcePosition" },
+      },
     }
   })
 
@@ -129,6 +154,8 @@ function resetStores() {
   booksStore.length = 0
   highlightsStore.length = 0
   bookmarksStore.length = 0
+  chapterIndexesStore.length = 0
+  chapterSummariesStore.length = 0
 }
 
 const UUID_BOOK_A = "11111111-1111-4111-8111-111111111111"
@@ -136,6 +163,7 @@ const UUID_BOOK_B = "22222222-2222-4222-8222-222222222222"
 const UUID_BOOK_C = "33333333-3333-4333-8333-333333333333"
 const UUID_HL_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const UUID_BM_A = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+const UUID_INDEX_A = "99999999-9999-4999-8999-999999999999"
 
 function seedBook(overrides: Partial<FakeBookRow> = {}): FakeBookRow {
   const updatedAt = overrides.updatedAt ?? 1_700_000_000_000
@@ -214,11 +242,36 @@ function seedBookmark(
   return full
 }
 
+function seedChapterIndex(overrides: Partial<FakeChapterIndexRow> = {}) {
+  const updatedAt = overrides.updatedAt ?? 1_700_000_300_000
+  const row: FakeChapterIndexRow = {
+    id: overrides.id ?? UUID_INDEX_A,
+    userId: overrides.userId ?? "user_alice",
+    bookId: overrides.bookId ?? UUID_BOOK_A,
+    contentVersion: overrides.contentVersion ?? "content-v1",
+    status: overrides.status ?? "ready",
+    modelIdentifier: overrides.modelIdentifier ?? "model",
+    modelVersion: overrides.modelVersion ?? "1",
+    completedCount: overrides.completedCount ?? 2,
+    totalCount: overrides.totalCount ?? 2,
+    errorMessage: overrides.errorMessage ?? null,
+    createdAt: overrides.createdAt ?? updatedAt,
+    updatedAt,
+  }
+  chapterIndexesStore.push(row)
+  chapterSummariesStore.push(
+    { id: "summary-2", userId: row.userId, bookId: row.bookId, contentVersion: row.contentVersion, chapterId: "chapter-2", sourcePosition: 1, name: "Two", summary: "Second", createdAt: row.createdAt, updatedAt },
+    { id: "summary-1", userId: row.userId, bookId: row.bookId, contentVersion: row.contentVersion, chapterId: "chapter-1", sourcePosition: 0, name: "One", summary: "First", createdAt: row.createdAt, updatedAt },
+  )
+}
+
 // ─── Mock @rishi/shared/schema so `books` + `highlights` + `bookmarks` resolve ───
 vi.mock("@rishi/shared/schema", () => ({
   books: BOOK_COLS,
   highlights: HIGHLIGHT_COLS,
   bookmarks: BOOKMARK_COLS,
+  chapterIndexes: CHAPTER_INDEX_COLS,
+  chapterIndexChapters: CHAPTER_SUMMARY_COLS,
   // Sibling tables touched by transitive imports — empty stubs.
   conversations: {},
   messages: {},
@@ -238,13 +291,16 @@ vi.mock("../db/schema", () => ({
   books: BOOK_COLS,
   highlights: HIGHLIGHT_COLS,
   bookmarks: BOOKMARK_COLS,
+  chapterIndexes: CHAPTER_INDEX_COLS,
+  chapterIndexChapters: CHAPTER_SUMMARY_COLS,
 }))
 
 // ─── Mock drizzle-orm helpers as predicate descriptors ────────────────────────
-type ColRef = { __table: "books" | "highlights" | "bookmarks"; __col: string }
+type ColRef = { __table: "books" | "highlights" | "bookmarks" | "chapter_indexes" | "chapter_index_chapters"; __col: string }
 type Pred =
   | { kind: "eq"; table: ColRef["__table"]; col: string; value: unknown }
   | { kind: "gt"; table: ColRef["__table"]; col: string; value: number }
+  | { kind: "in"; table: ColRef["__table"]; col: string; value: unknown[] }
   | { kind: "and"; preds: Pred[] }
 
 type OrderBy = { table: ColRef["__table"]; col: string; dir: "asc" | "desc" }
@@ -262,6 +318,7 @@ vi.mock("drizzle-orm", () => ({
     col: col.__col,
     value,
   }),
+  inArray: (col: ColRef, value: unknown[]): Pred => ({ kind: "in", table: col.__table, col: col.__col, value }),
   and: (...preds: Pred[]): Pred => ({ kind: "and", preds }),
   asc: (col: ColRef): OrderBy => ({
     table: col.__table,
@@ -283,6 +340,7 @@ function matches(row: Record<string, unknown>, p: Pred): boolean {
     const v = row[p.col]
     return typeof v === "number" && v > (p.value as number)
   }
+  if (p.kind === "in") return p.value.includes(row[p.col])
   return false
 }
 
@@ -334,6 +392,10 @@ vi.mock("../db/drizzle", () => {
                       ? (highlightsStore as unknown as Record<string, unknown>[])
                       : tableTag === "bookmarks"
                         ? (bookmarksStore as unknown as Record<string, unknown>[])
+                        : tableTag === "chapter_indexes"
+                          ? (chapterIndexesStore as unknown as Record<string, unknown>[])
+                          : tableTag === "chapter_index_chapters"
+                            ? (chapterSummariesStore as unknown as Record<string, unknown>[])
                         : []
                 let rows = src.slice()
                 if (predicate) rows = rows.filter((r) => matches(r, predicate!))
@@ -409,7 +471,7 @@ const env = {
 } as unknown as Record<string, unknown>
 
 interface SyncChange {
-  kind: "book" | "highlight" | "bookmark"
+  kind: "book" | "highlight" | "bookmark" | "chapter_index"
   id: string
   payload: Record<string, unknown>
   updated_at: number
@@ -437,6 +499,67 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("GET /api/sync/changes", () => {
+  it("pulls one ordered chapter_index envelope with version and source positions", async () => {
+    seedChapterIndex()
+    const res = await callChanges()
+    expect(res.status).toBe(200)
+    const env = await parseEnvelope(res)
+    const change = env.changes.find((item) => item.kind === "chapter_index")!
+    expect(change.id).toBe(UUID_BOOK_A)
+    expect(change.payload).toMatchObject({ book_id: UUID_BOOK_A, content_version: "content-v1" })
+    expect(change.payload.chapters).toEqual([
+      expect.objectContaining({ id: "chapter-1", source_position: 0 }),
+      expect.objectContaining({ id: "chapter-2", source_position: 1 }),
+    ])
+  })
+
+  it("pulls only the newest valid chapter snapshot for a book", async () => {
+    seedChapterIndex({ contentVersion: "content-v1", updatedAt: 1_700_000_300_000 })
+    seedChapterIndex({ contentVersion: "content-v2", updatedAt: 1_700_000_400_000 })
+    const res = await callChanges()
+    const env = await parseEnvelope(res)
+    const chapterChanges = env.changes.filter((item) => item.kind === "chapter_index")
+    expect(chapterChanges).toHaveLength(1)
+    expect(chapterChanges[0].payload.content_version).toBe("content-v2")
+  })
+
+  it("chapter_index honors the since cursor and user ownership", async () => {
+    seedChapterIndex({ userId: "user_bob" })
+    seedChapterIndex({ id: "other-index", updatedAt: 1_700_000_400_000 })
+    const res = await callChanges("?since=2020-01-01T00:00:00Z")
+    const env = await parseEnvelope(res)
+    expect(env.changes.filter((item) => item.kind === "chapter_index")).toHaveLength(1)
+    expect(env.changes.find((item) => item.kind === "chapter_index")?.id).toBe(UUID_BOOK_A)
+  })
+
+  it("selects the newest chapter version before applying the parent limit", async () => {
+    for (let i = 0; i < 5000; i++) {
+      seedChapterIndex({ contentVersion: `historical-${i}`, updatedAt: 1_700_000_000_000 + i })
+    }
+    seedChapterIndex({ contentVersion: "newest", updatedAt: 1_700_010_000_000 })
+    const res = await callChanges()
+    const env = await parseEnvelope(res)
+    const chapterChanges = env.changes.filter((item) => item.kind === "chapter_index")
+    expect(chapterChanges).toHaveLength(1)
+    expect(chapterChanges[0].payload.content_version).toBe("newest")
+  })
+
+  it("marks a snapshot when its child array is truncated", async () => {
+    seedChapterIndex({ contentVersion: "large" })
+    chapterSummariesStore.length = 0
+    for (let i = 0; i < 5001; i++) {
+      chapterSummariesStore.push({
+        id: `summary-${i}`, userId: "user_alice", bookId: UUID_BOOK_A, contentVersion: "large",
+        chapterId: `chapter-${i}`, sourcePosition: i, name: `Chapter ${i}`, summary: "Summary",
+        createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000,
+      })
+    }
+    const res = await callChanges()
+    const env = await parseEnvelope(res)
+    const chapter = env.changes.find((item) => item.kind === "chapter_index")!
+    expect(chapter.payload.chapters).toHaveLength(5000)
+    expect(chapter.payload.chapters_truncated).toBe(true)
+  })
   it("unauthenticated -> 401, no DB read", async () => {
     setUser(null)
     seedBook()

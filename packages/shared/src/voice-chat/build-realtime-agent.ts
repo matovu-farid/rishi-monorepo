@@ -150,6 +150,30 @@ export const BOOK_CONTEXT_TOOL_SPEC = {
   }
 }
 
+export const CHAPTER_INDEX_TOOL_SPEC = {
+  name: 'chapterIndex',
+  description:
+    'Return a page of the complete cached chapter index for the current book. Use startChapter and maxChapters to paginate; the response includes totalChapters and nextStartChapter when more chapters remain.',
+  parameters: {
+    type: 'object' as const,
+    properties: {
+      startChapter: {
+        type: 'integer' as const,
+        minimum: 0,
+        maximum: 100_000,
+        description: 'Zero-based chapter offset for this page.'
+      },
+      maxChapters: {
+        type: 'integer' as const,
+        minimum: 1,
+        maximum: 16,
+        description: 'Maximum chapters to return in this page.'
+      }
+    },
+    required: [] as const
+  }
+}
+
 export const CURRENT_PAGE_CONTEXT_TOOL_SPEC = {
   name: 'currentPageContext',
   description:

@@ -14,4 +14,5 @@ public enum SyncEntityKind: String, Codable, Sendable, CaseIterable, Hashable {
     case conversation = "conversation"
     case message      = "message"
     case bookmark     = "bookmark"
+    case chapterIndex = "chapter_index"
 }

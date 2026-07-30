@@ -47,6 +47,8 @@ import Foundation
 public actor RealtimeVoiceSession {
 
     public typealias BookContextResponderFactory = @Sendable (UUID) -> BookContextResponder
+    public typealias ChapterIndexCoordinatorFactory = @Sendable (UUID, String) async -> ChapterIndexCoordinator?
+    public typealias ChapterIndexBookContextResponderFactory = @Sendable (UUID, ChapterIndexCoordinator?, String?) -> BookContextResponder
 
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let coordinator: AudioSessionCoordinator
@@ -68,6 +70,9 @@ public actor RealtimeVoiceSession {
     /// `ControlWebSocketClient`'s reconnect loop, not here.
     private let controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)?
     private let responderFactory: BookContextResponderFactory?
+    private let chapterIndexResponderFactory: ChapterIndexBookContextResponderFactory?
+    private let chapterIndexCoordinatorFactory: ChapterIndexCoordinatorFactory?
+    private let chapterIndexContentVersionProvider: (@Sendable (UUID) async -> String?)?
     private let currentPageProvider: CurrentPageContextProvider?
     public let readerSessionIdentity: ReaderSessionIdentity?
     private let embedderPrewarm: (@Sendable () async -> Void)?
@@ -124,6 +129,9 @@ public actor RealtimeVoiceSession {
         sessionCoordinator: (any VoiceSessionCoordinating)? = nil,
         controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
         responderFactory: BookContextResponderFactory? = nil,
+        chapterIndexResponderFactory: ChapterIndexBookContextResponderFactory? = nil,
+        chapterIndexCoordinatorFactory: ChapterIndexCoordinatorFactory? = nil,
+        chapterIndexContentVersionProvider: (@Sendable (UUID) async -> String?)? = nil,
         currentPageProvider: CurrentPageContextProvider? = nil,
         readerSessionIdentity: ReaderSessionIdentity? = nil,
         embedderPrewarm: (@Sendable () async -> Void)? = nil,
@@ -147,6 +155,9 @@ public actor RealtimeVoiceSession {
         self.sessionCoordinator = sessionCoordinator
         self.controlSocketFactory = controlSocketFactory
         self.responderFactory = responderFactory
+        self.chapterIndexResponderFactory = chapterIndexResponderFactory
+        self.chapterIndexCoordinatorFactory = chapterIndexCoordinatorFactory
+        self.chapterIndexContentVersionProvider = chapterIndexContentVersionProvider
         self.currentPageProvider = currentPageProvider
         self.readerSessionIdentity = readerSessionIdentity
         self.embedderPrewarm = embedderPrewarm
@@ -716,15 +727,72 @@ public actor RealtimeVoiceSession {
     // MARK: - Helpers
 
     private func spawnResponderIfNeeded(bookId: UUID?) {
-        if let bookId, let factory = responderFactory {
-            let responder = factory(bookId)
+        if let bookId, responderFactory != nil || chapterIndexResponderFactory != nil {
+            let legacyFactory = responderFactory
+            let chapterFactory = chapterIndexResponderFactory
+            let coordinatorFactory = chapterIndexCoordinatorFactory
+            let contentVersionProvider = chapterIndexContentVersionProvider
             let provider = currentPageProvider
+            // Capture the sole tool-call continuation before async dependency
+            // work so early realtime events cannot be dropped.
+            let toolCallStream = client.toolCallStream()
             Log.event("voice.session.tool_responder.started", level: .info, data: [
                 "bookId": bookId.uuidString,
             ])
             responderTask = Task {
-                await responder.setCurrentPageProvider(provider)
-                await responder.consume(stream: client.toolCallStream())
+                let legacyResponder = legacyFactory.map { $0(bookId) }
+                let chapterResponder: BookContextResponder?
+                if let chapterFactory {
+                    let contentVersion = await contentVersionProvider?(bookId)
+                    let coordinator: ChapterIndexCoordinator? = if let contentVersion {
+                        await coordinatorFactory?(bookId, contentVersion)
+                    } else {
+                        nil
+                    }
+                    chapterResponder = chapterFactory(bookId, coordinator, contentVersion)
+                } else {
+                    chapterResponder = nil
+                }
+                guard legacyResponder != nil || chapterResponder != nil else {
+                    return
+                }
+                if let legacyResponder {
+                    await legacyResponder.setCurrentPageProvider(provider)
+                }
+                if let chapterResponder, legacyResponder == nil {
+                    await chapterResponder.setCurrentPageProvider(provider)
+                }
+
+                // Both responder factories recognize all three supported
+                // tools. Route each event to exactly one responder instead of
+                // broadcasting the shared stream and sending duplicate
+                // tool results.
+                guard let legacyResponder, let chapterResponder else {
+                    await (legacyResponder ?? chapterResponder)!.consume(stream: toolCallStream)
+                    return
+                }
+
+                let legacyPair = AsyncStream<RealtimeToolCallEvent>.makeStream()
+                let chapterPair = AsyncStream<RealtimeToolCallEvent>.makeStream()
+                let router = Task {
+                    for await event in toolCallStream {
+                        if Task.isCancelled { return }
+                        if event.name == BookContextResponder.chapterIndexToolName {
+                            chapterPair.continuation.yield(event)
+                        } else if event.name == BookContextResponder.toolName ||
+                                  event.name == BookContextResponder.currentPageToolName {
+                            legacyPair.continuation.yield(event)
+                        }
+                    }
+                    legacyPair.continuation.finish()
+                    chapterPair.continuation.finish()
+                }
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await legacyResponder.consume(stream: legacyPair.stream) }
+                    group.addTask { await chapterResponder.consume(stream: chapterPair.stream) }
+                    await group.waitForAll()
+                }
+                router.cancel()
             }
         } else {
             Log.event("voice.session.tool_responder.skipped", level: .info, data: [

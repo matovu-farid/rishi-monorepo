@@ -4,6 +4,7 @@ import Testing
 import Foundation
 import UIKit
 import PDFKit
+import ReadiumNavigator
 
 
 

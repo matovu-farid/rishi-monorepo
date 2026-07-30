@@ -15,8 +15,216 @@ import Foundation
 ///
 /// `FakeRealtimeClient.inject(toolCall:)` has replay-on-subscribe semantics
 /// (Plan 25-07), so injecting BEFORE or AFTER the Task starts both work.
-@Suite("BookContextResponder")
+@Suite("BookContextResponder", .serialized)
 struct BookContextResponderTests {
+
+    @Test("chapterIndex returns a ready structured JSON result for empty arguments")
+    func chapterIndex_readyResponse() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let persistence = ResponderChapterIndexPersistence(index: ChapterIndex(
+            bookID: bookID,
+            contentVersion: "v1",
+            status: .ready,
+            modelIdentifier: "test",
+            modelVersion: "1",
+            progress: .init(completed: 1, total: 1),
+            chapters: [.init(id: "c1", name: "One", summary: "Summary")]
+        ))
+        let coordinator = ChapterIndexCoordinator(
+            persistence: persistence,
+            source: ResponderChapterSource(),
+            summarizer: ResponderChapterSummarizer()
+        )
+        let search = StubBookSearch(
+            hits: [BookSearchHit(text: "existing", page: 1, score: 1)],
+            status: .ready
+        )
+        let responder = BookContextResponder(
+            client: fake,
+            search: search,
+            bookId: bookID,
+            chapterIndexCoordinator: coordinator,
+            chapterIndexContentVersion: "v1"
+        )
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+
+        fake.inject(toolCall: RealtimeToolCallEvent(
+            callId: "chapter-ready",
+            name: "chapterIndex",
+            argumentsJSON: "{}"
+        ))
+        fake.inject(toolCall: RealtimeToolCallEvent(
+            callId: "book-context-still-works",
+            name: "bookContext",
+            argumentsJSON: "{\"queryText\":\"existing behavior\"}"
+        ))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        consumeTask.cancel()
+
+        let sent = fake.sentToolResultsSnapshot()
+        #expect(sent.count == 2)
+        let chapterResult = try #require(sent.first(where: { $0.callId == "chapter-ready" }))
+        let json = try #require(JSONSerialization.jsonObject(with: Data(chapterResult.payload.utf8)) as? [String: Any])
+        #expect(json["status"] as? String == "ready")
+        #expect(json["bookId"] as? String == bookID.uuidString)
+        #expect(json["contentVersion"] as? String == "v1")
+        #expect((json["chapters"] as? [[String: Any]])?.first?["summary"] as? String == "Summary")
+        #expect(json["totalChapters"] as? Int == 1)
+        #expect(json["nextStartChapter"] == nil)
+        #expect(Set(json.keys) == Set(["status", "bookId", "contentVersion", "chapters", "totalChapters"]))
+        let bookContextResult = try #require(sent.first(where: { $0.callId == "book-context-still-works" }))
+        #expect((try JSONSerialization.jsonObject(with: Data(bookContextResult.payload.utf8)) as? [[String: Any]])?.first?["text"] as? String == "existing")
+    }
+
+    @Test("chapterIndex default page returns a cursor without omitting page chapters")
+    func chapterIndex_defaultPageReturnsNextCursor() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let coordinator = ChapterIndexCoordinator(
+            persistence: ResponderChapterIndexPersistence(index: responderIndex(bookID: bookID, count: 20)),
+            source: ResponderChapterSource(),
+            summarizer: ResponderChapterSummarizer()
+        )
+        let responder = BookContextResponder(client: fake, bookId: bookID, chapterIndexCoordinator: coordinator, chapterIndexContentVersion: "v1")
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-page-default", name: "chapterIndex", argumentsJSON: "{}"))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        consumeTask.cancel()
+
+        let sent = try #require(fake.sentToolResultsSnapshot().first)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(sent.payload.utf8)) as? [String: Any])
+        let chapters = try #require(json["chapters"] as? [[String: Any]])
+        #expect(chapters.count == 16)
+        #expect(chapters.first?["id"] as? String == "c0")
+        #expect(chapters.last?["id"] as? String == "c15")
+        #expect(json["totalChapters"] as? Int == 20)
+        #expect(json["nextStartChapter"] as? Int == 16)
+    }
+
+    @Test("chapterIndex explicit page starts at the requested cursor")
+    func chapterIndex_explicitPageUsesStartAndMax() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let coordinator = ChapterIndexCoordinator(
+            persistence: ResponderChapterIndexPersistence(index: responderIndex(bookID: bookID, count: 20)),
+            source: ResponderChapterSource(),
+            summarizer: ResponderChapterSummarizer()
+        )
+        let responder = BookContextResponder(client: fake, bookId: bookID, chapterIndexCoordinator: coordinator, chapterIndexContentVersion: "v1")
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-page-explicit", name: "chapterIndex", argumentsJSON: "{\"startChapter\":16,\"maxChapters\":4}"))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        consumeTask.cancel()
+
+        let sent = try #require(fake.sentToolResultsSnapshot().first)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(sent.payload.utf8)) as? [String: Any])
+        let chapters = try #require(json["chapters"] as? [[String: Any]])
+        #expect(chapters.map { $0["id"] as? String } == ["c16", "c17", "c18", "c19"])
+        #expect(json["totalChapters"] as? Int == 20)
+        #expect(json["nextStartChapter"] == nil)
+    }
+
+    @Test("chapterIndex rejects an oversized page request with bounded failure JSON")
+    func chapterIndex_oversizedPageRequestFailsBoundedly() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let coordinator = ChapterIndexCoordinator(
+            persistence: ResponderChapterIndexPersistence(index: responderIndex(bookID: bookID, count: 20)),
+            source: ResponderChapterSource(),
+            summarizer: ResponderChapterSummarizer()
+        )
+        let responder = BookContextResponder(client: fake, bookId: bookID, chapterIndexCoordinator: coordinator, chapterIndexContentVersion: "v1")
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-page-overflow", name: "chapterIndex", argumentsJSON: "{\"maxChapters\":17}"))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        consumeTask.cancel()
+
+        let sent = try #require(fake.sentToolResultsSnapshot().first)
+        #expect(sent.payload.utf8.count <= 64 * 1024)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(sent.payload.utf8)) as? [String: Any])
+        #expect(json["status"] as? String == "failed")
+        #expect((json["chapters"] as? [[String: Any]])?.isEmpty == true)
+    }
+
+    @Test("chapterIndex returns a bounded failed structured JSON result")
+    func chapterIndex_failedResponseIsBounded() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let coordinator = ChapterIndexCoordinator(
+            persistence: ResponderChapterIndexPersistence(),
+            source: ResponderChapterSource(),
+            summarizer: ResponderFailingSummarizer()
+        )
+        let responder = BookContextResponder(client: fake, bookId: bookID, chapterIndexCoordinator: coordinator, chapterIndexContentVersion: "v1")
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-failed", name: "chapterIndex", argumentsJSON: "{}"))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        consumeTask.cancel()
+
+        let sent = fake.sentToolResultsSnapshot()
+        #expect(sent.count == 1)
+        #expect(sent[0].payload.utf8.count <= 64 * 1024)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(sent[0].payload.utf8)) as? [String: Any])
+        #expect(json["status"] as? String == "failed")
+        #expect(json["bookId"] as? String == bookID.uuidString)
+        #expect(((json["error"] as? String)?.count ?? 0) <= 512)
+    }
+
+    @Test("chapterIndex returns building after the coordinator timeout")
+    func chapterIndex_timeoutReturnsBuilding() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let coordinator = ChapterIndexCoordinator(
+            persistence: ResponderChapterIndexPersistence(),
+            source: ResponderChapterSource(),
+            summarizer: ResponderBlockingSummarizer(),
+            timeout: .milliseconds(10)
+        )
+        let responder = BookContextResponder(
+            client: fake,
+            bookId: bookID,
+            chapterIndexCoordinator: coordinator,
+            chapterIndexContentVersion: "v1"
+        )
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-building", name: "chapterIndex", argumentsJSON: "{}"))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        consumeTask.cancel()
+
+        let sent = fake.sentToolResultsSnapshot()
+        #expect(sent.count == 1)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(sent[0].payload.utf8)) as? [String: Any])
+        #expect(json["status"] as? String == "building")
+    }
+
+    @Test("chapterIndex returns unavailable when no chapter source exists")
+    func chapterIndex_unavailableResponse() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        let bookID = UUID()
+        let coordinator = ChapterIndexCoordinator(
+            persistence: ResponderChapterIndexPersistence(),
+            source: ResponderChapterSource(availability: .unavailable(diagnostics: ["no outline"])),
+            summarizer: ResponderChapterSummarizer()
+        )
+        let responder = BookContextResponder(client: fake, bookId: bookID, chapterIndexCoordinator: coordinator, chapterIndexContentVersion: "v1")
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-unavailable", name: "chapterIndex", argumentsJSON: "{}"))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        consumeTask.cancel()
+
+        let sent = fake.sentToolResultsSnapshot()
+        #expect(sent.count == 1)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(sent[0].payload.utf8)) as? [String: Any])
+        #expect(json["status"] as? String == "unavailable")
+    }
 
     @Test("user-facing lookup messages hide internal retrieval details")
     func userFacingMessagesHideImplementationDetails() {
@@ -368,4 +576,67 @@ private final class LogEventBox: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return events
     }
+}
+
+private actor ResponderChapterIndexPersistence: ChapterIndexPersistence {
+    private var stored: ChapterIndex?
+
+    init(index: ChapterIndex? = nil) { stored = index }
+
+    func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? {
+        guard stored?.bookID == bookID, stored?.contentVersion == contentVersion else { return nil }
+        return stored
+    }
+
+    func upsertChapterIndex(_ index: ChapterIndex) async throws { stored = index }
+}
+
+private func responderIndex(bookID: BookID, count: Int) -> ChapterIndex {
+    ChapterIndex(
+        bookID: bookID,
+        contentVersion: "v1",
+        status: .ready,
+        modelIdentifier: "test",
+        modelVersion: "1",
+        progress: .init(completed: count, total: count),
+        chapters: (0..<count).map { index in
+            .init(id: "c\(index)", name: "Chapter \(index)", summary: "Summary \(index)")
+        }
+    )
+}
+
+private struct ResponderChapterSource: ChapterSource {
+    let availability: ChapterSourceResult.Availability
+
+    init(availability: ChapterSourceResult.Availability = .available) { self.availability = availability }
+
+    func chapters() async -> ChapterSourceResult {
+        ChapterSourceResult(
+            availability: availability,
+            records: [ChapterSourceRecord(id: "c1", name: "One", locator: .epub(href: "one.xhtml"), text: "text")]
+        )
+    }
+}
+
+private struct ResponderChapterSummarizer: ChapterSummarizing {
+    func summarize(chapter: ChapterSourceRecord) async throws -> ChapterSummary {
+        .init(id: chapter.id, name: chapter.name, summary: "Summary")
+    }
+}
+
+private struct ResponderBlockingSummarizer: ChapterSummarizing {
+    func summarize(chapter: ChapterSourceRecord) async throws -> ChapterSummary {
+        try await Task.sleep(for: .seconds(5))
+        return .init(id: chapter.id, name: chapter.name, summary: "Summary")
+    }
+}
+
+private struct ResponderFailingSummarizer: ChapterSummarizing {
+    func summarize(chapter: ChapterSourceRecord) async throws -> ChapterSummary {
+        throw ResponderChapterIndexError.failed
+    }
+}
+
+private enum ResponderChapterIndexError: Error {
+    case failed
 }

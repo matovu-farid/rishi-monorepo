@@ -37,6 +37,7 @@ public final class ChangeApplier: Sendable {
     private let positionStore: any PositionStore
     private let highlightStore: any HighlightStore
     private let bookmarkStore: any BookmarkStore
+    private let chapterIndexPersistence: (any ChapterIndexPersistence)?
     private let metadataStore: any SyncMetadataStore
     private let currentUserId: @Sendable () async -> UserID?
     private let accountIsActive: @Sendable () async -> Bool
@@ -47,6 +48,7 @@ public final class ChangeApplier: Sendable {
         positionStore: any PositionStore,
         highlightStore: any HighlightStore,
         bookmarkStore: any BookmarkStore,
+        chapterIndexPersistence: (any ChapterIndexPersistence)? = nil,
         metadataStore: any SyncMetadataStore,
         currentUserId: @escaping @Sendable () async -> UserID? = { nil },
         accountIsActive: @escaping @Sendable () async -> Bool = { true },
@@ -56,6 +58,7 @@ public final class ChangeApplier: Sendable {
         self.positionStore = positionStore
         self.highlightStore = highlightStore
         self.bookmarkStore = bookmarkStore
+        self.chapterIndexPersistence = chapterIndexPersistence
         self.metadataStore = metadataStore
         self.currentUserId = currentUserId
         self.accountIsActive = accountIsActive
@@ -84,6 +87,8 @@ public final class ChangeApplier: Sendable {
                     try await applyBook(change, into: &result)
                 case .bookmark:
                     try await applyBookmark(change, into: &result)
+                case .chapterIndex:
+                    try await applyChapterIndex(change, into: &result)
                 case .conversation, .message:
                     // Phase 9 will wire — record the cursor so we don't echo.
                     result.skipped += 1
@@ -176,6 +181,22 @@ public final class ChangeApplier: Sendable {
             lastSyncedAt: change.updatedAt,
             remoteEtag: nil
         )
+        result.applied += 1
+    }
+
+    private func applyChapterIndex(_ change: SyncChange, into result: inout ApplyResult) async throws {
+        guard let chapterIndexPersistence else {
+            result.skipped += 1
+            try await metadataStore.markClean(entityId: change.id, kind: .chapterIndex, lastSyncedAt: change.updatedAt, remoteEtag: nil)
+            return
+        }
+        let remote = try SyncPayloadCodec.decodeChapterIndex(change.payload, fallbackUpdatedAt: change.updatedAt)
+        if let local = try await chapterIndexPersistence.chapterIndex(bookID: remote.bookID, contentVersion: remote.contentVersion), local.updatedAt >= remote.updatedAt {
+            result.conflicts += 1
+            return
+        }
+        try await chapterIndexPersistence.upsertChapterIndex(remote)
+        try await metadataStore.markClean(entityId: change.id, kind: .chapterIndex, lastSyncedAt: change.updatedAt, remoteEtag: nil)
         result.applied += 1
     }
 

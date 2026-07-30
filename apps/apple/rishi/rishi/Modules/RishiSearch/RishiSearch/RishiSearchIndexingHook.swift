@@ -21,19 +21,23 @@ import Foundation
 public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendable {
     private let builder: IndexBuilder
     private let extractors: [String: any PerBookTextExtractor]
+    private let onIndexReady: (@Sendable (UUID) async -> Void)?
 
     public init(
         builder: IndexBuilder,
-        extractors: [String: any PerBookTextExtractor]
+        extractors: [String: any PerBookTextExtractor],
+        onIndexReady: (@Sendable (UUID) async -> Void)? = nil
     ) {
         self.builder = builder
         self.extractors = extractors
+        self.onIndexReady = onIndexReady
     }
 
     public func scheduleIndexing(for book: Book, fileURL: URL) async {
         let ext = fileURL.pathExtension.lowercased()
         let bookId = book.id
         let builder = self.builder
+        let onIndexReady = self.onIndexReady
         guard let extractor = extractors[ext] else {
             Log.event("rag.index.no_extractor", level: .warning, data: [
                 "bookId": bookId.uuidString,
@@ -66,9 +70,11 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
                     // sidecar moves out of `.notIndexed` and the cold-start
                     // sentinel doesn't stick.
                     try await builder.buildIndex(bookId: bookId, paragraphs: [])
+                    await onIndexReady?(bookId)
                     return
                 }
                 try await builder.buildIndex(bookId: bookId, paragraphs: paragraphs)
+                await onIndexReady?(bookId)
                 Log.event("rag.index.scheduled.done", level: .info, data: [
                     "bookId": bookId.uuidString,
                     "paragraphs": String(paragraphs.count),
