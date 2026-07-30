@@ -234,7 +234,12 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
         await MainActor.run {
             guard case .connected = convo.status else { return }
+            // OpenAI requires these WebRTC events in this order. The cancel
+            // stops generation; the buffer-clear cuts off audio already
+            // queued for playout. Keep both sends in one synchronous block so
+            // disconnect cannot race between them.
             try? convo.send(event: .cancelResponse())
+            try? convo.send(event: .outputAudioBufferClear())
         }
     }
 
