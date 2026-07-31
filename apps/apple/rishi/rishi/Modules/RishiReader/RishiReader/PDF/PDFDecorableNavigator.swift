@@ -26,24 +26,26 @@ import UIKit
 /// group and painted once a document is available via ``attach(pdfView:)``,
 /// PDFKit document/page notifications, or ``reapplyIfNeeded()``.
 ///
-/// Callers must invoke from the main actor (PDFKit UI). The type is not
-/// `@MainActor`-isolated so it can conform to nonisolated
-/// ``DecorableNavigator`` under Swift 6. Overlay UI is held
-/// `nonisolated(unsafe)` and touched only on the main actor.
-public final class PDFDecorableNavigator: DecorableNavigator, @unchecked Sendable {
+/// PDFKit UI is main-actor isolated. The `@preconcurrency` conformance keeps
+/// compatibility with Readium's older, nonisolated protocol declaration
+/// without weakening this type's actor isolation.
+@MainActor
+public final class PDFDecorableNavigator: @preconcurrency DecorableNavigator {
 
     public weak var pdfView: PDFView?
 
     /// Overlay installed above PDF content. Public for test seams.
-    /// Held unsafe because ``DecorableNavigator`` cannot be `@MainActor`.
-    nonisolated(unsafe) public private(set) var decorationOverlayView: PDFDecorationOverlayView?
+    public private(set) var decorationOverlayView: PDFDecorationOverlayView?
 
     /// Specs keyed by decoration group — source of truth for drawing / tests.
     private var specsByGroup: [String: [PDFDecorationAnnotationSpec]] = [:]
     /// Last `apply` request per group — kept even when document is nil.
     private var pendingDecorationsByGroup: [String: [Decoration]] = [:]
     private var interactionObservers: [String: OnActivatedCallback] = [:]
-    private var notificationObservers: [NSObjectProtocol] = []
+    // NotificationCenter tokens can be removed from deinit, which is not
+    // actor-isolated. All accesses are still serialized by this type's
+    // main-actor lifecycle.
+    nonisolated(unsafe) private var notificationObservers: [NSObjectProtocol] = []
 
     public init(pdfView: PDFView? = nil) {
         self.pdfView = pdfView
@@ -180,13 +182,15 @@ public final class PDFDecorableNavigator: DecorableNavigator, @unchecked Sendabl
                 object: pdfView,
                 queue: .main
             ) { [weak self] _ in
-                self?.reapplyIfNeeded()
+                MainActor.assumeIsolated {
+                    self?.reapplyIfNeeded()
+                }
             }
             notificationObservers.append(token)
         }
     }
 
-    private func removePDFViewObservers() {
+    nonisolated private func removePDFViewObservers() {
         let center = NotificationCenter.default
         for token in notificationObservers {
             center.removeObserver(token)

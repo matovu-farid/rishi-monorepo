@@ -1,4 +1,0 @@
-module hnswlib_c {
-    header "HNSWLibWrapper.h"
-    export *
-} 
