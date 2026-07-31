@@ -20,6 +20,7 @@ import PDFKit
 // without spinning up a real multi-second PDF parse.
 
 @Suite("PDFReaderViewModel.loadingState lifecycle", .serialized)
+@MainActor
 struct PDFReaderViewModelLoadingStateTests {
 
     private func makeFixture(pageCount: Int) throws -> URL {

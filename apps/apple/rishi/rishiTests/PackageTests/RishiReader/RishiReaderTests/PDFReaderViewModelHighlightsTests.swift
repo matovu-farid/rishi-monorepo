@@ -13,6 +13,7 @@ import CoreGraphics
 /// files in the temp dir and walk through the InMemoryHighlightStore (an
 /// actor). Serial execution keeps the per-test PDF setup deterministic.
 @Suite("PDFReaderViewModel + Highlights", .serialized)
+@MainActor
 struct PDFReaderViewModelHighlightsTests {
 
     // MARK: - Helpers

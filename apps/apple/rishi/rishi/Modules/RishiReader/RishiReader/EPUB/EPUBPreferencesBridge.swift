@@ -32,6 +32,7 @@ public enum EPUBPreferencesBridge {
     /// baseline (1.0 == 16pt, 1.25 == 20pt, etc).
     static let cssBaselinePoints: Double = 16.0
 
+    @MainActor
     public static func apply(
         typography: ReaderTypography,
         theme: ReaderTheme,

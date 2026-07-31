@@ -197,7 +197,7 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
         // playback uses A2DP. See `bluetoothRouting`.
         switch bluetoothRouting(category: category, options: options) {
         case .none: break
-        case .hfp:  avOptions.insert(.allowBluetooth)
+        case .hfp:  avOptions.insert(.allowBluetoothHFP)
         case .a2dp: avOptions.insert(.allowBluetoothA2DP)
         }
         if options.contains(.allowAirPlay)     { avOptions.insert(.allowAirPlay) }

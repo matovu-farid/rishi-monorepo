@@ -24,6 +24,7 @@ import PDFKit
 
 
 @Suite("PDFReadAloudPageContinuation", .serialized)
+@MainActor
 struct PDFReadAloudPageContinuationTests {
 
     private static let pageSize = CGSize(width: 612, height: 792)

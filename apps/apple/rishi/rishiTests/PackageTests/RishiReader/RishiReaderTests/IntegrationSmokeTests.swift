@@ -7,6 +7,7 @@ import PDFKit
 
 
 @Suite("Phase 5 integration smoke", .serialized)
+@MainActor
 struct IntegrationSmokeTests {
 
     @Test("Bundled sample.pdf exists in package resources")

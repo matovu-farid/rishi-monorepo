@@ -26,6 +26,7 @@ import PDFKit
 // loader which wraps `PDFDocument(url:)`.
 
 @Suite("PDFReaderViewModel.load() off-main", .serialized)
+@MainActor
 struct PDFReaderViewModelLoadTests {
 
     private func makeFixture(pageCount: Int) throws -> URL {

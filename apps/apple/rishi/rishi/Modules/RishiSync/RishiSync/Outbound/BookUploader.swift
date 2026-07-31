@@ -70,7 +70,7 @@ public final class BookUploader: Sendable {
         }
 
         // 2. Read the bytes off disk.
-        let absoluteFileURL = await fileStorage.absoluteFileURL(for: book)
+        let absoluteFileURL = fileStorage.absoluteFileURL(for: book)
         let data: Data
         do {
             data = try Data(contentsOf: absoluteFileURL)

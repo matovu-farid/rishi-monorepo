@@ -27,6 +27,7 @@ import Foundation
 ///      `UINotificationFeedbackGenerator` will break the build of
 ///      `RishiReaderTests` on dev hosts (no UIKit).
 @Suite("ReaderHapticsSensoryFeedback", .serialized)
+@MainActor
 struct ReaderHapticsSensoryFeedbackTests {
 
     @Test("PDFReaderViewModel.advancePage increments currentPageIndex by 1")

@@ -20,6 +20,7 @@ public enum EPUBDecorationApplier {
 
     /// Applies every highlight as a Readium decoration. Skips rows
     /// whose locator or color cannot be decoded (logged at warning).
+    @MainActor
     public static func apply(highlights: [Highlight], to navigator: EPUBNavigatorViewController) {
         let decorations = ReaderHighlightDecorationBuilder.make(from: highlights)
         navigator.apply(decorations: decorations, in: groupName)

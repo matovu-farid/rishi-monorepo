@@ -7,21 +7,23 @@ import Observation
 /// Owns the page state, position-debounce task, outline, and theme for one
 /// open PDF.
 ///
-/// Marked `@Observable` for SwiftUI bindings. NOT `@MainActor` because the
-/// PDFKit `PDFViewPageChanged` notification is delivered on whatever queue
-/// `PDFView` was hosted on (typically main, but the contract is unspecified).
-/// State mutations are localized to single methods; the debounce uses a
-/// detached `Task` keyed off the latest call so coalescing happens via
-/// `cancel()` on the previous pending write.
+/// Marked `@Observable` for SwiftUI bindings and isolated to the main actor.
+/// PDFKit documents and selections are UI-owned, so keeping the complete
+/// view-model on the main actor avoids sending non-Sendable PDFKit objects
+/// through detached tasks or notification closures.
 ///
 /// `userId` is `internal` (not `private`) so the highlight extension landing
 /// in plan 05-06 can pass it through to `HighlightStore.upsert(_:)`.
-/// @unchecked Sendable justified: holds the non-Sendable PDFKit
-/// `PDFDocument?` plus several `var` properties driving the `@Observable`
-/// surface. Mutations are scoped to single methods invoked from main; the
-/// reader screen treats this VM as MainActor-pinned in practice.
 @Observable
-public final class PDFReaderViewModel: @unchecked Sendable {
+@MainActor
+public final class PDFReaderViewModel {
+
+    /// PDFKit has no Sendable conformance, but this box is created inside the
+    /// detached parse task and consumed exactly once by the main actor. It
+    /// transfers ownership; it is never shared between executors afterward.
+    private struct PDFDocumentTransfer: @unchecked Sendable {
+        let document: PDFDocument?
+    }
 
     public let book: Book
     public private(set) var document: PDFDocument?
@@ -82,7 +84,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     private let positionStore: any PositionStore
     private let documentURL: URL
     private let debounceSeconds: Double
-    private let documentLoader: @Sendable (URL) async -> PDFDocument?
+    private let documentLoader: @Sendable (URL) async -> sending PDFDocument?
     private let onPositionChanged: (@Sendable (BookID) async -> Void)?
     private var pendingPositionTask: Task<Void, Never>?
     private var currentReadAloudParagraphText: String?
@@ -93,7 +95,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         documentURL: URL,
         positionStore: any PositionStore,
         debounceSeconds: Double = 1.0,
-        documentLoader: (@Sendable (URL) async -> PDFDocument?)? = nil,
+        documentLoader: (@Sendable (URL) async -> sending PDFDocument?)? = nil,
         onPositionChanged: (@Sendable (BookID) async -> Void)? = nil
     ) {
         self.book = book
@@ -110,31 +112,17 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// Loads the document, extracts the outline, restores the last position.
     /// Call once when the view appears.
     ///
-    /// The synchronous `PDFDocument(url:)` parse can take multiple seconds
-    /// on large books, so the call is dispatched to
-    /// `Task.detached(priority: .userInitiated)` and the result is awaited
-    /// back via `.value`. `Task.detached`'s `.value` is a `sending` return,
-    /// so the detached task's result can cross back into this viewmodel's
-    /// isolation. PDFKit's `PDFDocument` is not formally `Sendable`, but
-    /// the module is imported `@preconcurrency` at the top of this file
-    /// because PDFDocument is safe to construct on one thread and read
-    /// from another (Apple's own off-main parse pattern depends on it).
-    /// State assignment after the await still happens on this viewmodel's
-    /// executor — callers typically dispatch `load()` from a `@MainActor`
-    /// `.task` modifier, so post-load mutations remain observable from
-    /// SwiftUI.
+    /// PDFKit parsing runs off the main actor, while the loaded document and
+    /// all subsequent document access remain main-actor-owned. The `sending`
+    /// result transfers ownership exactly once across the detached task
+    /// boundary instead of treating a shared PDFKit reference as Sendable.
     public func load() async {
-        // Phase 21 Plan 21-03 — flip to .loading BEFORE the detached
-        // parse so the cold-open overlay binds immediately. Lands on
-        // the caller's executor (typically MainActor via SwiftUI's
-        // `.task`) so SwiftUI sees the transition on the same tick the
-        // overlay first renders.
         self.loadingState = .loading
-        let loader = self.documentLoader
-        let url = self.documentURL
-        let loaded: PDFDocument? = await Task.detached(priority: .userInitiated) {
-            await loader(url)
-        }.value
+        let loader = documentLoader
+        let url = documentURL
+        let loaded = await Task.detached(priority: .userInitiated) {
+            PDFDocumentTransfer(document: await loader(url))
+        }.value.document
         guard let doc = loaded else {
             Log.reader.error("Failed to open PDFDocument at \(self.documentURL.path, privacy: .public)")
             self.loadingState = .failed(reason: "Failed to open PDF document")
@@ -242,9 +230,9 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// owns only the explicit position application (the `seek`) so the live-page
     /// mutation is visible here rather than hidden in the scan.
     public func paragraphsForFollowingPage() async -> [String] {
-        let current = await MainActor.run { self.pageIndex }
+        let current = pageIndex
         guard let result = readAloudCursor.following(currentPage: current) else { return [] }
-        await MainActor.run { self.seek(toPage: result.pageIndex) }
+        seek(toPage: result.pageIndex)
         return result.paragraphs
     }
 
@@ -259,9 +247,9 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// document (no earlier non-empty page), which the read-aloud bridge treats
     /// as "stay put".
     public func paragraphsForPrecedingPage() async -> [String] {
-        let current = await MainActor.run { self.pageIndex }
+        let current = pageIndex
         guard let result = readAloudCursor.preceding(currentPage: current) else { return [] }
-        await MainActor.run { self.seek(toPage: result.pageIndex) }
+        seek(toPage: result.pageIndex)
         return result.paragraphs
     }
 

@@ -19,6 +19,7 @@ import PDFKit
 
 
 @Suite("PDFReadAloudCursor", .serialized)
+@MainActor
 struct PDFReadAloudCursorTests {
 
     private static let pageSize = CGSize(width: 612, height: 792)

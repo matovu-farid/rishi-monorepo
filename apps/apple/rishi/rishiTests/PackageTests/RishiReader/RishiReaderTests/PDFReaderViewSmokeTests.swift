@@ -30,6 +30,7 @@ import PDFKit
 // scenarios (accumulate-across-deltas then decide) so the observer's intended
 // turn behavior is regression-locked at the decision boundary.
 @Suite("PDFReaderView smoke", .serialized)
+@MainActor
 struct PDFReaderViewSmokeTests {
 
     @Test("VM-driven document property is reachable after load")

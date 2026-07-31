@@ -15,6 +15,7 @@ import ReadiumShared
 /// ordering across tests because every VM mutation bumps an `@Observable`
 /// trigger property.
 @Suite("ReaderViewModel + Highlights", .serialized)
+@MainActor
 struct ReaderViewModelHighlightsTests {
 
     // MARK: - Helpers

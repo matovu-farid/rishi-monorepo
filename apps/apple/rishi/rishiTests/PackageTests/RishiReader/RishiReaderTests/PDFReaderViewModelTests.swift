@@ -7,6 +7,7 @@ import PDFKit
 
 
 @Suite("PDFReaderViewModel", .serialized)
+@MainActor
 struct PDFReaderViewModelTests {
 
     private func makeFixture(pageCount: Int, withOutline: Bool = true) throws -> URL {

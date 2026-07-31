@@ -632,8 +632,8 @@ extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
         viewportDidChange viewport: NavigatorViewport?
     ) {
         guard let pdfNavigator = navigator as? PDFNavigatorViewController else { return }
-        let viewportSize = pdfNavigator.view.bounds.size
         MainActor.assumeIsolated {
+            let viewportSize = pdfNavigator.view.bounds.size
             guard viewportSize != lastFittedPDFViewportSize else { return }
             hasFittedPDFViewport = false
             pdfFitCandidateSize = nil
