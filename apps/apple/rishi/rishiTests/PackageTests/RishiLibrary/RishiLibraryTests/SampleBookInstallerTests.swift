@@ -16,7 +16,7 @@ struct SampleBookInstallerTests {
         let store = InMemoryBookStore()
         let storage = BookFileStorage(rootURL: root, bookStore: store,
                                       coverExtractors: ["epub": EpubCoverExtractor()])
-        let defaults = Self.makeDefaults()
+        let defaults = makeDefaults()
         let installer = SampleBookInstaller(storage: storage, defaults: defaults)
 
         let userId = UUID()
@@ -28,10 +28,10 @@ struct SampleBookInstallerTests {
 
     @Test("Second run: no-op (idempotent)")
     func secondRunIdempotent() async throws {
-        let root = Self.makeRoot()
+        let root = makeRoot()
         let store = InMemoryBookStore()
         let storage = BookFileStorage(rootURL: root, bookStore: store, coverExtractors: [:])
-        let defaults = Self.makeDefaults()
+        let defaults = makeDefaults()
         let installer = SampleBookInstaller(storage: storage, defaults: defaults)
         let userId = UUID()
         _ = await installer.installIfNeeded(ownerId: userId)
@@ -44,10 +44,10 @@ struct SampleBookInstallerTests {
 
     @Test("Missing resource is logged + nil-returned (not thrown)")
     func missingResourceGraceful() async throws {
-        let root = Self.makeRoot()
+        let root = makeRoot()
         let store = InMemoryBookStore()
         let storage = BookFileStorage(rootURL: root, bookStore: store, coverExtractors: [:])
-        let defaults = Self.makeDefaults()
+        let defaults = makeDefaults()
         // Force a bundle with no resources so the lookup fails.
         let installer = SampleBookInstaller(storage: storage, defaults: defaults,
                                             bundle: Bundle(for: NSObject.self))

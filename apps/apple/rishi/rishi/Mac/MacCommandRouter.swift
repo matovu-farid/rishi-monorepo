@@ -27,7 +27,7 @@ final class MacCommandRouter {
 
 
 private struct MacCommandRouterKey: EnvironmentKey {
-    nonisolated(unsafe) static let defaultValue: MacCommandRouter? = nil
+    static let defaultValue: MacCommandRouter? = nil
 }
 
 extension EnvironmentValues {

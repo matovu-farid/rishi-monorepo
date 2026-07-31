@@ -12,7 +12,8 @@ import AppKit
 /// Test-only helpers that build tiny on-disk fixtures programmatically.
 ///
 /// Generated in a per-test temp directory so we never commit binary blobs.
-enum RishiLibrary_FixtureBuilders {
+enum FixtureBuilders {
+    
 
     /// Writes a 1-page PDF at `url` containing a single SF Symbol page.
     static func writeTinyPDF(to url: URL) throws {

@@ -15,7 +15,7 @@ struct PDFOutlineExtractorTests {
     func emptyOutlinePDF() throws {
         let url = makeTempURL("no-outline")
         defer { try? FileManager.default.removeItem(at: url) }
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 2, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 2, withOutline: false)
 
         let doc = try #require(PDFDocument(url: url))
         let nodes = PDFOutlineExtractor.extract(from: doc)
@@ -26,7 +26,7 @@ struct PDFOutlineExtractorTests {
     func walksMultiLevelOutline() throws {
         let url = makeTempURL("with-outline")
         defer { try? FileManager.default.removeItem(at: url) }
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: true)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: true)
 
         let doc = try #require(PDFDocument(url: url))
         let nodes = PDFOutlineExtractor.extract(from: doc)
@@ -50,7 +50,7 @@ struct PDFOutlineExtractorTests {
     func flattenedTraversalOrder() throws {
         let url = makeTempURL("flatten")
         defer { try? FileManager.default.removeItem(at: url) }
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: true)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: true)
 
         let doc = try #require(PDFDocument(url: url))
         let labels = PDFOutlineExtractor.extract(from: doc)

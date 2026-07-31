@@ -36,7 +36,7 @@ struct PDFReaderViewSmokeTests {
     @MainActor
     func vmDocumentReachable() async throws {
         let url = URL.temporaryDirectory.appendingPathComponent("smoke-\(UUID().uuidString).pdf")
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: false)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let book = Book(userId: UUID(), title: "Smoke", formatType: .pdf, fileURL: "x")

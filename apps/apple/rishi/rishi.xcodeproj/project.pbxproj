@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		095536713018ED9500C80DA0 /* synced.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 095536703018ED9500C80DA0 /* synced.storekit */; };
-		1A1111232FD83183008C5ADE /* TTSPresenceWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */; };
 		BBB28AB44A15558BFB39403C /* PropertyBased in Frameworks */ = {isa = PBXBuildFile; productRef = 4FA89280AD0D00847DBD767F /* PropertyBased */; };
 		C10000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* ReadiumShared */; };
 		C10000000000000000000002 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000002 /* ReadiumNavigator */; };
@@ -46,7 +45,6 @@
 		092254A32FD83186008C5ADE /* rishiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		092254AD2FD83186008C5ADE /* rishiUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rishiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		095536703018ED9500C80DA0 /* synced.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = synced.storekit; sourceTree = "<group>"; };
-		1A1111122FD83183008C5ADE /* TTSPresenceWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TTSPresenceWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSPresenceWidgetBundle.swift; sourceTree = "<group>"; };
 		1A1111212FD83183008C5ADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A1111222FD83183008C5ADE /* TTSPresenceWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TTSPresenceWidget.entitlements; sourceTree = "<group>"; };
@@ -119,13 +117,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		1A1111162FD83183008C5ADE /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -148,7 +139,6 @@
 				092254942FD83183008C5ADE /* rishi.app */,
 				092254A32FD83186008C5ADE /* rishiTests.xctest */,
 				092254AD2FD83186008C5ADE /* rishiUITests.xctest */,
-				1A1111122FD83183008C5ADE /* TTSPresenceWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -168,7 +158,7 @@
 				1A1111222FD83183008C5ADE /* TTSPresenceWidget.entitlements */,
 			);
 			path = TTSPresenceWidget;
-			 sourceTree = "<group>";
+			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
@@ -253,23 +243,6 @@
 			productReference = 092254AD2FD83186008C5ADE /* rishiUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
-		1A1111132FD83183008C5ADE /* TTSPresenceWidget */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 1A1111142FD83183008C5ADE /* Build configuration list for PBXNativeTarget "TTSPresenceWidget" */;
-			buildPhases = (
-				1A1111152FD83183008C5ADE /* Sources */,
-				1A1111162FD83183008C5ADE /* Frameworks */,
-				1A1111172FD83183008C5ADE /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = TTSPresenceWidget;
-			productName = TTSPresenceWidget;
-			productReference = 1A1111122FD83183008C5ADE /* TTSPresenceWidget.appex */;
-			productType = "com.apple.product-type.widgetkit-extension";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -283,16 +256,13 @@
 					092254932FD83183008C5ADE = {
 						CreatedOnToolsVersion = 26.2;
 					};
-				092254A22FD83186008C5ADE = {
+					092254A22FD83186008C5ADE = {
 						CreatedOnToolsVersion = 26.2;
-					TestTargetID = 092254932FD83183008C5ADE;
+						TestTargetID = 092254932FD83183008C5ADE;
 					};
 					092254AC2FD83186008C5ADE = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 092254932FD83183008C5ADE;
-					};
-					1A1111132FD83183008C5ADE = {
-						CreatedOnToolsVersion = 26.2;
 					};
 				};
 			};
@@ -322,7 +292,6 @@
 				092254932FD83183008C5ADE /* rishi */,
 				092254A22FD83186008C5ADE /* rishiTests */,
 				092254AC2FD83186008C5ADE /* rishiUITests */,
-				1A1111132FD83183008C5ADE /* TTSPresenceWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -344,13 +313,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		092254AB2FD83186008C5ADE /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		1A1111172FD83183008C5ADE /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -401,14 +363,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		1A1111152FD83183008C5ADE /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				1A1111232FD83183008C5ADE /* TTSPresenceWidgetBundle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -733,58 +687,6 @@
 			};
 			name = Release;
 		};
-		1A1111182FD83183008C5ADE /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CODE_SIGN_ENTITLEMENTS = TTSPresenceWidget/TTSPresenceWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = TTSPresenceWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.4;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi.ttspresencewidget;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Debug;
-		};
-		1A1111192FD83183008C5ADE /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CODE_SIGN_ENTITLEMENTS = TTSPresenceWidget/TTSPresenceWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = TTSPresenceWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.4;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi.ttspresencewidget;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -820,15 +722,6 @@
 			buildConfigurations = (
 				092254BE2FD83186008C5ADE /* Debug */,
 				092254BF2FD83186008C5ADE /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		1A1111142FD83183008C5ADE /* Build configuration list for PBXNativeTarget "TTSPresenceWidget" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				1A1111182FD83183008C5ADE /* Debug */,
-				1A1111192FD83183008C5ADE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

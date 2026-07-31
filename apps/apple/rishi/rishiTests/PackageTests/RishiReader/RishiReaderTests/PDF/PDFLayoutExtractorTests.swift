@@ -5,7 +5,7 @@
 //
 //  Tests for layout-aware PDF text extraction. Builds synthetic PDFs in a
 //  temp directory using a CoreGraphics PDF context so PDFKit sees real
-//  selectable text (the existing `FixtureBuilders.writeMultiPagePDF`
+//  selectable text (the existing `RishiReader_FixtureBuilders.writeMultiPagePDF`
 //  rasterises text into an image — useless for selection-based tests).
 //
 

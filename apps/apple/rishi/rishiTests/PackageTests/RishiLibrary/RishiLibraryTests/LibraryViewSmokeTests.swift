@@ -65,7 +65,6 @@ struct LibraryViewSmokeTests {
         let stub = LibraryViewModelStub()
         _ = LibraryView(
             books: stub.books,
-            readingNow: stub.readingNow,
             positionLookup: stub.positionLookup,
             coverURL: stub.coverURL,
             onOpen: stub.onOpen,
@@ -86,7 +85,6 @@ struct LibraryViewSmokeTests {
         )
         _ = LibraryView(
             books: stub.books,
-            readingNow: stub.readingNow,
             positionLookup: stub.positionLookup,
             coverURL: stub.coverURL,
             onOpen: stub.onOpen,

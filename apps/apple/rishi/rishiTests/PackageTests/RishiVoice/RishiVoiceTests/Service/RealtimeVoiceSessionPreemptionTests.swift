@@ -29,7 +29,6 @@ struct RealtimeVoiceSessionPreemptionTests {
         let fetcher = StubEphemeralKeyFetcher(result: .success(.init(secret: "k", sessionId: "s")))
 
         let session = RealtimeVoiceSession(
-            micGate: micGate,
             coordinator: coordinator,
             keyFetcher: fetcher,
             client: client,

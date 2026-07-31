@@ -49,7 +49,7 @@ struct PDFSelectionLocatorEnricherTests {
         let url = URL.temporaryDirectory.appendingPathComponent(
             "enrich-\(UUID().uuidString).pdf"
         )
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let doc = try #require(PDFDocument(url: url))
@@ -74,7 +74,7 @@ struct PDFSelectionLocatorEnricherTests {
         let url = URL.temporaryDirectory.appendingPathComponent(
             "enrich-empty-\(UUID().uuidString).pdf"
         )
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let doc = try #require(PDFDocument(url: url))
@@ -110,7 +110,7 @@ struct PDFSelectionLocatorEnricherTests {
         let url = URL.temporaryDirectory.appendingPathComponent(
             "enrich-lines-\(UUID().uuidString).pdf"
         )
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let doc = try #require(PDFDocument(url: url))

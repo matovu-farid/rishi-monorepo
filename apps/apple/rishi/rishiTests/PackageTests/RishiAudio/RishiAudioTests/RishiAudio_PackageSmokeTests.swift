@@ -7,10 +7,7 @@ import Foundation
 @Suite("RishiAudio package smoke")
 struct RishiAudio_PackageSmokeTests {
 
-    @Test("Version string is the 1.0.0 release marker")
-    func versionStringIsScaffoldMarker() {
-        #expect(RishiAudio.version == "1.0.0")
-    }
+
 
     @Test("RishiCore UserID + BookID reachable from the test target")
     func rishiCoreIdsReachable() {

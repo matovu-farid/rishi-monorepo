@@ -16,7 +16,7 @@ struct PDFSelectionCoordinatorTests {
     @Test("Returns nil for an empty selection")
     func returnsNilForEmpty() throws {
         let url = URL.temporaryDirectory.appendingPathComponent("sel-empty-\(UUID().uuidString).pdf")
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
         defer { try? FileManager.default.removeItem(at: url) }
         let doc = try #require(PDFDocument(url: url))
 
@@ -28,7 +28,7 @@ struct PDFSelectionCoordinatorTests {
     @Test("Returns locator with page index 0 for first-page selection")
     func firstPageSelection() throws {
         let url = URL.temporaryDirectory.appendingPathComponent("sel-first-\(UUID().uuidString).pdf")
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 2, withOutline: false)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 2, withOutline: false)
         defer { try? FileManager.default.removeItem(at: url) }
         let doc = try #require(PDFDocument(url: url))
         let page = try #require(doc.page(at: 0))

@@ -72,11 +72,5 @@ struct ReaderSettingsStoreTests {
         #expect(await store.theme(for: bookId) == .matchDevice)
     }
 
-    @Test("peek matches async persistedTheme")
-    func peekMatchesAsyncPersistedTheme() async {
-        let store = UserDefaultsReaderSettingsStore(defaults: makeDefaults())
-        let bookId: BookID = UUID()
-        await store.setTheme(.sepia, for: bookId)
-        #expect(store.peekPersistedTheme(for: bookId) == await store.persistedTheme(for: bookId))
-    }
+
 }

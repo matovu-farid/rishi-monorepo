@@ -339,7 +339,7 @@ struct ReaderViewModelTests {
         let locator = Locator(
             href: href,
             mediaType: .pdf,
-            locations: Locator.Locations(page: 1)
+            locations: Locator.Locations(fragments: ["page=1"])
         )
         let extracted = await vm.firstParagraphForPageEntryPrefetch(at: locator)
         let passages = await vm.paragraphsForUserNavigationIntent(at: locator)
@@ -369,7 +369,7 @@ struct ReaderViewModelTests {
         let locator = Locator(
             href: try #require(RelativeURL(path: "publication.pdf")),
             mediaType: .pdf,
-            locations: Locator.Locations(page: 1)
+            locations: Locator.Locations(fragments: ["page=1"])
         )
         let passages = await vm.paragraphsForUserNavigationIntent(at: locator)
 
@@ -397,7 +397,7 @@ struct ReaderViewModelTests {
         let unavailableLocator = Locator(
             href: try #require(RelativeURL(path: "missing.pdf")),
             mediaType: .pdf,
-            locations: Locator.Locations(page: 1)
+            locations: Locator.Locations(fragments: ["page=1"])
         )
 
         #expect(await vm.firstParagraphForPageEntryPrefetch(at: unavailableLocator) == nil)

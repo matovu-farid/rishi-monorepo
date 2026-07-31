@@ -98,6 +98,12 @@ struct SyncEngineChatDirtyTests {
         func delete(_ id: MessageID) async throws {}
     }
 
+    private actor StubChapterIndexPersistence: ChapterIndexPersistence {
+        func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+        func upsertChapterIndex(_ index: ChapterIndex) async throws {}
+        func markChapterIndexDirty(bookID: BookID) async throws {}
+    }
+
     // MARK: - Helpers
 
     private func makeEngine(metadata: any SyncMetadataStore) async throws -> (SyncEngine, SyncQueue) {
@@ -122,6 +128,12 @@ struct SyncEngineChatDirtyTests {
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: workerClient, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
+        let chapterIndexUploader = ChapterIndexUploader(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            persistence: StubChapterIndexPersistence(),
+            metadataStore: metadata
+        )
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         // Phase 16-05 — dedicated chat-sync fetchers.
@@ -139,6 +151,7 @@ struct SyncEngineChatDirtyTests {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             bookmarkUploader: bookmarkUploader,
+            chapterIndexUploader: chapterIndexUploader,
             fetcher: fetcher,
             applier: applier,
             conversationsFetcher: conversationsFetcher,

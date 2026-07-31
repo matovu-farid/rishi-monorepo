@@ -51,8 +51,9 @@ struct SettingsScreenSmokeTests {
         #expect(
             BillingSection(
                 entitlementSnapshot: nil,
+                onSubscribe: {},
                 storeKitIsSubscribed: true,
-                onSubscribe: {}
+               
             ).subscriptionAction == .manage
         )
     }
@@ -157,10 +158,8 @@ struct SettingsScreenSmokeTests {
         let user = User(
             id: UUID(),
             email: "u@example.com",
-            displayName: "U",
-            avatarURL: nil,
-            hasPro: false,
-            createdAt: Date()
+            name: "U",
+      
         )
         var theme: ReaderTheme = .light
         var font: ReaderFontFamily = .system

@@ -11,7 +11,7 @@ struct PDFReaderViewModelTests {
 
     private func makeFixture(pageCount: Int, withOutline: Bool = true) throws -> URL {
         let url = URL.temporaryDirectory.appendingPathComponent("vm-fix-\(UUID().uuidString).pdf")
-        try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: pageCount, withOutline: withOutline)
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: pageCount, withOutline: withOutline)
         return url
     }
 

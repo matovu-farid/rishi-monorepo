@@ -219,7 +219,7 @@ public actor WorkerClient {
             throw RishiError.networkFailure(urlError)
         }
 
-        let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+        _ = Int(Date().timeIntervalSince(started) * 1000)
         let http = response as? HTTPURLResponse
         let status = http?.statusCode ?? -1
 

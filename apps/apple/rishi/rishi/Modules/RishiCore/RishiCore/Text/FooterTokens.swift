@@ -32,7 +32,7 @@ public enum FooterTokens {
     /// `NSRegularExpression` instances are documented thread-safe for read
     /// access, so the `nonisolated(unsafe)` static is sound under Swift 6
     /// strict concurrency.
-    nonisolated(unsafe) private static let pureNumericRegex: NSRegularExpression = {
+    private static let pureNumericRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
             pattern: "^[ivxlcdm0-9]+$",
@@ -43,7 +43,7 @@ public enum FooterTokens {
     /// `\b\d+\b`. Replaces embedded ASCII digit runs with the sentinel.
     /// ASCII-only by design — electron's JS `\d` is also `[0-9]`-only by
     /// default; do not add Unicode flags.
-    nonisolated(unsafe) private static let embeddedNumberRegex: NSRegularExpression = {
+    private static let embeddedNumberRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
             pattern: "\\b\\d+\\b",

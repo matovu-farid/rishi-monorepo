@@ -79,7 +79,7 @@ extension WorkerEndpoint {
             tokenProvider: tokenProvider,
             
         )
-        return await try workerClient.send(self)
+        return try await workerClient.send(self)
     }
 }
 

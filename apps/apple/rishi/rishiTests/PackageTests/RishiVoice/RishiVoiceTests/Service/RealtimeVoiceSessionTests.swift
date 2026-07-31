@@ -271,7 +271,6 @@ struct RealtimeVoiceSessionTests {
         let client = FakeRealtimeClient()
         client.setProviderCallId("call-1")
         let session = RealtimeVoiceSession(
-            micGate: FakeMicPermissionGate(decision: .granted),
             coordinator: coordinator,
             keyFetcher: StubEphemeralKeyFetcher(result: .success(.init(secret: "legacy", sessionId: "legacy"))),
             client: client,
@@ -325,7 +324,6 @@ struct RealtimeVoiceSessionTests {
         let fetcher = CapturingEphemeralKeyFetcher(result: keyFetchResult)
 
         let session = RealtimeVoiceSession(
-            micGate: micGate,
             coordinator: coordinator,
             keyFetcher: fetcher,
             client: client,

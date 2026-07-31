@@ -42,7 +42,7 @@ public enum EPUBBookmarkMatcher {
     /// same href, and either equal integer `position` (preferred) or
     /// `progression` within ``progressionEpsilon``.
     public static func matches(_ current: Locator, _ saved: Locator) -> Bool {
-        guard current.href == saved.href else { return false }
+        guard current.href.isEquivalentTo(saved.href)  else { return false }
         if let currentPosition = current.locations.position,
            let savedPosition = saved.locations.position {
             return currentPosition == savedPosition

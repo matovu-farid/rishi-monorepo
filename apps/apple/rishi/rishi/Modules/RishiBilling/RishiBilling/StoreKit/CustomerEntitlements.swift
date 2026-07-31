@@ -147,7 +147,7 @@ public final class CustomerEntitlements {
                 )
                 
                 do {
-                    try await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
+                   let _ = try await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
                 }catch {
                     print(error)
                 }

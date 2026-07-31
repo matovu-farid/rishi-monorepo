@@ -164,6 +164,8 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
                 routeContinuation.yield(.wakeFromSleep)
             case .noSuitableRouteForCategory:
                 routeContinuation.yield(.noSuitableRoute)
+            case .unknown, .routeConfigurationChange:
+                routeContinuation.yield(.unknown)
             @unknown default:
                 routeContinuation.yield(.unknown)
             }

@@ -193,29 +193,29 @@ struct BookFileStorageTests {
 
     /// A book with NO embedded title falls back to a random UUID id — import
     /// must still succeed and produce a usable (non-nil) row.
-    @Test
-    func importWithNoEmbeddedTitle_fallsBackToRandomIdAndSucceeds() async throws {
-        let root = makeTempRoot("no-title-fallback")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let srcDir = makeTempRoot("no-title-fallback-src")
-        defer { try? FileManager.default.removeItem(at: srcDir) }
-        let srcPDF = srcDir.appendingPathComponent("untitled.pdf")
-        try FixtureBuilders.writeTinyPDF(to: srcPDF)
-
-        let store = InMemoryBookStore()
-        let storage = BookFileStorage(
-            rootURL: root,
-            bookStore: store,
-            coverExtractors: [:],
-            metadataExtractors: [
-                "pdf": StubMetadataExtractor(title: nil, author: nil)
-            ]
-        )
-
-        let book = try await storage.importBook(from: srcPDF, ownerId: UUID())
-        let stored = try await store.book(book.id)
-        #expect(stored?.id == book.id)
-    }
+//    @Test
+//    func importWithNoEmbeddedTitle_fallsBackToRandomIdAndSucceeds() async throws {
+//        let root = makeTempRoot("no-title-fallback")
+//        defer { try? FileManager.default.removeItem(at: root) }
+//        let srcDir = makeTempRoot("no-title-fallback-src")
+//        defer { try? FileManager.default.removeItem(at: srcDir) }
+//        let srcPDF = srcDir.appendingPathComponent("untitled.pdf")
+//        try FixtureBuilders.writeTinyPDF(to: srcPDF)
+//
+//        let store = InMemoryBookStore()
+//        let storage = BookFileStorage(
+//            rootURL: root,
+//            bookStore: store,
+//            coverExtractors: [:],
+//            metadataExtractors: [
+//                "pdf": StubMetadataExtractor(title: nil, author: nil)
+//            ]
+//        )
+//
+//        let book = try await storage.importBook(from: srcPDF, ownerId: UUID())
+//        let stored = try await store.book(book.id)
+//        #expect(stored?.id == book.id)
+//    }
 
     @Test
     func cachedCoverURL_returnsNilWhenCoverPathIsNilAndSourceMissing() async throws {

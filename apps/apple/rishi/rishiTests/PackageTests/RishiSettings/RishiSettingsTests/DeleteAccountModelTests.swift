@@ -18,10 +18,8 @@ struct DeleteAccountModelTests {
         let user = User(
             id: UUID(),
             email: "user@example.com",
-            displayName: "Test User",
-            avatarURL: nil,
-            hasPro: true,
-            createdAt: Date()
+            name: "Test User",
+   
         )
         let section = AccountSection(
             user: user,
@@ -36,10 +34,8 @@ struct DeleteAccountModelTests {
         let user = User(
             id: UUID(),
             email: "anon@example.com",
-            displayName: nil,
-            avatarURL: nil,
-            hasPro: false,
-            createdAt: Date()
+            name: nil,
+
         )
         let section = AccountSection(
             user: user,
@@ -54,10 +50,7 @@ struct DeleteAccountModelTests {
         let user = User(
             id: UUID(),
             email: "x@example.com",
-            displayName: "",
-            avatarURL: nil,
-            hasPro: false,
-            createdAt: Date()
+            name: "",
         )
         let section = AccountSection(
             user: user,

@@ -3,6 +3,7 @@
 import Testing
 import Foundation
 import ReadiumShared
+import ReadiumNavigator
 
 
 @Suite("ReaderReadAloudDecorationBuilder")
