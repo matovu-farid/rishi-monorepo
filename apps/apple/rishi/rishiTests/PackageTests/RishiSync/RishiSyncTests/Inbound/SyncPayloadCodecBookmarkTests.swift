@@ -91,6 +91,17 @@ struct SyncPayloadCodecBookmarkTests {
         #expect(key == "books/legacy/book.pdf")
     }
 
+    @Test("decodeBookR2Key rejects a non-string R2 key")
+    func decodeBookR2KeyRejectsNonStringValue() {
+        let body = #"{"file_r2_key":123}"#
+
+        #expect(throws: DecodingError.self) {
+            try SyncPayloadCodec.decodeBookR2Key(
+                SyncOpaqueJSON(data: Data(body.utf8))
+            )
+        }
+    }
+
     @Test("book chapter index content version round-trips and remains optional")
     func bookChapterIndexContentVersionRoundTrip() throws {
         let book = Book(
