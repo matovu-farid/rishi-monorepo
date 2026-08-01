@@ -151,10 +151,7 @@ enum SyncPayloadCodec {
     }
 
     public static func decodeBookR2Key(_ payload: SyncOpaqueJSON) throws -> String? {
-        guard let object = try JSONSerialization.jsonObject(with: payload.data) as? [String: Any] else {
-            return nil
-        }
-        return object["file_r2_key"] as? String
+        try JSONDecoder().decode(WireBookR2Key.self, from: payload.data).fileR2Key
     }
 
     // MARK: - Encoders (outbound push)
@@ -337,6 +334,14 @@ enum SyncPayloadCodec {
             case fileR2Key = "file_r2_key"
             case currentCfi = "current_cfi"
             case lastProgressPercent = "last_progress_percent"
+        }
+    }
+
+    private struct WireBookR2Key: Decodable {
+        let fileR2Key: String?
+
+        enum CodingKeys: String, CodingKey {
+            case fileR2Key = "file_r2_key"
         }
     }
 
