@@ -86,6 +86,9 @@ vi.mock("./billing/sub-gate", () => ({
 
 // ─── Stub auth middleware so these endpoint tests can focus on speech logic ─
 vi.mock("./middleware", () => ({
+  requireAuthForDeletion: async (_c: unknown, next: () => Promise<void>) => {
+    await next()
+  },
   requireAuth: async (_c: unknown, next: () => Promise<void>) => {
     await next()
   },

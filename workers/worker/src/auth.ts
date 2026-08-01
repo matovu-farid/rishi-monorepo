@@ -12,9 +12,10 @@ import { sendPaymentFailedEmail } from "./billing/payment-failed-email";
 import {
   user as userTable,
   appleSubscriptions,
+  restoredAppleEntitlement,
   subscription,
 } from "./db/schema";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import type Stripe from "stripe";
 
@@ -41,6 +42,7 @@ export interface HasProDeps {
       currentPeriodEnd: Date;
       status: string;
     } | null>;
+    findRestoredActive?: (userId: string) => Promise<{ periodEnd: Date } | null>;
     findStripeActive(userId: string): Promise<{
       periodEnd: number;
       status: string;
@@ -52,10 +54,12 @@ export async function deriveHasPro(input: {
   userId: string;
   deps: HasProDeps;
 }): Promise<boolean> {
+  const restored = await input.deps.db.findRestoredActive?.(input.userId);
+  if (restored && restored.periodEnd.getTime() > Date.now()) return true;
   const apple = await input.deps.db.findAppleActive(input.userId);
-  if (apple) return true;
+  if (apple && apple.currentPeriodEnd.getTime() > Date.now()) return true;
   const stripe = await input.deps.db.findStripeActive(input.userId);
-  if (stripe) return true;
+  if (stripe && stripe.periodEnd * 1000 > Date.now()) return true;
   return false;
 }
 
@@ -76,11 +80,19 @@ function makeHasProDeps(db: ReturnType<typeof createDb>): HasProDeps {
             and(
               eq(appleSubscriptions.userId, uid),
               inArray(appleSubscriptions.status, ["active", "in_grace"]),
+              gt(appleSubscriptions.currentPeriodEnd, new Date()),
             ),
           )
           .orderBy(desc(appleSubscriptions.currentPeriodEnd))
           .get();
         return row ?? null;
+      },
+      findRestoredActive: async (uid) => {
+        const row = await db.select({ periodEnd: restoredAppleEntitlement.periodEnd })
+          .from(restoredAppleEntitlement)
+          .where(and(eq(restoredAppleEntitlement.userId, uid), inArray(restoredAppleEntitlement.status, ["active", "in_grace"]), gt(restoredAppleEntitlement.periodEnd, new Date())))
+          .orderBy(desc(restoredAppleEntitlement.periodEnd)).get();
+        return row?.periodEnd ? { periodEnd: row.periodEnd } : null;
       },
       findStripeActive: async (uid) => {
         const row = await db
@@ -93,6 +105,7 @@ function makeHasProDeps(db: ReturnType<typeof createDb>): HasProDeps {
             and(
               eq(subscription.referenceId, uid),
               inArray(subscription.status, ["active", "trialing"]),
+              gt(subscription.periodEnd, new Date()),
             ),
           )
           .orderBy(desc(subscription.periodEnd))

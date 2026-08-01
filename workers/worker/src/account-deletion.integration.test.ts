@@ -17,6 +17,9 @@ import {
   chapterIndexChapters,
   chapterIndexes,
   conversations,
+  retainedAppleEntitlement,
+  retainedAppleTransaction,
+  restoredAppleEntitlement,
   devices,
   highlights,
   messages,
@@ -72,6 +75,23 @@ import { encryptSiwaRefreshToken } from "./siwa-token-crypto";
 
 type TestD1 = D1Database & { close: () => void };
 
+function testLedgerBinding() {
+  return {
+    getByName: () => ({
+      markRestorationPending: vi.fn(async () => undefined),
+      restoreAccountEntitlements: vi.fn(async () => undefined),
+      snapshotAccountEntitlements: vi.fn(async () => ({
+        trialState: "never_granted" as const,
+        trialInitialCredits: 0,
+        trialUsedCredits: 0,
+        reader: { total: 0, used: 0, activeUntil: null, status: null },
+        voice: { total: 0, used: 0, activeUntil: null, status: null },
+      })),
+      purgeAccountData: vi.fn(async () => ({ purged: true as const })),
+    }),
+  };
+}
+
 function createD1(
   failOnRun?: (query: string) => boolean,
   beforeRun?: (query: string) => void | Promise<void>,
@@ -101,6 +121,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       })),
     } as unknown as R2Bucket;
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       BOOK_STORAGE,
       ACCESS_TOKEN_SECRET: "access-secret",
@@ -110,6 +131,8 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       APPLE_SIWA_PRIVATE_KEY: "test-private-key",
       APPLE_TEAM_ID: "test-team",
       SIWA_TOKEN_ENCRYPTION_SECRET: "test-encryption-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
       TTS_CACHE: { delete: ttsCacheDelete },
     } as unknown as Env;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -350,6 +373,11 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
     expect(await db.select().from(messages).where(eq(messages.id, messageId)).all()).toHaveLength(0);
     expect(await db.select().from(appleNotificationsLog).all()).toHaveLength(0);
     expect(await db.select().from(appleSubscriptions).where(eq(appleSubscriptions.userId, auth.userId)).all()).toHaveLength(0);
+    expect(await db.select().from(retainedAppleEntitlement).all()).toHaveLength(1);
+    const retainedTransactions = await db.select().from(retainedAppleTransaction).all();
+    expect(retainedTransactions).toHaveLength(1);
+    expect(retainedTransactions[0]?.originalTransactionHash).not.toBe("orig-1");
+    expect(await db.select().from(restoredAppleEntitlement).all()).toHaveLength(0);
     expect(await db.select().from(devices).where(eq(devices.userId, auth.userId)).all()).toHaveLength(0);
     expect(await db.select().from(userApiUsage).where(eq(userApiUsage.userId, auth.userId)).all()).toHaveLength(0);
     expect(await db.select().from(trialGrant).where(eq(trialGrant.userId, auth.userId)).all()).toHaveLength(0);
@@ -404,6 +432,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
 
     let failOnce = true;
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       BOOK_STORAGE: {
         delete: vi.fn(async () => {
@@ -455,7 +484,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       }),
     } as unknown as R2Bucket;
 
-    await deleteAccount(db, { DB: d1, BOOK_STORAGE: bucket } as unknown as Env, "late-upload-user");
+    await deleteAccount(db, { DB: d1, BOOK_STORAGE: bucket, USER_USAGE_LEDGER: testLedgerBinding() } as unknown as Env, "late-upload-user");
     expect(bucket.delete).toHaveBeenCalledWith("books/late-upload-user/late.epub");
     expect(objects).toEqual(new Set());
     d1.close();
@@ -476,6 +505,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
 
     await expect(deleteAccount(db, {
       DB: d1,
+      USER_USAGE_LEDGER: testLedgerBinding(),
       BOOK_STORAGE: {
         delete: vi.fn(async () => undefined),
         head: vi.fn(async () => null),
@@ -517,6 +547,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
 
     const result = await deleteAccount(db, {
       DB: d1,
+      USER_USAGE_LEDGER: testLedgerBinding(),
       BOOK_STORAGE: {
         delete: vi.fn(async () => undefined),
         head: vi.fn(async () => null),
@@ -527,6 +558,8 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       APPLE_SIWA_KEY_ID: "test-key",
       APPLE_TEAM_ID: "test-team",
       APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
     } as unknown as Env, "apple-config-user");
     expect(result.revocationStatus).toBe("revocation_unavailable");
     expect(await db.select().from(user).where(eq(user.id, "apple-config-user")).all()).toHaveLength(0);
@@ -546,6 +579,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       updatedAt: new Date(),
     });
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       BOOK_STORAGE: {
         delete: vi.fn(async () => undefined),
@@ -564,9 +598,12 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
   it("does not create a new account when Apple authorization exchange fails", async () => {
     const d1 = createD1();
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       ACCESS_TOKEN_SECRET: "access-secret",
       REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
       APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
       APPLE_SIWA_KEY_ID: "test-key",
       APPLE_SIWA_PRIVATE_KEY: "test-private-key",
@@ -595,9 +632,12 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
   it("recreates an Apple account after deletion without a new authorization code", async () => {
     const d1 = createD1();
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       ACCESS_TOKEN_SECRET: "access-secret",
       REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
       APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
       APPLE_SIWA_KEY_ID: "test-key",
       APPLE_SIWA_PRIVATE_KEY: "test-private-key",
@@ -666,6 +706,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
   it("rejects an explicitly empty Apple authorization code before creating an account", async () => {
     const d1 = createD1();
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       ACCESS_TOKEN_SECRET: "access-secret",
       REFRESH_TOKEN_SECRET: "refresh-secret",
@@ -691,9 +732,12 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
   it("treats a null Apple authorization code as absent", async () => {
     const d1 = createD1();
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       ACCESS_TOKEN_SECRET: "access-secret",
       REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
     } as unknown as Env;
     const app = new Hono();
     app.route("/auth", authRoutes);
@@ -718,9 +762,12 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
   it("recreates an account without exchanging a code when token encryption is unavailable", async () => {
     const d1 = createD1();
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       ACCESS_TOKEN_SECRET: "access-secret",
       REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
     } as unknown as Env;
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -759,9 +806,12 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       }
     });
     const env = {
+      USER_USAGE_LEDGER: testLedgerBinding(),
       DB: d1,
       ACCESS_TOKEN_SECRET: "access-secret",
       REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
     } as unknown as Env;
     const app = new Hono();
     app.route("/auth", authRoutes);
@@ -855,6 +905,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
 
     const result = await deleteAccount(db, {
       DB: d1,
+      USER_USAGE_LEDGER: testLedgerBinding(),
       BOOK_STORAGE: {
         delete: vi.fn(async () => undefined),
         head: vi.fn(async () => null),

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { Effect } from "effect";
-import { eq } from "drizzle-orm";
+import { and, eq, gt, inArray } from "drizzle-orm";
 
 import {
   verifyRefreshToken,
@@ -10,7 +10,7 @@ import {
 } from "../jwt";
 import { findOrCreateUser } from "../findOrCreateUser";
 import { createDb, WorkerDb } from "../db/drizzle";
-import { appleUsers } from "../db/schema";
+import { allowancePeriod, appleUsers, retainedAppleEntitlement, retainedAppleTransaction, restoredAppleEntitlement } from "../db/schema";
 import { encryptSiwaRefreshToken } from "../siwa-token-crypto";
 import { mintAppleClientSecret } from "../auth-apple-secret";
 import { createRemoteJWKSet, jwtVerify } from "jose";
@@ -18,6 +18,7 @@ import {
   AppleBucket,
   verifySignedTransaction,
 } from "../apple-connect/functions";
+import { hashAppleIdentity } from "../entitlement-retention";
 
 const authRoutes = new Hono<{
   Bindings: Env;
@@ -178,6 +179,100 @@ authRoutes.post("/apple", async (c) => {
           payload.is_private_email === "true",
       }),
     );
+
+    failureStage = "restore-retained-entitlements";
+    const retentionEnv = c.env as Env & {
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT?: string;
+      APPLE_IDENTITY_RETENTION_SECRET_PREVIOUS?: string;
+      APPLE_TRANSACTION_HASH_SECRET?: string;
+    };
+    if (!retentionEnv.APPLE_IDENTITY_RETENTION_SECRET_CURRENT || !retentionEnv.APPLE_TRANSACTION_HASH_SECRET || !c.env.USER_USAGE_LEDGER) {
+      return c.json({ error: "Apple entitlement restoration is temporarily unavailable" }, 503);
+    }
+    const identitySecrets = [
+      retentionEnv.APPLE_IDENTITY_RETENTION_SECRET_CURRENT,
+      retentionEnv.APPLE_IDENTITY_RETENTION_SECRET_PREVIOUS,
+    ].filter((secret): secret is string => Boolean(secret));
+    let identity = await hashAppleIdentity(payload.sub!, identitySecrets[0]);
+    let retained = await db.select().from(retainedAppleEntitlement).where(and(
+      eq(retainedAppleEntitlement.identityHashVersion, identity.identityHashVersion),
+      eq(retainedAppleEntitlement.identityHash, identity.identityHash),
+    )).get();
+    for (const secret of identitySecrets.slice(1)) {
+      if (retained) break;
+      const candidate = await hashAppleIdentity(payload.sub!, secret);
+      const candidateRow = await db.select().from(retainedAppleEntitlement).where(and(
+        eq(retainedAppleEntitlement.identityHashVersion, candidate.identityHashVersion),
+        eq(retainedAppleEntitlement.identityHash, candidate.identityHash),
+      )).get();
+      if (candidateRow) { identity = candidate; retained = candidateRow; }
+    }
+    {
+      if (retained) {
+        const ledger = c.env.USER_USAGE_LEDGER.getByName(user.id);
+        await ledger.markRestorationPending();
+        const restoredPeriodEnd = Math.max(retained.readerActiveUntil?.getTime() ?? 0, retained.voiceActiveUntil?.getTime() ?? 0);
+        if (restoredPeriodEnd > Date.now()) {
+          const readerActive = (retained.readerActiveUntil?.getTime() ?? 0) >= (retained.voiceActiveUntil?.getTime() ?? 0);
+          await db.insert(allowancePeriod).values({
+            id: `retained:${user.id}`,
+            userId: user.id,
+            plan: readerActive ? "reader" : "voice",
+            periodStart: new Date(),
+            periodEnd: new Date(restoredPeriodEnd),
+            narrationSecondsTotal: retained.readerCreditsTotal,
+            narrationSecondsUsed: retained.readerCreditsUsed,
+            voiceChatSecondsTotal: retained.voiceCreditsTotal,
+            voiceChatSecondsUsed: retained.voiceCreditsUsed,
+            transitionReason: "initial",
+            priorPeriodId: null,
+            sourceTransactionId: null,
+            createdAt: new Date(),
+          }).onConflictDoNothing();
+        }
+        await ledger.restoreAccountEntitlements({
+          trialState: retained.trialState,
+          trialInitialCredits: retained.trialInitialCredits,
+          trialUsedCredits: retained.trialUsedCredits,
+          reader: {
+            total: retained.readerCreditsTotal,
+            used: retained.readerCreditsUsed,
+            activeUntil: retained.readerActiveUntil?.getTime() ?? null,
+            status: retained.readerStatus,
+          },
+          voice: {
+            total: retained.voiceCreditsTotal,
+            used: retained.voiceCreditsUsed,
+            activeUntil: retained.voiceActiveUntil?.getTime() ?? null,
+            status: retained.voiceStatus,
+          },
+        });
+        const now = new Date();
+        const transactions = await db.select().from(retainedAppleTransaction).where(and(
+          eq(retainedAppleTransaction.identityHashVersion, identity.identityHashVersion),
+          eq(retainedAppleTransaction.identityHash, identity.identityHash),
+          inArray(retainedAppleTransaction.status, ["active", "in_grace"]),
+          gt(retainedAppleTransaction.periodEnd, now),
+        )).all();
+        for (const transaction of transactions) {
+          await db.insert(restoredAppleEntitlement).values({
+            userId: user.id,
+            identityHashVersion: identity.identityHashVersion,
+            identityHash: identity.identityHash,
+            transactionHashVersion: transaction.transactionHashVersion,
+            environment: transaction.environment,
+            originalTransactionHash: transaction.originalTransactionHash,
+            feature: transaction.feature,
+            status: transaction.status,
+            periodEnd: transaction.periodEnd,
+            updatedAt: new Date(),
+          }).onConflictDoUpdate({
+            target: [restoredAppleEntitlement.userId, restoredAppleEntitlement.transactionHashVersion, restoredAppleEntitlement.environment, restoredAppleEntitlement.originalTransactionHash],
+            set: { feature: transaction.feature, status: transaction.status, periodEnd: transaction.periodEnd, updatedAt: new Date() },
+          });
+        }
+      }
+    }
 
     failureStage = "sign-session-tokens";
 

@@ -7,10 +7,17 @@ import * as schema from "./schema";
 export const relations = defineRelations(schema, (r) => ({
   user: {
     appleAccounts: r.many.appleUsers(),
+    restoredAppleEntitlements: r.many.restoredAppleEntitlement(),
   },
   appleUsers: {
     user: r.one.user({
       from: r.appleUsers.userId,
+      to: r.user.id,
+    }),
+  },
+  restoredAppleEntitlement: {
+    user: r.one.user({
+      from: r.restoredAppleEntitlement.userId,
       to: r.user.id,
     }),
   },

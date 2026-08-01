@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, lt, ne, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
 import { createApnsSender, type ApnsSender } from "./apns";
@@ -7,8 +7,18 @@ import {
   appleSubscriptions,
   appleNotificationsLog,
   devices as devicesTable,
+  retainedAppleTransaction,
+  retainedAppleEntitlement,
+  restoredAppleEntitlement,
+  deletionState,
 } from "../db/schema";
 import { createDb } from "../db/drizzle";
+import {
+  hashAppleOriginalTransactionCandidates,
+  hashAppleOriginalTransaction,
+  type AppleTransactionHashSecrets,
+  type HashedAppleTransaction,
+} from "../entitlement-retention";
 // NOTE: type-only import — runtime import would form an ESM cycle with
 // src/index.ts via the route mount (same constraint as 14-04). The webhook
 // has NO requireAuth — Apple posts unauthenticated; trust is the JWS chain.
@@ -28,6 +38,7 @@ export interface AppleNotificationEnvelope {
   subtype?: string;
   notificationUUID: string;
   version: string;
+  signedDate?: number;
   data: {
     bundleId: string;
     environment: "Sandbox" | "Production";
@@ -58,6 +69,7 @@ export interface AppleTransactionPayload {
 
 export interface AppleWebhookDeps {
   verifyJws: (jws: string) => Promise<any>;
+  transactionHashSecrets?: AppleTransactionHashSecrets;
   db: {
     /**
      * Insert a notification log row keyed on `notificationUuid` PK.
@@ -72,7 +84,7 @@ export interface AppleWebhookDeps {
       userId: string | null;
       appleTransactionId: string | null;
       rawPayload: string;
-    }): Promise<{ inserted: boolean }>;
+    }): Promise<{ inserted: boolean; existingProcessingError?: string | null }>;
     markLogProcessed(
       notificationUuid: string,
       err: string | null,
@@ -85,14 +97,16 @@ export interface AppleWebhookDeps {
       status: "active" | "in_grace" | "expired" | "refunded";
       currentPeriodEnd: Date;
       environment: "Sandbox" | "Production";
-    }): Promise<void>;
+      eventAt?: number;
+    }): Promise<{ updated: boolean } | void>;
     updateSubStatus(
       appleTransactionId: string,
       patch: {
         status: "active" | "in_grace" | "expired" | "refunded";
         currentPeriodEnd: Date;
+        eventAt?: number;
       },
-    ): Promise<void>;
+    ): Promise<{ updated: boolean } | void>;
     /**
      * Resolve the owning userId for a subscription from a prior row keyed on
      * `appleOriginalTransactionId` (populated by /verify-receipt with the
@@ -110,6 +124,53 @@ export interface AppleWebhookDeps {
     findDevicesByUserId(
       userId: string,
     ): Promise<Array<{ deviceToken: string; topic: string; env: string }>>;
+    isStaleEvent?(input: {
+      transactionId: string;
+      originalTransactionId: string;
+      environment: "Sandbox" | "Production";
+      eventAt: number;
+    }): Promise<boolean>;
+    resolveAppleTransaction?(originalTransactionId: string, environment: "Sandbox" | "Production"): Promise<{
+      transactionHashVersion: number;
+      originalTransactionHash: string;
+      identityHashVersion: number;
+      identityHash: string;
+      retentionExpiresAt: Date;
+    } | null>;
+    reconcileRetainedTransaction?(row: {
+      identityHashVersion: number;
+      identityHash: string;
+      transactionHashVersion: number;
+      originalTransactionHash: string;
+      feature: "reader" | "voice";
+      environment: "Sandbox" | "Production";
+      lastEventAt: number;
+      status: "active" | "in_grace" | "expired" | "refunded";
+      periodEnd: Date | null;
+      retentionExpiresAt: Date;
+      updatedAt: Date;
+      eventAt: number;
+      monotonic: true;
+    }): Promise<{ updated: boolean } | void>;
+    upsertRestoredEntitlement?(row: {
+      userId: string;
+      identityHashVersion: number;
+      identityHash: string;
+      transactionHashVersion: number;
+      environment: "Sandbox" | "Production";
+      originalTransactionHash: string;
+      feature: "reader" | "voice";
+      status: "active" | "in_grace" | "expired" | "refunded";
+      periodEnd: Date | null;
+      updatedAt: Date;
+    }): Promise<{ updated: boolean } | void>;
+    updateLiveLedger?(input: {
+      userId: string;
+      feature: "reader" | "voice";
+      status: "active" | "in_grace" | "expired" | "refunded";
+      periodEnd: Date | null;
+      eventAt: number;
+    }): Promise<void>;
   };
   /**
    * APNs silent-push sender, or null when APNs credentials
@@ -128,7 +189,7 @@ export interface WebhookInput {
 }
 
 export interface WebhookResult {
-  status: 200 | 400;
+  status: 200 | 400 | 500;
   body: { ok: true } | { error: string };
 }
 
@@ -208,6 +269,10 @@ export async function handleAppleWebhook(
   // an absent renewal info doesn't fault non-renewal notification types.
 
   const txIdStr = tx ? String(tx.transactionId) : null;
+  const loggedTransactionId = tx && input.deps.transactionHashSecrets
+    ? (await hashAppleOriginalTransaction(String(tx.originalTransactionId), input.deps.transactionHashSecrets.current)).originalTransactionHash
+    : null;
+  const eventAt = Number(envelope.signedDate ?? Date.now());
 
   // 4. Idempotent log insert (Pitfall 3 — atomic insert-and-catch).
   // For TEST / transaction-less notifications, appleTransactionId is null
@@ -217,10 +282,23 @@ export async function handleAppleWebhook(
     notificationType: envelope.notificationType,
     subtype: envelope.subtype ?? null,
     userId: null,
-    appleTransactionId: txIdStr,
-    rawPayload: JSON.stringify(envelope),
+    // This log is inserted before the owner can be resolved. Never persist a
+    // raw Apple identifier or signed payload in the ownerless path; retained
+    // entitlement history uses versioned HMACs instead.
+    // This legacy column carries a versioned HMAC when a transaction exists;
+    // it is never populated with Apple's raw identifier. That gives the
+    // bounded replay/redaction job a stable lookup key without retaining PII.
+    appleTransactionId: loggedTransactionId,
+    rawPayload: JSON.stringify({
+      notificationUUID: envelope.notificationUUID,
+      notificationType: envelope.notificationType,
+      subtype: envelope.subtype ?? null,
+      environment: envelope.data.environment,
+      signedDate: eventAt,
+      hasTransaction: Boolean(txIdStr),
+    }),
   });
-  if (!insertResult.inserted) {
+  if (!insertResult.inserted && !insertResult.existingProcessingError) {
     // Duplicate UUID — Apple retry. Already processed; ACK 200 with no
     // further side effects.
     return { status: 200, body: { ok: true } };
@@ -232,16 +310,25 @@ export async function handleAppleWebhook(
   // branch (already logged above; ACK 200 means Apple will not redeliver).
   if (tx) {
     try {
-      await dispatch(envelope, tx, input.deps);
+      if (await input.deps.db.isStaleEvent?.({
+        transactionId: txIdStr!,
+        originalTransactionId: String(tx.originalTransactionId),
+        environment: tx.environment,
+        eventAt,
+      })) {
+        await input.deps.db.markLogProcessed(envelope.notificationUUID, null);
+        return { status: 200, body: { ok: true } };
+      }
+      await dispatch(envelope, tx, input.deps, eventAt);
       await input.deps.db.markLogProcessed(envelope.notificationUUID, null);
     } catch (e) {
       await input.deps.db.markLogProcessed(
         envelope.notificationUUID,
         String(e),
       );
-      // Still ACK 200 to stop Apple's retry storm. The error column lets
-      // the daily reconciliation cron pick up failed dispatches; the row
-      // is already logged so we have full payload for replay.
+      // Return a non-2xx response so Apple retries. A duplicate notification
+      // with an existing processing error is allowed back through above.
+      return { status: 500, body: { error: "temporary dispatch failure" } };
     }
   } else {
     await input.deps.db.markLogProcessed(envelope.notificationUUID, null);
@@ -266,10 +353,62 @@ async function dispatch(
   envelope: AppleNotificationEnvelope,
   tx: AppleTransactionPayload,
   deps: AppleWebhookDeps,
+  eventAt: number,
 ): Promise<void> {
   const txIdStr = String(tx.transactionId);
   const origIdStr = String(tx.originalTransactionId);
   const expires = new Date(tx.expiresDate);
+  const feature: "reader" | "voice" = tx.productId.toLowerCase().includes("voice") ? "voice" : "reader";
+  const resolvedUserId = await deps.db.findUserIdByOriginalTransactionId(origIdStr);
+  const liveUserId = resolvedUserId;
+  const retentionEnabled = Boolean(deps.transactionHashSecrets && deps.db.resolveAppleTransaction);
+
+  const reconcile = async (status: "active" | "in_grace" | "expired" | "refunded", periodEnd: Date | null) => {
+    const retained = await deps.db.resolveAppleTransaction?.(origIdStr, tx.environment);
+    if (!retained || !deps.transactionHashSecrets) return;
+    const row = {
+      ...retained,
+      feature,
+      environment: tx.environment,
+      lastEventAt: eventAt,
+      status,
+      periodEnd,
+      updatedAt: new Date(eventAt),
+      eventAt,
+      monotonic: true as const,
+    };
+    if (!resolvedUserId) {
+      await deps.db.reconcileRetainedTransaction?.(row);
+      return;
+    }
+    await deps.db.upsertRestoredEntitlement?.({ userId: resolvedUserId, ...row });
+    await deps.db.updateLiveLedger?.({ userId: resolvedUserId, feature, status, periodEnd, eventAt });
+  };
+
+  if (!resolvedUserId && retentionEnabled) {
+    switch (envelope.notificationType) {
+      case "SUBSCRIBED":
+      case "DID_RENEW":
+        await reconcile("active", expires);
+        return;
+      case "DID_FAIL_TO_RENEW":
+        await reconcile(
+          envelope.subtype === "GRACE_PERIOD" ? "in_grace" : "expired",
+          expires,
+        );
+        return;
+      case "GRACE_PERIOD_EXPIRED":
+      case "EXPIRED":
+        await reconcile("expired", expires);
+        return;
+      case "REFUND":
+      case "REVOKE":
+        await reconcile("refunded", null);
+        return;
+      default:
+        return;
+    }
+  }
 
   switch (envelope.notificationType) {
     case "SUBSCRIBED":
@@ -285,9 +424,7 @@ async function dispatch(
       const resolvedUserId =
         await deps.db.findUserIdByOriginalTransactionId(origIdStr);
       if (!resolvedUserId) {
-        console.log(
-          `[apple-webhook] ${envelope.notificationType}: verified notification logged without resolved owner for original transaction ${origIdStr}`,
-        );
+        console.log(`[apple-webhook] ${envelope.notificationType}: verified notification logged without resolved owner`);
         return;
       }
       await deps.db.upsertSub({
@@ -298,35 +435,29 @@ async function dispatch(
         status: "active",
         currentPeriodEnd: expires,
         environment: tx.environment,
+        eventAt,
       });
+      await reconcile("active", expires);
       break;
     }
     case "DID_FAIL_TO_RENEW":
       if (envelope.subtype === "GRACE_PERIOD") {
-        await deps.db.updateSubStatus(txIdStr, {
-          status: "in_grace",
-          currentPeriodEnd: expires,
-        });
+        if (liveUserId || !retentionEnabled) await deps.db.updateSubStatus(txIdStr, { status: "in_grace", currentPeriodEnd: expires, eventAt });
+        await reconcile("in_grace", expires);
       } else {
-        await deps.db.updateSubStatus(txIdStr, {
-          status: "expired",
-          currentPeriodEnd: expires,
-        });
+        if (liveUserId || !retentionEnabled) await deps.db.updateSubStatus(txIdStr, { status: "expired", currentPeriodEnd: expires, eventAt });
+        await reconcile("expired", expires);
       }
       break;
     case "GRACE_PERIOD_EXPIRED":
     case "EXPIRED":
-      await deps.db.updateSubStatus(txIdStr, {
-        status: "expired",
-        currentPeriodEnd: expires,
-      });
+      if (liveUserId || !retentionEnabled) await deps.db.updateSubStatus(txIdStr, { status: "expired", currentPeriodEnd: expires, eventAt });
+      await reconcile("expired", expires);
       break;
     case "REFUND":
     case "REVOKE": {
-      await deps.db.updateSubStatus(txIdStr, {
-        status: "refunded",
-        currentPeriodEnd: new Date(),
-      });
+      if (liveUserId || !retentionEnabled) await deps.db.updateSubStatus(txIdStr, { status: "refunded", currentPeriodEnd: new Date(), eventAt });
+      await reconcile("refunded", null);
       // Emit a silent push to every registered device so the app's
       // EntitlementReconciler invalidates immediately rather than waiting
       // for the next launch/foreground pull. Best-effort: a push failure
@@ -427,8 +558,14 @@ export function registerAppleWebhookRoute(
     // provisioned. When any is missing, pass null and the REFUND/REVOKE
     // path logs a warning and skips the silent push (entitlement still
     // reconciles on the device's next foreground pull).
-    const apnsKeyP8 = c.env.APPLE_APNS_KEY_P8;
-    const apnsKeyId = c.env.APPLE_APNS_KEY_ID;
+    const envWithRetention = c.env as Env & {
+      APPLE_APNS_KEY_P8?: string;
+      APPLE_APNS_KEY_ID?: string;
+      APPLE_TRANSACTION_HASH_SECRET?: string;
+      APPLE_TRANSACTION_HASH_SECRET_PREVIOUS?: string;
+    };
+    const apnsKeyP8 = envWithRetention.APPLE_APNS_KEY_P8;
+    const apnsKeyId = envWithRetention.APPLE_APNS_KEY_ID;
     const apnsTeamId = c.env.APPLE_TEAM_ID;
     const apns: ApnsSender | null =
       apnsKeyP8 && apnsKeyId && apnsTeamId
@@ -439,9 +576,13 @@ export function registerAppleWebhookRoute(
           })
         : null;
 
+    const retentionSecrets = envWithRetention.APPLE_TRANSACTION_HASH_SECRET
+      ? { current: envWithRetention.APPLE_TRANSACTION_HASH_SECRET, previous: envWithRetention.APPLE_TRANSACTION_HASH_SECRET_PREVIOUS }
+      : undefined;
     const deps: AppleWebhookDeps = {
       verifyJws: (jws) => verifyAppleJWS<any>(jws),
       apns,
+      transactionHashSecrets: retentionSecrets,
       db: {
         insertLog: async (row) => {
           // D1 ON CONFLICT DO NOTHING — atomic dedupe on notificationUuid PK.
@@ -462,7 +603,11 @@ export function registerAppleWebhookRoute(
           // D1's `meta.changes` is the canonical "row inserted?" signal.
           // Drizzle d1 wraps this on the result object.
           const changes = (result as any)?.meta?.changes ?? 0;
-          return { inserted: changes > 0 };
+          if (changes > 0) return { inserted: true };
+          const existing = await db.select({ processingError: appleNotificationsLog.processingError })
+            .from(appleNotificationsLog)
+            .where(eq(appleNotificationsLog.notificationUuid, row.notificationUuid)).get();
+          return { inserted: false, existingProcessingError: existing?.processingError ?? null };
         },
         markLogProcessed: async (uuid, err) => {
           await db
@@ -472,6 +617,11 @@ export function registerAppleWebhookRoute(
             .run();
         },
         upsertSub: async (row) => {
+          const deleting = await db.select({ userId: deletionState.userId }).from(deletionState).where(eq(deletionState.userId, row.userId)).get();
+          if (deleting) throw new Error("account deletion pending");
+          const eventDate = new Date(row.eventAt ?? Date.now());
+          const current = await db.select({ updatedAt: appleSubscriptions.updatedAt }).from(appleSubscriptions).where(eq(appleSubscriptions.appleTransactionId, row.appleTransactionId)).get();
+          if (current && current.updatedAt.getTime() >= eventDate.getTime()) return { updated: false };
           await db
             .insert(appleSubscriptions)
             .values(row)
@@ -480,18 +630,23 @@ export function registerAppleWebhookRoute(
               set: {
                 status: row.status,
                 currentPeriodEnd: row.currentPeriodEnd,
-                updatedAt: new Date(),
+                updatedAt: eventDate,
               },
             })
             .run();
         },
         updateSubStatus: async (txId, patch) => {
+          const owner = await db.select({ userId: appleSubscriptions.userId }).from(appleSubscriptions).where(eq(appleSubscriptions.appleTransactionId, txId)).get();
+          if (owner && await db.select({ userId: deletionState.userId }).from(deletionState).where(eq(deletionState.userId, owner.userId)).get()) throw new Error("account deletion pending");
+          const eventDate = new Date(patch.eventAt ?? Date.now());
+          const current = await db.select({ updatedAt: appleSubscriptions.updatedAt }).from(appleSubscriptions).where(eq(appleSubscriptions.appleTransactionId, txId)).get();
+          if (current && current.updatedAt.getTime() >= eventDate.getTime()) return { updated: false };
           await db
             .update(appleSubscriptions)
             .set({
               status: patch.status,
               currentPeriodEnd: patch.currentPeriodEnd,
-              updatedAt: new Date(),
+              updatedAt: eventDate,
             })
             .where(eq(appleSubscriptions.appleTransactionId, txId))
             .run();
@@ -527,6 +682,95 @@ export function registerAppleWebhookRoute(
             .where(eq(devicesTable.userId, userId))
             .all();
           return rows;
+        },
+        isStaleEvent: async ({ originalTransactionId, environment, eventAt }) => {
+          if (!retentionSecrets) return false;
+          const candidates = await hashAppleOriginalTransactionCandidates(originalTransactionId, retentionSecrets);
+          for (const candidate of candidates) {
+            const row = await db.select({ lastEventAt: retainedAppleTransaction.lastEventAt })
+              .from(retainedAppleTransaction)
+              .where(and(
+                eq(retainedAppleTransaction.transactionHashVersion, candidate.transactionHashVersion),
+                eq(retainedAppleTransaction.originalTransactionHash, candidate.originalTransactionHash),
+                eq(retainedAppleTransaction.environment, environment),
+              )).get();
+            if (row && row.lastEventAt.getTime() >= eventAt) return true;
+          }
+          return false;
+        },
+        resolveAppleTransaction: async (originalTransactionId, environment) => {
+          if (!retentionSecrets) return null;
+          const candidates = await hashAppleOriginalTransactionCandidates(originalTransactionId, retentionSecrets);
+          for (const candidate of candidates) {
+            const row = await db.select({
+              transactionHashVersion: retainedAppleTransaction.transactionHashVersion,
+              originalTransactionHash: retainedAppleTransaction.originalTransactionHash,
+              identityHashVersion: retainedAppleTransaction.identityHashVersion,
+              identityHash: retainedAppleTransaction.identityHash,
+              retentionExpiresAt: retainedAppleTransaction.retentionExpiresAt,
+            }).from(retainedAppleTransaction).where(and(
+              eq(retainedAppleTransaction.transactionHashVersion, candidate.transactionHashVersion),
+              eq(retainedAppleTransaction.originalTransactionHash, candidate.originalTransactionHash),
+              eq(retainedAppleTransaction.environment, environment),
+            )).get();
+            if (row) return row;
+          }
+          return null;
+        },
+        reconcileRetainedTransaction: async (row) => {
+          const eventDate = new Date(row.eventAt);
+          const changed = await db.update(retainedAppleTransaction).set({
+            identityHashVersion: row.identityHashVersion,
+            identityHash: row.identityHash,
+            feature: row.feature,
+            status: row.status,
+            periodEnd: row.periodEnd,
+            lastEventAt: eventDate,
+            updatedAt: row.updatedAt,
+          }).where(and(
+            eq(retainedAppleTransaction.transactionHashVersion, row.transactionHashVersion),
+            eq(retainedAppleTransaction.originalTransactionHash, row.originalTransactionHash),
+            eq(retainedAppleTransaction.environment, row.environment),
+            lt(retainedAppleTransaction.lastEventAt, eventDate),
+          )).run();
+          const transactions = await db.select().from(retainedAppleTransaction).where(and(
+            eq(retainedAppleTransaction.identityHashVersion, row.identityHashVersion),
+            eq(retainedAppleTransaction.identityHash, row.identityHash),
+          )).all();
+          const summarize = (feature: "reader" | "voice") => {
+            const rows = transactions.filter((transaction) => transaction.feature === feature);
+            const active = rows.filter((transaction) => (transaction.status === "active" || transaction.status === "in_grace") && transaction.periodEnd && transaction.periodEnd.getTime() > Date.now());
+            const latest = [...rows].sort((a, b) => b.lastEventAt.getTime() - a.lastEventAt.getTime())[0];
+            return {
+              activeUntil: active.reduce<Date | null>((max, transaction) => !max || !transaction.periodEnd || transaction.periodEnd > max ? transaction.periodEnd : max, null),
+              status: active[0]?.status ?? latest?.status ?? null,
+            };
+          };
+          const reader = summarize("reader");
+          const voice = summarize("voice");
+          await db.update(retainedAppleEntitlement).set({
+            readerActiveUntil: reader.activeUntil,
+            readerStatus: reader.status,
+            voiceActiveUntil: voice.activeUntil,
+            voiceStatus: voice.status,
+            updatedAt: eventDate,
+          }).where(and(
+            eq(retainedAppleEntitlement.identityHashVersion, row.identityHashVersion),
+            eq(retainedAppleEntitlement.identityHash, row.identityHash),
+          )).run();
+          return { updated: ((changed as any)?.meta?.changes ?? 0) > 0 };
+        },
+        upsertRestoredEntitlement: async (row) => {
+          if (await db.select({ userId: deletionState.userId }).from(deletionState).where(eq(deletionState.userId, row.userId)).get()) throw new Error("account deletion pending");
+          await db.insert(restoredAppleEntitlement).values(row).onConflictDoUpdate({
+            target: [restoredAppleEntitlement.userId, restoredAppleEntitlement.transactionHashVersion, restoredAppleEntitlement.environment, restoredAppleEntitlement.originalTransactionHash],
+            set: { status: row.status, periodEnd: row.periodEnd, feature: row.feature, updatedAt: row.updatedAt },
+          }).run();
+        },
+        updateLiveLedger: async ({ userId, feature, status, periodEnd }) => {
+          if (await db.select({ userId: deletionState.userId }).from(deletionState).where(eq(deletionState.userId, userId)).get()) throw new Error("account deletion pending");
+          const ledgerEnv = c.env as Env & { USER_USAGE_LEDGER: { getByName(name: string): { reconcileFeatureEntitlement(input: { feature: "reader" | "voice"; status: "active" | "in_grace" | "expired" | "refunded"; periodEnd: number | null }): Promise<void> } } };
+          await ledgerEnv.USER_USAGE_LEDGER.getByName(userId).reconcileFeatureEntitlement({ feature, status, periodEnd: periodEnd?.getTime() ?? null });
         },
       },
     };

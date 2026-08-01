@@ -238,7 +238,13 @@ export default function PrivacyPolicy() {
               position, bookmarks, highlights, conversations and messages,
               registered devices, subscription and entitlement records, usage
               records, and the account-scoped database and object-storage data
-              controlled by Rishi. After the server confirms deletion, the App
+              controlled by Rishi. We retain a keyed entitlement and anti-abuse
+              record for up to 24 months after deletion (or the end of the
+              last paid period, if later). That record contains only trial
+              aggregates, paid entitlement status, and hashed Apple transaction
+              references; it does not contain raw Apple subjects or transaction
+              identifiers. We use it to prevent repeated trials and to restore
+              valid paid access if you recreate the account. After the server confirms deletion, the App
               clears its credentials and local account data from that device.
             </p>
             <p>

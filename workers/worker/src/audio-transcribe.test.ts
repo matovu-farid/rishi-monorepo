@@ -53,6 +53,9 @@ vi.mock("./auth", () => ({
 }))
 
 vi.mock("./middleware", () => ({
+  requireAuthForDeletion: async (_c: unknown, next: () => Promise<void>) => {
+    await next()
+  },
   requireAuth: async (_c: unknown, next: () => Promise<void>) => {
     await next()
   },

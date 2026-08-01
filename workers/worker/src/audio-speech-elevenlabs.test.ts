@@ -47,6 +47,9 @@ vi.mock("./billing/sub-gate", () => ({
 }))
 
 vi.mock("./middleware", () => ({
+  requireAuthForDeletion: async (_c: unknown, next: () => Promise<void>) => {
+    await next()
+  },
   requireAuth: async (_c: unknown, next: () => Promise<void>) => {
     await next()
   },

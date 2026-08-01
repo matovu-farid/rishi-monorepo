@@ -48,8 +48,10 @@ import { findOrCreateUser } from "./findOrCreateUser";
 import { incrementApiUsage } from "./usage/api-usage";
 import { error } from "node:console";
 import { userRoutes } from "./routes/user";
+import { retryPendingDeletions } from "./account-deletion";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { InsufficientAllowanceError } from "./durable-objects/user-usage-ledger/errors";
+import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -1430,7 +1432,7 @@ app.post("/api/audio/transcribe", requireAuth, requireAiDataConsent, async (c) =
   return c.json({ transcript });
 });
 
-export default Sentry.withSentry((env: any) => {
+const sentryHandler = Sentry.withSentry((env: any) => {
   const { id: versionId } = env.CF_VERSION_METADATA;
   return {
     dsn: env.SENTRY_DSN || "",
@@ -1441,5 +1443,18 @@ export default Sentry.withSentry((env: any) => {
     enableLogs: true,
   };
 }, app);
+
+const scheduled = async (_controller: ScheduledController, env: Env): Promise<void> => {
+  const db = createDb(env.DB);
+  await retryPendingDeletions(db, env);
+  await purgeExpiredRetention(db);
+  await redactOwnerlessAppleNotificationLogs(db);
+};
+
+export default {
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
+    sentryHandler.fetch(request, env, ctx),
+  scheduled,
+};
 
 // export default app;

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { handleAppleWebhook, type AppleWebhookDeps } from "./apple-webhook";
 import { JWSInvalid } from "./jws-verify";
+import { hashAppleOriginalTransaction } from "../entitlement-retention";
 
 const EXPIRES_MS = 1812585600000;
 const NEW_EXPIRES_MS = 1820000000000;
@@ -11,6 +12,9 @@ interface MakeDepsOpts {
   renewal?: any;
   existingLog?: boolean;
   existingSub?: any;
+  existingRetainedTransaction?: any;
+  existingRestoredEntitlement?: any;
+  transactionSecrets?: { current: string; previous?: string };
   verifyThrows?: Error;
   devices?: Array<{ deviceToken: string; topic: string; env: string }>;
   apns?: "set" | "null" | "reject";
@@ -26,6 +30,16 @@ function makeDeps(
   const subRows: Record<string, any> = {};
   if (opts.existingSub)
     subRows[opts.existingSub.appleTransactionId] = opts.existingSub;
+  const retainedRows: Record<string, any> = {};
+  if (opts.existingRetainedTransaction) {
+    retainedRows[opts.existingRetainedTransaction.originalTransactionHash] =
+      opts.existingRetainedTransaction;
+  }
+  const restoredRows: Record<string, any> = {};
+  if (opts.existingRestoredEntitlement) {
+    restoredRows[opts.existingRestoredEntitlement.originalTransactionHash] =
+      opts.existingRestoredEntitlement;
+  }
 
   const insertLog = vi.fn(async (row: any) => {
     if (logRows[row.notificationUuid]) {
@@ -41,6 +55,34 @@ function makeDeps(
   });
   const updateSubStatus = vi.fn(async (txId: string, patch: any) => {
     if (subRows[txId]) Object.assign(subRows[txId], patch);
+  });
+  const reconcileRetainedTransaction = vi.fn(async (row: any) => {
+    retainedRows[row.originalTransactionHash] = row;
+  });
+  const upsertRestoredEntitlement = vi.fn(async (row: any) => {
+    restoredRows[row.originalTransactionHash] = row;
+  });
+  const updateLiveLedger = vi.fn(async (_input: any) => {});
+  const resolveAppleTransaction = vi.fn(async (originalTransactionId: string, environment: string) => {
+    const transaction = await hashAppleOriginalTransaction(
+      originalTransactionId,
+      opts.transactionSecrets?.current ?? "test-transaction-secret",
+    );
+    return {
+      ...transaction,
+      identityHashVersion: 1,
+      identityHash: "identity-hash",
+      environment,
+      retentionExpiresAt: new Date(1900000000000),
+    };
+  });
+  const isStaleEvent = vi.fn(async (input: any) => {
+    const existing = Object.values(subRows).find(
+      (row: any) => row.appleTransactionId === input.transactionId,
+    ) as any;
+    return existing?.lastEventAt
+      ? new Date(existing.lastEventAt).getTime() >= input.eventAt
+      : false;
   });
 
   const findUserIdByOriginalTransactionId = vi.fn(
@@ -79,6 +121,7 @@ function makeDeps(
   return {
     verifyJws,
     apns,
+    transactionHashSecrets: opts.transactionSecrets,
     db: {
       insertLog,
       markLogProcessed,
@@ -86,6 +129,11 @@ function makeDeps(
       updateSubStatus,
       findUserIdByOriginalTransactionId,
       findDevicesByUserId,
+      reconcileRetainedTransaction,
+      upsertRestoredEntitlement,
+      updateLiveLedger,
+      resolveAppleTransaction,
+      isStaleEvent,
     },
     _spy: {
       insertLog,
@@ -96,6 +144,11 @@ function makeDeps(
       findUserIdByOriginalTransactionId,
       findDevicesByUserId,
       sendSilentPush,
+      reconcileRetainedTransaction,
+      upsertRestoredEntitlement,
+      updateLiveLedger,
+      resolveAppleTransaction,
+      isStaleEvent,
     },
   };
 }
@@ -105,6 +158,7 @@ const baseEnvelope = (overrides: Partial<any> = {}) => ({
   subtype: "INITIAL_BUY",
   notificationUUID: "uuid-1",
   version: "2.0",
+  signedDate: 1810000000000,
   data: {
     bundleId: "org.fidexa.rishi",
     environment: "Sandbox" as const,
@@ -375,6 +429,148 @@ describe("handleAppleWebhook", () => {
     expect(result.status).toBe(200);
     expect(deps._spy.findDevicesByUserId).not.toHaveBeenCalled();
     expect(deps._spy.sendSilentPush).not.toHaveBeenCalled();
+  });
+
+  it("EXPIRED: ownerless transaction is retained by versioned HMAC and aggregate is recomputed", async () => {
+    const deps = makeDeps({
+      envelope: baseEnvelope({
+        notificationType: "EXPIRED",
+        subtype: undefined,
+        notificationUUID: "uuid-ownerless-expired",
+        signedDate: 1810000000100,
+      }),
+      tx: baseTx({ expiresDate: 1810000000200 }),
+      transactionSecrets: { current: "current-transaction-secret" },
+    });
+
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+
+    expect(result.status).toBe(200);
+    expect(deps._spy.reconcileRetainedTransaction).toHaveBeenCalledOnce();
+    expect(deps._spy.reconcileRetainedTransaction.mock.calls[0][0]).toMatchObject({
+      status: "expired",
+      lastEventAt: 1810000000100,
+    });
+    expect(
+      deps._spy.reconcileRetainedTransaction.mock.calls[0][0].originalTransactionHash,
+    ).not.toBe("2000000300000001");
+    expect(deps._spy.updateSubStatus).not.toHaveBeenCalled();
+  });
+
+  it("REFUND: ownerless transaction is retained as revoked without a raw identifier", async () => {
+    const deps = makeDeps({
+      envelope: baseEnvelope({
+        notificationType: "REFUND",
+        subtype: undefined,
+        notificationUUID: "uuid-ownerless-refund",
+        signedDate: 1810000000300,
+      }),
+      tx: baseTx({ expiresDate: 1810000000400 }),
+      transactionSecrets: {
+        current: "current-transaction-secret",
+        previous: "previous-transaction-secret",
+      },
+    });
+
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+
+    expect(result.status).toBe(200);
+    expect(deps._spy.reconcileRetainedTransaction).toHaveBeenCalledOnce();
+    expect(deps._spy.reconcileRetainedTransaction.mock.calls[0][0]).toMatchObject({
+      transactionHashVersion: 1,
+      status: "refunded",
+      lastEventAt: 1810000000300,
+    });
+    expect(deps._spy.insertLog.mock.calls[0][0].rawPayload).not.toContain(
+      "2000000300000001",
+    );
+    expect(deps._spy.updateSubStatus).not.toHaveBeenCalled();
+  });
+
+  it("REFUND: retained aggregate revocation is recomputed from all retained transactions", async () => {
+    const deps = makeDeps({
+      envelope: baseEnvelope({
+        notificationType: "REFUND",
+        subtype: undefined,
+        notificationUUID: "uuid-retained-revocation",
+        signedDate: 1810000000500,
+      }),
+      tx: baseTx({ expiresDate: 1810000000600 }),
+      transactionSecrets: { current: "current-transaction-secret" },
+      existingRetainedTransaction: {
+        originalTransactionHash: "other-hash",
+        feature: "reader",
+        status: "active",
+        periodEnd: new Date(1810000000700),
+      },
+    });
+
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+
+    expect(result.status).toBe(200);
+    expect(deps._spy.reconcileRetainedTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        monotonic: true,
+        eventAt: 1810000000500,
+      }),
+    );
+  });
+
+  it("ignores a stale signed event before mutating retained or live state", async () => {
+    const deps = makeDeps({
+      envelope: baseEnvelope({
+        notificationType: "REFUND",
+        subtype: undefined,
+        notificationUUID: "uuid-stale-refund",
+        signedDate: 1810000000800,
+      }),
+      tx: baseTx(),
+      existingSub: {
+        appleTransactionId: "2000000300000001",
+        appleOriginalTransactionId: "2000000300000001",
+        userId: "u-live",
+        status: "active",
+        lastEventAt: new Date(1810000000900),
+      },
+      transactionSecrets: { current: "current-transaction-secret" },
+    });
+
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+
+    expect(result.status).toBe(200);
+    expect(deps._spy.updateSubStatus).not.toHaveBeenCalled();
+    expect(deps._spy.upsertRestoredEntitlement).not.toHaveBeenCalled();
+    expect(deps._spy.updateLiveLedger).not.toHaveBeenCalled();
+  });
+
+  it("REFUND: live user binding is revoked in restored entitlement and ledger", async () => {
+    const deps = makeDeps({
+      envelope: baseEnvelope({
+        notificationType: "REFUND",
+        subtype: undefined,
+        notificationUUID: "uuid-live-restored-revocation",
+        signedDate: 1810000001000,
+      }),
+      tx: baseTx(),
+      existingSub: {
+        appleTransactionId: "2000000300000001",
+        appleOriginalTransactionId: "2000000300000001",
+        userId: "u-live",
+        status: "active",
+      },
+      transactionSecrets: { current: "current-transaction-secret" },
+    });
+
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+
+    expect(result.status).toBe(200);
+    expect(deps._spy.upsertRestoredEntitlement).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "u-live", status: "refunded", periodEnd: null }),
+    );
+    expect(deps._spy.updateLiveLedger).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "u-live", status: "refunded" }),
+    );
+    expect(deps._spy.updateSubStatus).toHaveBeenCalledOnce();
   });
 
   it("idempotent duplicate UUID: 200 ok, no re-dispatch", async () => {

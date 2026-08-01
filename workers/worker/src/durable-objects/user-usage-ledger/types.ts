@@ -29,3 +29,25 @@ export type EntitlementSnapshot =
       remainingVoiceChatSeconds: number;
     }
   | { state: "subscription_expired" };
+
+export type RetainedTrialState = "never_granted" | "active" | "exhausted";
+export type RetainedFeature = "reader" | "voice";
+export type RetainedStatus = "active" | "in_grace" | "expired" | "refunded";
+
+export interface AccountEntitlementSnapshot {
+  trialState: RetainedTrialState;
+  trialInitialCredits: number;
+  trialUsedCredits: number;
+  reader: {
+    total: number;
+    used: number;
+    activeUntil: number | null;
+    status: RetainedStatus | null;
+  };
+  voice: {
+    total: number;
+    used: number;
+    activeUntil: number | null;
+    status: RetainedStatus | null;
+  };
+}

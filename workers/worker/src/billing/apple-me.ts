@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import type { Hono, MiddlewareHandler } from "hono";
-import { appleSubscriptions, subscription } from "../db/schema";
+import { appleSubscriptions, restoredAppleEntitlement, subscription } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { rollAllowancePeriodsForward } from "./allowance-period-rollover";
 import type { EntitlementSnapshot } from "../durable-objects/user-usage-ledger/types";
@@ -61,6 +61,7 @@ export interface BillingMeDeps {
      * production resolver converts the Drizzle `timestamp`-mode Date to
      * seconds before passing it through this DI port).
      */
+    findRestoredActive?: (userId: string) => Promise<{ periodEnd: Date } | null>;
     findStripeActive(userId: string): Promise<{
       periodEnd: number;
       status: string;
@@ -93,16 +94,19 @@ export interface BillingMeInput {
 export async function handleBillingMe(
   input: BillingMeInput,
 ): Promise<BillingMeResponse> {
-  const apple = await input.deps.db.findAppleActive(input.userId);
+  const restored = await input.deps.db.findRestoredActive?.(input.userId);
+  const apple = restored && restored.periodEnd.getTime() > Date.now()
+    ? { currentPeriodEnd: restored.periodEnd, status: "active" }
+    : await input.deps.db.findAppleActive(input.userId);
   let premium = false;
   let premiumUntil: string | null = null;
 
-  if (apple) {
+  if (apple && apple.currentPeriodEnd.getTime() > Date.now()) {
     premium = true;
     premiumUntil = apple.currentPeriodEnd.toISOString();
   } else {
     const stripe = await input.deps.db.findStripeActive(input.userId);
-    if (stripe) {
+    if (stripe && stripe.periodEnd * 1000 > Date.now()) {
       premium = true;
       premiumUntil = new Date(stripe.periodEnd * 1000).toISOString();
     }
@@ -157,11 +161,19 @@ export function registerBillingMeRoute(
               and(
                 eq(appleSubscriptions.userId, uid),
                 inArray(appleSubscriptions.status, ["active", "in_grace"]),
+                gt(appleSubscriptions.currentPeriodEnd, new Date()),
               ),
             )
             .orderBy(desc(appleSubscriptions.currentPeriodEnd))
             .get();
           return row ?? null;
+        },
+        findRestoredActive: async (uid) => {
+          const row = await db.select({ periodEnd: restoredAppleEntitlement.periodEnd })
+            .from(restoredAppleEntitlement)
+            .where(and(eq(restoredAppleEntitlement.userId, uid), inArray(restoredAppleEntitlement.status, ["active", "in_grace"]), gt(restoredAppleEntitlement.periodEnd, new Date())))
+            .orderBy(desc(restoredAppleEntitlement.periodEnd)).get();
+          return row?.periodEnd ? { periodEnd: row.periodEnd } : null;
         },
         findStripeActive: async (uid) => {
           const row = await db
@@ -172,8 +184,9 @@ export function registerBillingMeRoute(
             .from(subscription)
             .where(
               and(
-                eq(subscription.referenceId, uid),
-                inArray(subscription.status, ["active", "trialing"]),
+              eq(subscription.referenceId, uid),
+              inArray(subscription.status, ["active", "trialing"]),
+              gt(subscription.periodEnd, new Date()),
               ),
             )
             .orderBy(desc(subscription.periodEnd))

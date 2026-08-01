@@ -112,7 +112,7 @@ export const currentAllowancePeriod = sqliteTable("current_allowance_period", {
   // Matches the D1 `allowancePeriod.id` row this mirror was synced from,
   // so paid-usage settlement can target the right D1 row via `ctx.waitUntil`.
   periodId: text("period_id").notNull(),
-  plan: text("plan", { enum: ["reader", "voice"] }).notNull(),
+  plan: text("plan", { enum: ["reader", "voice", "combined"] }).notNull(),
   periodStart: integer("period_start").notNull(), // epoch ms
   periodEnd: integer("period_end").notNull(), // epoch ms
   narrationSecondsTotal: integer("narration_seconds_total").notNull(),
@@ -120,6 +120,17 @@ export const currentAllowancePeriod = sqliteTable("current_allowance_period", {
   voiceChatSecondsTotal: integer("voice_chat_seconds_total").notNull(),
   voiceChatSecondsUsed: integer("voice_chat_seconds_used").notNull().default(0),
   updatedAt: integer("updated_at").notNull(), // epoch ms
+  // Restored accounts may have additive Reader and Voice subscriptions. The
+  // legacy plan/totals remain the active compatibility view; these nullable
+  // columns preserve the independent feature aggregates and end dates.
+  readerPeriodEnd: integer("reader_period_end"),
+  readerSecondsTotal: integer("reader_seconds_total"),
+  readerSecondsUsed: integer("reader_seconds_used"),
+  readerStatus: text("reader_status"),
+  voicePeriodEnd: integer("voice_period_end"),
+  voiceSecondsTotal: integer("voice_seconds_total"),
+  voiceSecondsUsed: integer("voice_seconds_used"),
+  voiceStatus: text("voice_status"),
 });
 
 export type CurrentAllowancePeriodRow = typeof currentAllowancePeriod.$inferSelect;

@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, ne, or } from "drizzle-orm";
+import { and, eq, gt, inArray, lte, ne, or } from "drizzle-orm";
 import type { WorkerDb } from "./db/drizzle";
 import {
   appleNotificationsLog,
   appleSubscriptions,
   appleUsers,
   books,
+  deletionState,
+  retainedAppleEntitlement,
+  retainedAppleTransaction,
   subscription,
   user,
   verification,
@@ -13,6 +16,8 @@ import {
 import { decryptSiwaRefreshToken } from "./siwa-token-crypto";
 import { mintAppleClientSecret } from "./auth-apple-secret";
 import { createStripeClient } from "./billing/stripe";
+import { hashAppleIdentity, hashAppleOriginalTransaction, mergeRetentionSnapshot, retentionExpiresAt } from "./entitlement-retention";
+import type { AccountEntitlementSnapshot } from "./durable-objects/user-usage-ledger/types";
 
 type DeletionStatus = "revoked" | "legacy_no_token" | "revocation_unavailable";
 
@@ -25,6 +30,14 @@ export interface AccountDeletionEnvironment {
   APPLE_TEAM_ID?: string;
   APPLE_SIWA_CLIENT_ID?: string;
   STRIPE_SECRET_KEY?: string;
+  APPLE_IDENTITY_RETENTION_SECRET_CURRENT?: string;
+  APPLE_TRANSACTION_HASH_SECRET?: string;
+  USER_USAGE_LEDGER?: {
+    getByName(name: string): {
+      snapshotAccountEntitlements(): Promise<AccountEntitlementSnapshot>;
+      purgeAccountData(): Promise<{ purged: true }>;
+    };
+  };
 }
 
 function userLogId(userId: string): string {
@@ -202,17 +215,90 @@ async function deleteRows(
   await db.delete(user).where(eq(user.id, userId));
 }
 
+async function retainAppleEntitlements(
+  db: WorkerDb,
+  env: AccountDeletionEnvironment,
+  appleRow: typeof appleUsers.$inferSelect | undefined,
+  subscriptions: Array<typeof appleSubscriptions.$inferSelect>,
+  snapshot: AccountEntitlementSnapshot,
+  deletedAt: number,
+): Promise<void> {
+  if (!appleRow) return;
+  if (!env.APPLE_IDENTITY_RETENTION_SECRET_CURRENT || !env.APPLE_TRANSACTION_HASH_SECRET) {
+    throw new Error("Apple entitlement retention secrets are not configured");
+  }
+  const identity = await hashAppleIdentity(appleRow.appleUserId, env.APPLE_IDENTITY_RETENTION_SECRET_CURRENT);
+  const latestPaid = subscriptions.reduce((latest, row) => Math.max(latest, row.currentPeriodEnd.getTime()), deletedAt);
+  const expiry = retentionExpiresAt(deletedAt, latestPaid);
+  const retainedValues: typeof retainedAppleEntitlement.$inferInsert = {
+    ...identity,
+    trialState: snapshot.trialState,
+    trialInitialCredits: snapshot.trialInitialCredits,
+    trialUsedCredits: snapshot.trialUsedCredits,
+    readerActiveUntil: snapshot.reader.activeUntil ? new Date(snapshot.reader.activeUntil) : null,
+    voiceActiveUntil: snapshot.voice.activeUntil ? new Date(snapshot.voice.activeUntil) : null,
+    readerCreditsTotal: snapshot.reader.total,
+    readerCreditsUsed: snapshot.reader.used,
+    voiceCreditsTotal: snapshot.voice.total,
+    voiceCreditsUsed: snapshot.voice.used,
+    readerStatus: snapshot.reader.status,
+    voiceStatus: snapshot.voice.status,
+    deletedAt: new Date(deletedAt),
+    retentionExpiresAt: new Date(expiry),
+    updatedAt: new Date(deletedAt),
+  };
+  const existing = (await db.select().from(retainedAppleEntitlement).where(and(
+    eq(retainedAppleEntitlement.identityHashVersion, identity.identityHashVersion),
+    eq(retainedAppleEntitlement.identityHash, identity.identityHash),
+  )).get()) ?? null;
+  const merged = mergeRetentionSnapshot(existing, retainedValues);
+  await db.insert(retainedAppleEntitlement).values(merged).onConflictDoUpdate({
+    target: [retainedAppleEntitlement.identityHashVersion, retainedAppleEntitlement.identityHash],
+    set: merged,
+  });
+  for (const row of subscriptions) {
+    const transaction = await hashAppleOriginalTransaction(row.appleOriginalTransactionId, env.APPLE_TRANSACTION_HASH_SECRET);
+    const feature = row.productId.toLowerCase().includes("voice") ? "voice" : "reader";
+    await db.insert(retainedAppleTransaction).values({
+      ...identity,
+      ...transaction,
+      feature,
+      environment: row.environment,
+      lastEventAt: row.updatedAt,
+      status: row.status,
+      periodEnd: row.currentPeriodEnd,
+      retentionExpiresAt: new Date(expiry),
+      updatedAt: new Date(deletedAt),
+    }).onConflictDoUpdate({
+      target: [retainedAppleTransaction.transactionHashVersion, retainedAppleTransaction.environment, retainedAppleTransaction.originalTransactionHash],
+      set: {
+        identityHashVersion: identity.identityHashVersion,
+        identityHash: identity.identityHash,
+        feature,
+        lastEventAt: row.updatedAt,
+        status: row.status,
+        periodEnd: row.currentPeriodEnd,
+        retentionExpiresAt: new Date(expiry),
+        updatedAt: new Date(deletedAt),
+      },
+    });
+  }
+}
+
 export async function deleteAccount(
   db: WorkerDb,
   env: AccountDeletionEnvironment,
   userId: string,
 ): Promise<AccountDeletionResult> {
+  const ledger = env.USER_USAGE_LEDGER?.getByName(userId);
+  if (!ledger) throw new Error("USER_USAGE_LEDGER binding is required for account deletion");
   const userRow = await db.select().from(user).where(eq(user.id, userId)).get();
 
   // Hard deletion is intentionally idempotent. Once the parent row is gone,
   // the database has already removed all FK-backed account data, so a repeat
   // request is a successful no-op rather than a reason to retain a tombstone.
   if (!userRow) {
+    await ledger.purgeAccountData();
     const r2ObjectsRemoved = await deleteR2PrefixObjects(env.BOOK_STORAGE, [
       `books/${userId}/`,
       `covers/${userId}/`,
@@ -235,11 +321,25 @@ export async function deleteAccount(
     db.select().from(appleUsers).where(eq(appleUsers.userId, userId)).get(),
     db.select({ id: books.id, fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key })
       .from(books).where(eq(books.userId, userId)).all(),
-    db.select({ appleTransactionId: appleSubscriptions.appleTransactionId })
-      .from(appleSubscriptions).where(eq(appleSubscriptions.userId, userId)).all(),
+    db.select().from(appleSubscriptions).where(eq(appleSubscriptions.userId, userId)).all(),
   ]);
   const verificationEmail = userRow?.email ?? appleRow?.email;
   const verificationIdentifiers = [userId, ...(verificationEmail ? [verificationEmail] : [])];
+  const markerNow = new Date();
+  await db.insert(deletionState).values({
+    userId,
+    deletionId,
+    ledgerName: userId,
+    status: "pending",
+    retryAt: new Date(markerNow.getTime() + 60_000),
+    createdAt: markerNow,
+    updatedAt: markerNow,
+  }).onConflictDoUpdate({
+    target: deletionState.userId,
+    set: { deletionId, ledgerName: userId, status: "pending", retryAt: new Date(markerNow.getTime() + 60_000), updatedAt: markerNow },
+  });
+  const entitlementSnapshot = await ledger.snapshotAccountEntitlements();
+  await retainAppleEntitlements(db, env, appleRow, userAppleSubscriptions, entitlementSnapshot, markerNow.getTime());
 
   logDeletionStage("revoke", userId, deletionId, { tokenPresent: Boolean(appleRow?.siwaRefreshTokenCiphertext) });
 
@@ -287,6 +387,10 @@ export async function deleteAccount(
   const sweptBeforeDelete = await deleteR2PrefixObjects(env.BOOK_STORAGE, userR2Prefixes);
 
   logDeletionStage("d1", userId, deletionId);
+  await db.update(deletionState)
+    .set({ status: "purging", retryAt: new Date(Date.now() + 60_000), updatedAt: new Date() })
+    .where(eq(deletionState.userId, userId));
+  await ledger.purgeAccountData();
   await deleteRows(db, userId, userAppleSubscriptions.map((row) => row.appleTransactionId), verificationIdentifiers);
 
   // A presigned upload issued before deletion can still arrive after the
@@ -309,4 +413,32 @@ export async function deleteAccount(
     revocationStatus,
     r2ObjectsRemoved: r2ObjectsRemoved + sweptBeforeDelete + sweptAfterDelete,
   };
+}
+
+/** Retry fenced deletions after a Worker crash, bounded for scheduled runs. */
+export async function retryPendingDeletions(
+  db: WorkerDb,
+  env: AccountDeletionEnvironment,
+  limit = 25,
+): Promise<number> {
+  const pending = await db.select({ userId: deletionState.userId })
+    .from(deletionState)
+    .where(and(
+      inArray(deletionState.status, ["pending", "purging"]),
+      // Do not hot-loop a failed deletion on every scheduled invocation.
+      // The marker remains in place and middleware continues to fence access.
+      lte(deletionState.retryAt, new Date()),
+    ))
+    .limit(limit)
+    .all();
+  let completed = 0;
+  for (const row of pending) {
+    try {
+      await deleteAccount(db, env, row.userId);
+      completed += 1;
+    } catch (error) {
+      console.error("account deletion retry failed", { userHash: userLogId(row.userId), error });
+    }
+  }
+  return completed;
 }

@@ -27,7 +27,7 @@ import {
   TRIAL_LEGACY_INITIAL_CREDITS,
   TRIAL_TTS_COST_CREDITS,
 } from "./types";
-import type { EntitlementSnapshot } from "./types";
+import type { AccountEntitlementSnapshot, EntitlementSnapshot } from "./types";
 import { VoiceSessionError } from "../voice-session/errors";
 import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
 import {
@@ -124,6 +124,146 @@ export class UserUsageLedger extends DurableObject<Env> {
 
   // ── Public RPC methods ──────────────────────────────────────────────
 
+  /** Mark a newly-created account as unable to fall through to a trial. */
+  async markRestorationPending(): Promise<void> {
+    await this.ctx.storage.put("restorationPending", true);
+    await this.ctx.storage.delete("purged");
+  }
+
+  /** Read the authoritative ledger without granting a trial or consulting D1. */
+  async snapshotAccountEntitlements(): Promise<AccountEntitlementSnapshot> {
+    const pending = await this.db
+      .select({ id: reservations.id })
+      .from(reservations)
+      .where(eq(reservations.status, "pending"));
+    // A pending reservation represents provider work that has already been
+    // admitted. Serialize its settlement before taking the snapshot so a
+    // request racing deletion cannot be silently omitted.
+    for (const row of pending) {
+      // This is a trusted deletion operation. It must settle the persisted
+      // reservation before the fence is raised, and any accounting failure
+      // must abort the snapshot rather than being silently discarded.
+      await this.commitTtsReservationInternal(row.id, true);
+    }
+    await this.ctx.storage.put("deletionFrozen", true);
+    const trial = await this.db.select().from(trialLedger).where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID)).get();
+    const period = await this.getCurrentAllowancePeriodRow();
+    const isReader = period?.plan === "reader" || period?.plan === "combined";
+    const isVoice = period?.plan === "voice" || period?.plan === "combined";
+    return {
+      trialState: !trial ? "never_granted" : trial.usedCredits >= trial.initialCredits ? "exhausted" : "active",
+      trialInitialCredits: trial?.initialCredits ?? 0,
+      trialUsedCredits: trial?.usedCredits ?? 0,
+      reader: {
+        total: period?.readerSecondsTotal ?? (isReader ? period?.narrationSecondsTotal ?? 0 : 0),
+        used: period?.readerSecondsUsed ?? (isReader ? period?.narrationSecondsUsed ?? 0 : 0),
+        activeUntil: period?.readerPeriodEnd ?? (isReader ? period?.periodEnd ?? null : null),
+        status: period?.readerStatus as "active" | "in_grace" | "expired" | "refunded" | null ?? (isReader && period && period.periodEnd > Date.now() ? "active" : null),
+      },
+      voice: {
+        total: period?.voiceSecondsTotal ?? (isVoice ? period?.voiceChatSecondsTotal ?? 0 : 0),
+        used: period?.voiceSecondsUsed ?? (isVoice ? period?.voiceChatSecondsUsed ?? 0 : 0),
+        activeUntil: period?.voicePeriodEnd ?? (isVoice ? period?.periodEnd ?? null : null),
+        status: period?.voiceStatus as "active" | "in_grace" | "expired" | "refunded" | null ?? (isVoice && period && period.periodEnd > Date.now() ? "active" : null),
+      },
+    };
+  }
+
+  /** Restore only into an empty ledger; retries with the same data are safe. */
+  async restoreAccountEntitlements(snapshot: AccountEntitlementSnapshot): Promise<void> {
+    const purged = await this.ctx.storage.get<boolean>("purged");
+    if (purged) throw new Error("ledger has been purged");
+    await this.ctx.storage.put("restorationPending", true);
+    if (snapshot.trialState === "never_granted") {
+      await this.ctx.storage.put("trialSuppressed", true);
+    }
+    const existingTrial = await this.db.select().from(trialLedger).where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID)).get();
+    if (existingTrial && (existingTrial.usedCredits !== snapshot.trialUsedCredits || existingTrial.initialCredits !== snapshot.trialInitialCredits)) {
+      throw new Error("cannot restore a non-empty ledger");
+    }
+    if (!existingTrial && snapshot.trialState !== "never_granted") {
+      await this.db.insert(trialLedger).values({
+        id: TRIAL_LEDGER_ROW_ID,
+        userId: this.requireUserId(),
+        initialCredits: snapshot.trialInitialCredits,
+        usedCredits: snapshot.trialUsedCredits,
+        grantedAt: Date.now(),
+      });
+    }
+    const readerActive = Boolean(snapshot.reader.activeUntil && snapshot.reader.activeUntil > Date.now());
+    const voiceActive = Boolean(snapshot.voice.activeUntil && snapshot.voice.activeUntil > Date.now());
+    const paid = readerActive || voiceActive
+      ? { plan: readerActive && voiceActive ? "combined" as const : readerActive ? "reader" as const : "voice" as const,
+          periodEnd: Math.max(snapshot.reader.activeUntil ?? 0, snapshot.voice.activeUntil ?? 0) }
+      : null;
+    if (paid) {
+      const existing = await this.getCurrentAllowancePeriodRow();
+      if (!existing) {
+        await this.db.insert(currentAllowancePeriod).values({
+          id: CURRENT_ALLOWANCE_PERIOD_ROW_ID,
+          periodId: `retained:${this.requireUserId()}`,
+          plan: paid.plan,
+          periodStart: Date.now(),
+          periodEnd: paid.periodEnd,
+          narrationSecondsTotal: snapshot.reader.total,
+          narrationSecondsUsed: snapshot.reader.used,
+          voiceChatSecondsTotal: snapshot.voice.total,
+          voiceChatSecondsUsed: snapshot.voice.used,
+          updatedAt: Date.now(),
+          readerPeriodEnd: snapshot.reader.activeUntil,
+          readerSecondsTotal: snapshot.reader.total,
+          readerSecondsUsed: snapshot.reader.used,
+          readerStatus: snapshot.reader.status,
+          voicePeriodEnd: snapshot.voice.activeUntil,
+          voiceSecondsTotal: snapshot.voice.total,
+          voiceSecondsUsed: snapshot.voice.used,
+          voiceStatus: snapshot.voice.status,
+        });
+      }
+    }
+    await this.ctx.storage.delete("restorationPending");
+    await this.ctx.storage.delete("deletionFrozen");
+  }
+
+  /** Purge all detailed state and leave a durable tombstone. */
+  async reconcileFeatureEntitlement(input: {
+    feature: "reader" | "voice";
+    status: "active" | "in_grace" | "expired" | "refunded";
+    periodEnd: number | null;
+  }): Promise<void> {
+    await this.assertLedgerWritable();
+    const period = await this.getCurrentAllowancePeriodRow();
+    if (!period) return;
+    const end = input.periodEnd;
+    if (input.feature === "reader") {
+      await this.db.update(currentAllowancePeriod).set({ readerPeriodEnd: end, readerStatus: input.status, updatedAt: Date.now() }).where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+    } else {
+      await this.db.update(currentAllowancePeriod).set({ voicePeriodEnd: end, voiceStatus: input.status, updatedAt: Date.now() }).where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
+    }
+  }
+
+  /** Purge all detailed state and leave a durable tombstone. */
+  async purgeAccountData(): Promise<{ purged: true }> {
+    await this.ctx.storage.put("deletionFrozen", true);
+    for (const socket of this.ctx.getWebSockets()) {
+      try { socket.close(410, "Account deleted"); } catch { /* already closed */ }
+    }
+    for (const table of [voiceSession, reservations, currentAllowancePeriod, trialLedger]) {
+      await this.db.delete(table);
+    }
+    await this.ctx.storage.put("purged", true);
+    await this.ctx.storage.delete("restorationPending");
+    await this.ctx.storage.delete("deletionFrozen");
+    await this.ctx.storage.deleteAlarm();
+    return { purged: true };
+  }
+
+  private async assertLedgerWritable(): Promise<void> {
+    if (await this.ctx.storage.get<boolean>("purged")) throw new Error("ledger has been purged");
+    if (await this.ctx.storage.get<boolean>("restorationPending")) throw new Error("entitlement restoration pending");
+    if (await this.ctx.storage.get<boolean>("deletionFrozen")) throw new Error("account deletion pending");
+  }
+
   /**
    * Grants the one-time trial credit pool if this account doesn't already
    * have a trial ledger row. Idempotent — safe to call on every request.
@@ -138,6 +278,8 @@ export class UserUsageLedger extends DurableObject<Env> {
    * wiring exists.
    */
   async grantTrialIfAbsent(): Promise<void> {
+    await this.assertLedgerWritable();
+    if (await this.ctx.storage.get<boolean>("trialSuppressed")) return;
     const userId = this.requireUserId();
     const existing = await this.db
       .select()
@@ -193,6 +335,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    *      trial logic exactly as plan 2 implemented it.
    */
   async getEntitlementSnapshot(): Promise<EntitlementSnapshot> {
+    await this.assertLedgerWritable();
     const period = await this.getCurrentAllowancePeriodRow();
     if (period) {
       const now = Date.now();
@@ -203,7 +346,7 @@ export class UserUsageLedger extends DurableObject<Env> {
           period.voiceChatSecondsTotal - period.voiceChatSecondsUsed,
         );
         return {
-          state: period.plan === "reader" ? "reader_active" : "voice_active",
+          state: period.plan === "reader" ? "reader_active" : period.plan === "voice" ? "voice_active" : "voice_active",
           periodEnd: period.periodEnd,
           remainingNarrationSeconds,
           remainingVoiceChatSeconds,
@@ -250,6 +393,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    * positive `estimateSeconds` exceeds a 0 remaining balance.
    */
   async reserveTts(estimateCredits: number): Promise<{ reservationId: string }> {
+    await this.assertLedgerWritable();
     const userId = this.requireUserId();
     const activePeriod = await this.getActiveAllowancePeriod();
 
@@ -341,6 +485,11 @@ export class UserUsageLedger extends DurableObject<Env> {
    * error-throwing behavior is otherwise unchanged from plan 2.
    */
   async commitTtsReservation(reservationId: string): Promise<void> {
+    await this.commitTtsReservationInternal(reservationId, false);
+  }
+
+  private async commitTtsReservationInternal(reservationId: string, trustedDeletionSettlement: boolean): Promise<void> {
+    if (!trustedDeletionSettlement) await this.assertLedgerWritable();
     const reservation = await this.findReservation(reservationId);
     if (!reservation) throw new ReservationNotFoundError(reservationId);
     if (reservation.status === "committed") return;
@@ -453,6 +602,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    * committed (money already spent — cannot be un-charged via release).
    */
   async releaseTtsReservation(reservationId: string): Promise<void> {
+    await this.assertLedgerWritable();
     const reservation = await this.findReservation(reservationId);
     if (!reservation) throw new ReservationNotFoundError(reservationId);
     // "expired" means the alarm-driven reconciliation sweep already
@@ -491,12 +641,21 @@ export class UserUsageLedger extends DurableObject<Env> {
    */
   async syncAllowancePeriod(period: {
     id: string;
-    plan: "reader" | "voice";
+    plan: "reader" | "voice" | "combined";
     periodStart: number;
     periodEnd: number;
     narrationSecondsTotal: number;
     voiceChatSecondsTotal: number;
+    readerPeriodEnd?: number | null;
+    readerSecondsTotal?: number;
+    readerSecondsUsed?: number;
+    readerStatus?: "active" | "in_grace" | "expired" | "refunded" | null;
+    voicePeriodEnd?: number | null;
+    voiceSecondsTotal?: number;
+    voiceSecondsUsed?: number;
+    voiceStatus?: "active" | "in_grace" | "expired" | "refunded" | null;
   }): Promise<void> {
+    await this.assertLedgerWritable();
     const userId = this.requireUserId();
     const now = Date.now();
     const existing = await this.getCurrentAllowancePeriodRow();
@@ -510,6 +669,8 @@ export class UserUsageLedger extends DurableObject<Env> {
           periodEnd: period.periodEnd,
           narrationSecondsTotal: period.narrationSecondsTotal,
           voiceChatSecondsTotal: period.voiceChatSecondsTotal,
+          ...(period.readerPeriodEnd !== undefined ? { readerPeriodEnd: period.readerPeriodEnd, readerSecondsTotal: period.readerSecondsTotal ?? period.narrationSecondsTotal, readerSecondsUsed: period.readerSecondsUsed ?? 0, readerStatus: period.readerStatus } : {}),
+          ...(period.voicePeriodEnd !== undefined ? { voicePeriodEnd: period.voicePeriodEnd, voiceSecondsTotal: period.voiceSecondsTotal ?? period.voiceChatSecondsTotal, voiceSecondsUsed: period.voiceSecondsUsed ?? 0, voiceStatus: period.voiceStatus } : {}),
           updatedAt: now,
         })
         .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID));
@@ -526,6 +687,14 @@ export class UserUsageLedger extends DurableObject<Env> {
           narrationSecondsUsed: 0,
           voiceChatSecondsTotal: period.voiceChatSecondsTotal,
           voiceChatSecondsUsed: 0,
+          readerPeriodEnd: period.readerPeriodEnd ?? (period.plan === "reader" || period.plan === "combined" ? period.periodEnd : null),
+          readerSecondsTotal: period.readerSecondsTotal ?? period.narrationSecondsTotal,
+          readerSecondsUsed: period.readerSecondsUsed ?? 0,
+          readerStatus: period.readerStatus ?? (period.plan === "reader" || period.plan === "combined" ? "active" : null),
+          voicePeriodEnd: period.voicePeriodEnd ?? (period.plan === "voice" || period.plan === "combined" ? period.periodEnd : null),
+          voiceSecondsTotal: period.voiceSecondsTotal ?? period.voiceChatSecondsTotal,
+          voiceSecondsUsed: period.voiceSecondsUsed ?? 0,
+          voiceStatus: period.voiceStatus ?? (period.plan === "voice" || period.plan === "combined" ? "active" : null),
           updatedAt: now,
         })
         .onConflictDoUpdate({
@@ -539,6 +708,14 @@ export class UserUsageLedger extends DurableObject<Env> {
             narrationSecondsUsed: 0,
             voiceChatSecondsTotal: period.voiceChatSecondsTotal,
             voiceChatSecondsUsed: 0,
+            readerPeriodEnd: period.readerPeriodEnd ?? (period.plan === "reader" || period.plan === "combined" ? period.periodEnd : null),
+            readerSecondsTotal: period.readerSecondsTotal ?? period.narrationSecondsTotal,
+            readerSecondsUsed: period.readerSecondsUsed ?? 0,
+            readerStatus: period.readerStatus ?? (period.plan === "reader" || period.plan === "combined" ? "active" : null),
+            voicePeriodEnd: period.voicePeriodEnd ?? (period.plan === "voice" || period.plan === "combined" ? period.periodEnd : null),
+            voiceSecondsTotal: period.voiceSecondsTotal ?? period.voiceChatSecondsTotal,
+            voiceSecondsUsed: period.voiceSecondsUsed ?? 0,
+            voiceStatus: period.voiceStatus ?? (period.plan === "voice" || period.plan === "combined" ? "active" : null),
             updatedAt: now,
           },
         });
@@ -626,6 +803,7 @@ export class UserUsageLedger extends DurableObject<Env> {
     nonce: string;
     capIntervals: number;
   }> {
+    await this.assertLedgerWritable();
     const userId = this.requireUserId();
     await this.grantTrialIfAbsent();
     await this.assertNoBlockingLiveSession(userId);
@@ -647,7 +825,7 @@ export class UserUsageLedger extends DurableObject<Env> {
           `only ${remainingVoiceChatSeconds}s of paid Voice Chat allowance remain; need at least ${PAID_VOICE_CHAT_SECONDS_PER_INTERVAL}s`,
         );
       }
-      planKind = activePeriod.plan;
+      planKind = activePeriod.plan === "reader" ? "reader" : "voice";
       capIntervals = activePeriod.plan === "reader" ? CAP_INTERVALS_READER : CAP_INTERVALS_VOICE;
       creditsPerInterval = PAID_VOICE_CHAT_SECONDS_PER_INTERVAL;
     } else {
@@ -737,6 +915,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    * optimistic local teardown may have left a registered row active server-side.
    */
   async endActiveVoiceSession(): Promise<{ ok: true; rishiSessionId?: string }> {
+    await this.assertLedgerWritable();
     this.requireUserId();
     const userId = this.requireUserId();
     let live = await findLiveVoiceSession(this.db);
@@ -757,6 +936,7 @@ export class UserUsageLedger extends DurableObject<Env> {
   }
 
   async endVoiceSession(rishiSessionId: string): Promise<{ ok: true }> {
+    await this.assertLedgerWritable();
     this.requireUserId();
     const row = await findVoiceSessionById(this.db, rishiSessionId);
     if (!row) {
@@ -816,6 +996,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    * registration attempt against the same session throws.
    */
   async registerCallId(rishiSessionId: string, callId: string, nonce: string): Promise<void> {
+    await this.assertLedgerWritable();
     const userId = this.requireUserId();
     const row = await findLiveVoiceSession(this.db);
 
@@ -890,6 +1071,8 @@ export class UserUsageLedger extends DurableObject<Env> {
    * invocation.
    */
   async alarm(): Promise<void> {
+    if (await this.ctx.storage.get<boolean>("purged")) return;
+    if (await this.ctx.storage.get<boolean>("deletionFrozen")) return;
     const now = Date.now();
     await this.handleVoiceSessionAlarm(now);
     await this.reconcileStaleReservations(now);
@@ -1234,6 +1417,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    * given rishiSessionId only (no cross-session refresh).
    */
   async touchVoiceSessionActivity(rishiSessionId: string): Promise<{ ok: true }> {
+    await this.assertLedgerWritable();
     this.requireUserId();
     await touchLastActivityAt(this.db, rishiSessionId, Date.now());
     return { ok: true };
@@ -1288,6 +1472,12 @@ export class UserUsageLedger extends DurableObject<Env> {
 
   // ---------- WS upgrade ----------
   async fetch(request: Request): Promise<Response> {
+    if (await this.ctx.storage.get<boolean>("purged")) {
+      return new Response("Ledger purged", { status: 410 });
+    }
+    if (await this.ctx.storage.get<boolean>("deletionFrozen")) {
+      return new Response("Account deletion pending", { status: 423 });
+    }
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected websocket", { status: 426 });
     }
@@ -1337,6 +1527,7 @@ export class UserUsageLedger extends DurableObject<Env> {
 
   // ---------- Hibernation handlers ----------
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    await this.assertLedgerWritable();
     const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
     let json: unknown;
     try {

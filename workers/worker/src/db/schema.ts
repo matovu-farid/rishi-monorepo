@@ -503,6 +503,131 @@ export type AppleNotificationLogEntry =
 export type NewAppleNotificationLogEntry =
   typeof appleNotificationsLog.$inferInsert;
 
+// ─── Apple entitlement retention ────────────────────────────────────────────
+// These tables intentionally retain only keyed hashes and compact entitlement
+// state after account deletion. Only the live restored binding belongs to a
+// user; the two retention tables must survive user deletion.
+export const retainedAppleEntitlement = sqliteTable(
+  "retained_apple_entitlement",
+  {
+    identityHashVersion: integer("identity_hash_version").notNull(),
+    identityHash: text("identity_hash").notNull(),
+    trialState: text("trial_state", {
+      enum: ["never_granted", "active", "exhausted"],
+    }).notNull(),
+    trialInitialCredits: integer("trial_initial_credits").notNull(),
+    trialUsedCredits: integer("trial_used_credits").notNull(),
+    readerActiveUntil: integer("reader_active_until", {
+      mode: "timestamp_ms",
+    }),
+    voiceActiveUntil: integer("voice_active_until", {
+      mode: "timestamp_ms",
+    }),
+    readerCreditsTotal: integer("reader_credits_total").notNull(),
+    readerCreditsUsed: integer("reader_credits_used").notNull(),
+    voiceCreditsTotal: integer("voice_credits_total").notNull(),
+    voiceCreditsUsed: integer("voice_credits_used").notNull(),
+    readerStatus: text("reader_status", {
+      enum: ["active", "in_grace", "expired", "refunded"],
+    }),
+    voiceStatus: text("voice_status", {
+      enum: ["active", "in_grace", "expired", "refunded"],
+    }),
+    deletedAt: integer("deleted_at", { mode: "timestamp_ms" }).notNull(),
+    retentionExpiresAt: integer("retention_expires_at", {
+      mode: "timestamp_ms",
+    }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => ({
+    identity: uniqueIndex("retained_apple_entitlement_identity_uniq").on(
+      t.identityHashVersion,
+      t.identityHash,
+    ),
+  }),
+);
+
+export const retainedAppleTransaction = sqliteTable(
+  "retained_apple_transaction",
+  {
+    identityHashVersion: integer("identity_hash_version").notNull(),
+    identityHash: text("identity_hash").notNull(),
+    transactionHashVersion: integer("transaction_hash_version").notNull(),
+    originalTransactionHash: text("original_transaction_hash").notNull(),
+    feature: text("feature", { enum: ["reader", "voice"] }).notNull(),
+    environment: text("environment", {
+      enum: ["Sandbox", "Production"],
+    }).notNull(),
+    lastEventAt: integer("last_event_at", { mode: "timestamp_ms" }).notNull(),
+    status: text("status", {
+      enum: ["active", "in_grace", "expired", "refunded"],
+    }).notNull(),
+    periodEnd: integer("period_end", { mode: "timestamp_ms" }),
+    retentionExpiresAt: integer("retention_expires_at", {
+      mode: "timestamp_ms",
+    }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => ({
+    key: uniqueIndex("retained_apple_transaction_key_uniq").on(
+      t.transactionHashVersion,
+      t.environment,
+      t.originalTransactionHash,
+    ),
+  }),
+);
+
+export const restoredAppleEntitlement = sqliteTable("restored_apple_entitlement", {
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  identityHashVersion: integer("identity_hash_version").notNull(),
+  identityHash: text("identity_hash").notNull(),
+  transactionHashVersion: integer("transaction_hash_version").notNull(),
+  environment: text("environment", {
+    enum: ["Sandbox", "Production"],
+  }).notNull(),
+  originalTransactionHash: text("original_transaction_hash").notNull(),
+  feature: text("feature", { enum: ["reader", "voice"] }).notNull(),
+  status: text("status", {
+    enum: ["active", "in_grace", "expired", "refunded"],
+  }).notNull(),
+  periodEnd: integer("period_end", { mode: "timestamp_ms" }),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+}, (t) => ({
+  key: uniqueIndex("restored_apple_entitlement_key_uniq").on(
+    t.userId,
+    t.transactionHashVersion,
+    t.environment,
+    t.originalTransactionHash,
+  ),
+}));
+
+export type RetainedAppleEntitlement = typeof retainedAppleEntitlement.$inferSelect;
+export type NewRetainedAppleEntitlement = typeof retainedAppleEntitlement.$inferInsert;
+export type RetainedAppleTransaction = typeof retainedAppleTransaction.$inferSelect;
+export type NewRetainedAppleTransaction = typeof retainedAppleTransaction.$inferInsert;
+export type RestoredAppleEntitlement = typeof restoredAppleEntitlement.$inferSelect;
+export type NewRestoredAppleEntitlement = typeof restoredAppleEntitlement.$inferInsert;
+
+// Durable fence used to serialize account deletion with usage and billing.
+// This table intentionally has a user FK: it is operational state, not
+// retained anti-abuse data, and must disappear with the account.
+export const deletionState = sqliteTable("deletion_state", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  deletionId: text("deletion_id").notNull(),
+  ledgerName: text("ledger_name").notNull(),
+  status: text("status", { enum: ["pending", "purging", "purged"] }).notNull(),
+  retryAt: integer("retry_at", { mode: "timestamp_ms" }).notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export type DeletionState = typeof deletionState.$inferSelect;
+export type NewDeletionState = typeof deletionState.$inferInsert;
+
 // ─── APNs device registrations (Quick-VPX VPX-02) ───────────────────────────
 //
 // iOS `APNsDeviceRegistrar` (RishiSync/Background/APNsDeviceRegistrar.swift)
@@ -587,7 +712,7 @@ export const allowancePeriod = sqliteTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    plan: text("plan", { enum: ["reader", "voice"] }).notNull(),
+    plan: text("plan", { enum: ["reader", "voice", "combined"] }).notNull(),
     periodStart: integer("period_start", { mode: "timestamp_ms" }).notNull(),
     periodEnd: integer("period_end", { mode: "timestamp_ms" }).notNull(),
     narrationSecondsTotal: integer("narration_seconds_total").notNull(),
