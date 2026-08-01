@@ -17,6 +17,7 @@ export type TestD1 = D1Database & {
 type TestD1Options = {
   migrations?: string[];
   failOnRun?: (query: string) => boolean;
+  beforeRun?: (query: string) => void | Promise<void>;
 };
 
 const migrationsDirectory = new URL("../../drizzle/migrations/", import.meta.url);
@@ -49,6 +50,7 @@ export function createTestD1(
           return statement;
         },
         async run() {
+          await options.beforeRun?.(query);
           if (options.failOnRun?.(query)) {
             throw new Error("temporary D1 failure");
           }

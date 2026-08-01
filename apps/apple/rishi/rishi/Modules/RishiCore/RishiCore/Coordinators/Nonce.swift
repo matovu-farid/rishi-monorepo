@@ -16,10 +16,10 @@ import CryptoKit
 ///
 /// The raw value is kept for symmetry / debugging but does not need to be sent
 /// anywhere: only the SHA-256 hex digest travels on the wire.
-enum Nonce {
+public enum Nonce {
     /// Returns a fresh `(raw, sha256Hex)` pair. Each call is independently
     /// random.
-    static func generate() -> (raw: String, sha256Hex: String) {
+    public static func generate() -> (raw: String, sha256Hex: String) {
         let raw = (0..<16)
             .map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }
             .joined()

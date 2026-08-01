@@ -116,6 +116,37 @@ struct SignedOutViewModelTests {
         #expect(vm.errorMessage?.isEmpty == false)
     }
 
+    @Test func liveAppleExchangePropagatesWorkerFailure() async {
+        let exchange = AppleSignInExchange { body in
+            #expect(body.identityToken == "identity-jwt")
+            #expect(body.authorizationCode == Data("apple-code".utf8).base64EncodedString())
+            #expect(body.nonce == "nonce-hex")
+            throw TestError(description: "worker-auth-failed")
+        }
+
+        do {
+            _ = try await exchange.run(
+                identityToken: "identity-jwt",
+                authorizationCode: Data("apple-code".utf8),
+                nonce: "nonce-hex"
+            )
+            Issue.record("Expected the live Apple exchange to throw")
+        } catch let error as TestError {
+            #expect(error.description == "worker-auth-failed")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func liveAppleFailureCanBeRecordedInVisibleState() {
+        let vm = SignedOutViewModel(authService: nil)
+
+        vm.recordFailure(TestError(description: "worker-auth-failed"))
+
+        #expect(vm.errorMessage == "worker-auth-failed")
+        #expect(!vm.isLoading)
+    }
+
     
     
     

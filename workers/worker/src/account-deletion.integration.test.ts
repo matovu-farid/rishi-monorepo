@@ -37,13 +37,19 @@ vi.mock("jose", async () => {
     ...actual,
     createRemoteJWKSet: vi.fn(() => ({})),
     jwtVerify: vi.fn(async (token: unknown, ...args: unknown[]) => {
-      if (token === "fake-identity-token") {
+      if (typeof token === "string" && token.startsWith("fake-identity-token:")) {
+        const options = args[1] as { nonce?: string } | undefined;
+        const tokenNonce = token.slice("fake-identity-token:".length);
+        if (!tokenNonce || options?.nonce !== tokenNonce) {
+          throw new Error("nonce mismatch or missing");
+        }
         return {
           payload: {
             sub: "apple-sub-integration",
             email: "integration@privaterelay.appleid.com",
             email_verified: true,
             is_private_email: true,
+            nonce: tokenNonce,
           },
         };
       }
@@ -66,9 +72,13 @@ import { encryptSiwaRefreshToken } from "./siwa-token-crypto";
 
 type TestD1 = D1Database & { close: () => void };
 
-function createD1(failOnRun?: (query: string) => boolean): TestD1 {
+function createD1(
+  failOnRun?: (query: string) => boolean,
+  beforeRun?: (query: string) => void | Promise<void>,
+): TestD1 {
   return createTestD1(":memory:", {
     failOnRun,
+    beforeRun,
   });
 }
 
@@ -123,7 +133,8 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        identityToken: "fake-identity-token",
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
         authorizationCode: btoa("fake-code"),
       }),
     }), env);
@@ -570,13 +581,224 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        identityToken: "fake-identity-token",
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
         authorizationCode: btoa("bad-code"),
       }),
     }), env);
     expect(response.status).toBe(502);
     const db = createDb(d1);
     expect(await db.select().from(user).all()).toHaveLength(0);
+    d1.close();
+  });
+
+  it("recreates an Apple account after deletion without a new authorization code", async () => {
+    const d1 = createD1();
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
+      APPLE_SIWA_KEY_ID: "test-key",
+      APPLE_SIWA_PRIVATE_KEY: "test-private-key",
+      APPLE_TEAM_ID: "test-team",
+      SIWA_TOKEN_ENCRYPTION_SECRET: "test-encryption-secret",
+      BOOK_STORAGE: {
+        delete: vi.fn(async () => undefined),
+        head: vi.fn(async () => null),
+        list: vi.fn(async () => ({ objects: [], truncated: false })),
+      },
+    } as unknown as Env;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/auth/token")) {
+        return new Response(JSON.stringify({ refresh_token: "apple-refresh-token" }), { status: 200 });
+      }
+      if (url.endsWith("/auth/revoke")) return new Response(null, { status: 200 });
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+    app.route("/api/user", userRoutes);
+
+    const firstAuthResponse = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+        authorizationCode: btoa("fake-code"),
+      }),
+    }), env);
+    expect(firstAuthResponse.status).toBe(200);
+    const firstAuth = await firstAuthResponse.json() as { accessToken: string; userId: string };
+
+    const deleteResponse = await app.fetch(new Request("http://test/api/user", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${firstAuth.accessToken}` },
+    }), env);
+    expect(deleteResponse.status).toBe(200);
+
+    const db = createDb(d1);
+    expect(await db.select().from(user).where(eq(user.id, firstAuth.userId)).all()).toHaveLength(0);
+    expect(await db.select().from(appleUsers).where(eq(appleUsers.userId, firstAuth.userId)).all()).toHaveLength(0);
+
+    const recreatedResponse = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+      }),
+    }), env);
+    expect(recreatedResponse.status).toBe(200);
+    const recreated = await recreatedResponse.json() as { userId: string };
+    expect(recreated.userId).not.toBe(firstAuth.userId);
+
+    const recreatedAppleUser = await db.select().from(appleUsers)
+      .where(eq(appleUsers.userId, recreated.userId)).get();
+    expect(recreatedAppleUser?.siwaRefreshTokenCiphertext).toBeNull();
+    expect(recreatedAppleUser?.siwaRefreshTokenNonce).toBeNull();
+    d1.close();
+  });
+
+  it("rejects an explicitly empty Apple authorization code before creating an account", async () => {
+    const d1 = createD1();
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+    } as unknown as Env;
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+
+    const response = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+        authorizationCode: "",
+      }),
+    }), env);
+
+    expect(response.status).toBe(400);
+    expect(await createDb(d1).select().from(user).all()).toHaveLength(0);
+    d1.close();
+  });
+
+  it("treats a null Apple authorization code as absent", async () => {
+    const d1 = createD1();
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+    } as unknown as Env;
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+
+    const response = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+        authorizationCode: null,
+      }),
+    }), env);
+
+    expect(response.status).toBe(200);
+    const recreated = await createDb(d1).select().from(appleUsers).get();
+    expect(recreated?.siwaRefreshTokenCiphertext).toBeNull();
+    expect(recreated?.siwaRefreshTokenNonce).toBeNull();
+    d1.close();
+  });
+
+  it("converges concurrent no-code Apple recreations on one user", async () => {
+    let userInsertCount = 0;
+    let releaseUserInserts!: () => void;
+    const bothUserInserts = new Promise<void>((resolve) => {
+      releaseUserInserts = resolve;
+    });
+    const d1 = createD1(undefined, async (query) => {
+      if (query.toLowerCase().includes('insert into "user"')) {
+        userInsertCount += 1;
+        if (userInsertCount === 2) releaseUserInserts();
+        await bothUserInserts;
+      }
+    });
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+    } as unknown as Env;
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+
+    const makeRequest = () => app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+      }),
+    }), env);
+    const [firstResponse, secondResponse] = await Promise.all([makeRequest(), makeRequest()]);
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    const first = await firstResponse.json() as { userId: string };
+    const second = await secondResponse.json() as { userId: string };
+    expect(first.userId).toBe(second.userId);
+
+    const db = createDb(d1);
+    expect(await db.select().from(user).all()).toHaveLength(1);
+    expect(await db.select().from(appleUsers).all()).toHaveLength(1);
+    d1.close();
+  });
+
+  it("rejects a nonce mismatch before creating an account", async () => {
+    const d1 = createD1();
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+    } as unknown as Env;
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+
+    const response = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "wrong-nonce",
+      }),
+    }), env);
+
+    expect(response.status).toBe(401);
+    expect(await createDb(d1).select().from(user).all()).toHaveLength(0);
+    d1.close();
+  });
+
+  it("rejects a missing nonce before creating an account", async () => {
+    const d1 = createD1();
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+    } as unknown as Env;
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+
+    const response = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identityToken: "fake-identity-token" }),
+    }), env);
+
+    expect(response.status).toBe(400);
+    expect(await createDb(d1).select().from(user).all()).toHaveLength(0);
     d1.close();
   });
 

@@ -11,6 +11,13 @@ export interface AppleIdentity {
   is_private_email?: boolean;
 }
 
+function isAppleSubjectUniqueConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error ? error.cause : undefined;
+  const causeMessage = cause instanceof Error ? cause.message : String(cause ?? "");
+  return `${message} ${causeMessage}`.includes("UNIQUE constraint failed: apple_users.apple_user_id");
+}
+
 export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
   Effect.gen(function* () {
     const existing = yield* Effect.tryPromise(() =>
@@ -47,16 +54,26 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
       privateEmail: identity.is_private_email ?? false,
       userId: userId,
     };
-    yield* Effect.tryPromise({
+    const resolvedUser = yield* Effect.tryPromise({
       try: async () => {
         try {
           await db.insert(user).values(userData);
 
           await db.insert(appleUsers).values(appleUser);
 
-          return userId;
+          return userData;
         } catch (err) {
           await db.delete(user).where(eq(user.id, userId));
+
+          if (isAppleSubjectUniqueConflict(err)) {
+            const concurrent = await db.query.appleUsers.findFirst({
+              where: { appleUserId: identity.sub },
+              with: { user: true },
+            });
+            if (concurrent?.user?.id) {
+              return concurrent.user;
+            }
+          }
 
           throw err;
         }
@@ -67,5 +84,5 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
       },
     });
 
-    return userData;
+    return resolvedUser;
   });

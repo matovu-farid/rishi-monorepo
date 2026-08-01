@@ -10,7 +10,7 @@ struct SignedOutView: View {
     
     @Environment(\.appDependencies) private var deps
     
-    var workerClient: WorkerClient? { deps?.services!.workerClient }
+    var workerClient: WorkerClient? { deps?.services?.workerClient }
     var onSignedIn: (User) -> Void = { _ in }
     @State var currentUser:User? = nil
     @State var isSignedIn:Bool = false
@@ -19,6 +19,9 @@ struct SignedOutView: View {
 
 
     @State private var viewModel = SignedOutViewModel(authService: nil)
+    @State private var pendingAppleNonce: String?
+    @State private var appleSignInInFlight = false
+    @State private var appleAuthorizationConsumed = false
 
     var body: some View {
         NavigationStack{
@@ -104,92 +107,110 @@ struct SignedOutView: View {
         }
     }
     func configure(_ request: ASAuthorizationAppleIDRequest) {
+        guard !appleSignInInFlight else { return }
+        appleSignInInFlight = true
         request.requestedScopes = [
             .fullName,
             .email
         ]
+        let (_, nonceHex) = Nonce.generate()
+        pendingAppleNonce = nonceHex
+        appleAuthorizationConsumed = false
+        request.nonce = nonceHex
     }
     func handle(_ result: Result<ASAuthorization, Error>) async {
+        guard !appleAuthorizationConsumed, let requestNonce = pendingAppleNonce else {
+            return
+        }
+        appleAuthorizationConsumed = true
+        defer {
+            pendingAppleNonce = nil
+            appleSignInInFlight = false
+        }
+
         switch result {
         case .success(let authorization):
-            
+
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                viewModel.recordFailure(RishiError.network(
+                    code: "siwa_invalid_credential",
+                    message: "Apple returned an unsupported credential."
+                ))
                 return
             }
-            
-            let userID = credential.user
-            let email = credential.email
-            let fullName = credential.fullName
-            
-            print("User ID:", userID)
-            print("Email:", email ?? "nil")
-            print("Name:", fullName?.givenName ?? "nil")
+
             guard let token = credential.identityToken,
                   let jwt = String(data: token, encoding: .utf8) else {
+                viewModel.recordFailure(RishiError.network(
+                    code: "siwa_missing_identity_token",
+                    message: "Apple did not return an identity token."
+                ))
                 return
             }
-           
-     
-            let endpoint = JWTEndPoint(
-                body: .init(
+
+            guard let deps, let workerClient = deps.services?.workerClient else {
+                viewModel.recordFailure(RishiError.network(
+                    code: "siwa_unavailable",
+                    message: "Authentication is not available."
+                ))
+                return
+            }
+
+            do {
+                let auth = try await AppleSignInExchange(send: { body in
+                    try await workerClient.send(JWTEndPoint(body: body))
+                }).run(
                     identityToken: jwt,
-                    authorizationCode: credential.authorizationCode?.base64EncodedString()
+                    authorizationCode: credential.authorizationCode,
+                    nonce: requestNonce
                 )
-            )
-            if let workerClient  {
-                let auth = try? await workerClient.send(endpoint)
-                if let auth {
-                    
-                    print(result)
-                    try? Keychain.save(
-                        auth.accessToken,
-                        for: .accessToken
-                    )
-                    
-                    try? Keychain.save(
-                        auth.refreshToken,
-                        for: .refreshToken
-                    )
-                    try? Keychain.save(
-                        auth.userId,
-                        for: .userId
-                    )
-                    try? await KeychainSessionStore().save(
-                        Session(
-                            token: auth.accessToken,
-                            userId: auth.userId,
-                            email: auth.user.email
+
+                    guard let userId = UUID(uuidString: auth.userId) else {
+                        throw RishiError.network(
+                            code: "siwa_invalid_user_id",
+                            message: "Authentication returned an invalid user identifier."
                         )
-                    )
-                    currentUser = auth.user
-                    
-                    if let userId = UUID(uuidString: auth.userId){
-                        deps?.setUserId(userId)
-                        await deps?.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
-                            platform: {
-                                #if targetEnvironment(macCatalyst)
-                                    "macos-catalyst"
-                                #else
-                                    "ios"
-                                #endif
-                            }(),
-                            appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
-                        )
-                        isSignedIn = true
-                        
                     }
+
+                    do {
+                        try Keychain.save(auth.accessToken, for: .accessToken)
+                        try Keychain.save(auth.refreshToken, for: .refreshToken)
+                        try Keychain.save(auth.userId, for: .userId)
+                        try await KeychainSessionStore().save(
+                            Session(token: auth.accessToken, userId: auth.userId, email: auth.user.email)
+                        )
+                    } catch {
+                        Keychain.delete(.accessToken)
+                        Keychain.delete(.refreshToken)
+                        Keychain.delete(.userId)
+                        try? await KeychainSessionStore().delete()
+                        throw error
+                    }
+
+                    currentUser = auth.user
+                    deps.setUserId(userId)
+                    await deps.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
+                        platform: {
+                            #if targetEnvironment(macCatalyst)
+                                "macos-catalyst"
+                            #else
+                                "ios"
+                            #endif
+                        }(),
+                        appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+                    )
+                    isSignedIn = true
                     currentUserBox.signIn(user: auth.user)
-                    await deps?.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
-                    await deps?.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+                    await deps.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
+                    await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                         reason: .signIn
                     )
-                }
+            } catch {
+                viewModel.recordFailure(error)
             }
-            
-            
-            
+
         case .failure(let error):
-            print(error)
+            viewModel.recordFailure(error)
         }
     }
 
@@ -203,6 +224,7 @@ struct SignedOutView: View {
                 }
             }
         )
+        .disabled(appleSignInInFlight)
         .signInWithAppleButtonStyle(.black)
         .frame(maxWidth: 400)
         .frame(height: 44)

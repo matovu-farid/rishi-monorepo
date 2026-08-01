@@ -1,6 +1,29 @@
 import Foundation
 import Observation
 
+struct AppleSignInExchange: Sendable {
+    typealias Send = @Sendable (JWTEndPoint.BodyType) async throws -> JWTEndPoint.ResponseType
+
+    private let send: Send
+
+    init(send: @escaping Send) {
+        self.send = send
+    }
+
+    func run(
+        identityToken: String,
+        authorizationCode: Data?,
+        nonce: String?
+    ) async throws -> JWTEndPoint.ResponseType {
+        try await send(
+            JWTEndPoint.BodyType(
+                identityToken: identityToken,
+                authorizationCode: authorizationCode?.base64EncodedString(),
+                nonce: nonce
+            )
+        )
+    }
+}
 
 @MainActor
 @Observable
@@ -43,6 +66,10 @@ final class SignedOutViewModel {
 
     func setAuthService(_ service: (any AuthService)?) {
         self.authService = service
+    }
+
+    func recordFailure(_ error: any Error) {
+        state = .error(Self.humanReadable(error))
     }
 
     func signInWithApple() async {

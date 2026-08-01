@@ -68,9 +68,10 @@ authRoutes.post("/apple", async (c) => {
   const appleJWKS = createRemoteJWKSet(
     new URL("https://appleid.apple.com/auth/keys"),
   );
-  const { identityToken, authorizationCode } = await c.req.json<{
+  const { identityToken, authorizationCode, nonce } = await c.req.json<{
     identityToken: string;
-    authorizationCode?: string;
+    authorizationCode?: string | null;
+    nonce?: string | null;
   }>();
 
   if (!identityToken) {
@@ -82,12 +83,27 @@ authRoutes.post("/apple", async (c) => {
     );
   }
 
+  const authorizationCodeValue =
+    typeof authorizationCode === "string" ? authorizationCode : undefined;
+  if (authorizationCodeValue !== undefined && authorizationCodeValue.trim().length === 0) {
+    return c.json({ error: "Invalid Apple authorization code" }, 400);
+  }
+  const suppliedAuthorizationCode = authorizationCodeValue !== undefined;
+  const expectedNonce = typeof nonce === "string" && nonce.length > 0 ? nonce : undefined;
+  if (!expectedNonce) {
+    return c.json({ error: "Missing Apple sign-in nonce" }, 400);
+  }
+
   try {
-    const { payload } = await jwtVerify(identityToken, appleJWKS, {
+    const jwtOptions = {
       issuer: "https://appleid.apple.com",
 
       // Your iOS Bundle Identifier
       audience: "org.fidexa.rishi",
+      nonce: expectedNonce,
+    } as Parameters<typeof jwtVerify>[2];
+    const { payload } = await jwtVerify(identityToken, appleJWKS, {
+      ...jwtOptions,
     });
     const db = createDb(c.env.DB);
     const existingAppleUser = await db.select({
@@ -98,27 +114,29 @@ authRoutes.post("/apple", async (c) => {
       .where(eq(appleUsers.appleUserId, payload.sub!))
       .get();
 
-    if (!existingAppleUser && !authorizationCode) {
-      return c.json({ error: "Missing Apple authorization code" }, 400);
+    if (!existingAppleUser && !suppliedAuthorizationCode) {
+      console.info("apple sign-in creating account without authorization code", {
+        appleSubjectPresent: Boolean(payload.sub),
+      });
     }
 
-    if (existingAppleUser && !authorizationCode) {
+    if (existingAppleUser && !suppliedAuthorizationCode) {
       console.info("apple sign-in legacy authorization path", {
         revocationTokenPresent: Boolean(existingAppleUser.hasRefreshToken),
       });
     }
 
-    // New accounts must retain the SIWA refresh token so deletion can revoke
-    // the Apple authorization. Do not create an account that can never meet
-    // that requirement because the encryption secret is absent.
-    if (!existingAppleUser && !c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
+    // When Apple supplies an authorization code, retain its refresh token so
+    // deletion can revoke the Apple authorization. Identity-only recreation
+    // is also valid after a deleted authorization no longer returns a code.
+    if (suppliedAuthorizationCode && !c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
       return c.json({ error: "Apple sign-in is temporarily unavailable" }, 503);
     }
 
     let siwaRefreshToken: string | undefined;
-    if (authorizationCode) {
+    if (authorizationCodeValue !== undefined) {
       try {
-        const decodedAuthorizationCode = decodeAppleAuthorizationCode(authorizationCode);
+        const decodedAuthorizationCode = decodeAppleAuthorizationCode(authorizationCodeValue);
         siwaRefreshToken = await exchangeAppleAuthorizationCode(c.env, decodedAuthorizationCode);
       } catch (error) {
         console.error("Apple authorization exchange failed", error);
