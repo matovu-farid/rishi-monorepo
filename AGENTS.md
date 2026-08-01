@@ -37,6 +37,22 @@ the main thread clean and coherent over long sessions.
 - In `workers/**`, use Drizzle for all database schema access and mutations in application and test code.
 - Do not hand-write raw SQL statements in worker application or test code. SQL is limited to generated migration artifacts managed by Drizzle.
 
+## Worker database schema and migrations
+
+- Drizzle schema files are the source of truth for every database object used by the Worker:
+  - D1 schema: `workers/worker/src/db/schema.ts`, configured by `workers/worker/drizzle.config.ts`.
+  - Durable Object ledger schema: `workers/worker/src/durable-objects/user-usage-ledger/schema.ts`, configured by `workers/worker/drizzle-do.config.ts`.
+- Before changing a table or column, cross-reference the relevant schema file, migration history, runtime queries, tests, and `wrangler.jsonc` bindings. Every live table/column must be represented in its Drizzle schema unless it is explicitly documented as an intentional external/legacy object.
+- Never delete or reset a migration directory because it appears old or redundant. Migration files are append-only history for databases that may already contain production data. Removing or renaming them can cause an already-existing table to be recreated. If migration history is inconsistent, repair the history deliberately and verify it against the database before applying anything.
+- Never hand-author migration SQL. Run the appropriate Bun command from `workers/worker`:
+  - D1: `bunx drizzle-kit generate --config=drizzle.config.ts`.
+  - Durable Object ledger: `bunx drizzle-kit generate --config=drizzle-do.config.ts`.
+  Commit the generated SQL and metadata together. Do not edit generated migration SQL by hand.
+- `drizzle-kit generate` creates migration artifacts; it does not apply them. Apply D1 migrations with the repository's Wrangler/D1 migration workflow. Durable Object migrations are bundled through `drizzle/ledger-do-migrations/migrations.js` and applied by the Drizzle Durable SQLite migrator at DO initialization.
+- Do not add runtime `PRAGMA`, `CREATE TABLE`, `ALTER TABLE`, or `DROP TABLE` fallbacks to compensate for missing migration history. Add the field/table to the Drizzle schema, generate the migration, register generated Durable Object migrations in `migrations.js` when required, and let the migrator apply it.
+- Keep the two database domains separate: D1 tables in `src/db/schema.ts` are not Durable Object tables, and ledger tables in the DO schema must not be added to the D1 schema merely to make them visible.
+- Drizzle `sql` expressions are allowed for parameterized calculations/conditions in queries; they are not a substitute for schema migrations and must not contain hand-written DDL.
+
 ## Worker package commands
 
 - In `workers/worker`, always use Bun for dependency installation and project commands: `bun install`, `bun run <script>`, and `bunx <tool>`.

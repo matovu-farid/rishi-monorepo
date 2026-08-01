@@ -221,7 +221,8 @@ struct LibraryTabView: View {
                         manageSubscriptionPresenter: dependencies.settings.manageSubscriptionPresenter,
                         groupID: dependencies.settings.groupID,
                     dataUseConsentStore: dependencies.settings.dataUseConsentStore,
-                    onRevokeDataUse: {}
+                    onRevokeDataUse: {},
+                    deleteAccount: dependencies.settings.deleteAccount
                     ),
                     user: user
                 )

@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { DrizzleD1Database } from "drizzle-orm/d1";
 import { WorkerDb } from "./db/drizzle";
-import { appleUsers, user } from "@rishi/shared";
+import { appleUsers, user } from "./db/schema";
 export interface AppleIdentity {
   sub: string;
   email?: string;

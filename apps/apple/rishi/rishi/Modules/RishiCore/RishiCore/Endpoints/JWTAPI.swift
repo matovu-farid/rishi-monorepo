@@ -24,8 +24,11 @@ public struct JWTEndPoint: WorkerEndpointWithBody {
     
     public struct BodyType:Encodable,Sendable {
         public let identityToken: String
-        public init(identityToken: String) {
+        public let authorizationCode: String?
+
+        public init(identityToken: String, authorizationCode: String? = nil) {
             self.identityToken = identityToken
+            self.authorizationCode = authorizationCode
         }
     }
     

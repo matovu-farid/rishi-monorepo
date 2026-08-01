@@ -1,0 +1,93 @@
+[
+  {
+    "metadataOutputVersion" : "3.0",
+    "shortDescription" : "All-MiniLM-L6-v2 embeddings (384-dim) — accepts token IDs and attention mask.",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32)",
+        "shortDescription" : "",
+        "shape" : "[]",
+        "name" : "var_570",
+        "type" : "MultiArray"
+      }
+    ],
+    "storagePrecision" : "Float32",
+    "modelParameters" : [
+
+    ],
+    "author" : "Converted from sentence-transformers\/all-MiniLM-L6-v2",
+    "specificationVersion" : 4,
+    "license" : "Original model license: see Hugging Face model page",
+    "computePrecision" : "Float16",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "10.15",
+      "tvOS" : "13.0",
+      "visionOS" : "1.0",
+      "watchOS" : "6.0",
+      "iOS" : "13.0",
+      "macCatalyst" : "13.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_neuralNetwork"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 64)",
+        "shortDescription" : "",
+        "shape" : "[1, 64]",
+        "name" : "input_ids",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 64)",
+        "shortDescription" : "",
+        "shape" : "[1, 64]",
+        "name" : "attention_mask",
+        "type" : "MultiArray"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.version" : "7.0",
+      "com.github.apple.coremltools.source" : "torch==2.8.0"
+    },
+    "generatedClassName" : "AllMiniLML6V2",
+    "neuralNetworkLayerTypeHistogram" : {
+      "Transpose" : 24,
+      "Multiply" : 7,
+      "ActivationLinear" : 3,
+      "InnerProduct" : 36,
+      "AddBroadcastable" : 6,
+      "EmbeddingND" : 1,
+      "Add" : 15,
+      "Tile" : 1,
+      "UnaryPower" : 2,
+      "BatchedMatmul" : 12,
+      "LoadConstantND" : 3,
+      "ExpandDims" : 4,
+      "Scale" : 13,
+      "ReshapeStatic" : 50,
+      "Mvn" : 13,
+      "SoftmaxND" : 6,
+      "DivideBroadcastable" : 2,
+      "Clip" : 2,
+      "MultiplyBroadcastable" : 1,
+      "ReduceSum" : 3,
+      "UnaryAbs" : 1,
+      "Gelu" : 6
+    },
+    "method" : "predict"
+  }
+]

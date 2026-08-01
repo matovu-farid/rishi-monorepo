@@ -18,6 +18,10 @@ describe("PrivacyPolicy", () => {
     expect(screen.getAllByText(/conversation messages/i)).toHaveLength(2);
     expect(screen.getByText(/Sentry on the web service and worker/i)).toBeInTheDocument();
     expect(screen.getByText(/does not promise a specific retention period/i)).toBeInTheDocument();
+    expect(screen.getByText(/permanently delete your account directly from the App's account settings/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not cancel an Apple App Store subscription/i)).toBeInTheDocument();
+    expect(screen.getByText(/shared content-addressed narration cache entries/i)).toBeInTheDocument();
+    expect(screen.getByText(/retains no account deletion marker or tombstone/i)).toBeInTheDocument();
 
     expect(
       screen.queryByText(/raw audio is not retained after the voice session/i),

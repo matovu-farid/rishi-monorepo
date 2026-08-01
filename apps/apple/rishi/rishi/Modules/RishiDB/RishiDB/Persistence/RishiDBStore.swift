@@ -27,4 +27,29 @@ public actor RishiDBStore {
             throw error
         }
     }
+
+    /// Permanently removes every account-scoped model from the local store.
+    /// This is intentionally separate from sign-out: account deletion is the
+    /// only flow allowed to erase the local library and conversation history.
+    public func purgeAll() throws {
+        try deleteAll(BookEntity.self)
+        try deleteAll(PositionEntity.self)
+        try deleteAll(HighlightEntity.self)
+        try deleteAll(BookmarkEntity.self)
+        try deleteAll(ConversationEntity.self)
+        try deleteAll(MessageEntity.self)
+        try deleteAll(UserEntity.self)
+        try deleteAll(SyncMetadataEntity.self)
+        try deleteAll(ChapterIndexEntity.self)
+        try deleteAll(ChapterSummaryEntity.self)
+        if context.hasChanges {
+            try context.save()
+        }
+    }
+
+    private func deleteAll<Model: PersistentModel>(_ type: Model.Type) throws {
+        for model in try context.fetch(FetchDescriptor<Model>()) {
+            context.delete(model)
+        }
+    }
 }

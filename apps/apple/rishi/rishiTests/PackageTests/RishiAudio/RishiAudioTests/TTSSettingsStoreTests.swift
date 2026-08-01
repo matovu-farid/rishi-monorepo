@@ -73,6 +73,35 @@ struct TTSSettingsStoreTests {
         #expect(loaded == .default)
     }
 
+    @Test("Account deletion removes only the deleted user's settings")
+    func removeIsPerUser() async {
+        let store = InMemoryTTSSettingsStore()
+        let deletedUser = UUID()
+        let retainedUser = UUID()
+        let settings = TTSSettings(voice: "shimmer", model: "eleven_v3", speed: 1.25)
+        await store.save(settings, userId: deletedUser)
+        await store.save(settings, userId: retainedUser)
+
+        await store.remove(userId: deletedUser)
+
+        #expect(await store.load(userId: deletedUser) == .default)
+        #expect(await store.load(userId: retainedUser) == settings)
+    }
+
+    @Test("UserDefaults account deletion removes the user's settings")
+    func userDefaultsRemove() async {
+        let suiteName = "RishiAudio.TTSSettings.Tests.remove.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = UserDefaultsTTSSettingsStore(defaults: defaults)
+        let userId = UUID()
+        await store.save(TTSSettings(voice: "nova", model: "eleven_v3", speed: 1.1), userId: userId)
+
+        await store.remove(userId: userId)
+
+        #expect(await store.load(userId: userId) == .default)
+    }
+
     @Test("Key shape is per-user")
     func keyShape() {
         let userId = UUID()

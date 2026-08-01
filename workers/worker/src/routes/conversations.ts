@@ -3,7 +3,7 @@ import { z } from "zod";
 import { conversations } from "../db/schema";
 import { createDb } from "../db/drizzle";
 
-import { requireAuth } from "../index";
+import { requireAuth } from "../middleware";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { and, desc, eq, gt } from "drizzle-orm";
 

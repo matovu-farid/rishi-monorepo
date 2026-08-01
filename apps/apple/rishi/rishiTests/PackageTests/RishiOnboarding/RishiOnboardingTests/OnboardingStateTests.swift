@@ -44,4 +44,32 @@ struct OnboardingStateTests {
         #expect(await s.hasCompletedOnboarding() == true)
         #expect(await s.primerShownMic() == true)
     }
+
+    @Test("Account deletion removes only the deleted user's trial flag")
+    func trialStateRemoveIsPerUser() async {
+        let deletedUser = UUID()
+        let retainedUser = UUID()
+        let state = InMemoryTrialOnboardingState()
+        await state.setHasSeenNoCardIntro(true, userId: deletedUser)
+        await state.setHasSeenNoCardIntro(true, userId: retainedUser)
+
+        await state.remove(userId: deletedUser)
+
+        #expect(await state.hasSeenNoCardIntro(userId: deletedUser) == false)
+        #expect(await state.hasSeenNoCardIntro(userId: retainedUser) == true)
+    }
+
+    @Test("UserDefaults account deletion removes the trial flag")
+    func userDefaultsTrialStateRemove() async {
+        let suiteName = "test.onboarding.trial.remove.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let state = UserDefaultsTrialOnboardingState(defaults: defaults)
+        let userId = UUID()
+        await state.setHasSeenNoCardIntro(true, userId: userId)
+
+        await state.remove(userId: userId)
+
+        #expect(await state.hasSeenNoCardIntro(userId: userId) == false)
+    }
 }

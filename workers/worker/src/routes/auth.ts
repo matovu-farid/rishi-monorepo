@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { Effect } from "effect";
+import { eq } from "drizzle-orm";
 
 import {
   verifyRefreshToken,
@@ -9,6 +10,9 @@ import {
 } from "../jwt";
 import { findOrCreateUser } from "../findOrCreateUser";
 import { createDb, WorkerDb } from "../db/drizzle";
+import { appleUsers } from "../db/schema";
+import { encryptSiwaRefreshToken } from "../siwa-token-crypto";
+import { mintAppleClientSecret } from "../auth-apple-secret";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
   AppleBucket,
@@ -21,12 +25,52 @@ const authRoutes = new Hono<{
     db: WorkerDb;
   };
 }>();
+
+async function exchangeAppleAuthorizationCode(
+  env: Env,
+  authorizationCode: string,
+): Promise<string> {
+  const clientSecret = await mintAppleClientSecret({
+    APPLE_SIWA_PRIVATE_KEY: env.APPLE_SIWA_PRIVATE_KEY,
+    APPLE_SIWA_KEY_ID: env.APPLE_SIWA_KEY_ID,
+    APPLE_TEAM_ID: env.APPLE_TEAM_ID,
+    APPLE_SIWA_CLIENT_ID: env.APPLE_SIWA_CLIENT_ID,
+  });
+  const response = await fetch("https://appleid.apple.com/auth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.APPLE_SIWA_CLIENT_ID,
+      client_secret: clientSecret,
+      code: authorizationCode,
+      grant_type: "authorization_code",
+    }),
+  });
+  if (!response.ok) throw new Error(`Apple authorization exchange failed (${response.status})`);
+  const payload = await response.json() as { refresh_token?: string };
+  if (!payload.refresh_token) throw new Error("Apple authorization exchange returned no refresh token");
+  return payload.refresh_token;
+}
+
+function decodeAppleAuthorizationCode(encodedAuthorizationCode: string): string {
+  try {
+    const binary = atob(encodedAuthorizationCode);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const decoded = new TextDecoder().decode(bytes);
+    if (!decoded) throw new Error("empty authorization code");
+    return decoded;
+  } catch {
+    throw new Error("Invalid Apple authorization code encoding");
+  }
+}
+
 authRoutes.post("/apple", async (c) => {
   const appleJWKS = createRemoteJWKSet(
     new URL("https://appleid.apple.com/auth/keys"),
   );
-  const { identityToken } = await c.req.json<{
+  const { identityToken, authorizationCode } = await c.req.json<{
     identityToken: string;
+    authorizationCode?: string;
   }>();
 
   if (!identityToken) {
@@ -46,10 +90,45 @@ authRoutes.post("/apple", async (c) => {
       audience: "org.fidexa.rishi",
     });
     const db = createDb(c.env.DB);
+    const existingAppleUser = await db.select({
+      userId: appleUsers.userId,
+      hasRefreshToken: appleUsers.siwaRefreshTokenCiphertext,
+    })
+      .from(appleUsers)
+      .where(eq(appleUsers.appleUserId, payload.sub!))
+      .get();
+
+    if (!existingAppleUser && !authorizationCode) {
+      return c.json({ error: "Missing Apple authorization code" }, 400);
+    }
+
+    if (existingAppleUser && !authorizationCode) {
+      console.info("apple sign-in legacy authorization path", {
+        revocationTokenPresent: Boolean(existingAppleUser.hasRefreshToken),
+      });
+    }
+
+    // New accounts must retain the SIWA refresh token so deletion can revoke
+    // the Apple authorization. Do not create an account that can never meet
+    // that requirement because the encryption secret is absent.
+    if (!existingAppleUser && !c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
+      return c.json({ error: "Apple sign-in is temporarily unavailable" }, 503);
+    }
+
+    let siwaRefreshToken: string | undefined;
+    if (authorizationCode) {
+      try {
+        const decodedAuthorizationCode = decodeAppleAuthorizationCode(authorizationCode);
+        siwaRefreshToken = await exchangeAppleAuthorizationCode(c.env, decodedAuthorizationCode);
+      } catch (error) {
+        console.error("Apple authorization exchange failed", error);
+        return c.json({ error: "Could not complete Apple sign-in. Please try again." }, 502);
+      }
+    }
     const user = await Effect.runPromise(
       findOrCreateUser(db, {
         sub: payload.sub!,
-        email: (payload.email as string) || "${payload.sub}@apple.com",
+        email: (payload.email as string) || `${payload.sub}@apple.com`,
         email_verified:
           payload.email_verified === true || payload.email_verified === "true",
         is_private_email:
@@ -57,6 +136,20 @@ authRoutes.post("/apple", async (c) => {
           payload.is_private_email === "true",
       }),
     );
+
+    if (siwaRefreshToken && c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
+      const encrypted = await encryptSiwaRefreshToken(
+        siwaRefreshToken,
+        c.env.SIWA_TOKEN_ENCRYPTION_SECRET,
+      );
+      await db.update(appleUsers)
+        .set({
+          siwaRefreshTokenCiphertext: encrypted.ciphertext,
+          siwaRefreshTokenNonce: encrypted.nonce,
+          updatedAt: new Date(),
+        })
+        .where(eq(appleUsers.userId, user.id));
+    }
 
     const accessToken = await Effect.runPromise(
       signAccessToken(c.env, {

@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, asc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
@@ -17,6 +17,7 @@ import {
   TRIAL_LEDGER_ROW_ID,
   currentAllowancePeriod,
   CURRENT_ALLOWANCE_PERIOD_ROW_ID,
+  voiceSession,
   type CurrentAllowancePeriodRow,
 } from "./schema";
 import type { VoiceSessionRow, VoiceSessionStatus } from "./schema";
@@ -102,50 +103,23 @@ export class UserUsageLedger extends DurableObject<Env> {
     // Must complete before any request/RPC call is processed.
     ctx.blockConcurrencyWhile(async () => {
       migrate(this.db, migrations);
-      // Belt-and-suspenders: older DO instances may have applied the
-      // original `reservations` CREATE without later ALTER migrations
-      // (drizzle-kit folder migrations can be skipped if the journal
-      // name column is null). Code reads/writes `pool_kind` /
-      // `allowance_period_id` — ensure they exist before any RPC.
-      this.ensureReservationsPoolColumns();
-      this.ensureLastActivityAtColumn();
+      await this.backfillLegacyLastActivityAt();
     });
   }
 
-  /** Idempotent ADD COLUMN for reservation pool tracking. */
-  private ensureReservationsPoolColumns(): void {
-    const cols = this.db
-      .values<[number, string]>(sql`PRAGMA table_info('reservations')`)
-      .map(([, name]) => name);
-    const have = new Set(cols);
-    if (!have.has("pool_kind")) {
-      this.db.run(sql.raw("ALTER TABLE `reservations` ADD `pool_kind` text"));
-    }
-    if (!have.has("allowance_period_id")) {
-      this.db.run(
-        sql.raw("ALTER TABLE `reservations` ADD `allowance_period_id` text"),
+  /** Preserve activity timestamps for live sessions created before the column existed. */
+  private async backfillLegacyLastActivityAt(): Promise<void> {
+    await this.db
+      .update(voiceSession)
+      .set({
+        lastActivityAt: sql`COALESCE(${voiceSession.updatedAt}, ${voiceSession.callRegisteredAt}, ${voiceSession.createdAt})`,
+      })
+      .where(
+        and(
+          inArray(voiceSession.status, ["pending_registration", "active"]),
+          isNull(voiceSession.lastActivityAt),
+        ),
       );
-    }
-  }
-
-  /**
-   * Idempotent ADD COLUMN + live-row backfill for inactivity tracking.
-   * Self-guarding COALESCE keeps re-runs / tick-bumped `updated_at` from
-   * refreshing activity once `last_activity_at` is set.
-   */
-  private ensureLastActivityAtColumn(): void {
-    const cols = this.db
-      .values<[number, string]>(sql`PRAGMA table_info('voice_session')`)
-      .map(([, name]) => name);
-    if (!cols.includes("last_activity_at")) {
-      this.db.run(sql.raw("ALTER TABLE `voice_session` ADD `last_activity_at` integer"));
-    }
-    this.db.run(
-      sql.raw(`UPDATE voice_session
-SET last_activity_at = COALESCE(last_activity_at, updated_at, call_registered_at, created_at)
-WHERE status IN ('pending_registration', 'active')
-  AND last_activity_at IS NULL;`),
-    );
   }
 
   // ── Public RPC methods ──────────────────────────────────────────────
@@ -1061,7 +1035,8 @@ WHERE status IN ('pending_registration', 'active')
    * soon as the shortfall is known — closes that gap.
    */
   private async tickActiveSession(row: VoiceSessionRow, userId: string, now: number): Promise<void> {
-    // After ensure + create/register seed, lastActivityAt must be set.
+    // New and registered sessions seed lastActivityAt; legacy rows with a
+    // null value are treated as immediately idle by the inactivity policy.
     // Do NOT fall back to updatedAt (interval ticks bump it every 30s).
     if (shouldTerminateForInactivity(row.lastActivityAt, now)) {
       await this.terminateSession(row, "inactivity_timeout", userId, now);

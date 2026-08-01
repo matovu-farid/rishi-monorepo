@@ -1,0 +1,3921 @@
+{
+  "storage" : "model.espresso.weights",
+  "analyses" : {
+
+  },
+  "properties" : {
+
+  },
+  "format_version" : 200,
+  "metadata_in_weights" : [
+
+  ],
+  "layers" : [
+    {
+      "size_of_axes" : 1,
+      "bottom" : "attention_mask",
+      "axes_0" : 1,
+      "weights" : {
+
+      },
+      "nd_axis" : 0,
+      "debug_info" : "33",
+      "top" : "33",
+      "type" : "expand_dims",
+      "name" : "33"
+    },
+    {
+      "size_of_axes" : 1,
+      "bottom" : "33",
+      "axes_0" : 2,
+      "weights" : {
+
+      },
+      "nd_axis" : 0,
+      "debug_info" : "34",
+      "top" : "34",
+      "type" : "expand_dims",
+      "name" : "34"
+    },
+    {
+      "bottom" : "34",
+      "weights" : {
+
+      },
+      "mode" : 6,
+      "debug_info" : "cast_44",
+      "top" : "cast_44",
+      "type" : "activation",
+      "name" : "cast_44",
+      "beta" : 0
+    },
+    {
+      "top" : "13",
+      "w" : 1,
+      "h" : 1,
+      "name" : "13",
+      "nd_rank" : 1,
+      "type" : "load_constant",
+      "k" : 1,
+      "bottom" : "",
+      "debug_info" : "13",
+      "n" : 1,
+      "weights" : {
+
+      },
+      "constant_blob" : 1
+    },
+    {
+      "alpha" : -1,
+      "bottom" : "cast_44",
+      "weights" : {
+
+      },
+      "mode" : 6,
+      "debug_info" : "_neg_y_37",
+      "top" : "_neg_y_37",
+      "type" : "activation",
+      "name" : "_neg_y_37",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_neg_y_37,13",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "37",
+      "top" : "37",
+      "type" : "elementwise",
+      "name" : "37",
+      "beta" : 0
+    },
+    {
+      "bottom" : "37",
+      "alpha" : -3.4028234663852886e+38,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "attention_mask_1",
+      "top" : "attention_mask_1",
+      "type" : "elementwise",
+      "name" : "attention_mask_1",
+      "beta" : 0
+    },
+    {
+      "size_of_axes" : 1,
+      "bottom" : "input_ids",
+      "axes_0" : -1,
+      "weights" : {
+
+      },
+      "nd_axis" : 0,
+      "debug_info" : "inputs_embeds_expand_dims",
+      "top" : "inputs_embeds_expand_dims",
+      "type" : "expand_dims",
+      "name" : "inputs_embeds_expand_dims"
+    },
+    {
+      "nB" : 30522,
+      "top" : "inputs_embeds",
+      "has_biases" : 0,
+      "nd_mode" : true,
+      "nC" : 384,
+      "blob_weights" : 3,
+      "weights" : {
+
+      },
+      "is_lookup" : 1,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "inputs_embeds_expand_dims",
+      "debug_info" : "inputs_embeds",
+      "has_tanh" : 0,
+      "hint_fallback_from_metal" : 1,
+      "name" : "inputs_embeds",
+      "has_prelu" : 0
+    },
+    {
+      "top" : "token_type_embeddings.1",
+      "w" : 384,
+      "h" : 64,
+      "name" : "token_type_embeddings.1",
+      "nd_rank" : 3,
+      "type" : "load_constant",
+      "k" : 1,
+      "bottom" : "",
+      "debug_info" : "token_type_embeddings.1",
+      "n" : 1,
+      "weights" : {
+
+      },
+      "constant_blob" : 5
+    },
+    {
+      "bottom" : "inputs_embeds,token_type_embeddings.1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "embeddings.1",
+      "top" : "embeddings.1",
+      "type" : "elementwise",
+      "name" : "embeddings.1",
+      "beta" : 0
+    },
+    {
+      "top" : "position_embeddings.1",
+      "w" : 384,
+      "h" : 64,
+      "name" : "position_embeddings.1",
+      "nd_rank" : 3,
+      "type" : "load_constant",
+      "k" : 1,
+      "bottom" : "",
+      "debug_info" : "position_embeddings.1",
+      "n" : 1,
+      "weights" : {
+
+      },
+      "constant_blob" : 7
+    },
+    {
+      "bottom" : "embeddings.1,position_embeddings.1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.5",
+      "top" : "input.5",
+      "type" : "elementwise",
+      "name" : "input.5",
+      "beta" : 0
+    },
+    {
+      "name" : "input.7_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.5",
+      "debug_info" : "input.7_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.7_reshape"
+    },
+    {
+      "bottom" : "input.7_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.7_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.7_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.7_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.7_scale",
+      "constant_blob" : 9,
+      "top" : "input.7_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.7_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.7_scale",
+      "constant_blob" : 11,
+      "top" : "input.7_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.7_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.7_mvn,input.7_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.7_scale",
+      "top" : "input.7_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.7_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.7_scale_mul_out,input.7_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.7_scale",
+      "top" : "input.7_scale",
+      "type" : "elementwise",
+      "name" : "input.7_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.7",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.7_scale",
+      "debug_info" : "input.7",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.7"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_0",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 15,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.7",
+      "blob_biases" : 13,
+      "has_tanh" : 0,
+      "debug_info" : "linear_0",
+      "name" : "linear_0",
+      "has_prelu" : 0
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_1",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 19,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.7",
+      "blob_biases" : 17,
+      "has_tanh" : 0,
+      "debug_info" : "linear_1",
+      "name" : "linear_1",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.3",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_1",
+      "debug_info" : "x.3",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.3"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_2",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 23,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.7",
+      "blob_biases" : 21,
+      "has_tanh" : 0,
+      "debug_info" : "linear_2",
+      "name" : "linear_2",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.7",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_2",
+      "debug_info" : "x.7",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.7"
+    },
+    {
+      "name" : "x.11",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_0",
+      "debug_info" : "x.11",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.11"
+    },
+    {
+      "axis_h" : 0,
+      "axis_w" : 2,
+      "bottom" : "x.3",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_51",
+      "top" : "transpose_51",
+      "type" : "transpose",
+      "name" : "transpose_51"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.11",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_52",
+      "top" : "transpose_52",
+      "type" : "transpose",
+      "name" : "transpose_52"
+    },
+    {
+      "bottom" : "transpose_52,transpose_51",
+      "weights" : {
+
+      },
+      "debug_info" : "attention_scores.1",
+      "top" : "attention_scores.1",
+      "type" : "batch_matmul",
+      "name" : "attention_scores.1",
+      "channel_mode" : false
+    },
+    {
+      "bottom" : "attention_scores.1",
+      "alpha" : 0.1767766922712326,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "_inversed_attention_scores.3",
+      "top" : "_inversed_attention_scores.3",
+      "type" : "elementwise",
+      "name" : "_inversed_attention_scores.3",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_inversed_attention_scores.3,attention_mask_1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.11",
+      "nd_mode" : true,
+      "top" : "input.11",
+      "type" : "elementwise",
+      "name" : "input.11",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.11",
+      "weights" : {
+
+      },
+      "nd_axis" : -1,
+      "debug_info" : "input.13",
+      "top" : "input.13",
+      "type" : "softmax_nd",
+      "name" : "input.13"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.7",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_53",
+      "top" : "transpose_53",
+      "type" : "transpose",
+      "name" : "transpose_53"
+    },
+    {
+      "bottom" : "input.13,transpose_53",
+      "weights" : {
+
+      },
+      "debug_info" : "context_layer.1",
+      "top" : "context_layer.1",
+      "type" : "batch_matmul",
+      "name" : "context_layer.1",
+      "channel_mode" : false
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "context_layer.1",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_50",
+      "top" : "transpose_50",
+      "type" : "transpose",
+      "name" : "transpose_50"
+    },
+    {
+      "name" : "input.15",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "transpose_50",
+      "debug_info" : "input.15",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.15"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_3",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 27,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.15",
+      "blob_biases" : 25,
+      "has_tanh" : 0,
+      "debug_info" : "linear_3",
+      "name" : "linear_3",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_3,input.7",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.19",
+      "top" : "input.19",
+      "type" : "elementwise",
+      "name" : "input.19",
+      "beta" : 0
+    },
+    {
+      "name" : "input.21_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.19",
+      "debug_info" : "input.21_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.21_reshape"
+    },
+    {
+      "bottom" : "input.21_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.21_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.21_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.21_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.21_scale",
+      "constant_blob" : 29,
+      "top" : "input.21_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.21_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.21_scale",
+      "constant_blob" : 31,
+      "top" : "input.21_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.21_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.21_mvn,input.21_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.21_scale",
+      "top" : "input.21_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.21_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.21_scale_mul_out,input.21_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.21_scale",
+      "top" : "input.21_scale",
+      "type" : "elementwise",
+      "name" : "input.21_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.21",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.21_scale",
+      "debug_info" : "input.21",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.21"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_4",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 1536,
+      "blob_weights" : 35,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.21",
+      "blob_biases" : 33,
+      "has_tanh" : 0,
+      "debug_info" : "linear_4",
+      "name" : "linear_4",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_4",
+      "weights" : {
+
+      },
+      "mode" : 19,
+      "debug_info" : "input.25",
+      "top" : "input.25",
+      "type" : "activation",
+      "name" : "input.25"
+    },
+    {
+      "nB" : 1536,
+      "top" : "linear_5",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 39,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.25",
+      "blob_biases" : 37,
+      "has_tanh" : 0,
+      "debug_info" : "linear_5",
+      "name" : "linear_5",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_5,input.21",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.29",
+      "top" : "input.29",
+      "type" : "elementwise",
+      "name" : "input.29",
+      "beta" : 0
+    },
+    {
+      "name" : "input.31_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.29",
+      "debug_info" : "input.31_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.31_reshape"
+    },
+    {
+      "bottom" : "input.31_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.31_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.31_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.31_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.31_scale",
+      "constant_blob" : 41,
+      "top" : "input.31_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.31_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.31_scale",
+      "constant_blob" : 43,
+      "top" : "input.31_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.31_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.31_mvn,input.31_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.31_scale",
+      "top" : "input.31_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.31_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.31_scale_mul_out,input.31_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.31_scale",
+      "top" : "input.31_scale",
+      "type" : "elementwise",
+      "name" : "input.31_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.31",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.31_scale",
+      "debug_info" : "input.31",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.31"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_6",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 47,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.31",
+      "blob_biases" : 45,
+      "has_tanh" : 0,
+      "debug_info" : "linear_6",
+      "name" : "linear_6",
+      "has_prelu" : 0
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_7",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 51,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.31",
+      "blob_biases" : 49,
+      "has_tanh" : 0,
+      "debug_info" : "linear_7",
+      "name" : "linear_7",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.15",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_7",
+      "debug_info" : "x.15",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.15"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_8",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 55,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.31",
+      "blob_biases" : 53,
+      "has_tanh" : 0,
+      "debug_info" : "linear_8",
+      "name" : "linear_8",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.19",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_8",
+      "debug_info" : "x.19",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.19"
+    },
+    {
+      "name" : "x.23",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_6",
+      "debug_info" : "x.23",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.23"
+    },
+    {
+      "axis_h" : 0,
+      "axis_w" : 2,
+      "bottom" : "x.15",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_47",
+      "top" : "transpose_47",
+      "type" : "transpose",
+      "name" : "transpose_47"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.23",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_48",
+      "top" : "transpose_48",
+      "type" : "transpose",
+      "name" : "transpose_48"
+    },
+    {
+      "bottom" : "transpose_48,transpose_47",
+      "weights" : {
+
+      },
+      "debug_info" : "attention_scores.5",
+      "top" : "attention_scores.5",
+      "type" : "batch_matmul",
+      "name" : "attention_scores.5",
+      "channel_mode" : false
+    },
+    {
+      "bottom" : "attention_scores.5",
+      "alpha" : 0.1767766922712326,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "_inversed_attention_scores.7",
+      "top" : "_inversed_attention_scores.7",
+      "type" : "elementwise",
+      "name" : "_inversed_attention_scores.7",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_inversed_attention_scores.7,attention_mask_1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.33",
+      "nd_mode" : true,
+      "top" : "input.33",
+      "type" : "elementwise",
+      "name" : "input.33",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.33",
+      "weights" : {
+
+      },
+      "nd_axis" : -1,
+      "debug_info" : "input.35",
+      "top" : "input.35",
+      "type" : "softmax_nd",
+      "name" : "input.35"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.19",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_49",
+      "top" : "transpose_49",
+      "type" : "transpose",
+      "name" : "transpose_49"
+    },
+    {
+      "bottom" : "input.35,transpose_49",
+      "weights" : {
+
+      },
+      "debug_info" : "context_layer.5",
+      "top" : "context_layer.5",
+      "type" : "batch_matmul",
+      "name" : "context_layer.5",
+      "channel_mode" : false
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "context_layer.5",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_46",
+      "top" : "transpose_46",
+      "type" : "transpose",
+      "name" : "transpose_46"
+    },
+    {
+      "name" : "input.37",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "transpose_46",
+      "debug_info" : "input.37",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.37"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_9",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 59,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.37",
+      "blob_biases" : 57,
+      "has_tanh" : 0,
+      "debug_info" : "linear_9",
+      "name" : "linear_9",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_9,input.31",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.41",
+      "top" : "input.41",
+      "type" : "elementwise",
+      "name" : "input.41",
+      "beta" : 0
+    },
+    {
+      "name" : "input.43_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.41",
+      "debug_info" : "input.43_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.43_reshape"
+    },
+    {
+      "bottom" : "input.43_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.43_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.43_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.43_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.43_scale",
+      "constant_blob" : 61,
+      "top" : "input.43_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.43_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.43_scale",
+      "constant_blob" : 63,
+      "top" : "input.43_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.43_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.43_mvn,input.43_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.43_scale",
+      "top" : "input.43_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.43_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.43_scale_mul_out,input.43_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.43_scale",
+      "top" : "input.43_scale",
+      "type" : "elementwise",
+      "name" : "input.43_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.43",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.43_scale",
+      "debug_info" : "input.43",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.43"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_10",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 1536,
+      "blob_weights" : 67,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.43",
+      "blob_biases" : 65,
+      "has_tanh" : 0,
+      "debug_info" : "linear_10",
+      "name" : "linear_10",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_10",
+      "weights" : {
+
+      },
+      "mode" : 19,
+      "debug_info" : "input.47",
+      "top" : "input.47",
+      "type" : "activation",
+      "name" : "input.47"
+    },
+    {
+      "nB" : 1536,
+      "top" : "linear_11",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 71,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.47",
+      "blob_biases" : 69,
+      "has_tanh" : 0,
+      "debug_info" : "linear_11",
+      "name" : "linear_11",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_11,input.43",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.51",
+      "top" : "input.51",
+      "type" : "elementwise",
+      "name" : "input.51",
+      "beta" : 0
+    },
+    {
+      "name" : "input.53_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.51",
+      "debug_info" : "input.53_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.53_reshape"
+    },
+    {
+      "bottom" : "input.53_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.53_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.53_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.53_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.53_scale",
+      "constant_blob" : 73,
+      "top" : "input.53_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.53_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.53_scale",
+      "constant_blob" : 75,
+      "top" : "input.53_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.53_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.53_mvn,input.53_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.53_scale",
+      "top" : "input.53_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.53_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.53_scale_mul_out,input.53_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.53_scale",
+      "top" : "input.53_scale",
+      "type" : "elementwise",
+      "name" : "input.53_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.53",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.53_scale",
+      "debug_info" : "input.53",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.53"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_12",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 79,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.53",
+      "blob_biases" : 77,
+      "has_tanh" : 0,
+      "debug_info" : "linear_12",
+      "name" : "linear_12",
+      "has_prelu" : 0
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_13",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 83,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.53",
+      "blob_biases" : 81,
+      "has_tanh" : 0,
+      "debug_info" : "linear_13",
+      "name" : "linear_13",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.27",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_13",
+      "debug_info" : "x.27",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.27"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_14",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 87,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.53",
+      "blob_biases" : 85,
+      "has_tanh" : 0,
+      "debug_info" : "linear_14",
+      "name" : "linear_14",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.31",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_14",
+      "debug_info" : "x.31",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.31"
+    },
+    {
+      "name" : "x.35",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_12",
+      "debug_info" : "x.35",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.35"
+    },
+    {
+      "axis_h" : 0,
+      "axis_w" : 2,
+      "bottom" : "x.27",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_43",
+      "top" : "transpose_43",
+      "type" : "transpose",
+      "name" : "transpose_43"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.35",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_44",
+      "top" : "transpose_44",
+      "type" : "transpose",
+      "name" : "transpose_44"
+    },
+    {
+      "bottom" : "transpose_44,transpose_43",
+      "weights" : {
+
+      },
+      "debug_info" : "attention_scores.9",
+      "top" : "attention_scores.9",
+      "type" : "batch_matmul",
+      "name" : "attention_scores.9",
+      "channel_mode" : false
+    },
+    {
+      "bottom" : "attention_scores.9",
+      "alpha" : 0.1767766922712326,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "_inversed_attention_scores.11",
+      "top" : "_inversed_attention_scores.11",
+      "type" : "elementwise",
+      "name" : "_inversed_attention_scores.11",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_inversed_attention_scores.11,attention_mask_1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.55",
+      "nd_mode" : true,
+      "top" : "input.55",
+      "type" : "elementwise",
+      "name" : "input.55",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.55",
+      "weights" : {
+
+      },
+      "nd_axis" : -1,
+      "debug_info" : "input.57",
+      "top" : "input.57",
+      "type" : "softmax_nd",
+      "name" : "input.57"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.31",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_45",
+      "top" : "transpose_45",
+      "type" : "transpose",
+      "name" : "transpose_45"
+    },
+    {
+      "bottom" : "input.57,transpose_45",
+      "weights" : {
+
+      },
+      "debug_info" : "context_layer.9",
+      "top" : "context_layer.9",
+      "type" : "batch_matmul",
+      "name" : "context_layer.9",
+      "channel_mode" : false
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "context_layer.9",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_42",
+      "top" : "transpose_42",
+      "type" : "transpose",
+      "name" : "transpose_42"
+    },
+    {
+      "name" : "input.59",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "transpose_42",
+      "debug_info" : "input.59",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.59"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_15",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 91,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.59",
+      "blob_biases" : 89,
+      "has_tanh" : 0,
+      "debug_info" : "linear_15",
+      "name" : "linear_15",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_15,input.53",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.63",
+      "top" : "input.63",
+      "type" : "elementwise",
+      "name" : "input.63",
+      "beta" : 0
+    },
+    {
+      "name" : "input.65_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.63",
+      "debug_info" : "input.65_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.65_reshape"
+    },
+    {
+      "bottom" : "input.65_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.65_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.65_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.65_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.65_scale",
+      "constant_blob" : 93,
+      "top" : "input.65_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.65_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.65_scale",
+      "constant_blob" : 95,
+      "top" : "input.65_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.65_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.65_mvn,input.65_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.65_scale",
+      "top" : "input.65_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.65_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.65_scale_mul_out,input.65_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.65_scale",
+      "top" : "input.65_scale",
+      "type" : "elementwise",
+      "name" : "input.65_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.65",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.65_scale",
+      "debug_info" : "input.65",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.65"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_16",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 1536,
+      "blob_weights" : 99,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.65",
+      "blob_biases" : 97,
+      "has_tanh" : 0,
+      "debug_info" : "linear_16",
+      "name" : "linear_16",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_16",
+      "weights" : {
+
+      },
+      "mode" : 19,
+      "debug_info" : "input.69",
+      "top" : "input.69",
+      "type" : "activation",
+      "name" : "input.69"
+    },
+    {
+      "nB" : 1536,
+      "top" : "linear_17",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 103,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.69",
+      "blob_biases" : 101,
+      "has_tanh" : 0,
+      "debug_info" : "linear_17",
+      "name" : "linear_17",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_17,input.65",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.73",
+      "top" : "input.73",
+      "type" : "elementwise",
+      "name" : "input.73",
+      "beta" : 0
+    },
+    {
+      "name" : "input.75_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.73",
+      "debug_info" : "input.75_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.75_reshape"
+    },
+    {
+      "bottom" : "input.75_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.75_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.75_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.75_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.75_scale",
+      "constant_blob" : 105,
+      "top" : "input.75_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.75_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.75_scale",
+      "constant_blob" : 107,
+      "top" : "input.75_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.75_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.75_mvn,input.75_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.75_scale",
+      "top" : "input.75_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.75_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.75_scale_mul_out,input.75_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.75_scale",
+      "top" : "input.75_scale",
+      "type" : "elementwise",
+      "name" : "input.75_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.75",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.75_scale",
+      "debug_info" : "input.75",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.75"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_18",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 111,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.75",
+      "blob_biases" : 109,
+      "has_tanh" : 0,
+      "debug_info" : "linear_18",
+      "name" : "linear_18",
+      "has_prelu" : 0
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_19",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 115,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.75",
+      "blob_biases" : 113,
+      "has_tanh" : 0,
+      "debug_info" : "linear_19",
+      "name" : "linear_19",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.39",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_19",
+      "debug_info" : "x.39",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.39"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_20",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 119,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.75",
+      "blob_biases" : 117,
+      "has_tanh" : 0,
+      "debug_info" : "linear_20",
+      "name" : "linear_20",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.43",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_20",
+      "debug_info" : "x.43",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.43"
+    },
+    {
+      "name" : "x.47",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_18",
+      "debug_info" : "x.47",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.47"
+    },
+    {
+      "axis_h" : 0,
+      "axis_w" : 2,
+      "bottom" : "x.39",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_39",
+      "top" : "transpose_39",
+      "type" : "transpose",
+      "name" : "transpose_39"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.47",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_40",
+      "top" : "transpose_40",
+      "type" : "transpose",
+      "name" : "transpose_40"
+    },
+    {
+      "bottom" : "transpose_40,transpose_39",
+      "weights" : {
+
+      },
+      "debug_info" : "attention_scores.13",
+      "top" : "attention_scores.13",
+      "type" : "batch_matmul",
+      "name" : "attention_scores.13",
+      "channel_mode" : false
+    },
+    {
+      "bottom" : "attention_scores.13",
+      "alpha" : 0.1767766922712326,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "_inversed_attention_scores.15",
+      "top" : "_inversed_attention_scores.15",
+      "type" : "elementwise",
+      "name" : "_inversed_attention_scores.15",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_inversed_attention_scores.15,attention_mask_1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.77",
+      "nd_mode" : true,
+      "top" : "input.77",
+      "type" : "elementwise",
+      "name" : "input.77",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.77",
+      "weights" : {
+
+      },
+      "nd_axis" : -1,
+      "debug_info" : "input.79",
+      "top" : "input.79",
+      "type" : "softmax_nd",
+      "name" : "input.79"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.43",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_41",
+      "top" : "transpose_41",
+      "type" : "transpose",
+      "name" : "transpose_41"
+    },
+    {
+      "bottom" : "input.79,transpose_41",
+      "weights" : {
+
+      },
+      "debug_info" : "context_layer.13",
+      "top" : "context_layer.13",
+      "type" : "batch_matmul",
+      "name" : "context_layer.13",
+      "channel_mode" : false
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "context_layer.13",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_38",
+      "top" : "transpose_38",
+      "type" : "transpose",
+      "name" : "transpose_38"
+    },
+    {
+      "name" : "input.81",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "transpose_38",
+      "debug_info" : "input.81",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.81"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_21",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 123,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.81",
+      "blob_biases" : 121,
+      "has_tanh" : 0,
+      "debug_info" : "linear_21",
+      "name" : "linear_21",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_21,input.75",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.85",
+      "top" : "input.85",
+      "type" : "elementwise",
+      "name" : "input.85",
+      "beta" : 0
+    },
+    {
+      "name" : "input.87_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.85",
+      "debug_info" : "input.87_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.87_reshape"
+    },
+    {
+      "bottom" : "input.87_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.87_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.87_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.87_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.87_scale",
+      "constant_blob" : 125,
+      "top" : "input.87_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.87_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.87_scale",
+      "constant_blob" : 127,
+      "top" : "input.87_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.87_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.87_mvn,input.87_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.87_scale",
+      "top" : "input.87_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.87_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.87_scale_mul_out,input.87_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.87_scale",
+      "top" : "input.87_scale",
+      "type" : "elementwise",
+      "name" : "input.87_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.87",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.87_scale",
+      "debug_info" : "input.87",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.87"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_22",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 1536,
+      "blob_weights" : 131,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.87",
+      "blob_biases" : 129,
+      "has_tanh" : 0,
+      "debug_info" : "linear_22",
+      "name" : "linear_22",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_22",
+      "weights" : {
+
+      },
+      "mode" : 19,
+      "debug_info" : "input.91",
+      "top" : "input.91",
+      "type" : "activation",
+      "name" : "input.91"
+    },
+    {
+      "nB" : 1536,
+      "top" : "linear_23",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 135,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.91",
+      "blob_biases" : 133,
+      "has_tanh" : 0,
+      "debug_info" : "linear_23",
+      "name" : "linear_23",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_23,input.87",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.95",
+      "top" : "input.95",
+      "type" : "elementwise",
+      "name" : "input.95",
+      "beta" : 0
+    },
+    {
+      "name" : "input.97_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.95",
+      "debug_info" : "input.97_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.97_reshape"
+    },
+    {
+      "bottom" : "input.97_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.97_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.97_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.97_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.97_scale",
+      "constant_blob" : 137,
+      "top" : "input.97_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.97_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.97_scale",
+      "constant_blob" : 139,
+      "top" : "input.97_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.97_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.97_mvn,input.97_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.97_scale",
+      "top" : "input.97_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.97_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.97_scale_mul_out,input.97_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.97_scale",
+      "top" : "input.97_scale",
+      "type" : "elementwise",
+      "name" : "input.97_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.97",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.97_scale",
+      "debug_info" : "input.97",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.97"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_24",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 143,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.97",
+      "blob_biases" : 141,
+      "has_tanh" : 0,
+      "debug_info" : "linear_24",
+      "name" : "linear_24",
+      "has_prelu" : 0
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_25",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 147,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.97",
+      "blob_biases" : 145,
+      "has_tanh" : 0,
+      "debug_info" : "linear_25",
+      "name" : "linear_25",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.51",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_25",
+      "debug_info" : "x.51",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.51"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_26",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 151,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.97",
+      "blob_biases" : 149,
+      "has_tanh" : 0,
+      "debug_info" : "linear_26",
+      "name" : "linear_26",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.55",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_26",
+      "debug_info" : "x.55",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.55"
+    },
+    {
+      "name" : "x.59",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_24",
+      "debug_info" : "x.59",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.59"
+    },
+    {
+      "axis_h" : 0,
+      "axis_w" : 2,
+      "bottom" : "x.51",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_35",
+      "top" : "transpose_35",
+      "type" : "transpose",
+      "name" : "transpose_35"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.59",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_36",
+      "top" : "transpose_36",
+      "type" : "transpose",
+      "name" : "transpose_36"
+    },
+    {
+      "bottom" : "transpose_36,transpose_35",
+      "weights" : {
+
+      },
+      "debug_info" : "attention_scores.17",
+      "top" : "attention_scores.17",
+      "type" : "batch_matmul",
+      "name" : "attention_scores.17",
+      "channel_mode" : false
+    },
+    {
+      "bottom" : "attention_scores.17",
+      "alpha" : 0.1767766922712326,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "_inversed_attention_scores.19",
+      "top" : "_inversed_attention_scores.19",
+      "type" : "elementwise",
+      "name" : "_inversed_attention_scores.19",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_inversed_attention_scores.19,attention_mask_1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.99",
+      "nd_mode" : true,
+      "top" : "input.99",
+      "type" : "elementwise",
+      "name" : "input.99",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.99",
+      "weights" : {
+
+      },
+      "nd_axis" : -1,
+      "debug_info" : "input.101",
+      "top" : "input.101",
+      "type" : "softmax_nd",
+      "name" : "input.101"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.55",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_37",
+      "top" : "transpose_37",
+      "type" : "transpose",
+      "name" : "transpose_37"
+    },
+    {
+      "bottom" : "input.101,transpose_37",
+      "weights" : {
+
+      },
+      "debug_info" : "context_layer.17",
+      "top" : "context_layer.17",
+      "type" : "batch_matmul",
+      "name" : "context_layer.17",
+      "channel_mode" : false
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "context_layer.17",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_34",
+      "top" : "transpose_34",
+      "type" : "transpose",
+      "name" : "transpose_34"
+    },
+    {
+      "name" : "input.103",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "transpose_34",
+      "debug_info" : "input.103",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.103"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_27",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 155,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.103",
+      "blob_biases" : 153,
+      "has_tanh" : 0,
+      "debug_info" : "linear_27",
+      "name" : "linear_27",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_27,input.97",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.107",
+      "top" : "input.107",
+      "type" : "elementwise",
+      "name" : "input.107",
+      "beta" : 0
+    },
+    {
+      "name" : "input.109_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.107",
+      "debug_info" : "input.109_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.109_reshape"
+    },
+    {
+      "bottom" : "input.109_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.109_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.109_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.109_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.109_scale",
+      "constant_blob" : 157,
+      "top" : "input.109_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.109_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.109_scale",
+      "constant_blob" : 159,
+      "top" : "input.109_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.109_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.109_mvn,input.109_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.109_scale",
+      "top" : "input.109_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.109_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.109_scale_mul_out,input.109_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.109_scale",
+      "top" : "input.109_scale",
+      "type" : "elementwise",
+      "name" : "input.109_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.109",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.109_scale",
+      "debug_info" : "input.109",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.109"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_28",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 1536,
+      "blob_weights" : 163,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.109",
+      "blob_biases" : 161,
+      "has_tanh" : 0,
+      "debug_info" : "linear_28",
+      "name" : "linear_28",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_28",
+      "weights" : {
+
+      },
+      "mode" : 19,
+      "debug_info" : "input.113",
+      "top" : "input.113",
+      "type" : "activation",
+      "name" : "input.113"
+    },
+    {
+      "nB" : 1536,
+      "top" : "linear_29",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 167,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.113",
+      "blob_biases" : 165,
+      "has_tanh" : 0,
+      "debug_info" : "linear_29",
+      "name" : "linear_29",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_29,input.109",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.117",
+      "top" : "input.117",
+      "type" : "elementwise",
+      "name" : "input.117",
+      "beta" : 0
+    },
+    {
+      "name" : "input.119_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.117",
+      "debug_info" : "input.119_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.119_reshape"
+    },
+    {
+      "bottom" : "input.119_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.119_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.119_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.119_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.119_scale",
+      "constant_blob" : 169,
+      "top" : "input.119_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.119_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.119_scale",
+      "constant_blob" : 171,
+      "top" : "input.119_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.119_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.119_mvn,input.119_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.119_scale",
+      "top" : "input.119_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.119_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.119_scale_mul_out,input.119_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.119_scale",
+      "top" : "input.119_scale",
+      "type" : "elementwise",
+      "name" : "input.119_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.119",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.119_scale",
+      "debug_info" : "input.119",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.119"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_30",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 175,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.119",
+      "blob_biases" : 173,
+      "has_tanh" : 0,
+      "debug_info" : "linear_30",
+      "name" : "linear_30",
+      "has_prelu" : 0
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_31",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 179,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.119",
+      "blob_biases" : 177,
+      "has_tanh" : 0,
+      "debug_info" : "linear_31",
+      "name" : "linear_31",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.63",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_31",
+      "debug_info" : "x.63",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.63"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_32",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 183,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.119",
+      "blob_biases" : 181,
+      "has_tanh" : 0,
+      "debug_info" : "linear_32",
+      "name" : "linear_32",
+      "has_prelu" : 0
+    },
+    {
+      "name" : "x.67",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_32",
+      "debug_info" : "x.67",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x.67"
+    },
+    {
+      "name" : "x",
+      "weights" : {
+
+      },
+      "dst_w" : 32,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 12,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "linear_30",
+      "debug_info" : "x",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "x"
+    },
+    {
+      "axis_h" : 0,
+      "axis_w" : 2,
+      "bottom" : "x.63",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_31",
+      "top" : "transpose_31",
+      "type" : "transpose",
+      "name" : "transpose_31"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_32",
+      "top" : "transpose_32",
+      "type" : "transpose",
+      "name" : "transpose_32"
+    },
+    {
+      "bottom" : "transpose_32,transpose_31",
+      "weights" : {
+
+      },
+      "debug_info" : "attention_scores.21",
+      "top" : "attention_scores.21",
+      "type" : "batch_matmul",
+      "name" : "attention_scores.21",
+      "channel_mode" : false
+    },
+    {
+      "bottom" : "attention_scores.21",
+      "alpha" : 0.1767766922712326,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "_inversed_attention_scores",
+      "top" : "_inversed_attention_scores",
+      "type" : "elementwise",
+      "name" : "_inversed_attention_scores",
+      "beta" : 0
+    },
+    {
+      "bottom" : "_inversed_attention_scores,attention_mask_1",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.121",
+      "nd_mode" : true,
+      "top" : "input.121",
+      "type" : "elementwise",
+      "name" : "input.121",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.121",
+      "weights" : {
+
+      },
+      "nd_axis" : -1,
+      "debug_info" : "input.123",
+      "top" : "input.123",
+      "type" : "softmax_nd",
+      "name" : "input.123"
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "x.67",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_33",
+      "top" : "transpose_33",
+      "type" : "transpose",
+      "name" : "transpose_33"
+    },
+    {
+      "bottom" : "input.123,transpose_33",
+      "weights" : {
+
+      },
+      "debug_info" : "context_layer.21",
+      "top" : "context_layer.21",
+      "type" : "batch_matmul",
+      "name" : "context_layer.21",
+      "channel_mode" : false
+    },
+    {
+      "axis_h" : 2,
+      "axis_w" : 0,
+      "bottom" : "context_layer.21",
+      "axis_k" : 1,
+      "axis_n" : 3,
+      "axis_seq" : 4,
+      "weights" : {
+
+      },
+      "debug_info" : "transpose_30",
+      "top" : "transpose_30",
+      "type" : "transpose",
+      "name" : "transpose_30"
+    },
+    {
+      "name" : "input.125",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "transpose_30",
+      "debug_info" : "input.125",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.125"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_33",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 187,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.125",
+      "blob_biases" : 185,
+      "has_tanh" : 0,
+      "debug_info" : "linear_33",
+      "name" : "linear_33",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_33,input.119",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.129",
+      "top" : "input.129",
+      "type" : "elementwise",
+      "name" : "input.129",
+      "beta" : 0
+    },
+    {
+      "name" : "input.131_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.129",
+      "debug_info" : "input.131_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "input.131_reshape"
+    },
+    {
+      "bottom" : "input.131_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "input.131_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "input.131_mvn",
+      "type" : "l2_normalize",
+      "name" : "input.131_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.131_scale",
+      "constant_blob" : 189,
+      "top" : "input.131_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.131_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "input.131_scale",
+      "constant_blob" : 191,
+      "top" : "input.131_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "input.131_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "input.131_mvn,input.131_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.131_scale",
+      "top" : "input.131_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "input.131_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input.131_scale_mul_out,input.131_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.131_scale",
+      "top" : "input.131_scale",
+      "type" : "elementwise",
+      "name" : "input.131_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "input.131",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.131_scale",
+      "debug_info" : "input.131",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "input.131"
+    },
+    {
+      "nB" : 384,
+      "top" : "linear_34",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 1536,
+      "blob_weights" : 195,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.131",
+      "blob_biases" : 193,
+      "has_tanh" : 0,
+      "debug_info" : "linear_34",
+      "name" : "linear_34",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_34",
+      "weights" : {
+
+      },
+      "mode" : 19,
+      "debug_info" : "input.135",
+      "top" : "input.135",
+      "type" : "activation",
+      "name" : "input.135"
+    },
+    {
+      "nB" : 1536,
+      "top" : "linear_35",
+      "has_biases" : 1,
+      "weights" : {
+
+      },
+      "nC" : 384,
+      "blob_weights" : 199,
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "bottom" : "input.135",
+      "blob_biases" : 197,
+      "has_tanh" : 0,
+      "debug_info" : "linear_35",
+      "name" : "linear_35",
+      "has_prelu" : 0
+    },
+    {
+      "bottom" : "linear_35,input.131",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input.139",
+      "top" : "input.139",
+      "type" : "elementwise",
+      "name" : "input.139",
+      "beta" : 0
+    },
+    {
+      "name" : "hidden_states_reshape",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 4,
+      "type" : "reshape",
+      "dst_h" : 1,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "input.139",
+      "debug_info" : "hidden_states_reshape",
+      "dst_seq" : 1,
+      "dst_k" : 64,
+      "top" : "hidden_states_reshape"
+    },
+    {
+      "bottom" : "hidden_states_reshape",
+      "weights" : {
+
+      },
+      "eps" : 9.999999960041972e-13,
+      "debug_info" : "hidden_states_mvn",
+      "axis" : 1,
+      "normalization_mode" : 1,
+      "top" : "hidden_states_mvn",
+      "type" : "l2_normalize",
+      "name" : "hidden_states_mvn"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "hidden_states_scale",
+      "constant_blob" : 201,
+      "top" : "hidden_states_scale_constant_in_scale",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "hidden_states_scale_constant_in_scale"
+    },
+    {
+      "bottom" : "",
+      "k" : 1,
+      "n" : 1,
+      "weights" : {
+
+      },
+      "h" : 1,
+      "debug_info" : "hidden_states_scale",
+      "constant_blob" : 203,
+      "top" : "hidden_states_scale_constant_in_bias",
+      "w" : 384,
+      "type" : "load_constant",
+      "name" : "hidden_states_scale_constant_in_bias"
+    },
+    {
+      "bottom" : "hidden_states_mvn,hidden_states_scale_constant_in_scale",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "hidden_states_scale",
+      "top" : "hidden_states_scale_mul_out",
+      "type" : "elementwise",
+      "name" : "hidden_states_scale_mul_out",
+      "beta" : 0
+    },
+    {
+      "bottom" : "hidden_states_scale_mul_out,hidden_states_scale_constant_in_bias",
+      "alpha" : 1,
+      "operation" : 0,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "hidden_states_scale",
+      "top" : "hidden_states_scale",
+      "type" : "elementwise",
+      "name" : "hidden_states_scale",
+      "beta" : 0
+    },
+    {
+      "name" : "hidden_states",
+      "weights" : {
+
+      },
+      "dst_w" : 384,
+      "version" : 1,
+      "dst_n" : 1,
+      "dst_nd_rank" : 3,
+      "type" : "reshape",
+      "dst_h" : 64,
+      "mode" : 0,
+      "dynamic_shape" : false,
+      "bottom" : "hidden_states_scale",
+      "debug_info" : "hidden_states",
+      "dst_seq" : 1,
+      "dst_k" : 1,
+      "top" : "hidden_states"
+    },
+    {
+      "size_of_axes" : 1,
+      "bottom" : "attention_mask",
+      "axes_0" : -1,
+      "weights" : {
+
+      },
+      "nd_axis" : 0,
+      "debug_info" : "540",
+      "top" : "540",
+      "type" : "expand_dims",
+      "name" : "540"
+    },
+    {
+      "bottom" : "540",
+      "weights" : {
+
+      },
+      "mode" : 6,
+      "debug_info" : "cast_43",
+      "top" : "cast_43",
+      "type" : "activation",
+      "name" : "cast_43",
+      "beta" : 0
+    },
+    {
+      "bottom" : "hidden_states,cast_43",
+      "alpha" : 1,
+      "operation" : 1,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "546",
+      "nd_mode" : true,
+      "top" : "546",
+      "type" : "elementwise",
+      "name" : "546",
+      "beta" : 0
+    },
+    {
+      "axis_mode" : 2,
+      "bottom" : "546",
+      "weights" : {
+
+      },
+      "mode" : 0,
+      "nd_axis" : 1,
+      "nd_mode" : true,
+      "debug_info" : "summed",
+      "use_version" : 1,
+      "top" : "summed_presqueeze",
+      "type" : "reduce",
+      "name" : "summed_presqueeze"
+    },
+    {
+      "size_of_axes" : 1,
+      "bottom" : "summed_presqueeze",
+      "axes_0" : 1,
+      "weights" : {
+
+      },
+      "nd_axis" : 0,
+      "debug_info" : "summed",
+      "version" : 1,
+      "top" : "summed",
+      "type" : "squeeze",
+      "name" : "summed"
+    },
+    {
+      "axis_mode" : 2,
+      "bottom" : "cast_43",
+      "weights" : {
+
+      },
+      "mode" : 0,
+      "nd_axis" : 1,
+      "nd_mode" : true,
+      "debug_info" : "556",
+      "use_version" : 1,
+      "top" : "556_presqueeze",
+      "type" : "reduce",
+      "name" : "556_presqueeze"
+    },
+    {
+      "size_of_axes" : 1,
+      "bottom" : "556_presqueeze",
+      "axes_0" : 1,
+      "weights" : {
+
+      },
+      "nd_axis" : 0,
+      "debug_info" : "556",
+      "version" : 1,
+      "top" : "556",
+      "type" : "squeeze",
+      "name" : "556"
+    },
+    {
+      "bottom" : "556",
+      "alpha" : 9.9999997171806854e-10,
+      "operation" : 119,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "denom.1",
+      "top" : "denom.1",
+      "type" : "elementwise",
+      "name" : "denom.1",
+      "beta" : 3.4028234663852886e+38
+    },
+    {
+      "bottom" : "summed,denom.1",
+      "alpha" : 1,
+      "operation" : 102,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "input",
+      "nd_mode" : true,
+      "top" : "input",
+      "type" : "elementwise",
+      "name" : "input",
+      "beta" : 0
+    },
+    {
+      "bottom" : "input",
+      "alpha" : 1,
+      "operation" : 24,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "abs_0",
+      "top" : "abs_0",
+      "type" : "elementwise",
+      "name" : "abs_0",
+      "beta" : 0
+    },
+    {
+      "bottom" : "abs_0",
+      "alpha" : 2,
+      "operation" : 13,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "pow_0",
+      "top" : "pow_0",
+      "type" : "elementwise",
+      "name" : "pow_0",
+      "beta" : 0
+    },
+    {
+      "axis_mode" : 1,
+      "bottom" : "pow_0",
+      "weights" : {
+
+      },
+      "mode" : 0,
+      "nd_axis" : 1,
+      "nd_mode" : true,
+      "debug_info" : "reduce_sum_0",
+      "use_version" : 1,
+      "top" : "reduce_sum_0",
+      "type" : "reduce",
+      "name" : "reduce_sum_0"
+    },
+    {
+      "bottom" : "reduce_sum_0",
+      "alpha" : 0.5,
+      "operation" : 13,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "566",
+      "top" : "566",
+      "type" : "elementwise",
+      "name" : "566",
+      "beta" : 0
+    },
+    {
+      "bottom" : "566",
+      "alpha" : 9.999999960041972e-13,
+      "operation" : 119,
+      "weights" : {
+
+      },
+      "fused_relu" : 0,
+      "debug_info" : "568",
+      "top" : "568",
+      "type" : "elementwise",
+      "name" : "568",
+      "beta" : "inf"
+    },
+    {
+      "name" : "denom",
+      "bottom" : "568",
+      "dst_n" : 1,
+      "dst_seq" : 1,
+      "weights" : {
+
+      },
+      "dst_k" : 1,
+      "debug_info" : "denom",
+      "top" : "denom",
+      "dst_h" : 1,
+      "dst_w" : 384,
+      "type" : "tile"
+    },
+    {
+      "name" : "var_570",
+      "fused_relu" : 0,
+      "beta" : 0,
+      "operation" : 102,
+      "type" : "elementwise",
+      "alpha" : 1,
+      "attributes" : {
+        "is_output" : 1
+      },
+      "bottom" : "input,denom",
+      "debug_info" : "var_570",
+      "nd_mode" : true,
+      "weights" : {
+
+      },
+      "top" : "var_570"
+    }
+  ]
+}

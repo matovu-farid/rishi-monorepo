@@ -126,11 +126,27 @@ The native purchase and entitlement-sync path is covered by the StoreKit Sandbox
 App Review requires in-app account deletion when the app supports account creation. Present in Settings → Account → Delete Account. Implementation:
 
 1. Client calls authenticated `DELETE /api/user` on our worker.
-2. Worker calls `https://appleid.apple.com/auth/revoke` server-side per Pitfall 1.
-3. Worker deletes the user row + cascades sync state.
-4. Client clears Keychain + signs out.
+2. Worker verifies the authenticated user row, revokes the stored Sign in with Apple refresh token server-side when available, and performs a hard delete.
+3. Worker removes account-scoped database rows and R2 book/cover objects. Foreign-key cascades are a database safety net for user-owned and child rows; shared content-addressed narration cache entries are not account-owned and remain available.
+4. After a successful server response, the client purges its local database, book files/covers, sync metadata, credentials, and billing caches, then signs out.
 
-Failures on the worker side log to `siwa_revocation_failures`. Row deletion proceeds anyway so the user is not stranded. See Phase 3 plan 03-05 for the client wiring.
+Apple App Store subscriptions are not canceled by account deletion; users manage those through Apple’s subscription settings. Revocation failures are recorded in the deletion result, but do not strand the user or prevent local account cleanup.
+
+Apple revocation failures are recorded in structured `account_deletion` stage logs without exposing credentials and do not block account erasure. Required R2, Stripe, D1, or verification failures return a non-success response so the user can retry while the account row still exists. See the account-deletion remediation plan for the client wiring.
+
+### App Review Information — deletion demonstration
+
+Provide App Review with a signed-in demo account that can reach the library and has no active operation blocking deletion. The account must be a normal Rishi account created through Sign in with Apple; do not require support contact, a phone call, or an external deletion website. If the account has an Apple subscription, explain that the subscription is managed separately in Apple’s subscription settings and is not canceled by deleting the Rishi account.
+
+Navigation path for the recording:
+
+1. Sign in or create the demo account.
+2. From the Library, tap the gear-shaped **Settings** control.
+3. In the **Account** section, tap **Delete Account…**.
+4. Confirm the **Delete Account?** alert and tap the destructive **Delete** action.
+5. Show the completed request returning to the signed-out screen; do not hide a retry/error state. If the request fails, show that the user remains signed in and can retry.
+
+The physical-device recording should show the complete path from sign-in through the confirmation, deletion result, and signed-out state. Record on an iPad in both portrait and landscape where practical, and include the Mac Catalyst account-menu path in separate internal verification notes.
 
 ### Guideline 2.1 — Voice chat permission primer
 

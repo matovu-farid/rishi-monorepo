@@ -1,0 +1,367 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "21FE6F39",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6763041630",
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_developerTeamID" : "9VL7VRY6QZ",
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 806940065.48960996,
+    "_locale" : "en_US",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "22247412",
+      "localizations" : [
+        {
+          "description" : "",
+          "displayName" : "Rishi Reader & Voice",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "rishi-reader-voice-group",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "76.99",
+              "displayPrice" : "76.99",
+              "internalID" : "6793976493_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "76.99",
+          "familyShareable" : true,
+          "groupNumber" : 2,
+          "internalID" : "6793976493",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "6h AI narration + 270m Voice Chat monthly.",
+              "displayName" : "Reader Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.reader.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Rishi Reader Annual",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "79.99",
+              "displayPrice" : "79.99",
+              "internalID" : "6795118029_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "79.99",
+          "familyShareable" : false,
+          "groupNumber" : 6,
+          "internalID" : "6795118029",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "6h AI narration, 270 min Voice Chat. Billed yearly.",
+              "displayName" : "Rishi Reader Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.reader.annual.macos",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Rishi Reader Annual macOS",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "7.99",
+              "displayPrice" : "7.99",
+              "internalID" : "6793975797_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "7.99",
+          "familyShareable" : true,
+          "groupNumber" : 2,
+          "internalID" : "6793975797",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "6h AI narration + 270m Voice Chat monthly.",
+              "displayName" : "Reader Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "rishi.reader.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Rishi Reader Monthly",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "7.99",
+              "displayPrice" : "7.99",
+              "internalID" : "6795118072_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "7.99",
+          "familyShareable" : false,
+          "groupNumber" : 5,
+          "internalID" : "6795118072",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "6h AI narration, 270 min Voice Chat monthly.",
+              "displayName" : "Rishi Reader Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.reader.monthly.macos",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Rishi Reader Monthly macOS",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "143.99",
+              "displayPrice" : "143.99",
+              "internalID" : "6793971722_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "143.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "6793971722",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "12h AI narration + 540m Voice Chat monthly.",
+              "displayName" : "Voice Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.voice.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Rishi Voice Annual",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "99.99",
+              "displayPrice" : "99.99",
+              "internalID" : "6795117803_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "99.99",
+          "familyShareable" : false,
+          "groupNumber" : 4,
+          "internalID" : "6795117803",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "12h AI narration, 540 min Voice Chat. Billed yearly.",
+              "displayName" : "Rishi Voice Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.voice.annual.macos",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Rishi Voice Annual macOS",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "14.99",
+              "displayPrice" : "14.99",
+              "internalID" : "6792411434_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "14.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "6792411434",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "12h AI narration + 540m Voice Chat monthly.",
+              "displayName" : "Voice Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.voice.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Rishi Voice Monthly",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "14.99",
+              "displayPrice" : "14.99",
+              "internalID" : "6795117523_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "14.99",
+          "familyShareable" : true,
+          "groupNumber" : 3,
+          "internalID" : "6795117523",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "12h AI narration, 540 min Voice Chat monthly.",
+              "displayName" : "Rishi Voice Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.fidexa.rishi.voice.monthly.macos",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Rishi Voice Monthly macOS",
+          "subscriptionGroupID" : "22247412",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 5,
+    "minor" : 0
+  }
+}

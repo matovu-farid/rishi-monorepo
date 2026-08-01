@@ -130,7 +130,12 @@ struct SignedOutView: View {
             }
            
      
-            let endpoint = JWTEndPoint(body: .init(identityToken: jwt))
+            let endpoint = JWTEndPoint(
+                body: .init(
+                    identityToken: jwt,
+                    authorizationCode: credential.authorizationCode?.base64EncodedString()
+                )
+            )
             if let workerClient  {
                 let auth = try? await workerClient.send(endpoint)
                 if let auth {

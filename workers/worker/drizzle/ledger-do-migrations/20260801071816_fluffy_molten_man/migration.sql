@@ -1,0 +1,1 @@
+ALTER TABLE `voice_session` ADD `last_activity_at` integer;

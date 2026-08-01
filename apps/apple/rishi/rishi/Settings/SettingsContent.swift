@@ -21,6 +21,7 @@ struct SettingsContentDependencies {
     let groupID: GroupId?
     let dataUseConsentStore: any DataUseConsentStore
     let onRevokeDataUse: @Sendable () async -> Void
+    let deleteAccount: @Sendable (UUID) async throws -> Void
 }
 
 struct SettingsContent: View {
@@ -90,11 +91,10 @@ struct SettingsContent: View {
                         }
                     },
                     onDelete: {
-                        _ = try await dependencies.workerClient.send(DeleteUserEndpoint())
+                        try await dependencies.deleteAccount(user.id)
                     },
                     onDeleted: {
                         onDismiss()
-                        signOut()
                     },
 
                     onDismiss: { onDismiss() }

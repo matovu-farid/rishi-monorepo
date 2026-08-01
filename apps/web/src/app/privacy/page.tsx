@@ -12,7 +12,7 @@ export default function PrivacyPolicy() {
       <div className="max-w-3xl mx-auto px-6 py-16">
         <h1 className="text-4xl font-bold mb-2">Privacy Policy</h1>
         <p className="text-muted-foreground mb-12">
-          Effective Date: July 29, 2026
+          Effective Date: August 1, 2026
         </p>
 
         <div className="space-y-10 text-base leading-relaxed">
@@ -229,18 +229,30 @@ export default function PrivacyPolicy() {
             <h2 className="text-2xl font-semibold mb-3">
               10. Data Retention and Deletion
             </h2>
+            <p className="mb-4">
+              You can permanently delete your account directly from the App&apos;s
+              account settings. The deletion request is authenticated, can be
+              retried if a network or service error occurs, and removes the
+              account identity, Sign in with Apple linkage and stored
+              authorization credential, synced books and covers, reading
+              position, bookmarks, highlights, conversations and messages,
+              registered devices, subscription and entitlement records, usage
+              records, and the account-scoped database and object-storage data
+              controlled by Rishi. After the server confirms deletion, the App
+              clears its credentials and local account data from that device.
+            </p>
             <p>
-              We keep account and content data in our systems while it is needed
-              to provide the App and its cloud-sync features. We do not publish
-              a fixed retention period here for every data type or service.
-              You may delete your account through the App&apos;s account settings or
-              contact us using the address below. The account-deletion workflow
-              removes the account-scoped records and user-owned book files and
-              covers from the systems it controls. Deletion does not give us
-              control over copies held by independent AI providers, operational
-              backups or logs during their normal lifecycle, or a shared
-              content-addressed narration cache. Those copies are handled under
-              the applicable provider or infrastructure policies.
+              Deletion does not remove shared content-addressed narration cache
+              entries, copies already held by independent AI providers, or
+              operational backups and logs retained for security, accounting,
+              fraud prevention, or legal obligations during their normal
+              lifecycle. Once the account row is deleted, Rishi retains no
+              account deletion marker or tombstone. A repeated deletion request
+              is treated as an idempotent no-op when the account is already
+              absent. Deleting a Rishi account also does not cancel an Apple
+              App Store subscription; manage that subscription through Apple&apos;s
+              subscription settings. We do not publish a fixed retention period
+              here for every data type or independent service.
             </p>
           </section>
 

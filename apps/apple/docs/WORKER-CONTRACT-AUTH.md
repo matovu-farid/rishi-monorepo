@@ -409,6 +409,22 @@ If a downstream platform (Android, future Electron re-add) wires this contract, 
 
 Tick before any platform's SIWA build ships to its respective store / channel.
 
+### Account deletion contract
+
+`DELETE /api/user` is the authenticated, idempotent account-deletion endpoint. It removes the user row and all account-scoped Better Auth, verification-token, sync, reading, conversation, usage, entitlement, device, Apple subscription, and Stripe-local subscription rows. Database `ON DELETE CASCADE` constraints cover user-owned and child rows as a safety net; the deletion service explicitly removes verification rows, R2 book/cover objects, and Apple notification rows because those are not fully represented by a direct user foreign key. Shared content-addressed narration cache objects and Apple App Store subscription records are not deleted/canceled. The client must purge local database/files/sync metadata and sign out only after the server succeeds. A repeated request after the user row is absent returns an idempotent success without retaining a deletion marker or tombstone.
+
+The native client sends the one-time Apple authorization code as a Base64-encoded UTF-8 string in the optional `authorizationCode` field. The Worker decodes it before forwarding the original code to Apple's token endpoint. Existing accounts may omit the field for backward compatibility; new accounts must provide it so the refresh token can be retained for later revocation.
+
+Deletion is deliberately non-transactional across D1 and R2: R2 book/cover keys are deleted first, each delete is idempotent, and a retry re-reads the user’s remaining rows and keys while the user row still exists. The Worker returns success only after the D1 teardown and verification stage complete. Apple revocation is best-effort: a transient or unavailable revocation is reported as `revocation_unavailable` while account erasure continues. Required R2, Stripe-anonymization, D1, or verification failures return a non-success response; a later request can retry while the user row remains. No credential or raw Apple payload is written to logs. Stripe customer metadata is anonymized when a configured Stripe secret and customer ID are present; Apple App Store subscriptions remain managed separately by Apple and are not canceled by this endpoint.
+
+The account-scoped deletion inventory is:
+
+- Better Auth `user`, `account`, `session`, `passkey`, and verification-token rows, plus the Apple linkage and encrypted Sign in with Apple refresh token.
+- Books, R2 book/cover objects, reading positions, bookmarks, highlights, extracted pages/words/paragraphs, chapter indexes, conversations, and messages.
+- Registered devices, Apple IAP subscription/notification rows, Stripe-local subscription rows, entitlement/allowance/trial/usage rows, and account API-usage rows.
+
+There is no account-deletion marker or tombstone. The authenticated middleware checks the `user` row on every ordinary request, while the deletion endpoint allows a missing user so a repeated request can return success. Global/device-local `sync_meta` and shared content-addressed TTS cache objects are outside this server-side inventory and are cleared/retained according to the client and cache policies respectively.
+
 ### Worker team confirms:
 
 - [ ] `POST /api/auth/sign-in/social` accepts the Section 2.2 body shape and returns the Section 2.4 envelope on success.

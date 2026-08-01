@@ -77,6 +77,29 @@ public struct BookFileStorage:Sendable {
         try await bookStore.delete(book.id)
     }
 
+    /// Removes all local book material, including extracted covers and search
+    /// sidecars. The Rishi app's local store belongs to the signed-in account.
+    public func purgeAll() throws {
+        for url in [
+            booksDirURL,
+            rootURL.appendingPathComponent("Caches", isDirectory: true)
+                .appendingPathComponent("book-covers", isDirectory: true),
+        ] where fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+
+        // Drag/drop imports use a namespaced temporary copy while the system
+        // document picker is active. Remove only Rishi-owned temporary files;
+        // never sweep the platform temporary directory wholesale.
+        let temporaryDirectory = fileManager.temporaryDirectory
+        for url in try fileManager.contentsOfDirectory(
+            at: temporaryDirectory,
+            includingPropertiesForKeys: nil
+        ) where url.lastPathComponent.hasPrefix("RishiDrop-") {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+
     public nonisolated func cachedCoverURLIfFresh(for book: Book) -> URL? {
         guard let cache = coverCache else { return nil }
         let sourceFileURL: URL

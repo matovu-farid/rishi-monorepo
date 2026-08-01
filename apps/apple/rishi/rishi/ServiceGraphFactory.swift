@@ -480,6 +480,7 @@ enum ServiceGraphFactory {
             workerClient: workerClient,
             dataUseConsentStore: dataUseConsentStore,
             library: LibraryRuntime(
+                dbStore: dbStore,
                 bookStore: bookStore,
                 positionStore: positionStore,
                 highlightStore: highlightStore,

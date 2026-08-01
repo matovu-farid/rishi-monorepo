@@ -114,6 +114,40 @@ struct BootstrappedServices: @unchecked Sendable {
     let onboarding: OnboardingRuntime
 }
 
+extension BootstrappedServices {
+    func accountDeletionCoordinator(
+        userId: UUID,
+        signOut: @escaping @MainActor @Sendable () -> Void
+    ) -> AccountDeletionCoordinator {
+        AccountDeletionCoordinator(
+            deleteServer: { [workerClient] in
+                _ = try await workerClient.send(DeleteUserEndpoint())
+            },
+            purgeLocal: { [self] in
+                var cleanupError: Error?
+                await voice.presenter.requestEnd()
+                await sync.engine.resetForAccountSwitch()
+                do { try library.bookFileStorage.purgeAll() }
+                catch { cleanupError = error }
+                do { try await library.dbStore.purgeAll() }
+                catch { cleanupError = cleanupError ?? error }
+                if let metadataStore = sync.metadataStore as? SwiftDataSyncMetadataStore {
+                    do { try await metadataStore.resetAll() }
+                    catch { cleanupError = cleanupError ?? error }
+                }
+                await dataUseConsentStore.revoke(for: userId.uuidString)
+                await audio.ttsSettingsStore.remove(userId: userId)
+                await onboarding.trialState.remove(userId: userId)
+                await billing.entitlementService.clearSnapshotCache(for: userId.uuidString)
+                await billing.entitlementService.clearCache()
+                await MainActor.run { billing.entitlementReconciler.reset() }
+                if let cleanupError { throw cleanupError }
+            },
+            signOut: signOut
+        )
+    }
+}
+
 struct SettingsRuntime: @unchecked Sendable {
     let readerDefaults: AppReaderDefaults
     let telemetryStore: any TelemetryStore
@@ -149,6 +183,7 @@ struct ChatRuntime: @unchecked Sendable {
 }
 
 struct LibraryRuntime: @unchecked Sendable {
+    let dbStore: RishiDBStore
     let bookStore: any BookStore
     let positionStore: any PositionStore
     let highlightStore: any HighlightStore

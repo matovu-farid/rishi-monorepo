@@ -89,9 +89,13 @@ session) and modify `DELETE /api/user` to call
 **Owner:** matovu90@gmail.com (worker side).
 **iOS status:** DONE. Phase 3 ships SIWA against the contract from
 WORKER-TICKETS.md Ticket 1. Tests pass against the documented response shape.
-**Worker status:** assumed DONE in production (Phase 3 has been "Complete"
-in `.planning/STATE.md` since the Phase 3 close). Re-verify before App
-Review — Guideline 5.1.1(v) tests account deletion path.
+**Worker status:** IMPLEMENTED in the account-deletion remediation branch. The
+legacy `/auth/apple` route accepts the optional base64 authorization code,
+exchanges it before creating a new account, encrypts the returned refresh token
+with AES-GCM, and `DELETE /api/user` revokes it before removing the linkage.
+Existing accounts without a code retain the explicit legacy/no-token path.
+Production verification remains required after deploying the migration and
+Worker secrets.
 
 **Verification:**
 ```bash
@@ -101,8 +105,9 @@ Review — Guideline 5.1.1(v) tests account deletion path.
 # second sign-in, revocation is not landing — App Store will reject.
 ```
 
-**Fallback:** none — this is App-Review-required. If revocation is not in
-production by submission, hold the submission.
+**Fallback:** legacy accounts can still be fully erased when no refresh token
+was captured, but Apple revocation is reported as unavailable. New accounts
+must have a successful authorization-code exchange before they are created.
 
 ---
 

@@ -81,7 +81,7 @@ export const voiceSession = sqliteTable("voice_session", {
     .default("not_started"),
   hangupAttempts: integer("hangup_attempts").notNull().default(0),
   // Last real user/assistant activity (not interval ticks). Nullable for
-  // legacy rows until ensureLastActivityAtColumn backfills live sessions.
+  // legacy rows until the generated migration adds the column.
   lastActivityAt: integer("last_activity_at"), // epoch ms
   createdAt: integer("created_at").notNull(), // epoch ms
   updatedAt: integer("updated_at").notNull(), // epoch ms

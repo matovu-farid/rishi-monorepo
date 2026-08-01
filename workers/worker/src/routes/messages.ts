@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { conversations, messages } from "../db/schema";
 import { createDb } from "../db/drizzle";
-import { requireAuth } from "../index";
+import { requireAuth } from "../middleware";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 

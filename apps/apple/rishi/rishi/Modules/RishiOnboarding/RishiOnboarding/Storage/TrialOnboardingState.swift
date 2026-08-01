@@ -10,6 +10,7 @@ import Foundation
 public protocol TrialOnboardingState: Sendable {
     func hasSeenNoCardIntro(userId: UserID) async -> Bool
     func setHasSeenNoCardIntro(_ value: Bool, userId: UserID) async
+    func remove(userId: UserID) async
 }
 
 /// UserDefaults-backed implementation. Key pattern matches
@@ -35,6 +36,10 @@ public final class UserDefaultsTrialOnboardingState: TrialOnboardingState, @unch
         defaults.set(value, forKey: Self.key(for: userId))
     }
 
+    public func remove(userId: UserID) async {
+        defaults.removeObject(forKey: Self.key(for: userId))
+    }
+
     static func key(for userId: UserID) -> String {
         "onboarding.noCardTrial.seen.\(userId.uuidString)"
     }
@@ -52,5 +57,9 @@ public actor InMemoryTrialOnboardingState: TrialOnboardingState {
 
     public func setHasSeenNoCardIntro(_ value: Bool, userId: UserID) async {
         if value { seen.insert(userId) } else { seen.remove(userId) }
+    }
+
+    public func remove(userId: UserID) async {
+        seen.remove(userId)
     }
 }

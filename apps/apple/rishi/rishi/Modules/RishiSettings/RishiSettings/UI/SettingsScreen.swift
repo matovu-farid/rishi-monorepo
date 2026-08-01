@@ -210,6 +210,10 @@ public struct SettingsScreen: View {
                 isPresented: $showDeleteConfirm
             ) {
                 Button("Delete", role: .destructive) {
+                    // Close the confirmation before starting the network
+                    // operation so the progress state is visible. Failures
+                    // are surfaced by the retryable alert below.
+                    showDeleteConfirm = false
                     Task { await deleteModel?.runDelete() }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -228,6 +232,19 @@ public struct SettingsScreen: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(deleteModel?.deleteError ?? "")
+            }
+            .overlay {
+                if deleteModel?.inFlight == true {
+                    ZStack {
+                        Color.black.opacity(0.18)
+                            .ignoresSafeArea()
+                        ProgressView("Deleting account…")
+                            .padding(24)
+                            .background(.regularMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .accessibilityIdentifier("account-deletion-progress")
+                    }
+                }
             }
             .sheet(item: $legalSheetURL) { wrapper in
                 SafariSheet(url: wrapper.url)

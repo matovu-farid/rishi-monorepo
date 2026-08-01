@@ -22,10 +22,20 @@ struct SignedInContentDependencies {
     let voicePresenter: VoiceSessionPresenter
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let dataUseConsentStore: any DataUseConsentStore
+    let deleteAccount: @Sendable (UUID) async throws -> Void
 
     @MainActor
-    static func make(services: BootstrappedServices) -> Self {
-        Self(
+    static func make(
+        services: BootstrappedServices,
+        onSignedOut: @escaping @MainActor @Sendable () -> Void
+    ) -> Self {
+        let deleteAccount: @Sendable (UUID) async throws -> Void = { userId in
+            try await services.accountDeletionCoordinator(
+                userId: userId,
+                signOut: onSignedOut
+            ).run()
+        }
+        return Self(
             library: LibraryTabDependencies(
                 bookStore: services.library.bookStore,
                 positionStore: services.library.positionStore,
@@ -54,14 +64,16 @@ struct SignedInContentDependencies {
                     manageSubscriptionPresenter: services.billing.manageSubscriptionPresenter,
                     groupID: services.billing.groupID,
                     dataUseConsentStore: services.dataUseConsentStore,
-                    onRevokeDataUse: { await services.voice.presenter.requestEnd() }
+                    onRevokeDataUse: { await services.voice.presenter.requestEnd() },
+                    deleteAccount: deleteAccount
                 )
             ),
             chatService: services.chat.service,
             messageStore: services.chat.messageStore,
             voicePresenter: services.voice.presenter,
             entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
-            dataUseConsentStore: services.dataUseConsentStore
+            dataUseConsentStore: services.dataUseConsentStore,
+            deleteAccount: deleteAccount
         )
     }
 }
@@ -86,7 +98,10 @@ struct SignedInView: View {
     var body: some View {
         if let services, let user {
             SignedInContent(
-                dependencies: SignedInContentDependencies.make(services: services),
+                dependencies: SignedInContentDependencies.make(
+                    services: services,
+                    onSignedOut: { signOut() }
+                ),
                 user: user,
                 onLibraryReadyForTrial: onLibraryReadyForTrial
             )
@@ -284,7 +299,7 @@ extension View {
     func readerPrefsMenuPublisher(
         services: BootstrappedServices,
         user: User,
-        onSignedOut: @escaping () -> Void,
+        onSignedOut: @escaping @MainActor @Sendable () -> Void,
         account: MacAccountMenuModel?,
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) -> some View {
@@ -311,14 +326,14 @@ extension View {
         @State private var vm: MacReaderPrefsMenuViewModel
         let services: BootstrappedServices
         let user: User
-        let onSignedOut: () -> Void
+        let onSignedOut: @MainActor @Sendable () -> Void
         let account: MacAccountMenuModel?
         let pdfViewMode: Binding<PDFViewModeSetting>?
 
         init(
             services: BootstrappedServices,
             user: User,
-            onSignedOut: @escaping () -> Void,
+            onSignedOut: @escaping @MainActor @Sendable () -> Void,
             account: MacAccountMenuModel?,
             pdfViewMode: Binding<PDFViewModeSetting>?
         ) {
@@ -361,8 +376,10 @@ extension View {
             var payload = vm.makeAccountPayload(subscriptionAction: action)
             payload.onDeleteAccount = { account?.requestDelete() }
             account?.onDeleteConfirmed = {
-                _ = try await services.workerClient.send(DeleteUserEndpoint())
-                onSignedOut()
+                try await services.accountDeletionCoordinator(
+                    userId: user.id,
+                    signOut: onSignedOut
+                ).run()
             }
             account?.update(payload)
         }
