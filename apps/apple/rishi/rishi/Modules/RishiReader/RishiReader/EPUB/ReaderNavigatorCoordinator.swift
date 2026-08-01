@@ -502,7 +502,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
         guard navigator is PDFNavigatorViewController, !hasFittedPDFViewport else { return }
         pdfViewportFitTask?.cancel()
         pdfViewportFitTask = Task { [weak self] in
-            for _ in 0..<60 {
+            for _ in 0..<20 {
                 guard !Task.isCancelled, let self else { return }
                 if self.fitPDFViewportIfReady() { return }
                 try? await Task.sleep(for: .milliseconds(25))
@@ -517,45 +517,24 @@ public final class ReaderNavigatorCoordinator: NSObject {
               let pdfView = pdfNavigator.pdfView,
               pdfView.document != nil,
               pdfView.currentPage != nil,
-              pdfView.bounds.width > 1,
-              pdfView.bounds.height > 1 else {
+              !pdfNavigator.settings.scroll,
+              pdfNavigator.view.bounds.width > 1,
+              pdfNavigator.view.bounds.height > 1 else {
             return false
         }
 
         pdfNavigator.view.layoutIfNeeded()
         pdfView.layoutIfNeeded()
-        let viewportSize = pdfView.bounds.size
-        guard viewportSize.width > 1, viewportSize.height > 1 else { return false }
+        // Readium's fit helper is package-internal. The public PDFKit
+        // equivalent is the scale that fits the current page in the live
+        // viewport, which is the correct initial behavior for the unified
+        // reader's paginated PDF presentation.
+        let fitScale = pdfView.scaleFactorForSizeToFit
+        guard fitScale.isFinite, fitScale > 0 else { return false }
 
-        // Readium rebuilds the PDF view when preferences change, and
-        // Catalyst can deliver one layout pass before the window reaches its
-        // final size. Require two identical passes before committing the
-        // scale so a transient size cannot permanently zoom the document.
-        if pdfFitCandidateSize == viewportSize {
-            pdfFitCandidatePasses += 1
-        } else {
-            pdfFitCandidateSize = viewportSize
-            pdfFitCandidatePasses = 1
-            return false
-        }
-        guard pdfFitCandidatePasses >= 2 else { return false }
-
-        // This legacy correction is intentionally Catalyst-only. Paginated
-        // Catalyst PDFs used to rely on PDFKit's live fit value; keep that
-        // behavior there while leaving iOS entirely on Readium's defaults.
-        if !pdfNavigator.settings.scroll {
-            let fitScale = pdfView.scaleFactorForSizeToFit
-            guard fitScale.isFinite, fitScale > 0 else { return false }
-            pdfView.minScaleFactor = fitScale
-            pdfView.scaleFactor = fitScale
-        }
-        lastFittedPDFViewportSize = viewportSize
+        pdfView.minScaleFactor = fitScale
+        pdfView.scaleFactor = fitScale
         hasFittedPDFViewport = true
-        isApplyingPDFViewMode = false
-        if let pendingPDFViewMode {
-            self.pendingPDFViewMode = nil
-            self.pdfViewMode = pendingPDFViewMode
-        }
         return true
     }
     #endif
