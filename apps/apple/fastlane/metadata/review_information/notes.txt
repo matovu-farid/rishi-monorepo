@@ -3,7 +3,7 @@ Thanks for reviewing Rishi.
 SIGN-IN FLOW
 - Sign in with Apple is the only test path. No shared credentials are needed; the reviewer's Apple ID is sufficient.
 - Google Sign-In is also available but Apple is the recommended review path.
-- Account deletion is available in Settings → Account → Delete Account. This calls our worker which performs Apple /auth/revoke server-side, then deletes the user row.
+- Account deletion is available on iPhone/iPad in Settings → Account → Delete Account, and on Mac Catalyst in the Account menu → Delete Account. Confirm the native destructive prompt to start deletion; this calls our authenticated worker deletion endpoint, then deletes the user row.
 
 FIRST-RUN CONTENT
 - A sample EPUB ("The Sample Book") ships in the bundle and is auto-installed into the library on first launch. The reviewer does not need to import their own content to exercise the reader, highlights, chat, or read-aloud surfaces.

@@ -83,7 +83,7 @@ captures in § 6.
 
 **Summary:** Worker must implement `POST /api/auth/apple/token` (verify
 Apple identity token, exchange auth code for refresh token, mint Better Auth
-session) and modify `POST /api/auth/delete-user` to call
+session) and modify `DELETE /api/user` to call
 `https://appleid.apple.com/auth/revoke` BEFORE row deletion.
 
 **Owner:** matovu90@gmail.com (worker side).

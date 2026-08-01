@@ -309,6 +309,8 @@ private struct AccountMenuItems: View {
         .disabled(payload == nil)
         Button("Sign Out") { payload?.onSignOut() }
             .disabled(payload == nil)
+        Button("Delete Account…") { payload?.onDeleteAccount() }
+            .disabled(payload == nil)
         Divider()
         Button("Privacy Policy") { payload?.onOpenPrivacy() }
             .disabled(payload == nil)

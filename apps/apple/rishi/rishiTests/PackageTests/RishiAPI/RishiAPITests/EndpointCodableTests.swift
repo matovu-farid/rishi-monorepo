@@ -52,7 +52,8 @@ struct EndpointCodableTests {
 
     @Test func signOutAndDeleteUserPathsAreCorrect() {
         #expect(SignOutEndpoint().path == "/api/auth/sign-out")
-        #expect(DeleteUserEndpoint().path == "/api/auth/delete-user")
+        #expect(DeleteUserEndpoint().method == .DELETE)
+        #expect(DeleteUserEndpoint().path == "/api/user")
         #expect(GetSessionEndpoint().method == .GET)
     }
 

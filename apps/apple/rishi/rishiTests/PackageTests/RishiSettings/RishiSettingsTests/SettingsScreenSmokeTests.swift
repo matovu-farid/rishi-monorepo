@@ -13,6 +13,21 @@ import SwiftUI
 @Suite("Settings screen + sections construction smoke")
 struct SettingsScreenSmokeTests {
 
+    @Test("Mac account deletion presents confirmation and signs out only after confirmation")
+    func macAccountDeletionConfirmation() async {
+        let account = MacAccountMenuModel()
+        var deleted = false
+        account.onDeleteConfirmed = { deleted = true }
+
+        account.requestDelete()
+        #expect(account.deleteConfirmationPresented)
+        #expect(deleted == false)
+
+        await account.confirmDelete()
+        #expect(deleted)
+        #expect(account.deleteConfirmationPresented == false)
+    }
+
     @Test("BillingSection constructs (entitlement granted)")
     func billingSectionConstructsGranted() {
         // Phase 13: BillingSection no longer takes onManage; the inner

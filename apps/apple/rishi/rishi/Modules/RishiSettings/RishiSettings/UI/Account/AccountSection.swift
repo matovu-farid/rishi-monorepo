@@ -12,6 +12,8 @@ import SwiftUI
 /// SwiftUI section with no `@Environment` reach-ins.
 struct AccountSection: View {
 
+    static let deleteAccountButtonTitle = "Delete Account…"
+
     public let user: User
     public let onSignOut: () async -> Void
     public let onShowDeleteFlow: () -> Void
@@ -48,11 +50,11 @@ struct AccountSection: View {
             .foregroundStyle(RishiColor.accent)
             .accessibilityIdentifier("settings-account-signout")
 
-//            Button("Delete Account…") {
-//                onShowDeleteFlow()
-//            }
-//            .foregroundStyle(RishiColor.danger)
-//            .accessibilityIdentifier("settings-account-delete")
+            Button(Self.deleteAccountButtonTitle) {
+                onShowDeleteFlow()
+            }
+            .foregroundStyle(RishiColor.danger)
+            .accessibilityIdentifier("settings-account-delete")
         } header: {
             Text("Account")
                 .font(RishiTypography.titleM)

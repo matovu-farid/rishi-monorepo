@@ -10,6 +10,11 @@ import SwiftUI
 @Suite("Delete account model + Account section")
 struct DeleteAccountModelTests {
 
+    @Test("Account section exposes the account deletion action")
+    func accountSectionExposesDeleteAction() {
+        #expect(AccountSection.deleteAccountButtonTitle == "Delete Account…")
+    }
+
     // MARK: - AccountSection construction (carried over from the removed
     // DeleteAccountFlow suite — the row still exists and drives the alert).
 

@@ -208,6 +208,7 @@ struct LibraryTabView: View {
             .sheet(isPresented: Bindable(model).showSettings) {
                 SettingsSheet(
                     dependencies: SettingsContentDependencies(
+                        workerClient: dependencies.settings.workerClient,
                         readerDefaults: dependencies.settings.readerDefaults,
                         ttsSettingsStore: dependencies.settings.ttsSettingsStore,
                         syncStatus: dependencies.settings.syncStatus,

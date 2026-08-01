@@ -150,6 +150,7 @@ final class MacReaderPrefsMenuViewModel {
             onSignOut: { [signOut] in
                 Task { @MainActor in await signOut() }
             },
+            onDeleteAccount: {},
             onOpenPrivacy: { self.open(.privacyPolicy) },
             onOpenTerms: { self.open(.termsOfUse) }
         )

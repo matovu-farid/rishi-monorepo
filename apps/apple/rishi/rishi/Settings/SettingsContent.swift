@@ -7,6 +7,7 @@
 import SwiftUI
 
 struct SettingsContentDependencies {
+    let workerClient: WorkerClient
     let readerDefaults: AppReaderDefaults
     let ttsSettingsStore: any TTSSettingsStore
     let syncStatus: SyncStatus
@@ -89,10 +90,7 @@ struct SettingsContent: View {
                         }
                     },
                     onDelete: {
-                        await MainActor.run {
-                            onDismiss()
-                            signOut()
-                        }
+                        _ = try await dependencies.workerClient.send(DeleteUserEndpoint())
                     },
                     onDeleted: {
                         onDismiss()

@@ -140,17 +140,15 @@ public struct SignOutEndpoint: WorkerEndpoint {
 
 // MARK: - Delete user (Bearer-auth)
 
-/// `POST /api/auth/delete-user` — full account deletion.
+/// `DELETE /api/user` — full account deletion for the authenticated user.
 ///
-/// Server-side MUST call `https://appleid.apple.com/auth/revoke` before row
-/// deletion per STATE.md Phase 0 decision (App Store Guideline 5.1.1(v)). The
-/// client doesn't need to know about that — it just hits this endpoint and
-/// trusts the worker to do the right thing.
+/// The client sends no account data; the authenticated worker identifies the
+/// user from the bearer token and performs the deletion.
 public struct DeleteUserEndpoint: WorkerEndpoint {
     public typealias Response = OkResponse
 
-    public let method: HTTPMethod = .POST
-    public let path: String = "/api/auth/delete-user"
+    public let method: HTTPMethod = .DELETE
+    public let path: String = "/api/user"
 
     public init() {}
 }

@@ -41,6 +41,7 @@ struct SignedInContentDependencies {
                 entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
                 groupID: services.billing.groupID,
                 settings: SettingsContentDependencies(
+                    workerClient: services.workerClient,
                     readerDefaults: services.settings.readerDefaults,
                     ttsSettingsStore: services.audio.ttsSettingsStore,
                     syncStatus: services.sync.status,
@@ -96,6 +97,7 @@ struct SignedInView: View {
                 onSignedOut: { signOut() },
                 account: appDependencies?.macAccountMenu
             )
+            .accountDeletionAlerts(account: appDependencies?.macAccountMenu)
         } else {
             VStack {
 #if DEBUG
@@ -309,6 +311,7 @@ extension View {
         @State private var vm: MacReaderPrefsMenuViewModel
         let services: BootstrappedServices
         let user: User
+        let onSignedOut: () -> Void
         let account: MacAccountMenuModel?
         let pdfViewMode: Binding<PDFViewModeSetting>?
 
@@ -320,6 +323,7 @@ extension View {
             pdfViewMode: Binding<PDFViewModeSetting>?
         ) {
             self.services = services
+            self.onSignedOut = onSignedOut
             _vm = State(
                 wrappedValue: MacReaderPrefsMenuViewModel(
                     services: services,
@@ -354,8 +358,50 @@ extension View {
             } else {
                 action = .unavailable
             }
-            account?.update(vm.makeAccountPayload(subscriptionAction: action))
+            var payload = vm.makeAccountPayload(subscriptionAction: action)
+            payload.onDeleteAccount = { account?.requestDelete() }
+            account?.onDeleteConfirmed = {
+                _ = try await services.workerClient.send(DeleteUserEndpoint())
+                onSignedOut()
+            }
+            account?.update(payload)
         }
     }
 
 #endif
+
+private extension View {
+    @ViewBuilder
+    func accountDeletionAlerts(account: MacAccountMenuModel?) -> some View {
+        #if targetEnvironment(macCatalyst)
+        self
+            .alert(
+                "Delete Account?",
+                isPresented: Binding(
+                    get: { account?.deleteConfirmationPresented == true },
+                    set: { account?.deleteConfirmationPresented = $0 }
+                )
+            ) {
+                Button("Delete", role: .destructive) {
+                    Task { await account?.confirmDelete() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete your account, your library, your highlights, and your conversations. This cannot be undone.")
+            }
+            .alert(
+                "Couldn't delete your account",
+                isPresented: Binding(
+                    get: { account?.deleteError != nil },
+                    set: { if !$0 { account?.deleteError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(account?.deleteError ?? "")
+            }
+        #else
+        self
+        #endif
+    }
+}

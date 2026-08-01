@@ -22,7 +22,7 @@ Plus one out-of-band hydration:
 
 2. **On every app launch:** iOS hits `GET /api/auth/get-session` with the stored bearer token to confirm the session is still valid. The worker returns either the live `ProfileResponse` envelope OR the JSON literal `null` (NOT a 401) — iOS decodes either into a Swift `Optional<ProfileResponse>` and treats `nil` as "no session, free tier".
 
-Account deletion (`POST /api/auth/delete-user`) was wired in Phase 3 and is unchanged by this contract — see `apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AuthAPI.swift` for the endpoint shape.
+Account deletion (`DELETE /api/user`) is wired through the authenticated worker user route — see `apps/apple/rishi/rishi/Modules/RishiCore/RishiCore/Endpoints/AuthAPI.swift` for the endpoint shape.
 
 Apple-only v1: the worker's `socialProviders.google` block stays configured for future web/Android use, but iOS does NOT exercise it. The Google button + coordinator + endpoint were removed from the iOS app in Phase 15 (see [`RUNBOOK-BILLING-WORKER.md`](./RUNBOOK-BILLING-WORKER.md) Section SIWA Provider).
 
@@ -255,12 +255,12 @@ See `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Service/EntitlementSe
 
 ---
 
-## 4. Endpoint: `POST /api/auth/sign-out`, `POST /api/auth/delete-user`
+## 4. Endpoint: `POST /api/auth/sign-out`, `DELETE /api/user`
 
 These are documented in `AuthAPI.swift` and were wired in Phase 3. Quick summary:
 
 - `POST /api/auth/sign-out` — Bearer auth; returns `{"ok": true}`. Worker invalidates the bearer token + clears the cookie.
-- `POST /api/auth/delete-user` — Bearer auth; returns `{"ok": true}`. Worker MUST call `https://appleid.apple.com/auth/revoke` with the stored Apple refresh/access token BEFORE row deletion per App Store Guideline 5.1.1(v). iOS does not orchestrate the revoke — it trusts the worker.
+- `DELETE /api/user` — Bearer auth; returns `{"ok": true}` and deletes the authenticated user row. iOS does not send account identifiers; the worker derives identity from the bearer token.
 
 Neither endpoint changed in Phase 15.
 

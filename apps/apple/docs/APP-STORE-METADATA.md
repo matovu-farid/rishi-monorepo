@@ -125,7 +125,7 @@ The native purchase and entitlement-sync path is covered by the StoreKit Sandbox
 
 App Review requires in-app account deletion when the app supports account creation. Present in Settings → Account → Delete Account. Implementation:
 
-1. Client calls `POST /api/auth/delete-user` on our worker.
+1. Client calls authenticated `DELETE /api/user` on our worker.
 2. Worker calls `https://appleid.apple.com/auth/revoke` server-side per Pitfall 1.
 3. Worker deletes the user row + cascades sync state.
 4. Client clears Keychain + signs out.

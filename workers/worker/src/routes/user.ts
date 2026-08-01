@@ -38,13 +38,11 @@ userRoutes.delete("/", requireAuth, async (c) => {
 
     await db.delete(user).where(eq(user.id, userId));
 
-    return c.json({
-      message: "Deleted successfully",
-    });
+    return c.json({ ok: true });
   } catch (e) {
     console.log(e);
-    c.json({
-      error: "Failed to get a user",
-    });
+    return c.json({
+      error: "Failed to delete user",
+    }, 500);
   }
 });
