@@ -538,6 +538,47 @@ public final class ReaderNavigatorCoordinator: NSObject {
         return true
     }
     #endif
+
+    #if !targetEnvironment(macCatalyst)
+    /// Recomputes the initial PDF fit after the Readium child view has been
+    /// installed and laid out. Readium can perform its first fit before the
+    /// SwiftUI container has its final bounds on iOS.
+    private func schedulePDFViewportFitForIOS() {
+        guard navigator is PDFNavigatorViewController, !hasFittedPDFViewport else { return }
+        pdfViewportFitTask?.cancel()
+        pdfViewportFitTask = Task { [weak self] in
+            for _ in 0..<20 {
+                guard !Task.isCancelled, let self else { return }
+                if self.fitPDFViewportIfReadyForIOS() { return }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
+
+    @discardableResult
+    private func fitPDFViewportIfReadyForIOS() -> Bool {
+        guard !hasFittedPDFViewport,
+              let pdfNavigator = navigator as? PDFNavigatorViewController,
+              let pdfView = pdfNavigator.pdfView,
+              pdfView.document != nil,
+              pdfView.currentPage != nil,
+              !pdfNavigator.settings.scroll,
+              pdfNavigator.view.bounds.width > 1,
+              pdfNavigator.view.bounds.height > 1 else {
+            return false
+        }
+
+        pdfNavigator.view.layoutIfNeeded()
+        pdfView.layoutIfNeeded()
+        let fitScale = pdfView.scaleFactorForSizeToFit
+        guard fitScale.isFinite, fitScale > 0 else { return false }
+
+        pdfView.minScaleFactor = fitScale
+        pdfView.scaleFactor = fitScale
+        hasFittedPDFViewport = true
+        return true
+    }
+    #endif
 }
 
 extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
@@ -547,8 +588,8 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
         // Highlights applied during setup are stashed; paint them now.
         if navigator is PDFNavigatorViewController {
             pdfDecorable.reapplyIfNeeded()
-            #if targetEnvironment(macCatalyst)
-            schedulePDFViewportFit()
+            #if !targetEnvironment(macCatalyst)
+            schedulePDFViewportFitForIOS()
             #endif
         }
         handleLocationChange(locator)
@@ -612,8 +653,8 @@ extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
             // Document is often still nil here; locationDidChange / a later
             // apply with document present will flush via reapplyIfNeeded.
             pdfDecorable.reapplyIfNeeded()
-            #if targetEnvironment(macCatalyst)
-            schedulePDFViewportFit()
+            #if !targetEnvironment(macCatalyst)
+            schedulePDFViewportFitForIOS()
             #endif
         }
     }
