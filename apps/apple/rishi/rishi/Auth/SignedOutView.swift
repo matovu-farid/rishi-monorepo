@@ -206,10 +206,12 @@ struct SignedOutView: View {
                         reason: .signIn
                     )
             } catch {
+                print("Apple sign-in Worker exchange failed: \(error)")
                 viewModel.recordFailure(error)
             }
 
         case .failure(let error):
+            print("Apple authorization failed: \(error)")
             viewModel.recordFailure(error)
         }
     }

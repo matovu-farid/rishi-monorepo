@@ -46,7 +46,12 @@ async function exchangeAppleAuthorizationCode(
       grant_type: "authorization_code",
     }),
   });
-  if (!response.ok) throw new Error(`Apple authorization exchange failed (${response.status})`);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Apple authorization exchange failed (${response.status}): ${body.slice(0, 240)}`,
+    );
+  }
   const payload = await response.json() as { refresh_token?: string };
   if (!payload.refresh_token) throw new Error("Apple authorization exchange returned no refresh token");
   return payload.refresh_token;
@@ -65,6 +70,7 @@ function decodeAppleAuthorizationCode(encodedAuthorizationCode: string): string 
 }
 
 authRoutes.post("/apple", async (c) => {
+  let failureStage = "parse-request";
   const appleJWKS = createRemoteJWKSet(
     new URL("https://appleid.apple.com/auth/keys"),
   );
@@ -83,6 +89,13 @@ authRoutes.post("/apple", async (c) => {
     );
   }
 
+  console.info("apple sign-in request", {
+    hasIdentityToken: Boolean(identityToken),
+    identityTokenLength: typeof identityToken === "string" ? identityToken.length : 0,
+    hasAuthorizationCode: typeof authorizationCode === "string" && authorizationCode.length > 0,
+    hasNonce: typeof nonce === "string" && nonce.length > 0,
+  });
+
   const authorizationCodeValue =
     typeof authorizationCode === "string" ? authorizationCode : undefined;
   if (authorizationCodeValue !== undefined && authorizationCodeValue.trim().length === 0) {
@@ -95,6 +108,7 @@ authRoutes.post("/apple", async (c) => {
   }
 
   try {
+    failureStage = "verify-identity-token";
     const jwtOptions = {
       issuer: "https://appleid.apple.com",
 
@@ -105,6 +119,7 @@ authRoutes.post("/apple", async (c) => {
     const { payload } = await jwtVerify(identityToken, appleJWKS, {
       ...jwtOptions,
     });
+    failureStage = "lookup-apple-user";
     const db = createDb(c.env.DB);
     const existingAppleUser = await db.select({
       userId: appleUsers.userId,
@@ -126,23 +141,32 @@ authRoutes.post("/apple", async (c) => {
       });
     }
 
-    // When Apple supplies an authorization code, retain its refresh token so
-    // deletion can revoke the Apple authorization. Identity-only recreation
-    // is also valid after a deleted authorization no longer returns a code.
+    // When configured, exchange an authorization code so its refresh token
+    // can be encrypted and retained for revocation during account deletion.
+    // If the encryption secret is unavailable, continue with the verified
+    // identity-only path rather than blocking account recreation. No token is
+    // exchanged or retained in that degraded mode.
     if (suppliedAuthorizationCode && !c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
-      return c.json({ error: "Apple sign-in is temporarily unavailable" }, 503);
+      console.warn("apple sign-in proceeding without authorization-code exchange", {
+        reason: "SIWA_TOKEN_ENCRYPTION_SECRET is not configured",
+      });
     }
 
     let siwaRefreshToken: string | undefined;
-    if (authorizationCodeValue !== undefined) {
+    if (authorizationCodeValue !== undefined && c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
+      failureStage = "exchange-authorization-code";
       try {
         const decodedAuthorizationCode = decodeAppleAuthorizationCode(authorizationCodeValue);
         siwaRefreshToken = await exchangeAppleAuthorizationCode(c.env, decodedAuthorizationCode);
       } catch (error) {
         console.error("Apple authorization exchange failed", error);
-        return c.json({ error: "Could not complete Apple sign-in. Please try again." }, 502);
+        return c.json({
+          error: "Could not complete Apple sign-in. Please try again.",
+          code: "APPLE_AUTHORIZATION_EXCHANGE_FAILED",
+        }, 502);
       }
     }
+    failureStage = "find-or-create-user";
     const user = await Effect.runPromise(
       findOrCreateUser(db, {
         sub: payload.sub!,
@@ -154,6 +178,8 @@ authRoutes.post("/apple", async (c) => {
           payload.is_private_email === "true",
       }),
     );
+
+    failureStage = "sign-session-tokens";
 
     if (siwaRefreshToken && c.env.SIWA_TOKEN_ENCRYPTION_SECRET) {
       const encrypted = await encryptSiwaRefreshToken(
@@ -181,6 +207,11 @@ authRoutes.post("/apple", async (c) => {
       }),
     );
 
+    console.info("apple sign-in succeeded", {
+      existingAppleUser: Boolean(existingAppleUser),
+      usedAuthorizationCode: suppliedAuthorizationCode,
+      userIdPresent: Boolean(user.id),
+    });
     return c.json({
       accessToken,
       refreshToken,
@@ -192,7 +223,10 @@ authRoutes.post("/apple", async (c) => {
       },
     });
   } catch (err) {
-    console.error(err);
+    console.error("apple sign-in failed", {
+      stage: failureStage,
+      error: err instanceof Error ? err.message : String(err),
+    });
 
     return c.json(
       {

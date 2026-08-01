@@ -715,6 +715,36 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
     d1.close();
   });
 
+  it("recreates an account without exchanging a code when token encryption is unavailable", async () => {
+    const d1 = createD1();
+    const env = {
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+    } as unknown as Env;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+
+    const response = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+        authorizationCode: btoa("stale-or-unexchangeable-code"),
+      }),
+    }), env);
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const appleRow = await createDb(d1).select().from(appleUsers).get();
+    expect(appleRow?.siwaRefreshTokenCiphertext).toBeNull();
+    expect(appleRow?.siwaRefreshTokenNonce).toBeNull();
+    d1.close();
+  });
+
   it("converges concurrent no-code Apple recreations on one user", async () => {
     let userInsertCount = 0;
     let releaseUserInserts!: () => void;
