@@ -493,6 +493,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
     }
     #endif
 
+    #if targetEnvironment(macCatalyst)
     /// Recomputes the initial PDF fit after the Readium child view has been
     /// installed and laid out. Readium performs its first fit while creating
     /// the PDFView, which can happen before the SwiftUI container has its
@@ -538,6 +539,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
             return false
         }
         guard pdfFitCandidatePasses >= 2 else { return false }
+
         // Readium owns PDF fitting through PDFPreferences. Do not override
         // PDFView's scale here: changing the window frame and scale factor
         // during Readium's presentation rebuild causes stale/oversized zoom
@@ -551,6 +553,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
         }
         return true
     }
+    #endif
 }
 
 extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
@@ -560,7 +563,9 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
         // Highlights applied during setup are stashed; paint them now.
         if navigator is PDFNavigatorViewController {
             pdfDecorable.reapplyIfNeeded()
+            #if targetEnvironment(macCatalyst)
             schedulePDFViewportFit()
+            #endif
         }
         handleLocationChange(locator)
     }
@@ -623,10 +628,13 @@ extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
             // Document is often still nil here; locationDidChange / a later
             // apply with document present will flush via reapplyIfNeeded.
             pdfDecorable.reapplyIfNeeded()
+            #if targetEnvironment(macCatalyst)
             schedulePDFViewportFit()
+            #endif
         }
     }
 
+    #if targetEnvironment(macCatalyst)
     public nonisolated func navigator(
         _ navigator: any ViewportObservingNavigator,
         viewportDidChange viewport: NavigatorViewport?
@@ -641,6 +649,7 @@ extension ReaderNavigatorCoordinator: PDFNavigatorDelegate {
             schedulePDFViewportFit()
         }
     }
+    #endif
 }
 
 extension ReaderNavigatorCoordinator: UIGestureRecognizerDelegate {
