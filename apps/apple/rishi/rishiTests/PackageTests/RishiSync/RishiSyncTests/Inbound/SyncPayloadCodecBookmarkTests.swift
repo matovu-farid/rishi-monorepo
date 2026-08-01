@@ -66,6 +66,31 @@ struct SyncPayloadCodecBookmarkTests {
         #expect(book.fileURL == "")
     }
 
+    @Test("decodeBookR2Key accepts ISO8601 book created_at")
+    func decodeBookR2KeyAcceptsISO8601CreatedAt() throws {
+        let id = UUID()
+        let body = """
+        {"id":"\(id.uuidString)","title":"Remote","format_type":"pdf","created_at":"2026-07-29T00:00:00Z","file_r2_key":"books/session/\(id.uuidString).pdf"}
+        """
+
+        let key = try SyncPayloadCodec.decodeBookR2Key(
+            SyncOpaqueJSON(data: Data(body.utf8))
+        )
+
+        #expect(key == "books/session/\(id.uuidString).pdf")
+    }
+
+    @Test("decodeBookR2Key ignores unrelated legacy numeric dates")
+    func decodeBookR2KeyIgnoresUnrelatedLegacyNumericDates() throws {
+        let body = #"{"file_r2_key":"books/legacy/book.pdf","created_at":123.0,"opened_at":456.0}"#
+
+        let key = try SyncPayloadCodec.decodeBookR2Key(
+            SyncOpaqueJSON(data: Data(body.utf8))
+        )
+
+        #expect(key == "books/legacy/book.pdf")
+    }
+
     @Test("book chapter index content version round-trips and remains optional")
     func bookChapterIndexContentVersionRoundTrip() throws {
         let book = Book(
