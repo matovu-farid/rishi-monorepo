@@ -540,10 +540,15 @@ public final class ReaderNavigatorCoordinator: NSObject {
         }
         guard pdfFitCandidatePasses >= 2 else { return false }
 
-        // Readium owns PDF fitting through PDFPreferences. Do not override
-        // PDFView's scale here: changing the window frame and scale factor
-        // during Readium's presentation rebuild causes stale/oversized zoom
-        // on subsequent opens. This gate only waits for a finalized viewport.
+        // This legacy correction is intentionally Catalyst-only. Paginated
+        // Catalyst PDFs used to rely on PDFKit's live fit value; keep that
+        // behavior there while leaving iOS entirely on Readium's defaults.
+        if !pdfNavigator.settings.scroll {
+            let fitScale = pdfView.scaleFactorForSizeToFit
+            guard fitScale.isFinite, fitScale > 0 else { return false }
+            pdfView.minScaleFactor = fitScale
+            pdfView.scaleFactor = fitScale
+        }
         lastFittedPDFViewportSize = viewportSize
         hasFittedPDFViewport = true
         isApplyingPDFViewMode = false
