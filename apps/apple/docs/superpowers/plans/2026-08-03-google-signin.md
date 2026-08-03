@@ -151,3 +151,20 @@ Expected: exit code 0. A real Google sign-in smoke test remains dependent on con
 ### Re-review verdict
 
 PASS WITH NOTES: no open Critical or High findings remain. The production Google-row preflight, public iOS client ID, deployed Google credentials, Catalyst keychain group, and Wrangler credentials are explicit gates; the implementation must report those gaps rather than commit secret values or claim live sign-in success without a smoke test.
+
+## Adversarial review — implementation round 1
+
+### Findings and resolutions
+
+1. **High — an absent `GOOGLE_CLIENT_ID` could disable audience validation.** Resolved by trimming the configured worker audience and returning a configuration error before `jwtVerify` when it is missing.
+2. **High — SwiftUI scene URL delivery was not bridged.** Resolved by forwarding URLs through the app’s `.onOpenURL` handler while retaining the existing application-delegate callback bridge so Google OAuth can resume on iOS and Mac Catalyst without removing deep-link propagation.
+3. **Medium — the implementation test mocked JWT verification.** Accepted as a test-scope note because the production route uses `jose` with fixed Google JWKS, RS256, issuer, audience, required subject/expiry, and max age; the deployed smoke test remains an external credential/device gate.
+4. **Medium — Google client ID build settings are intentionally placeholders.** Accepted as a configuration gate: the app fails with a user-facing configuration error until the public iOS, server/web, and reversed client IDs are supplied through Xcode build settings.
+
+### Re-review status
+
+The two High findings were fixed and the focused Worker suite was rerun (12 tests passing). The narrow independent re-review passed both fixes and found no new Critical or High issues.
+
+### Re-review verdict
+
+PASS WITH NOTES: no open Critical or High findings remain. The remaining notes are external configuration and runtime gates: the public iOS client ID/build settings must be supplied, and a real signed iOS or Catalyst flow still requires a configured OAuth client and interactive device test.

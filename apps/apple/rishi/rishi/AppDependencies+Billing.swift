@@ -17,6 +17,7 @@ extension AppDependencies {
     /// Full sign-out sequence: clear entitlement caches, then reset auth UI state.
     @MainActor
     func performSignOut(currentUserBox: CurrentUserBox) async {
+        GoogleSignInCoordinator.signOut()
         let outgoing = try? Keychain.load(.userId)
         await services?.dataUseConsentStore.clearCurrentUser()
         await clearEntitlementState(for: outgoing)

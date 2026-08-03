@@ -36,6 +36,7 @@ import { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
 import { user, user as userTable } from "./db/schema";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import authRoutes from "./routes/auth";
+import { googleRoutes } from "./routes/google";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { AppleBucket, createTestNotification } from "./apple-connect/functions";
@@ -584,6 +585,7 @@ app.route("/api/user", userRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);
+app.route("/auth", googleRoutes);
 app.route("/auth", authRoutes);
 app.route("/api/sync/messages", messagesRoutes);
 app.route("/desktop", desktopRoutes);

@@ -20,8 +20,9 @@ struct SignedOutView: View {
 
     @State private var viewModel = SignedOutViewModel(authService: nil)
     @State private var pendingAppleNonce: String?
-    @State private var appleSignInInFlight = false
+    @State private var signInInFlight = false
     @State private var appleAuthorizationConsumed = false
+    @State private var googleSignInCoordinator = GoogleSignInCoordinator()
 
     var body: some View {
         NavigationStack{
@@ -104,11 +105,12 @@ struct SignedOutView: View {
     private var buttons: some View {
         VStack(spacing: RishiSpacing.m) {
             appleButton
+            googleButton
         }
     }
     func configure(_ request: ASAuthorizationAppleIDRequest) {
-        guard !appleSignInInFlight else { return }
-        appleSignInInFlight = true
+        guard !signInInFlight else { return }
+        signInInFlight = true
         request.requestedScopes = [
             .fullName,
             .email
@@ -125,7 +127,7 @@ struct SignedOutView: View {
         appleAuthorizationConsumed = true
         defer {
             pendingAppleNonce = nil
-            appleSignInInFlight = false
+            signInInFlight = false
         }
 
         switch result {
@@ -165,45 +167,10 @@ struct SignedOutView: View {
                     nonce: requestNonce
                 )
 
-                    guard let userId = UUID(uuidString: auth.userId) else {
-                        throw RishiError.network(
-                            code: "siwa_invalid_user_id",
-                            message: "Authentication returned an invalid user identifier."
-                        )
-                    }
-
-                    do {
-                        try Keychain.save(auth.accessToken, for: .accessToken)
-                        try Keychain.save(auth.refreshToken, for: .refreshToken)
-                        try Keychain.save(auth.userId, for: .userId)
-                        try await KeychainSessionStore().save(
-                            Session(token: auth.accessToken, userId: auth.userId, email: auth.user.email)
-                        )
-                    } catch {
-                        Keychain.delete(.accessToken)
-                        Keychain.delete(.refreshToken)
-                        Keychain.delete(.userId)
-                        try? await KeychainSessionStore().delete()
-                        throw error
-                    }
-
-                    currentUser = auth.user
-                    deps.setUserId(userId)
-                    await deps.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
-                        platform: {
-                            #if targetEnvironment(macCatalyst)
-                                "macos-catalyst"
-                            #else
-                                "ios"
-                            #endif
-                        }(),
-                        appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
-                    )
-                    isSignedIn = true
-                    currentUserBox.signIn(user: auth.user)
-                    await deps.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
-                    await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
-                        reason: .signIn
+                    try await completeSignIn(
+                        auth,
+                        deps: deps,
+                        invalidUserIDCode: "siwa_invalid_user_id"
                     )
             } catch {
                 print("Apple sign-in Worker exchange failed: \(error)")
@@ -216,6 +183,89 @@ struct SignedOutView: View {
         }
     }
 
+    private func signInWithGoogle() {
+        guard !signInInFlight else { return }
+        signInInFlight = true
+
+        Task { @MainActor in
+            defer { signInInFlight = false }
+
+            guard let deps, let workerClient = deps.services?.workerClient else {
+                viewModel.recordFailure(RishiError.network(
+                    code: "google_sign_in_unavailable",
+                    message: "Authentication is not available."
+                ))
+                return
+            }
+
+            do {
+                let identityToken = try await googleSignInCoordinator.signIn()
+                let auth = try await workerClient.send(
+                    GoogleAuthEndpoint(
+                        body: GoogleAuthEndpoint.Body(identityToken: identityToken)
+                    )
+                )
+                try await completeSignIn(
+                    auth,
+                    deps: deps,
+                    invalidUserIDCode: "google_invalid_user_id"
+                )
+            } catch {
+                guard !GoogleSignInCoordinator.isCancellation(error) else { return }
+                GoogleSignInCoordinator.signOut()
+                print("Google sign-in Worker exchange failed: \(error)")
+                viewModel.recordFailure(error)
+            }
+        }
+    }
+
+    private func completeSignIn(
+        _ auth: JWTEndPoint.ResponseType,
+        deps: AppDependencies,
+        invalidUserIDCode: String
+    ) async throws {
+        guard let userId = UUID(uuidString: auth.userId) else {
+            throw RishiError.network(
+                code: invalidUserIDCode,
+                message: "Authentication returned an invalid user identifier."
+            )
+        }
+
+        do {
+            try Keychain.save(auth.accessToken, for: .accessToken)
+            try Keychain.save(auth.refreshToken, for: .refreshToken)
+            try Keychain.save(auth.userId, for: .userId)
+            try await KeychainSessionStore().save(
+                Session(token: auth.accessToken, userId: auth.userId, email: auth.user.email)
+            )
+        } catch {
+            Keychain.delete(.accessToken)
+            Keychain.delete(.refreshToken)
+            Keychain.delete(.userId)
+            try? await KeychainSessionStore().delete()
+            throw error
+        }
+
+        currentUser = auth.user
+        deps.setUserId(userId)
+        await deps.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
+            platform: {
+                #if targetEnvironment(macCatalyst)
+                    "macos-catalyst"
+                #else
+                    "ios"
+                #endif
+            }(),
+            appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+        )
+        isSignedIn = true
+        currentUserBox.signIn(user: auth.user)
+        await deps.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
+        await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+            reason: .signIn
+        )
+    }
+
     private var appleButton: some View {
         SignInWithAppleButton(
             .signIn,
@@ -226,16 +276,43 @@ struct SignedOutView: View {
                 }
             }
         )
-        .disabled(appleSignInInFlight)
+        .disabled(signInInFlight)
         .signInWithAppleButtonStyle(.black)
         .frame(maxWidth: 400)
         .frame(height: 44)
         .cornerRadius(10)
     }
 
+    private var googleButton: some View {
+        Button(action: signInWithGoogle) {
+            HStack(spacing: RishiSpacing.s) {
+                Text("G")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 24, height: 24)
+
+                Text("Continue with Google")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.black)
+            }
+            .frame(maxWidth: 400)
+            .frame(height: 44)
+            .background(Color.white)
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.black.opacity(0.18), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(signInInFlight)
+        .accessibilityLabel("Continue with Google")
+        .accessibilityIdentifier("google-sign-in-button")
+    }
+
     @ViewBuilder
     private var errorRow: some View {
-        if viewModel.isLoading {
+        if viewModel.isLoading || signInInFlight {
             #if DEBUG
                 Text("View Model loading")
             #endif

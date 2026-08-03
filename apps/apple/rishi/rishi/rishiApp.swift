@@ -42,6 +42,14 @@ struct rishiApp: App {
 
         
             RootView()
+                .onOpenURL { url in
+                    // Google Sign-In can deliver OAuth callbacks through the
+                    // SwiftUI scene rather than UIApplicationDelegate. Keep
+                    // the delegate bridge below as a compatibility fallback;
+                    // URL events continue to propagate to existing deep-link
+                    // handlers.
+                    _ = GoogleSignInCoordinator.handle(url)
+                }
                 .environment(currentUserBox)
                 .environment(\.appDependencies, deps)
                 .environment(deps)
@@ -178,6 +186,14 @@ struct rishiApp: App {
                 UIApplication.shared.registerForRemoteNotifications()
             }
             return true
+        }
+
+        func application(
+            _ app: UIApplication,
+            open url: URL,
+            options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+        ) -> Bool {
+            GoogleSignInCoordinator.handle(url)
         }
 
         func application(

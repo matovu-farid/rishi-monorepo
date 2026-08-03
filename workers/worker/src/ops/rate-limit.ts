@@ -116,6 +116,10 @@ export async function checkRateLimit(
  * telemetry.ts) shows real usage distributions.
  */
 export const RATE_LIMITS = {
+  // ── Google native sign-in: verification is deliberately after this IP
+  // check so invalid-token floods cannot make the JWKS path expensive. ────
+  googleSignInIp: { windowSeconds: 60, max: 5 },
+
   // ── Trial grant: the one-time 300-credit grant on first login ──────────
   // A legitimate user grants exactly once, ever, ever. 3/account/24h gives
   // headroom for a retried/racy first request (e.g. an app relaunch mid-

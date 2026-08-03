@@ -18,6 +18,7 @@
 		C10000000000000000000007 /* USearch in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000007 /* USearch */; };
 		C10000000000000000000008 /* ChunkedAudioPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000008 /* ChunkedAudioPlayer */; };
 		C10000000000000000000009 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000009 /* LiveKitWebRTC */; };
+		D10000000000000000000010 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000010 /* GoogleSignIn */; };
 		D10000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* ReadiumShared */; };
 		D10000000000000000000002 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000002 /* ReadiumNavigator */; };
 		D10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* ReadiumZIPFoundation */; };
@@ -96,6 +97,7 @@
 				C10000000000000000000007 /* USearch in Frameworks */,
 				C10000000000000000000008 /* ChunkedAudioPlayer in Frameworks */,
 				C10000000000000000000009 /* LiveKitWebRTC in Frameworks */,
+				D10000000000000000000010 /* GoogleSignIn in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -190,6 +192,7 @@
 				B10000000000000000000007 /* USearch */,
 				B10000000000000000000008 /* ChunkedAudioPlayer */,
 				B10000000000000000000009 /* LiveKitWebRTC */,
+				B10000000000000000000010 /* GoogleSignIn */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -283,6 +286,7 @@
 				A10000000000000000000005 /* XCRemoteSwiftPackageReference "swift-chunked-audio-player" */,
 				A10000000000000000000006 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
 				409EA85688A9CBA8B4DFA13A /* XCRemoteSwiftPackageReference "swift-property-based" */,
+				A10000000000000000000007 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 092254952FD83183008C5ADE /* Products */;
@@ -520,6 +524,9 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = rishi/Info.plist;
+				GOOGLE_IOS_CLIENT_ID = "";
+				GOOGLE_REVERSED_CLIENT_ID = "";
+				GOOGLE_SERVER_CLIENT_ID = "";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
@@ -566,6 +573,9 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = rishi/Info.plist;
+				GOOGLE_IOS_CLIENT_ID = "";
+				GOOGLE_REVERSED_CLIENT_ID = "";
+				GOOGLE_SERVER_CLIENT_ID = "";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
@@ -783,6 +793,14 @@
 				kind = branch;
 			};
 		};
+		A10000000000000000000007 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -835,6 +853,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000006 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
 			productName = LiveKitWebRTC;
+		};
+		B10000000000000000000010 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000007 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
