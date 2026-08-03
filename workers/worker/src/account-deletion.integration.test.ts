@@ -71,6 +71,7 @@ import { syncRoutes } from "./routes/sync";
 import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
 import { deleteAccount } from "./account-deletion";
+import { hashAppleIdentity } from "./entitlement-retention";
 import { encryptSiwaRefreshToken } from "./siwa-token-crypto";
 
 type TestD1 = D1Database & { close: () => void };
@@ -79,7 +80,13 @@ function testLedgerBinding() {
   return {
     getByName: () => ({
       markRestorationPending: vi.fn(async () => undefined),
-      restoreAccountEntitlements: vi.fn(async () => undefined),
+      restoreAccountEntitlements: vi.fn(async () => ({
+        trialState: "never_granted" as const,
+        trialInitialCredits: 0,
+        trialUsedCredits: 0,
+        reader: { total: 0, used: 0, activeUntil: null, status: null },
+        voice: { total: 0, used: 0, activeUntil: null, status: null },
+      })),
       snapshotAccountEntitlements: vi.fn(async () => ({
         trialState: "never_granted" as const,
         trialInitialCredits: 0,
@@ -700,6 +707,157 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       .where(eq(appleUsers.userId, recreated.userId)).get();
     expect(recreatedAppleUser?.siwaRefreshTokenCiphertext).toBeNull();
     expect(recreatedAppleUser?.siwaRefreshTokenNonce).toBeNull();
+    d1.close();
+  });
+
+  it("allows repeat Apple sign-in with retained entitlements and preserves a populated ledger", async () => {
+    const d1 = createD1();
+    const existingLedgerState = {
+      trialState: "exhausted" as const,
+      trialInitialCredits: 300,
+      trialUsedCredits: 300,
+      reader: { total: 600, used: 120, activeUntil: Date.now() + 86_400_000, status: "active" as const },
+      voice: { total: 0, used: 0, activeUntil: null, status: null },
+    };
+    const ledger = {
+      markRestorationPending: vi.fn(async () => undefined),
+      restoreAccountEntitlements: vi.fn(async () => {
+        throw new Error("cannot restore a non-empty ledger");
+      }),
+      snapshotAccountEntitlements: vi.fn(async () => structuredClone(existingLedgerState)),
+    };
+    const env = {
+      USER_USAGE_LEDGER: { getByName: vi.fn(() => ledger) },
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
+      APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
+      APPLE_SIWA_KEY_ID: "test-key",
+      APPLE_SIWA_PRIVATE_KEY: "test-private-key",
+      APPLE_TEAM_ID: "test-team",
+    } as unknown as Env;
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+    const signIn = () => app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+      }),
+    }), env);
+
+    try {
+      const firstResponse = await signIn();
+      expect(firstResponse.status).toBe(200);
+
+      const identity = await hashAppleIdentity(
+        "apple-sub-integration",
+        "test-identity-retention-secret",
+      );
+      const now = new Date();
+      const db = createDb(d1);
+      await db.insert(retainedAppleEntitlement).values({
+        identityHashVersion: identity.identityHashVersion,
+        identityHash: identity.identityHash,
+        trialState: "active",
+        trialInitialCredits: 300,
+        trialUsedCredits: 0,
+        readerActiveUntil: new Date(Date.now() + 86_400_000),
+        voiceActiveUntil: null,
+        readerCreditsTotal: 900,
+        readerCreditsUsed: 0,
+        voiceCreditsTotal: 0,
+        voiceCreditsUsed: 0,
+        readerStatus: "active",
+        voiceStatus: null,
+        deletedAt: now,
+        retentionExpiresAt: new Date(Date.now() + 86_400_000 * 365),
+        updatedAt: now,
+      });
+
+      const secondResponse = await signIn();
+      expect(secondResponse.status).toBe(200);
+      expect(await ledger.snapshotAccountEntitlements()).toEqual(existingLedgerState);
+    } finally {
+      d1.close();
+    }
+  });
+
+  it("mirrors the Durable Object snapshot accepted during entitlement restoration", async () => {
+    const d1 = createD1();
+    const acceptedSnapshot = {
+      trialState: "exhausted" as const,
+      trialInitialCredits: 300,
+      trialUsedCredits: 300,
+      reader: { total: 42, used: 7, activeUntil: Date.now() + 86_400_000, status: "active" as const },
+      voice: { total: 84, used: 9, activeUntil: Date.now() + 86_400_000, status: "active" as const },
+    };
+    const ledger = {
+      restoreAccountEntitlements: vi.fn(async () => acceptedSnapshot),
+      snapshotAccountEntitlements: vi.fn(async () => acceptedSnapshot),
+    };
+    const env = {
+      USER_USAGE_LEDGER: { getByName: vi.fn(() => ledger) },
+      DB: d1,
+      ACCESS_TOKEN_SECRET: "access-secret",
+      REFRESH_TOKEN_SECRET: "refresh-secret",
+      APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
+      APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
+      APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
+      APPLE_SIWA_KEY_ID: "test-key",
+      APPLE_SIWA_PRIVATE_KEY: "test-private-key",
+      APPLE_TEAM_ID: "test-team",
+    } as unknown as Env;
+    const identity = await hashAppleIdentity(
+      "apple-sub-integration",
+      "test-identity-retention-secret",
+    );
+    const now = new Date();
+    const db = createDb(d1);
+    await db.insert(retainedAppleEntitlement).values({
+      identityHashVersion: identity.identityHashVersion,
+      identityHash: identity.identityHash,
+      trialState: "active",
+      trialInitialCredits: 300,
+      trialUsedCredits: 0,
+      readerActiveUntil: new Date(Date.now() + 86_400_000),
+      voiceActiveUntil: new Date(Date.now() + 86_400_000),
+      readerCreditsTotal: 900,
+      readerCreditsUsed: 0,
+      voiceCreditsTotal: 900,
+      voiceCreditsUsed: 0,
+      readerStatus: "active",
+      voiceStatus: "active",
+      deletedAt: now,
+      retentionExpiresAt: new Date(Date.now() + 86_400_000 * 365),
+      updatedAt: now,
+    });
+
+    const app = new Hono();
+    app.route("/auth", authRoutes);
+    const response = await app.fetch(new Request("http://test/auth/apple", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identityToken: "fake-identity-token:test-nonce",
+        nonce: "test-nonce",
+      }),
+    }), env);
+
+    expect(response.status).toBe(200);
+    const auth = await response.json() as { userId: string };
+    const mirrored = await db.select().from(allowancePeriod)
+      .where(eq(allowancePeriod.userId, auth.userId)).get();
+    expect(mirrored).toMatchObject({
+      plan: "combined",
+      narrationSecondsTotal: 42,
+      narrationSecondsUsed: 7,
+      voiceChatSecondsTotal: 84,
+      voiceChatSecondsUsed: 9,
+    });
     d1.close();
   });
 

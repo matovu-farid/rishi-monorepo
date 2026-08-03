@@ -124,12 +124,6 @@ export class UserUsageLedger extends DurableObject<Env> {
 
   // ── Public RPC methods ──────────────────────────────────────────────
 
-  /** Mark a newly-created account as unable to fall through to a trial. */
-  async markRestorationPending(): Promise<void> {
-    await this.ctx.storage.put("restorationPending", true);
-    await this.ctx.storage.delete("purged");
-  }
-
   /** Read the authoritative ledger without granting a trial or consulting D1. */
   async snapshotAccountEntitlements(): Promise<AccountEntitlementSnapshot> {
     const pending = await this.db
@@ -146,6 +140,10 @@ export class UserUsageLedger extends DurableObject<Env> {
       await this.commitTtsReservationInternal(row.id, true);
     }
     await this.ctx.storage.put("deletionFrozen", true);
+    return this.readAccountEntitlementSnapshot();
+  }
+
+  private async readAccountEntitlementSnapshot(): Promise<AccountEntitlementSnapshot> {
     const trial = await this.db.select().from(trialLedger).where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID)).get();
     const period = await this.getCurrentAllowancePeriodRow();
     const isReader = period?.plan === "reader" || period?.plan === "combined";
@@ -169,60 +167,125 @@ export class UserUsageLedger extends DurableObject<Env> {
     };
   }
 
-  /** Restore only into an empty ledger; retries with the same data are safe. */
-  async restoreAccountEntitlements(snapshot: AccountEntitlementSnapshot): Promise<void> {
+  /**
+   * Restore retained state without overwriting an existing ledger.
+   *
+   * Account recreation is normally the only path that needs restoration, but
+   * Apple sign-in is retryable and can race with itself. Existing trial and
+   * paid feature state therefore remains authoritative; missing Reader/Voice
+   * state may still be added from the retained snapshot.
+   */
+  async restoreAccountEntitlements(snapshot: AccountEntitlementSnapshot): Promise<AccountEntitlementSnapshot> {
     const purged = await this.ctx.storage.get<boolean>("purged");
     if (purged) throw new Error("ledger has been purged");
     await this.ctx.storage.put("restorationPending", true);
-    if (snapshot.trialState === "never_granted") {
-      await this.ctx.storage.put("trialSuppressed", true);
-    }
-    const existingTrial = await this.db.select().from(trialLedger).where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID)).get();
-    if (existingTrial && (existingTrial.usedCredits !== snapshot.trialUsedCredits || existingTrial.initialCredits !== snapshot.trialInitialCredits)) {
-      throw new Error("cannot restore a non-empty ledger");
-    }
-    if (!existingTrial && snapshot.trialState !== "never_granted") {
-      await this.db.insert(trialLedger).values({
-        id: TRIAL_LEDGER_ROW_ID,
-        userId: this.requireUserId(),
-        initialCredits: snapshot.trialInitialCredits,
-        usedCredits: snapshot.trialUsedCredits,
-        grantedAt: Date.now(),
+    try {
+      const shouldSuppressTrial = this.db.transaction((tx) => {
+        const existingTrial = tx.select().from(trialLedger).where(eq(trialLedger.id, TRIAL_LEDGER_ROW_ID)).get();
+        const suppressTrial = !existingTrial && snapshot.trialState === "never_granted";
+
+        if (!existingTrial && snapshot.trialState !== "never_granted") {
+          tx.insert(trialLedger).values({
+            id: TRIAL_LEDGER_ROW_ID,
+            userId: this.requireUserId(),
+            initialCredits: snapshot.trialInitialCredits,
+            usedCredits: snapshot.trialUsedCredits,
+            grantedAt: Date.now(),
+          }).run();
+        }
+
+        const [existing] = tx
+          .select()
+          .from(currentAllowancePeriod)
+          .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID))
+          .all();
+        const existingReader = existing && (
+        existing.plan === "reader" ||
+        existing.plan === "combined" ||
+        existing.readerPeriodEnd !== null ||
+        existing.readerSecondsTotal !== null ||
+        existing.readerStatus !== null
+      ) ? {
+        activeUntil: existing.readerPeriodEnd ?? existing.periodEnd,
+        total: existing.readerSecondsTotal ?? existing.narrationSecondsTotal,
+        used: existing.readerSecondsUsed ?? existing.narrationSecondsUsed,
+        status: existing.readerStatus as AccountEntitlementSnapshot["reader"]["status"],
+      } : null;
+        const existingVoice = existing && (
+        existing.plan === "voice" ||
+        existing.plan === "combined" ||
+        existing.voicePeriodEnd !== null ||
+        existing.voiceSecondsTotal !== null ||
+        existing.voiceStatus !== null
+      ) ? {
+        activeUntil: existing.voicePeriodEnd ?? existing.periodEnd,
+        total: existing.voiceSecondsTotal ?? existing.voiceChatSecondsTotal,
+        used: existing.voiceSecondsUsed ?? existing.voiceChatSecondsUsed,
+        status: existing.voiceStatus as AccountEntitlementSnapshot["voice"]["status"],
+      } : null;
+        const reader = existingReader ?? snapshot.reader;
+        const voice = existingVoice ?? snapshot.voice;
+        const readerPresent = Boolean(existingReader || reader.activeUntil || reader.total || reader.status);
+        const voicePresent = Boolean(existingVoice || voice.activeUntil || voice.total || voice.status);
+
+        if (readerPresent || voicePresent) {
+          const now = Date.now();
+          const mergedPeriodEnd = Math.max(
+            existing?.periodEnd ?? 0,
+            reader.activeUntil ?? 0,
+            voice.activeUntil ?? 0,
+          );
+          const mergedPlan = readerPresent && voicePresent
+            ? "combined" as const
+            : readerPresent
+              ? "reader" as const
+              : "voice" as const;
+          const mergedValues = {
+            plan: mergedPlan,
+            periodEnd: mergedPeriodEnd,
+            narrationSecondsTotal: readerPresent ? reader.total : 0,
+            narrationSecondsUsed: readerPresent ? reader.used : 0,
+            voiceChatSecondsTotal: voicePresent ? voice.total : 0,
+            voiceChatSecondsUsed: voicePresent ? voice.used : 0,
+            updatedAt: now,
+            readerPeriodEnd: readerPresent ? reader.activeUntil : null,
+            readerSecondsTotal: readerPresent ? reader.total : null,
+            readerSecondsUsed: readerPresent ? reader.used : null,
+            readerStatus: readerPresent ? reader.status : null,
+            voicePeriodEnd: voicePresent ? voice.activeUntil : null,
+            voiceSecondsTotal: voicePresent ? voice.total : null,
+            voiceSecondsUsed: voicePresent ? voice.used : null,
+            voiceStatus: voicePresent ? voice.status : null,
+          };
+          if (existing) {
+            tx.update(currentAllowancePeriod)
+            .set(mergedValues)
+            .where(eq(currentAllowancePeriod.id, CURRENT_ALLOWANCE_PERIOD_ROW_ID))
+            .run();
+          } else {
+            tx.insert(currentAllowancePeriod).values({
+              id: CURRENT_ALLOWANCE_PERIOD_ROW_ID,
+              periodId: `retained:${this.requireUserId()}`,
+              periodStart: now,
+              ...mergedValues,
+            }).run();
+          }
+        }
+
+        return suppressTrial;
       });
-    }
-    const readerActive = Boolean(snapshot.reader.activeUntil && snapshot.reader.activeUntil > Date.now());
-    const voiceActive = Boolean(snapshot.voice.activeUntil && snapshot.voice.activeUntil > Date.now());
-    const paid = readerActive || voiceActive
-      ? { plan: readerActive && voiceActive ? "combined" as const : readerActive ? "reader" as const : "voice" as const,
-          periodEnd: Math.max(snapshot.reader.activeUntil ?? 0, snapshot.voice.activeUntil ?? 0) }
-      : null;
-    if (paid) {
-      const existing = await this.getCurrentAllowancePeriodRow();
-      if (!existing) {
-        await this.db.insert(currentAllowancePeriod).values({
-          id: CURRENT_ALLOWANCE_PERIOD_ROW_ID,
-          periodId: `retained:${this.requireUserId()}`,
-          plan: paid.plan,
-          periodStart: Date.now(),
-          periodEnd: paid.periodEnd,
-          narrationSecondsTotal: snapshot.reader.total,
-          narrationSecondsUsed: snapshot.reader.used,
-          voiceChatSecondsTotal: snapshot.voice.total,
-          voiceChatSecondsUsed: snapshot.voice.used,
-          updatedAt: Date.now(),
-          readerPeriodEnd: snapshot.reader.activeUntil,
-          readerSecondsTotal: snapshot.reader.total,
-          readerSecondsUsed: snapshot.reader.used,
-          readerStatus: snapshot.reader.status,
-          voicePeriodEnd: snapshot.voice.activeUntil,
-          voiceSecondsTotal: snapshot.voice.total,
-          voiceSecondsUsed: snapshot.voice.used,
-          voiceStatus: snapshot.voice.status,
-        });
+
+      if (shouldSuppressTrial) {
+        await this.ctx.storage.put("trialSuppressed", true);
       }
+      await this.ctx.storage.delete("restorationPending");
+      return this.readAccountEntitlementSnapshot();
+    } catch (error) {
+      // No session is issued when restoration fails. Clear the fence so a
+      // retry can recover instead of permanently blocking the ledger.
+      await this.ctx.storage.delete("restorationPending");
+      throw error;
     }
-    await this.ctx.storage.delete("restorationPending");
-    await this.ctx.storage.delete("deletionFrozen");
   }
 
   /** Purge all detailed state and leave a durable tombstone. */
