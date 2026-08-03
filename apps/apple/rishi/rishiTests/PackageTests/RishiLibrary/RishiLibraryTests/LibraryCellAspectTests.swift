@@ -175,10 +175,8 @@ struct LibraryCellAspectTests {
     // MARK: - Test 3: gradient fallback does not leak intrinsic size
 
     /// Hosts `BookCoverImageView` (no cover URL — gradient branch) inside a
-    /// 1pt-tall parent. The rendered height MUST be `<= 1.0`. This locks the
-    /// `.frame(maxWidth: .infinity, maxHeight: .infinity)` semantic on the
-    /// outer Group: drop the modifier and the gradient's intrinsic-zero
-    /// size becomes ambiguous and the test fails.
+    /// 1pt-tall parent. The rendered height MUST be `<= 1.0`. This locks
+    /// the fallback's stable aspect-ratio behavior inside the parent bound.
     @Test("gradient fallback does not leak intrinsic size past parent bound")
     func gradientFallbackDoesNotLeakIntrinsicSize() {
         let book = makeBook(title: "Gradient")

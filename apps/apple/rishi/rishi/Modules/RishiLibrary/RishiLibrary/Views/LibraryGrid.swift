@@ -11,8 +11,7 @@ struct LibraryGrid: View {
 
     @State private var pendingDelete: Book?
 
-    static let coverWidth: CGFloat = 145
-    static let coverHeight: CGFloat = coverWidth * 1.5
+    static let coverWidth: CGFloat = 150
 
     private let columns: [GridItem] = [
         GridItem(
@@ -39,7 +38,7 @@ struct LibraryGrid: View {
 
     public var body: some View {
         VStack {
-            LazyVGrid(columns: columns) {
+            LazyVGrid(columns: columns, spacing: RishiSpacing.m) {
                 ForEach(books) { book in
                     cell(for: book)
                        
@@ -82,8 +81,7 @@ struct LibraryGrid: View {
         } label: {
 
             BookCoverImageView(book: book, coverURL: coverURL(book))
-                //.aspectRatio(2.0 / 3.0, contentMode: .fit)
-                .frame(width: Self.coverWidth, height: Self.coverHeight)
+                .frame(width: Self.coverWidth)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
@@ -216,5 +214,3 @@ private enum LibraryGridPreviewFixtures {
     .background(RishiColor.background)
     .preferredColorScheme(.dark)
 }
-
-

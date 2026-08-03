@@ -28,14 +28,9 @@ struct BookCoverImageView: View {
     }
 
     public var body: some View {
-        // Plan 21-02 (LibraryCellAspectTests) locks this invariant — do NOT drop the .frame(maxWidth: .infinity, maxHeight: .infinity) on either branch; the regression suite will fail.
-        // Phase 21 follow-up — every branch fills the parent's offered size
-        // via `.frame(maxWidth: .infinity, maxHeight: .infinity)`. Without this,
-        // the AsyncImage's natural intrinsic size (e.g. a 2000x3000 cover) leaks
-        // up through the surrounding `Group` and overrides any
-        // `.aspectRatio(2/3, contentMode: .fit)` the caller applies — producing
-        // ~350pt-tall tiles in a 180pt-wide grid. With the explicit fill, the
-        // aspect-ratio modifier in `LibraryGrid` is now load-bearing again.
+        // The grid fixes the cover width; loaded artwork keeps its intrinsic
+        // aspect ratio and determines the resulting height. The fallback below
+        // uses a stable 2:3 portrait ratio when no artwork is available.
         Group {
             if let url = coverURL {
                 AsyncImage(url: url) {phase in
@@ -44,8 +39,8 @@ struct BookCoverImageView: View {
                 
                         image
                             .resizable()
-                            .scaledToFill()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
                     default:
                         gradientFallback
                     }
@@ -81,6 +76,7 @@ struct BookCoverImageView: View {
                 .lineLimit(4)
                 .minimumScaleFactor(0.6)
         }
+        .aspectRatio(2.0 / 3.0, contentMode: .fit)
     }
 }
 
