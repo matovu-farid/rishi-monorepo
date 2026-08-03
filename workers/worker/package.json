@@ -6,7 +6,9 @@
     "deploy": "wrangler deploy --minify",
     "generate-types": "wrangler types",
     "type-check": "bun generate-types && tsc",
-    "db:generate:ledger": "drizzle-kit generate --config=drizzle-do.config.ts"
+    "db:generate:ledger": "drizzle-kit generate --config=drizzle-do.config.ts",
+    "migrate:remote": "bunx wrangler d1 migrations apply rishi --remote",
+    "migrate:local": "bunx wrangler d1 migrations apply rishi"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.64",
