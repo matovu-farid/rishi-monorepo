@@ -7,6 +7,33 @@ import ReadiumShared
 
 
 
+private func makeReadiumEngineFactory(
+    player: any TTSPlaying,
+    state: TTSPlaybackState,
+    settingsStore: any TTSSettingsStore,
+    userId: UserID
+) -> PublicationSpeechSynthesizer.EngineFactory {
+    {
+        CustomTTSEngine(
+            player: player,
+            state: state,
+            settingsStore: settingsStore,
+            userId: userId
+        )
+    }
+}
+
+private func makeReadiumTokenizerFactory(
+    granularity: CustomTTSTokenizer.Granularity
+) -> PublicationSpeechSynthesizer.TokenizerFactory {
+    { language in
+        CustomTTSTokenizer.tokenize(
+            defaultLanguage: language,
+            granularity: granularity
+        )
+    }
+}
+
 
 @MainActor
 @Observable
@@ -93,6 +120,15 @@ final class ReadAloudController {
             vm.book.formatType == .pdf || publication.manifest.conforms(to: .pdf)
             ? .sentence
             : .paragraph
+        let engineFactory = makeReadiumEngineFactory(
+            player: ttsEngine,
+            state: ttsState,
+            settingsStore: ttsSettingsStore,
+            userId: userId
+        )
+        let tokenizerFactory = makeReadiumTokenizerFactory(
+            granularity: tokenizerGranularity
+        )
 
         guard let synthesizer = PublicationSpeechSynthesizer(
             publication: publication,
@@ -100,20 +136,8 @@ final class ReadAloudController {
                 defaultLanguage: publication.metadata.language,
                 voiceIdentifier: settings.voice
             ),
-            engineFactory: { [ttsEngine, ttsState, ttsSettingsStore, userId] in
-                CustomTTSEngine(
-                    player: ttsEngine,
-                    state: ttsState,
-                    settingsStore: ttsSettingsStore,
-                    userId: userId
-                )
-            },
-            tokenizerFactory: { language in
-                return CustomTTSTokenizer.tokenize(
-                    defaultLanguage: language,
-                    granularity: tokenizerGranularity
-                )
-            },
+            engineFactory: engineFactory,
+            tokenizerFactory: tokenizerFactory,
             delegate: self
         ) else {
             return
