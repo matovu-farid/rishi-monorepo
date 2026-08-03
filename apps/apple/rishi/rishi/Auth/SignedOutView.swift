@@ -3,6 +3,7 @@ import AuthenticationServices
 
 
 import SwiftUI
+import GoogleSignInSwift
 
 struct SignedOutView: View {
 
@@ -284,29 +285,13 @@ struct SignedOutView: View {
     }
 
     private var googleButton: some View {
-        Button(action: signInWithGoogle) {
-            HStack(spacing: RishiSpacing.s) {
-                Text("G")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 24, height: 24)
-
-                Text("Continue with Google")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.black)
-            }
-            .frame(maxWidth: 400)
-            .frame(height: 44)
-            .background(Color.white)
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.black.opacity(0.18), lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .disabled(signInInFlight)
-        .accessibilityLabel("Continue with Google")
+        GoogleSignInButton(
+            scheme: .light,
+            style: .wide,
+            state: signInInFlight ? .disabled : .normal,
+            action: signInWithGoogle
+        )
+        .frame(maxWidth: 400)
         .accessibilityIdentifier("google-sign-in-button")
     }
 
