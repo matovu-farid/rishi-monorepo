@@ -735,6 +735,69 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     expect(highlightsStore[0].isDeleted).toBe(true)
   })
 
+  it("does not let a stale highlight tombstone erase a newer live row", async () => {
+    highlightsStore.push({
+      id: UUID_HL,
+      bookId: UUID_BOOK,
+      userId: "user_alice",
+      cfiRange: "epubcfi(/0)",
+      text: "newer",
+      color: "yellow",
+      note: null,
+      createdAt: 0,
+      updatedAt: REFERENCE_DATE_OFFSET_MS + 10_000,
+      isDeleted: false,
+    })
+    const res = await callPush({
+      changes: [{
+        kind: "highlight",
+        id: UUID_HL,
+        payload: { id: UUID_HL },
+        updated_at: 5.0,
+        deleted: true,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(highlightsStore[0].isDeleted).toBe(false)
+    expect(highlightsStore[0].updatedAt).toBe(REFERENCE_DATE_OFFSET_MS + 10_000)
+  })
+
+  it("allows a newer highlight edit to supersede its tombstone", async () => {
+    highlightsStore.push({
+      id: UUID_HL,
+      bookId: UUID_BOOK,
+      userId: "user_alice",
+      cfiRange: "epubcfi(/0)",
+      text: "old",
+      color: "yellow",
+      note: null,
+      createdAt: 0,
+      updatedAt: REFERENCE_DATE_OFFSET_MS + 1_000,
+      isDeleted: true,
+    })
+    const res = await callPush({
+      changes: [{
+        kind: "highlight",
+        id: UUID_HL,
+        payload: {
+          id: UUID_HL,
+          book_id: UUID_BOOK,
+          locator_start: "epubcfi(/1)",
+          locator_end: "epubcfi(/2)",
+          text: "restored",
+          color: "blue",
+        },
+        updated_at: 5.0,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(highlightsStore[0].isDeleted).toBe(false)
+    expect(highlightsStore[0].text).toBe("restored")
+  })
+
   it("accepted_at = max(updated_at) across all changes (seconds-since-2001)", async () => {
     // Lock the canonical reference offset directly in the assertion so this
     // test catches any drift from `(msEpoch - 978_307_200_000) / 1000`.
@@ -1138,8 +1201,26 @@ describe("POST /api/sync/push — chapter_index kind", () => {
   })
 
   it("bounds chapter count and summary size", async () => {
-    const tooMany = { ...payload(), chapters: Array.from({ length: 501 }, (_, i) => ({ id: `c-${i}`, name: "x", summary: "x", source_position: i })) }
+    const tooMany = { ...payload(), chapters: Array.from({ length: 5001 }, (_, i) => ({ id: `c-${i}`, name: "x", summary: "x", source_position: i })) }
     expect((await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: tooMany, updated_at: 8, deleted: false }] })).status).toBe(400)
     expect((await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: payload("v", "x".repeat(32769)), updated_at: 8, deleted: false }] })).status).toBe(400)
+  })
+
+  it("accepts source positions above the chapter-count limit", async () => {
+    seedBook({ id: UUID_BOOK, userId: "user_alice" })
+    const indexed = { ...payload(), chapters: [{ id: "chapter-1", name: "One", summary: "First", source_position: 501 }] }
+    const response = await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: indexed, updated_at: 8, deleted: false }] })
+    expect(response.status).toBe(200)
+  })
+
+  it("returns a structured reason for invalid chapter indexes", async () => {
+    const response = await callPush({ changes: [{ kind: "chapter_index", id: UUID_BOOK, payload: { ...payload(), book_id: "wrong-book" }, updated_at: 8, deleted: false }] })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "invalid_chapter_index",
+        message: "book_id does not match the change id",
+      },
+    })
   })
 })

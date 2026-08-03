@@ -174,6 +174,16 @@ struct AnyCodable: Codable {
         var c = encoder.singleValueContainer()
         switch value {
         case is NSNull: try c.encodeNil()
+        // JSONSerialization bridges every JSON number to NSNumber, and on
+        // Apple `NSNumber as? Bool` succeeds for numeric values too. Inspect
+        // the Objective-C type tag first so `1` cannot become `true` in the
+        // canonical sync hash.
+        case let number as NSNumber:
+            switch String(cString: number.objCType) {
+            case "c": try c.encode(number.boolValue)
+            case "d", "f": try c.encode(number.doubleValue)
+            default: try c.encode(number.int64Value)
+            }
         case let b as Bool: try c.encode(b)
         case let i as Int: try c.encode(i)
         case let d as Double: try c.encode(d)
@@ -214,8 +224,40 @@ public struct SyncChangesEndpoint: WorkerEndpoint {
 
 public struct SyncChangesResponse: Decodable, Sendable, Equatable {
     public let changes: [SyncChange]
+    /// SHA-256 of the canonical generated projection. Optional for rolling
+    /// worker deployments that still return the legacy envelope.
+    public let snapshotHash: String?
+    /// SHA-256 of the canonical projection with synchronization timestamps
+    /// removed. New clients use this for convergence verification.
+    public let snapshotHashWithoutTimestamps: String?
+    public let isTruncated: Bool
 
-    public init(changes: [SyncChange]) { self.changes = changes }
+    enum CodingKeys: String, CodingKey {
+        case changes
+        case snapshotHash = "snapshot_hash"
+        case snapshotHashWithoutTimestamps = "snapshot_hash_without_timestamps"
+        case isTruncated = "is_truncated"
+    }
+
+    public init(
+        changes: [SyncChange],
+        snapshotHash: String? = nil,
+        snapshotHashWithoutTimestamps: String? = nil,
+        isTruncated: Bool = false
+    ) {
+        self.changes = changes
+        self.snapshotHash = snapshotHash
+        self.snapshotHashWithoutTimestamps = snapshotHashWithoutTimestamps
+        self.isTruncated = isTruncated
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.changes = try container.decode([SyncChange].self, forKey: .changes)
+        self.snapshotHash = try container.decodeIfPresent(String.self, forKey: .snapshotHash)
+        self.snapshotHashWithoutTimestamps = try container.decodeIfPresent(String.self, forKey: .snapshotHashWithoutTimestamps)
+        self.isTruncated = try container.decodeIfPresent(Bool.self, forKey: .isTruncated) ?? false
+    }
 }
 
 // MARK: - POST /api/sync/push

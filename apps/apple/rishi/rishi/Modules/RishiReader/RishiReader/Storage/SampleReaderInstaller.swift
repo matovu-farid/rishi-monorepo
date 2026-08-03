@@ -18,15 +18,18 @@ public final class SampleReaderInstaller: @unchecked Sendable {
     private let storage: BookFileStorage
     private let defaults: UserDefaults
     private let bundle: Bundle
+    private let onBookImported: (@Sendable (BookID) async -> Void)?
 
     public init(storage: BookFileStorage,
                 defaults: UserDefaults = .standard,
-                bundle: Bundle? = nil) {
+                bundle: Bundle? = nil,
+                onBookImported: (@Sendable (BookID) async -> Void)? = nil) {
         self.storage = storage
         self.defaults = defaults
         // `AppResourceBundle.bundle` is package-internal — accept an explicit override
         // for tests, default to the SwiftPM-generated resource bundle.
         self.bundle = bundle ?? AppResourceBundle.bundle
+        self.onBookImported = onBookImported
     }
 
     /// Copies `sample.pdf` from bundled resources into the user's library on
@@ -44,6 +47,9 @@ public final class SampleReaderInstaller: @unchecked Sendable {
         }
         do {
             let book = try await storage.importBook(from: url, ownerId: ownerId)
+            if let onBookImported {
+                await onBookImported(book.id)
+            }
             defaults.set(true, forKey: Self.defaultsKey)
             Log.event("reader.sample.installed", level: .info,
                       data: ["bookId": book.id.uuidString])

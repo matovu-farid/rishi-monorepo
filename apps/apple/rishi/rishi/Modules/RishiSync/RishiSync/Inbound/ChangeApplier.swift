@@ -138,8 +138,18 @@ public final class ChangeApplier: Sendable {
 
     private func applyHighlight(_ change: SyncChange, into result: inout ApplyResult) async throws {
         if change.deleted {
+            if try await metadataStore.pending(kind: .highlight, limit: 10_000)
+                .contains(where: { $0.entityId == change.id }) {
+                result.conflicts += 1
+                return
+            }
             try await highlightStore.delete(change.id)
-            try await metadataStore.forget(entityId: change.id, kind: .highlight)
+            try await metadataStore.markClean(
+                entityId: change.id,
+                kind: .highlight,
+                lastSyncedAt: change.updatedAt,
+                remoteEtag: nil
+            )
             result.applied += 1
             return
         }
@@ -162,8 +172,18 @@ public final class ChangeApplier: Sendable {
 
     private func applyBookmark(_ change: SyncChange, into result: inout ApplyResult) async throws {
         if change.deleted {
+            if try await metadataStore.pending(kind: .bookmark, limit: 10_000)
+                .contains(where: { $0.entityId == change.id }) {
+                result.conflicts += 1
+                return
+            }
             try await bookmarkStore.delete(change.id)
-            try await metadataStore.forget(entityId: change.id, kind: .bookmark)
+            try await metadataStore.markClean(
+                entityId: change.id,
+                kind: .bookmark,
+                lastSyncedAt: change.updatedAt,
+                remoteEtag: nil
+            )
             result.applied += 1
             return
         }

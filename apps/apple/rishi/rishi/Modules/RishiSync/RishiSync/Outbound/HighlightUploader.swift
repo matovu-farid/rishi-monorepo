@@ -48,7 +48,7 @@ public final class HighlightUploader: Sendable {
                         payload: payload,
                         // v1 highlights don't carry updatedAt; createdAt is monotone enough
                         // for "newest wins" merge-by-id resolution in ChangeApplier.
-                        updatedAt: highlight.createdAt,
+                        updatedAt: try await metadataStore.dirtyAt(entityId: highlight.id, kind: .highlight) ?? highlight.createdAt,
                         deleted: false
                     ))
                     liveIds.append(item.entityId)
@@ -61,7 +61,7 @@ public final class HighlightUploader: Sendable {
                     kind: SyncEntityKind.highlight.rawValue,
                     id: item.entityId,
                     payload: SyncOpaqueJSON(data: Data("{}".utf8)),
-                    updatedAt: Date(),
+                    updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .highlight) ?? Date(),
                     deleted: true
                 ))
                 tombstoneIds.append(item.entityId)

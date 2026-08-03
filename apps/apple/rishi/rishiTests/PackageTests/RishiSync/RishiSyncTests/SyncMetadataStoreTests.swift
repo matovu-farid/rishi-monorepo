@@ -107,4 +107,40 @@ struct SyncMetadataStoreTests {
         )
         #expect(try await store.pending(kind: .position, limit: 10).count == 1)
     }
+
+    @Test("dirty timestamps and tombstones survive without a local entity row")
+    func dirtyTimestampAndTombstone() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markTombstone(entityId: id, kind: .book)
+
+        #expect(try await store.isTombstone(entityId: id, kind: .book))
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) != nil)
+        #expect(try await store.allDirty() == [SyncPendingItem(entityId: id, kind: .book)])
+
+        try await store.markClean(
+            entityId: id,
+            kind: .book,
+            lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            remoteEtag: nil
+        )
+        #expect(try await store.isTombstone(entityId: id, kind: .book) == false)
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) == nil)
+    }
+
+    @Test("resetAll removes persisted cursors and dirty rows")
+    func resetAllClearsAccountState() async throws {
+        let store = try makeStore()
+        try await store.markDirty(entityId: UUID(), kind: .book)
+        try await store.markClean(
+            entityId: UUID(),
+            kind: .highlight,
+            lastSyncedAt: Date(),
+            remoteEtag: nil
+        )
+        try await store.resetAll()
+
+        #expect(try await store.pendingCount() == 0)
+        #expect(try await store.globalLastSyncedAt() == nil)
+    }
 }

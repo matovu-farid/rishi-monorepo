@@ -25,6 +25,8 @@ struct SyncAPIEndpointsTests {
     func syncChangesResponseDecodes() throws {
         let json = """
         {
+          "snapshot_hash": "legacy-hash",
+          "snapshot_hash_without_timestamps": "timestamp-free-hash",
           "changes": [
             {
               "kind": "position",
@@ -43,6 +45,8 @@ struct SyncAPIEndpointsTests {
         #expect(response.changes[0].kind == "position")
         #expect(response.changes[0].deleted == false)
         #expect(response.changes[0].payload.data.isEmpty == false)
+        #expect(response.snapshotHash == "legacy-hash")
+        #expect(response.snapshotHashWithoutTimestamps == "timestamp-free-hash")
     }
 
     @Test("SyncPushEndpoint body encodes snake_case updated_at")

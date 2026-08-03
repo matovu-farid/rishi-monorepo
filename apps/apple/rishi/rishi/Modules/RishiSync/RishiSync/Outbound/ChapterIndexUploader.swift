@@ -38,7 +38,7 @@ public final class ChapterIndexUploader: Sendable {
                 kind: SyncEntityKind.chapterIndex.rawValue,
                 id: book.id,
                 payload: try SyncPayloadCodec.encodeChapterIndex(index),
-                updatedAt: index.updatedAt,
+                updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .chapterIndex) ?? index.updatedAt,
                 deleted: false
             ))
             resolved.append(item.entityId)

@@ -105,6 +105,9 @@ struct OutboundDrainer: Sendable {
                 if let book = try await bookStore.book(item.entityId) {
                     try await bookUploader.upload(book)
                     result.booksUploaded += 1
+                } else if try await metadataStore.isTombstone(entityId: item.entityId, kind: .book) {
+                    try await bookUploader.uploadTombstone(item.entityId)
+                    result.booksUploaded += 1
                 } else {
                     // Local row gone — drop the dirty mark.
                     try await metadataStore.forget(entityId: item.entityId, kind: .book)

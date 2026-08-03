@@ -8,20 +8,29 @@ final class SyncMetadataRow {
     var entityType: String
     var remoteEtag: String?
     var lastSyncedAt: Date?
+    var dirtyAt: Date?
     var dirty: Bool
+    // A model default is required for SwiftData's lightweight migration of
+    // existing stores; the initializer default alone does not populate the
+    // new column for rows already on disk.
+    var tombstone: Bool = false
 
     init(
         entityId: String,
         entityType: String,
         remoteEtag: String? = nil,
         lastSyncedAt: Date? = nil,
-        dirty: Bool = false
+        dirtyAt: Date? = nil,
+        dirty: Bool = false,
+        tombstone: Bool = false
     ) {
         self.entityId = entityId
         self.entityType = entityType
         self.remoteEtag = remoteEtag
         self.lastSyncedAt = lastSyncedAt
+        self.dirtyAt = dirtyAt
         self.dirty = dirty
+        self.tombstone = tombstone
     }
 }
 
@@ -55,11 +64,14 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 row.entityType = type
                 row.dirty = true
+                row.dirtyAt = Date()
+                row.tombstone = false
             } else {
                 context.insert(
                     SyncMetadataRow(
                         entityId: key,
                         entityType: type,
+                        dirtyAt: Date(),
                         dirty: true
                     )
                 )
@@ -79,6 +91,8 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                 row.remoteEtag = remoteEtag
                 row.lastSyncedAt = lastSyncedAt
                 row.dirty = false
+                row.dirtyAt = nil
+                row.tombstone = false
             } else {
                 context.insert(
                     SyncMetadataRow(
@@ -86,7 +100,8 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                         entityType: type,
                         remoteEtag: remoteEtag,
                         lastSyncedAt: lastSyncedAt,
-                        dirty: false
+                        dirty: false,
+                        tombstone: false
                     )
                 )
             }
@@ -178,8 +193,59 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         }
     }
 
+    public func markTombstone(entityId: UUID, kind: SyncEntityKind) async throws {
+        let id = entityId.uuidString
+        let type = kind.rawValue
+        let key = Self.storageId(entityId: id, kind: type)
+        try await MainActor.run {
+            let context = ModelContext(container)
+            if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
+                row.entityType = type
+                row.dirty = true
+                row.dirtyAt = Date()
+                row.tombstone = true
+            } else {
+                context.insert(SyncMetadataRow(
+                    entityId: key,
+                    entityType: type,
+                    dirtyAt: Date(),
+                    dirty: true,
+                    tombstone: true
+                ))
+            }
+            try context.save()
+        }
+    }
+
+    public func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool {
+        let id = entityId.uuidString
+        let type = kind.rawValue
+        return try await MainActor.run {
+            let context = ModelContext(container)
+            return try Self.fetchRow(entityId: id, kind: type, in: context)?.tombstone ?? false
+        }
+    }
+
+    public func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
+        let id = entityId.uuidString
+        let type = kind.rawValue
+        return try await MainActor.run {
+            let context = ModelContext(container)
+            return try Self.fetchRow(entityId: id, kind: type, in: context)?.dirtyAt
+        }
+    }
+
+    public func lastSyncedAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
+        let id = entityId.uuidString
+        let type = kind.rawValue
+        return try await MainActor.run {
+            let context = ModelContext(container)
+            return try Self.fetchRow(entityId: id, kind: type, in: context)?.lastSyncedAt
+        }
+    }
+
     private static func storageId(entityId: String, kind: String) -> String {
-        "(kind):(entityId)"
+        "\(kind):\(entityId)"
     }
 
     private static func fetchRow(entityId: String, kind: String, in context: ModelContext) throws -> SyncMetadataRow? {
@@ -191,8 +257,11 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     }
 
     private static func decodePending(_ row: SyncMetadataRow) -> SyncPendingItem? {
-        let rawId = row.entityId.hasPrefix("(row.entityType):")
-            ? String(row.entityId.dropFirst(row.entityType.count + 1))
+        let prefix = "\(row.entityType):"
+        // Accept legacy raw UUID rows while new writes use a kind-prefixed
+        // key, so existing installations retain their pending queue.
+        let rawId = row.entityId.hasPrefix(prefix)
+            ? String(row.entityId.dropFirst(prefix.count))
             : row.entityId
         guard let id = UUID(uuidString: rawId), let kind = SyncEntityKind(rawValue: row.entityType) else { return nil }
         return SyncPendingItem(entityId: id, kind: kind)

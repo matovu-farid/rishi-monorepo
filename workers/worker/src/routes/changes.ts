@@ -46,6 +46,56 @@ function toSecondsSinceRefDate(msEpoch: number): number {
   return (msEpoch - REFERENCE_DATE_OFFSET_MS) / 1000;
 }
 
+/**
+ * Canonical JSON for the sync projection. JSON.stringify preserves insertion
+ * order, which is not a protocol guarantee when rows are assembled by
+ * different query paths. Sorting object keys recursively makes the digest
+ * independent of database/JavaScript object construction order.
+ */
+export function canonicalizeSyncJSON(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalizeSyncJSON).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalizeSyncJSON(item)}`)
+    .join(",")}}`;
+}
+
+/**
+ * Remove timestamps from the generated projection before equality hashing.
+ * Timestamps remain part of the wire object and are still used for LWW
+ * conflict resolution; they are excluded only from convergence comparison so
+ * clock/precision differences between Apple and JavaScript cannot create a
+ * false mismatch.
+ */
+export function stripSyncTimestamps(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripSyncTimestamps);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => {
+        const normalized = key.replaceAll("-", "_").toLowerCase();
+        return normalized !== "created_at" && normalized !== "updated_at";
+      })
+      .map(([key, item]) => [key, stripSyncTimestamps(item)]),
+  );
+}
+
+export async function hashSyncProjection(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalizeSyncJSON(stripSyncTimestamps(value)));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Legacy digest retained for older Apple builds during Worker rollout. */
+export async function hashSyncProjectionWithTimestamps(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalizeSyncJSON(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export const changesRoutes = new Hono<{
   Bindings: Env;
   Variables: { userId: string };
@@ -154,7 +204,7 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
         file_size: row.fileSize,
         created_at:
           typeof row.createdAt === "number"
-            ? new Date(row.createdAt).toISOString()
+            ? new Date(row.createdAt).toISOString() // WIRE-ISO8601-PAYLOAD
             : null,
       },
       updated_at: toSecondsSinceRefDate(updatedAt),
@@ -168,9 +218,27 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
   >) {
     const updatedAt = row.updatedAt as number;
     const isDeleted = !!row.isDeleted;
-    // Highlights: payload includes EVERY column (per the contract — no
-    // local-only paths exist on this table).
-    const { ...payload } = row;
+    // Map Drizzle's camelCase columns to the snake_case wire contract. Do
+    // not spread the row: the client decoder intentionally only understands
+    // the portable metadata fields below.
+    const payload = {
+      id: row.id as string,
+      book_id: row.bookId as string,
+      locator_start: row.cfiRange as string,
+      // D1 currently stores one canonical CFI range. Mirror it in both
+      // wire endpoints so the Apple decoder can materialize the range even
+      // for rows created by older clients that did not persist a separate
+      // end locator.
+      locator_end: row.cfiRange as string,
+      text: row.text as string,
+      color: row.color as string,
+      note: row.note ?? null,
+      chapter: row.chapter ?? null,
+      created_at:
+        typeof row.createdAt === "number"
+          ? new Date(row.createdAt).toISOString() // WIRE-ISO8601-PAYLOAD
+          : null,
+    };
     changes.push({
       kind: "highlight",
       id: row.id as string,
@@ -212,6 +280,7 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
 
   const childrenByVersion = new Map<string, Array<Record<string, unknown>>>();
   let childBudget = CHAPTER_CHILD_LIMIT;
+  let hasTruncatedChapterChildren = false;
   for (const row of latestChapterRows) {
     const key = `${row.bookId}:${row.contentVersion}`;
     if (childBudget <= 0) continue;
@@ -227,6 +296,7 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
       .limit(Math.min(CHAPTER_CHILD_LIMIT + 1, childBudget + 1))
       .all();
     childrenByVersion.set(key, rows as unknown as Array<Record<string, unknown>>);
+    if (rows.length > CHAPTER_CHILD_LIMIT) hasTruncatedChapterChildren = true;
     childBudget -= Math.min(rows.length, CHAPTER_CHILD_LIMIT);
   }
 
@@ -247,8 +317,8 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
         model_version: row.modelVersion as string,
         progress: { completed: row.completedCount, total: row.totalCount },
         error_message: row.errorMessage ?? null,
-        created_at: typeof row.createdAt === "number" ? new Date(row.createdAt).toISOString() : null,
-        updated_at: typeof row.updatedAt === "number" ? new Date(row.updatedAt).toISOString() : null,
+        created_at: typeof row.createdAt === "number" ? new Date(row.createdAt).toISOString() : null, // WIRE-ISO8601-PAYLOAD
+        updated_at: typeof row.updatedAt === "number" ? new Date(row.updatedAt).toISOString() : null, // WIRE-ISO8601-PAYLOAD
         chapters: childRowsForIndex.map((child) => ({
           id: child.chapterId,
           name: child.name,
@@ -267,7 +337,12 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
   // a stable, monotonically-increasing iteration order. Within-kind order
   // already comes from the .orderBy(asc(...)) clauses above; this final
   // sort interleaves books + highlights correctly.
-  changes.sort((a, b) => a.__sortKey - b.__sortKey);
+  changes.sort(
+    (a, b) =>
+      a.__sortKey - b.__sortKey ||
+      (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
   const truncatedTypes = [
     bookRows.length >= PULL_LIMIT ? bookRows.at(-1)?.updatedAt : undefined,
     highlightRows.length >= PULL_LIMIT ? highlightRows.at(-1)?.updatedAt : undefined,
@@ -288,6 +363,21 @@ changesRoutes.get("/", requireAuth, requireAiDataConsent, async (c) => {
     void _s;
     return rest;
     });
+  const hashInput = [...sanitized].sort(
+    (left, right) =>
+      (left.kind < right.kind ? -1 : left.kind > right.kind ? 1 : 0) ||
+      (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+  );
+  const snapshotHash = await hashSyncProjectionWithTimestamps(hashInput);
+  const timestampFreeSnapshotHash = await hashSyncProjection(hashInput);
 
-  return c.json({ changes: sanitized });
+  return c.json({
+    changes: sanitized,
+    snapshot_hash: snapshotHash,
+    snapshot_hash_without_timestamps: timestampFreeSnapshotHash,
+    is_truncated:
+      truncatedTypes.length > 0 ||
+      changes.length > PULL_LIMIT ||
+      hasTruncatedChapterChildren,
+  });
 });

@@ -50,7 +50,7 @@ public final class BookmarkUploader: Sendable {
                         payload: payload,
                         // Bookmarks don't carry updatedAt; createdAt is the
                         // monotone LWW key (ChangeApplier.applyBookmark compares it).
-                        updatedAt: bookmark.createdAt,
+                        updatedAt: try await metadataStore.dirtyAt(entityId: bookmark.id, kind: .bookmark) ?? bookmark.createdAt,
                         deleted: false
                     ))
                     liveIds.append(item.entityId)
@@ -63,7 +63,7 @@ public final class BookmarkUploader: Sendable {
                     kind: SyncEntityKind.bookmark.rawValue,
                     id: item.entityId,
                     payload: SyncOpaqueJSON(data: Data("{}".utf8)),
-                    updatedAt: Date(),
+                    updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .bookmark) ?? Date(),
                     deleted: true
                 ))
                 tombstoneIds.append(item.entityId)

@@ -68,6 +68,7 @@ public actor SyncEngine {
         public let conversationStore: any ConversationStore
         public let messageStore: any MessageStore
         public let dataUseConsentProvider: any WorkerDataUseConsentProvider
+        public let localSyncObjectBuilder: LocalSyncObjectBuilder?
 
         public init(
             queue: SyncQueue,
@@ -86,7 +87,8 @@ public actor SyncEngine {
             messagesFetcher: MessagesFetcher,
             conversationStore: any ConversationStore,
             messageStore: any MessageStore,
-            dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
+            dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+            localSyncObjectBuilder: LocalSyncObjectBuilder? = nil
         ) {
             self.queue = queue
             self.metadataStore = metadataStore
@@ -105,6 +107,7 @@ public actor SyncEngine {
             self.conversationStore = conversationStore
             self.messageStore = messageStore
             self.dataUseConsentProvider = dataUseConsentProvider
+            self.localSyncObjectBuilder = localSyncObjectBuilder
         }
     }
 
@@ -130,6 +133,7 @@ public actor SyncEngine {
     private let messageStore: any MessageStore
     private let chatRefreshDelegate: (any ChatSyncRefreshDelegate)?
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
+    private let localSyncObjectBuilder: LocalSyncObjectBuilder?
 
     // Plan 34-10 (SRP) — runOnce's three responsibilities extracted into
     // focused collaborators. The engine keeps only orchestration + actor
@@ -182,6 +186,7 @@ public actor SyncEngine {
         self.messageStore = messageStore
         self.chatRefreshDelegate = chatRefreshDelegate
         self.dataUseConsentProvider = dependencies.dataUseConsentProvider
+        self.localSyncObjectBuilder = dependencies.localSyncObjectBuilder
 
         // Plan 34-10 (SRP) — assemble the runOnce collaborators from the
         // already-stored dependencies. No new init params; uploaders/fetchers/
@@ -244,6 +249,20 @@ public actor SyncEngine {
             await statusReporter.refreshPendingCount(on: status)
         } catch {
             Log.error("sync.markBookDirty.failed", error: error)
+        }
+    }
+
+    /// Persists a book deletion after its local row/file has been removed.
+    /// The book uploader turns this metadata-only queue item into a remote
+    /// tombstone, so deletion is not lost just because the BookStore no
+    /// longer has a live Book value.
+    public func markBookDeleted(_ bookId: BookID) async {
+        do {
+            try await metadataStore.markTombstone(entityId: bookId, kind: .book)
+            await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
+            await statusReporter.refreshPendingCount(on: status)
+        } catch {
+            Log.error("sync.markBookDeleted.failed", error: error)
         }
     }
 
@@ -339,17 +358,20 @@ public actor SyncEngine {
         }
         let waveGeneration = accountGeneration
         statusReporter.setRunning(true, on: status)
+        var inboundReadyForOutbound = true
 
         // 0. Hydrate the in-memory queue from sync_metadata.
         do {
             try await queue.refreshFromStore()
         } catch {
             wave.errors.append("queue.refresh: \(error)")
+            inboundReadyForOutbound = false
         }
 
         // 1. Inbound — fetch + apply remote changes.
         do {
-            let changes = try await fetcher.fetch()
+            let snapshot = try await fetcher.fetchSnapshot()
+            let changes = snapshot.changes
             guard !Task.isCancelled else {
                 statusReporter.setRunning(false, on: status)
                 return wave
@@ -361,9 +383,13 @@ public actor SyncEngine {
                 wave.conflicts = result.conflicts
                 wave.skipped = result.skipped
                 wave.errors.append(contentsOf: result.errors)
+                if !result.errors.isEmpty {
+                    inboundReadyForOutbound = false
+                }
             }
         } catch {
             wave.errors.append("fetch: \(error)")
+            inboundReadyForOutbound = false
         }
 
         // 1b. Inbound — Phase 16-05: dedicated chat-sync pulls, delegated to
@@ -376,6 +402,9 @@ public actor SyncEngine {
         wave.applied += chatMerge.applied
         wave.conflicts += chatMerge.conflicts
         wave.errors.append(contentsOf: chatMerge.errors)
+        if !chatMerge.errors.isEmpty {
+            inboundReadyForOutbound = false
+        }
         let chatRowsApplied = chatMerge.chatRowsApplied
 
         guard !Task.isCancelled else {
@@ -384,6 +413,12 @@ public actor SyncEngine {
         }
 
         guard waveGeneration == accountGeneration else {
+            statusReporter.setRunning(false, on: status)
+            return wave
+        }
+
+        guard inboundReadyForOutbound else {
+            await statusReporter.snapshotStatus(error: wave.errors.first, on: status)
             statusReporter.setRunning(false, on: status)
             return wave
         }
@@ -400,6 +435,61 @@ public actor SyncEngine {
         wave.bookmarksPushed = drain.bookmarksPushed
         wave.chapterIndexesPushed = drain.chapterIndexesPushed
         wave.errors.append(contentsOf: drain.errors)
+
+        // Final read-back: the Worker returns the hash of its generated
+        // projection. Re-encode the client-side SyncObject projection with
+        // the Apple canonical encoder and reject a mismatch instead of
+        // silently claiming sync completed. Legacy workers omit
+        // snapshot_hash and remain compatible.
+        guard waveGeneration == accountGeneration else {
+            statusReporter.setRunning(false, on: status)
+            return wave
+        }
+        do {
+            let snapshot = try await fetcher.fetchFullSnapshot()
+            guard waveGeneration == accountGeneration else {
+                statusReporter.setRunning(false, on: status)
+                return wave
+            }
+            let localChanges: [SyncChange]
+            if let localSyncObjectBuilder {
+                let localObject = try await localSyncObjectBuilder.build()
+                localChanges = localObject.changes
+            } else {
+                localChanges = []
+            }
+            guard waveGeneration == accountGeneration else {
+                statusReporter.setRunning(false, on: status)
+                return wave
+            }
+            let clientObject = SyncObject(
+                changes: snapshot.merging(localChanges: localChanges).changes,
+                remoteHash: snapshot.remoteHash,
+                isTruncated: snapshot.isTruncated
+            )
+            if clientObject.isTruncated {
+                wave.errors.append("sync verification incomplete: projection truncated")
+            } else if let remoteHash = clientObject.remoteHash {
+                let clientHash = try clientObject.canonicalHash()
+                if clientHash != remoteHash {
+                    let diff = snapshot.diff(against: clientObject)
+                    Log.event("sync.verification.mismatch", level: .error, data: [
+                        "remote_hash": remoteHash,
+                        "client_hash": clientHash,
+                        "remote_changes": String(snapshot.changes.count),
+                        "client_changes": String(clientObject.changes.count),
+                        "diff_count": String(diff.count),
+                        "diff": diff.prefix(50).joined(separator: ";"),
+                    ])
+                    wave.errors.append("sync verification mismatch")
+                }
+            }
+            if try await metadataStore.pendingCount() > 0 {
+                wave.errors.append("sync verification has pending local changes")
+            }
+        } catch {
+            wave.errors.append("verify: \(error)")
+        }
 
         // 3. Snapshot SyncStatus for the UI.
         await statusReporter.snapshotStatus(error: wave.errors.first, on: status)
@@ -447,6 +537,11 @@ public actor SyncEngine {
         accountGeneration += 1
         await debouncer.cancelAll()
         await queue.clear()
+        do {
+            try await metadataStore.resetAll()
+        } catch {
+            Log.error("sync.reset_metadata.failed", error: error)
+        }
     }
 
     // MARK: - Status mutations

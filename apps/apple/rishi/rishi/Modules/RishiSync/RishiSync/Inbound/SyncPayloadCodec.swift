@@ -217,7 +217,11 @@ enum SyncPayloadCodec {
         )))
     }
 
-    public static func encodeBook(_ book: Book, r2Key: String? = nil) throws -> SyncOpaqueJSON {
+    public static func encodeBook(
+        _ book: Book,
+        r2Key: String? = nil,
+        position: Position? = nil
+    ) throws -> SyncOpaqueJSON {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let wire = WireBook(
@@ -235,8 +239,8 @@ enum SyncPayloadCodec {
             conversationId: book.conversationId,
             chapterIndexContentVersion: book.chapterIndexContentVersion,
             fileR2Key: r2Key,
-            currentCfi: nil,
-            lastProgressPercent: nil
+            currentCfi: position?.locator,
+            lastProgressPercent: position?.percentComplete
         )
         return SyncOpaqueJSON(data: try encoder.encode(wire))
     }

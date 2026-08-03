@@ -8,7 +8,8 @@ extension LibraryViewModel {
         userId: UserID,
         importCoordinator: ImportCoordinator,
         positionStore: any PositionStore,
-        bookFileStorage: BookFileStorage
+        bookFileStorage: BookFileStorage,
+        onBookDeleted: (@Sendable (BookID) async -> Void)? = nil
     ) -> LibraryViewModel {
         return LibraryViewModel(
             bookStore: bookStore,
@@ -16,7 +17,8 @@ extension LibraryViewModel {
             importCoordinator: importCoordinator,
             positionLoader: PositionLoader(positionStore: positionStore),
             coverResolver: BookCoverResolver(storage: bookFileStorage),
-            deleteBook: { book in try await bookFileStorage.delete(book) }
+            deleteBook: { book in try await bookFileStorage.delete(book) },
+            onBookDeleted: onBookDeleted
         )
     }
 }

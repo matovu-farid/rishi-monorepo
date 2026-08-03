@@ -22,6 +22,10 @@ public final class RemoteChangeFetcher: Sendable {
     }
 
     public func fetch() async throws -> [SyncChange] {
+        return try await fetchSnapshot().changes
+    }
+
+    public func fetchSnapshot() async throws -> SyncObject {
         let since = try await metadataStore.globalLastSyncedAt()
         Log.event("sync.fetch.started", level: .info, data: [
             "since": since.map { ISO8601DateFormatter().string(from: $0) } ?? "nil",
@@ -29,7 +33,24 @@ public final class RemoteChangeFetcher: Sendable {
         let response = try await workerClient.send(SyncChangesEndpoint(since: since))
         Log.event("sync.fetch.completed", level: .info, data: [
             "count": String(response.changes.count),
+            "snapshot_hash": response.snapshotHash ?? "unavailable",
+            "snapshot_hash_without_timestamps": response.snapshotHashWithoutTimestamps ?? "unavailable",
         ])
-        return response.changes
+        return SyncObject(
+            changes: response.changes,
+            remoteHash: response.snapshotHashWithoutTimestamps,
+            isTruncated: response.isTruncated
+        )
+    }
+
+    /// Fetches the complete generated projection without advancing the local
+    /// cursor. Used after outbound mutations for convergence verification.
+    public func fetchFullSnapshot() async throws -> SyncObject {
+        let response = try await workerClient.send(SyncChangesEndpoint(since: nil))
+        return SyncObject(
+            changes: response.changes,
+            remoteHash: response.snapshotHashWithoutTimestamps,
+            isTruncated: response.isTruncated
+        )
     }
 }

@@ -461,7 +461,12 @@ vi.mock("../index.ts", async () => {
 })
 
 // ─── Now import the route under test — this is the RED on first run ─────────
-import { changesRoutes } from "./changes"
+import {
+  changesRoutes,
+  hashSyncProjection,
+  hashSyncProjectionWithTimestamps,
+  stripSyncTimestamps,
+} from "./changes"
 
 const env = {
   BETTER_AUTH_SECRET: "test-secret",
@@ -487,8 +492,8 @@ async function callChanges(query: string = ""): Promise<Response> {
   return changesRoutes.fetch(req, env)
 }
 
-async function parseEnvelope(res: Response): Promise<{ changes: SyncChange[] }> {
-  return (await res.json()) as { changes: SyncChange[] }
+async function parseEnvelope(res: Response): Promise<{ changes: SyncChange[]; is_truncated?: boolean }> {
+  return (await res.json()) as { changes: SyncChange[]; is_truncated?: boolean }
 }
 
 beforeEach(() => {
@@ -559,6 +564,7 @@ describe("GET /api/sync/changes", () => {
     const chapter = env.changes.find((item) => item.kind === "chapter_index")!
     expect(chapter.payload.chapters).toHaveLength(5000)
     expect(chapter.payload.chapters_truncated).toBe(true)
+    expect(env.is_truncated).toBe(true)
   })
   it("unauthenticated -> 401, no DB read", async () => {
     setUser(null)
@@ -657,7 +663,7 @@ describe("GET /api/sync/changes", () => {
     expect(env.changes[0].deleted).toBe(true)
   })
 
-  it("book payload omits file_path + cover_path; highlight payload includes all cols", async () => {
+  it("book payload omits local paths; highlight payload uses portable snake_case fields", async () => {
     seedBook({
       id: UUID_BOOK_A,
       title: "X",
@@ -691,15 +697,91 @@ describe("GET /api/sync/changes", () => {
 
     const hlChange = env.changes.find((c) => c.kind === "highlight")!
     expect(hlChange).toBeDefined()
-    // Highlights include EVERY column — sanity check the three the seed
-    // set explicitly.
+    // Highlights are explicitly mapped to the portable wire contract.
     const hlPayload = hlChange.payload as Record<string, unknown>
-    const cfiField = hlPayload.cfi_range ?? hlPayload.cfiRange
+    const cfiField = hlPayload.locator_start
     const textField = hlPayload.text
     const colorField = hlPayload.color
     expect(cfiField).toBe("cfi:1")
+    expect(hlPayload.locator_end).toBe("cfi:1")
     expect(textField).toBe("quote")
     expect(colorField).toBe("yellow")
+    expect(hlPayload.bookId).toBeUndefined()
+    expect(hlPayload.cfiRange).toBeUndefined()
+  })
+
+  it("returns a deterministic hash for the exact generated projection", async () => {
+    seedBook({ id: UUID_BOOK_B, updatedAt: 1_700_000_000_000 })
+    seedBook({ id: UUID_BOOK_A, updatedAt: 1_700_000_000_000 })
+    const first = await callChanges()
+    const firstBody = (await first.json()) as {
+      changes: SyncChange[]
+      snapshot_hash: string
+      snapshot_hash_without_timestamps: string
+    }
+
+    resetStores()
+    seedBook({ id: UUID_BOOK_A, updatedAt: 1_700_000_000_000 })
+    seedBook({ id: UUID_BOOK_B, updatedAt: 1_700_000_000_000 })
+    const second = await callChanges()
+    const secondBody = (await second.json()) as {
+      changes: SyncChange[]
+      snapshot_hash: string
+      snapshot_hash_without_timestamps: string
+    }
+
+    expect(firstBody.snapshot_hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(secondBody.snapshot_hash).toBe(firstBody.snapshot_hash)
+    expect(firstBody.snapshot_hash_without_timestamps).toMatch(/^[0-9a-f]{64}$/)
+    expect(secondBody.snapshot_hash_without_timestamps).toBe(firstBody.snapshot_hash_without_timestamps)
+    expect(secondBody.changes).toEqual(firstBody.changes)
+  })
+
+  it("removes synchronization timestamps before equality hashing", async () => {
+    const first = [{
+      kind: "book",
+      id: UUID_BOOK_A,
+      payload: {
+        title: "X",
+        created_at: "2026-08-02T00:00:00.000Z",
+        nested: { updated_at: "2026-08-02T00:00:00.000Z", value: 1 },
+      },
+      updated_at: 10,
+      deleted: false,
+    }]
+    const second = [{
+      kind: "book",
+      id: UUID_BOOK_A,
+      payload: {
+        title: "X",
+        created_at: "2026-08-03T00:00:00.000Z",
+        nested: { updated_at: "2026-08-03T00:00:00.000Z", value: 1 },
+      },
+      updated_at: 20,
+      deleted: false,
+    }]
+
+    expect(stripSyncTimestamps(first)).toEqual(stripSyncTimestamps(second))
+    expect(await hashSyncProjection(first)).toBe(await hashSyncProjection(second))
+    expect(await hashSyncProjectionWithTimestamps(first)).not.toBe(await hashSyncProjectionWithTimestamps(second))
+  })
+
+  it("uses the timestamp-free projection for the route snapshot hash", async () => {
+    seedBook({ updatedAt: 1_700_000_000_000, createdAt: 1_600_000_000_000 })
+    const first = (await callChanges().then((response) => response.json())) as {
+      snapshot_hash: string
+      snapshot_hash_without_timestamps: string
+    }
+
+    resetStores()
+    seedBook({ updatedAt: 1_800_000_000_000, createdAt: 1_600_000_000_000 })
+    const second = (await callChanges().then((response) => response.json())) as {
+      snapshot_hash: string
+      snapshot_hash_without_timestamps: string
+    }
+
+    expect(second.snapshot_hash).not.toBe(first.snapshot_hash)
+    expect(second.snapshot_hash_without_timestamps).toBe(first.snapshot_hash_without_timestamps)
   })
 
   it("normalizes pulled book payloads to SyncPayloadCodec snake_case and includes sync metadata", async () => {

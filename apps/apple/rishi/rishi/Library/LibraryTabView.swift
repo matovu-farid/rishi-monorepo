@@ -61,7 +61,10 @@ struct LibraryTabView: View {
             userId: user.id,
             importCoordinator: dependencies.importCoordinator,
             positionStore: dependencies.positionStore,
-            bookFileStorage: dependencies.bookFileStorage
+            bookFileStorage: dependencies.bookFileStorage,
+            onBookDeleted: { bookId in
+                await dependencies.syncEngine.markBookDeleted(bookId)
+            }
         ))
     }
 

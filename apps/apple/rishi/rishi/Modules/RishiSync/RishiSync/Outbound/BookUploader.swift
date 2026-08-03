@@ -110,7 +110,7 @@ public final class BookUploader: Sendable {
                     kind: SyncEntityKind.book.rawValue,
                     id: book.id,
                     payload: payload,
-                    updatedAt: Date(),
+                    updatedAt: try await metadataStore.dirtyAt(entityId: book.id, kind: .book) ?? Date(),
                     deleted: false
                 )]))
             )
@@ -130,6 +130,27 @@ public final class BookUploader: Sendable {
         Log.event("sync.book.upload.completed", level: .info, data: [
             "book_id": book.id.uuidString,
         ])
+    }
+
+    /// Pushes a metadata-only deletion for a book whose local row/file has
+    /// already been removed. The worker keeps the remote tombstone so other
+    /// devices converge on the deletion.
+    public func uploadTombstone(_ id: BookID) async throws {
+        let response = try await workerClient.send(
+            SyncPushEndpoint(body: .init(changes: [SyncChange(
+                kind: SyncEntityKind.book.rawValue,
+                id: id,
+                payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+                updatedAt: try await metadataStore.dirtyAt(entityId: id, kind: .book) ?? Date(),
+                deleted: true
+            )]))
+        )
+        try await metadataStore.markClean(
+            entityId: id,
+            kind: .book,
+            lastSyncedAt: response.acceptedAt,
+            remoteEtag: nil
+        )
     }
 
     // MARK: - Helpers

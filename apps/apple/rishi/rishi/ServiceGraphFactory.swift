@@ -253,6 +253,15 @@ enum ServiceGraphFactory {
             workerClient: workerClient,
             metadataStore: syncMetadataStore
         )
+        let localSyncObjectBuilder = LocalSyncObjectBuilder(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            highlightStore: highlightStore,
+            bookmarkStore: bookmarkStore,
+            metadataStore: syncMetadataStore,
+            localUserIdProvider: { await userIdBox.value },
+            workerUserIdProvider: syncUserIdProvider
+        )
 
         let chatRefreshAdapter = AppChatRefreshAdapter()
 
@@ -275,7 +284,8 @@ enum ServiceGraphFactory {
             messagesFetcher: messagesFetcher,
             conversationStore: conversationStore,
             messageStore: messageStore,
-            dataUseConsentProvider: dataUseConsentProvider
+            dataUseConsentProvider: dataUseConsentProvider,
+            localSyncObjectBuilder: localSyncObjectBuilder
             ),
             chatRefreshDelegate: chatRefreshAdapter
         )
@@ -294,16 +304,20 @@ enum ServiceGraphFactory {
             pdfCache: pdfThumbnailCache,
             epubCache: epubUnpackedCache
         )
+        let syncAfterBookImported: @Sendable (BookID) async -> Void = { [syncEngine] bookId in
+            await syncEngine.markBookDirty(bookId)
+            await syncEngine.syncNow()
+        }
         let importCoordinator = ImportCoordinator(
             storage: bookFileStorage,
             currentUserId: {
                 await userIdBox.value
             },
             onBookImported: {
-                [syncEngine, bookStore, bookFileStorage, bookPrewarmer] bookId
+                [syncAfterBookImported, bookStore, bookFileStorage, bookPrewarmer] bookId
                 in
 
-                await syncEngine.markBookDirty(bookId)
+                await syncAfterBookImported(bookId)
 
                 Task.detached(priority: .userInitiated) {
                     guard let book = try? await bookStore.book(bookId) else {
@@ -315,9 +329,13 @@ enum ServiceGraphFactory {
             }
         )
 
-        let sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
+        let sampleBookInstaller = SampleBookInstaller(
+            storage: bookFileStorage,
+            onBookImported: syncAfterBookImported
+        )
         let sampleReaderInstaller = SampleReaderInstaller(
-            storage: bookFileStorage
+            storage: bookFileStorage,
+            onBookImported: syncAfterBookImported
         )
 
         Task { [syncEngine, syncStatus] in

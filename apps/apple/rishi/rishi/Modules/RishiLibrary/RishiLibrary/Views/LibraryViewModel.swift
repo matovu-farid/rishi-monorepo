@@ -67,6 +67,7 @@ public final class LibraryViewModel {
     private let positionLoader: PositionLoader
     private let coverResolver: BookCoverResolver
     private let deleteBook: @Sendable (Book) async throws -> Void
+    private let onBookDeleted: (@Sendable (BookID) async -> Void)?
 
     private var searchTask: Task<Void, Never>? = nil
 
@@ -79,7 +80,8 @@ public final class LibraryViewModel {
         importCoordinator: ImportCoordinator,
         positionLoader: PositionLoader,
         coverResolver: BookCoverResolver,
-        deleteBook: @escaping @Sendable (Book) async throws -> Void
+        deleteBook: @escaping @Sendable (Book) async throws -> Void,
+        onBookDeleted: (@Sendable (BookID) async -> Void)? = nil
     ) {
         self.bookStore = bookStore
         self.currentUserId = currentUserId
@@ -87,6 +89,7 @@ public final class LibraryViewModel {
         self.positionLoader = positionLoader
         self.coverResolver = coverResolver
         self.deleteBook = deleteBook
+        self.onBookDeleted = onBookDeleted
     }
 
     /// Compatibility initializer for callers that still provide raw storage.
@@ -197,6 +200,7 @@ public final class LibraryViewModel {
         cancelSearchDebounce()
         do {
             try await deleteBook(book)
+            await onBookDeleted?(book.id)
             books.removeAll { existing in existing.id == book.id }
             positionsByBookId[book.id] = nil
             coverURLs[book.id] = nil

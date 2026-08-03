@@ -59,7 +59,7 @@ public final class PositionUploader: Sendable {
                     kind: SyncEntityKind.position.rawValue,
                     id: position.id,
                     payload: payload,
-                    updatedAt: position.updatedAt,
+                    updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .position) ?? position.updatedAt,
                     deleted: false
                 ))
                 resolvedIds.append(item.entityId)

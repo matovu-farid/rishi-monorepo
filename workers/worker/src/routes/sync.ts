@@ -53,7 +53,15 @@ const PushBodySchema = z.object({
 
 class SyncOwnershipConflict extends Error {}
 class InvalidBookR2Key extends Error {}
-class InvalidChapterIndex extends Error {}
+class InvalidChapterIndex extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidChapterIndex";
+  }
+}
+
+const MAX_CHAPTER_SOURCE_POSITION = 1_000_000;
+const MAX_CHAPTERS_PER_INDEX = 5_000;
 
 const ChapterIndexPayloadSchema = z.object({
   id: z.string().min(1).max(256),
@@ -63,8 +71,8 @@ const ChapterIndexPayloadSchema = z.object({
   model_identifier: z.string().max(256).default(""),
   model_version: z.string().max(256).default(""),
   progress: z.object({
-    completed: z.number().int().min(0).max(500),
-    total: z.number().int().min(0).max(500),
+    completed: z.number().int().min(0).max(MAX_CHAPTERS_PER_INDEX),
+    total: z.number().int().min(0).max(MAX_CHAPTERS_PER_INDEX),
   }).default({ completed: 0, total: 0 }),
   error_message: z.string().max(8192).nullable().optional(),
   created_at: z.string().datetime().optional(),
@@ -73,16 +81,29 @@ const ChapterIndexPayloadSchema = z.object({
     id: z.string().min(1).max(256),
     name: z.string().min(1).max(8192),
     summary: z.string().max(32768),
-    source_position: z.number().int().min(0).max(500),
-  })).max(500),
+    // This is the source document's original position, not the number of
+    // chapters in the normalized payload. EPUB positions can exceed 500 when
+    // unreadable TOC entries were filtered out before indexing.
+    source_position: z.number().int().min(0).max(MAX_CHAPTER_SOURCE_POSITION),
+  })).max(MAX_CHAPTERS_PER_INDEX),
 });
 
 function parseChapterIndexPayload(payload: Record<string, unknown>, bookId: string) {
   const parsed = ChapterIndexPayloadSchema.safeParse(payload);
-  if (!parsed.success || parsed.data.book_id !== bookId) throw new InvalidChapterIndex();
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path.length ? issue.path.join(".") : "payload";
+    throw new InvalidChapterIndex(`${path}: ${issue?.message ?? "invalid payload"}`);
+  }
+  if (parsed.data.book_id !== bookId) {
+    throw new InvalidChapterIndex("book_id does not match the change id");
+  }
   const ids = new Set(parsed.data.chapters.map((chapter) => chapter.id));
-  if (ids.size !== parsed.data.chapters.length || JSON.stringify(payload).length > 2 * 1024 * 1024) {
-    throw new InvalidChapterIndex();
+  if (ids.size !== parsed.data.chapters.length) {
+    throw new InvalidChapterIndex("chapters contains duplicate ids");
+  }
+  if (JSON.stringify(payload).length > 2 * 1024 * 1024) {
+    throw new InvalidChapterIndex("payload exceeds the 2 MiB limit");
   }
   return parsed.data;
 }
@@ -383,7 +404,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         if (change.deleted) {
           // Tombstone: flip isDeleted on the matching row if it exists.
           // No-op for unknown ids (the row may live on another device).
-          if (existing) {
+          if (existing && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
             await tx
               .update(highlights)
               .set({
@@ -430,6 +451,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             text,
             color,
             note,
+            isDeleted: false,
             updatedAt: pushedUpdatedAtMs,
           };
           if (bookId) patch.bookId = bookId;
@@ -468,7 +490,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         if (change.deleted) {
           // Tombstone: flip isDeleted on the matching row if it exists.
           // No-op for unknown ids (the row may live on another device).
-          if (existing) {
+          if (existing && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
             await tx
               .update(bookmarks)
               .set({
@@ -507,6 +529,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
               location,
               label,
               snippet,
+              isDeleted: false,
               updatedAt: pushedUpdatedAtMs,
             } as Partial<typeof bookmarks.$inferInsert>)
             .where(
@@ -612,7 +635,12 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       return c.json({ error: "invalid_file_r2_key" }, 400);
     }
     if (error instanceof InvalidChapterIndex) {
-      return c.json({ error: "invalid_chapter_index" }, 400);
+      return c.json({
+        error: {
+          code: "invalid_chapter_index",
+          message: error.message,
+        },
+      }, 400);
     }
     throw error;
   }

@@ -39,6 +39,33 @@ public protocol SyncMetadataStore: Sendable {
 
     /// Erase the row. Called after the server confirms a tombstone delete.
     func forget(entityId: UUID, kind: SyncEntityKind) async throws
+
+    /// Clears all account-scoped sync state during sign-out/account switch.
+    func resetAll() async throws
+
+    /// Records a durable deletion tombstone until the worker acknowledges it.
+    func markTombstone(entityId: UUID, kind: SyncEntityKind) async throws
+
+    /// Returns whether the pending row is a deletion tombstone.
+    func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool
+
+    /// Timestamp captured when the local mutation was marked dirty. This is
+    /// the LWW timestamp sent to the Worker, rather than upload time.
+    func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date?
+
+    /// Last accepted remote timestamp for one entity, used when rebuilding
+    /// the canonical local projection after a pull.
+    func lastSyncedAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date?
+}
+
+public extension SyncMetadataStore {
+    func resetAll() async throws {}
+    func markTombstone(entityId: UUID, kind: SyncEntityKind) async throws {
+        try await markDirty(entityId: entityId, kind: kind)
+    }
+    func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool { false }
+    func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? { nil }
+    func lastSyncedAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? { nil }
 }
 
 public struct SyncPendingItem: Sendable, Hashable {
