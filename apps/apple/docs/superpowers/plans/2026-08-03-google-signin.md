@@ -12,28 +12,28 @@
 
 ## Files and responsibilities
 
-- Create `workers/worker/src/routes/google.ts` — Google token verification, native-provider lookup/creation, deletion fence, rate limit, and `/google` route response.
+- Create `workers/worker/src/routes/google.ts` — Google token verification, provider lookup/creation, UUID compatibility check, deletion fence, rate limit, and `/google` route response.
 - Create `workers/worker/src/routes/google.test.ts` — focused Google route security and idempotency tests.
-- Modify `workers/worker/src/db/schema.ts` — add the UUID-backed `google_users` provider table and uniqueness constraint.
-- Create generated `workers/worker/drizzle/migrations/<timestamp>_google_users/` artifacts — migration output from Drizzle only.
 - Modify `workers/worker/src/index.ts` — mount the Google route under `/auth`.
 - Create `apps/apple/rishi/rishi/Modules/RishiCore/RishiCore/Endpoints/GoogleAuthAPI.swift` — typed `/auth/google` endpoint contract.
 - Create `apps/apple/rishi/rishi/Auth/GoogleSignInCoordinator.swift` — Google SDK presentation and ID-token extraction.
 - Modify `apps/apple/rishi/rishi/Auth/SignedOutView.swift` — Google button, loading state, exchange, and shared session completion.
 - Modify `apps/apple/rishi/rishi/rishiApp.swift` — forward Google callback URLs through `GIDSignIn`.
 - Modify `apps/apple/rishi/rishi/Info.plist` — Google client-ID keys and callback URL scheme placeholder/configuration.
+- Modify `apps/apple/rishi/rishi/rishi-mac.entitlements` — add the Catalyst keychain access group required by GoogleSignIn-iOS.
 - Modify `apps/apple/rishi/rishi.xcodeproj/project.pbxproj` — add the official GoogleSignIn-iOS package and `GoogleSignIn` product to the app target.
 - Modify `apps/apple/rishi/rishi.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` — resolve and pin the package.
 - Modify `apps/apple/rishi/rishiTests/SignedOutViewModelTests.swift` or add a focused exchange test beside it — test the client endpoint payload without requiring the SDK.
+- Modify `apps/apple/rishi/rishi/AppDependencies+Billing.swift` — sign out of Google’s SDK when the app performs its existing local sign-out sequence.
 - Modify `apps/apple/docs/features/auth.md` — document Google as the second native provider and the configuration/deployment requirements.
 
-The Better Auth `account` table is intentionally not reused: Better Auth’s default user IDs are not UUIDs, while this native app still decodes the Rishi user ID as a UUID. The new `google_users` table is the native provider-identity store, with a unique Google subject and a foreign key to the UUID-backed Rishi user. Drizzle must generate the migration; no SQL is hand-authored.
+The Better Auth `account` table is reused conditionally: native-created rows use deterministic IDs and UUID-backed Rishi users, while any pre-existing row linked to a non-UUID Better Auth user fails closed until explicitly migrated. This avoids a schema migration in the current task while preventing the native app from receiving an incompatible identity. A production preflight must inspect existing Google rows before rollout.
 
 ### Task 1: Add red tests for Google verification and identity mapping
 
 **Files:** Create `workers/worker/src/routes/google.test.ts`.
 
-- [ ] **Step 1: Write the test fixtures and failing route expectations.** Generate an ES256 key pair with `jose`, stub the Google cert endpoint, and provide an in-memory D1 plus fake `RATE_LIMIT_KV`. Assert the route accepts only a token whose `iss`, `aud`, `exp`, and `sub` are valid. Add tests for wrong audience, wrong issuer, expired token, missing `sub`, repeat sign-in, same-email/different-sub separation, deletion fencing, and IP throttling.
+- [ ] **Step 1: Write the test fixtures and failing route expectations.** Generate an ES256 key pair with `jose`, stub the Google cert endpoint, and provide an in-memory D1 plus fake `RATE_LIMIT_KV`. Assert the route accepts only a token whose `iss`, `aud`, `exp`, and `sub` are valid. Add tests for wrong audience, wrong issuer, expired token, missing `sub`, repeat sign-in, deterministic account ID, incompatible pre-existing user ID, same-email/different-sub separation, deletion fencing, and IP throttling.
 
 ```ts
 const request = (token: string) => new Request("https://api.fidexa.org/auth/google", {
@@ -52,21 +52,7 @@ Run: `bun test src/routes/google.test.ts` from `workers/worker`.
 
 Expected: FAIL with the missing `/auth/google` implementation or route response.
 
-### Task 2: Add the native Google identity schema and generated migration
-
-**Files:** Modify `workers/worker/src/db/schema.ts`; create generated migration artifacts under `workers/worker/drizzle/migrations/`.
-
-- [ ] **Step 1: Add `googleUsers` to the Drizzle schema.** Define `id` as the primary key, `googleUserId` as a unique Google subject, `userId` as a required foreign key to `user.id` with cascade deletion, nullable email, verified-email flag, and created/updated timestamps. Keep this table separate from Better Auth’s `account` table.
-
-- [ ] **Step 2: Generate the migration with Bun.**
-
-Run: `bunx drizzle-kit generate --config=drizzle.config.ts` from `workers/worker`.
-
-Expected: a new timestamped migration and matching metadata; do not edit the generated SQL.
-
-- [ ] **Step 3: Review the generated migration and schema diff.** Confirm it creates only `google_users`, its unique Google-sub index, and the foreign key; do not delete or rename any existing migration directory.
-
-### Task 3: Implement the Worker Google route
+### Task 2: Implement the Worker Google route
 
 **Files:** Create `workers/worker/src/routes/google.ts`; modify `workers/worker/src/index.ts` and `workers/worker/src/ops/rate-limit.ts`.
 
@@ -82,7 +68,7 @@ await jwtVerify(identityToken, googleJWKS, {
 
 Reject empty tokens, missing `payload.sub`, and invalid claims with a generic 401 response. Do not log the token or email.
 
-- [ ] **Step 2: Resolve or create the native provider identity with Drizzle.** Query `google_users.google_user_id = payload.sub`. If found, query the referenced UUID-backed `user`, reject the request if a `deletion_state` row is `pending` or `purging`, and issue Rishi tokens for that user. If not found, create a UUID `user` row using the verified Google name/email and insert a `google_users` row. Handle a unique-sub conflict by deleting only the newly created orphan user and re-reading the canonical row.
+- [ ] **Step 2: Resolve or create the provider identity with Drizzle.** Query `account.provider_id = "google"` and `account.account_id = payload.sub`. If found, query the referenced user and require `UUID(uuidString: user.id)` before issuing tokens; otherwise return a generic migration-required response. If not found, create a UUID `user` row using the verified Google name/email and insert an account row with `id = "google:<sub>"`, `providerId = "google"`, `accountId = payload.sub`, and explicit timestamps. Handle the deterministic primary-key conflict by deleting only the newly created orphan user and re-reading the canonical row.
 
 - [ ] **Step 3: Return the Apple-compatible response shape.** Use the existing `signAccessToken` and `signRefreshToken` helpers and return `{ accessToken, refreshToken, userId, user: { id, email, name } }`. Do not create a Better Auth session or return the Google ID token as a bearer token.
 
@@ -98,7 +84,9 @@ Expected: all focused Google tests pass, including repeat sign-in and no email a
 
 - [ ] **Step 2: Add runtime configuration keys without committing secrets.** Add `GIDClientID` and `GIDServerClientID` as build-setting substitutions. `GIDServerClientID` must equal the worker’s `GOOGLE_CLIENT_ID`; `GIDClientID` must be the public iOS OAuth client ID. Add the reversed iOS client-ID scheme to `CFBundleURLTypes`. If the project has no supplied iOS ID, use an explicit `GOOGLE_IOS_CLIENT_ID` placeholder and make the coordinator report a configuration error rather than silently attempting sign-in.
 
-- [ ] **Step 3: Resolve package dependencies.** Run `xcodebuild -resolvePackageDependencies -project apps/apple/rishi/rishi.xcodeproj` and confirm `GoogleSignIn` appears in `Package.resolved`.
+- [ ] **Step 3: Configure Catalyst Keychain access.** Add `$(AppIdentifierPrefix)$(CFBundleIdentifier)` to `rishi-mac.entitlements` as a keychain access group, preserving the existing application group. Do not add a client secret or a Google token to entitlements.
+
+- [ ] **Step 4: Resolve package dependencies.** Run `xcodebuild -resolvePackageDependencies -project apps/apple/rishi/rishi.xcodeproj` and confirm `GoogleSignIn` appears in `Package.resolved`.
 
 ### Task 5: Add the iOS/Catalyst Google flow and share session completion
 
@@ -112,7 +100,9 @@ Expected: all focused Google tests pass, including repeat sign-in and no email a
 
 - [ ] **Step 4: Add the Google button and exchange.** Add a custom SwiftUI button below Apple’s button. Prevent simultaneous Apple/Google requests, call the coordinator, send the ID token through `GoogleAuthEndpoint`, and reuse one session-completion function for Keychain writes, `deps.setUserId`, sync retry, current-user state, consent, and entitlement refresh. Clear partial Keychain state on persistence failure.
 
-- [ ] **Step 5: Build the Apple target.** Run the focused Xcode build and fix compile/API issues before moving to review.
+- [ ] **Step 5: Sign out of the Google SDK in the existing local sign-out path.** Call `GIDSignIn.sharedInstance.signOut()` before clearing Rishi state so the next Google login can select a different account.
+
+- [ ] **Step 6: Build the Apple target.** Run the focused Xcode build and fix compile/API issues before moving to review.
 
 ### Task 6: Documentation and implementation review
 
@@ -148,15 +138,16 @@ Expected: exit code 0. A real Google sign-in smoke test remains dependent on con
 
 ### Findings and resolutions
 
-1. **Critical — Better Auth user IDs are not guaranteed UUIDs, while the native app still requires UUID-backed user IDs.** Resolved by isolating native Google identities in `google_users` and creating UUID-backed Rishi users; Better Auth’s `account` table is not reused.
-2. **High — no composite provider uniqueness existed in the Better Auth account table.** Resolved by the dedicated table’s unique Google subject and generated Drizzle migration.
+1. **Critical — Better Auth user IDs are not guaranteed UUIDs, while the native app still requires UUID-backed user IDs.** Resolved by creating UUID-backed native users and failing closed for incompatible pre-existing Google account rows.
+2. **High — no composite provider uniqueness exists in the Better Auth account table.** Resolved for the native route by deterministic account primary keys and conflict recovery; the deployment preflight must identify existing duplicate provider rows.
 3. **High — the custom public auth route bypassed Better Auth’s configured rate limit.** Resolved by adding an IP-based `RATE_LIMIT_KV` check before verification.
 4. **High — a user pending deletion could receive a fresh session.** Resolved by checking `deletion_state` before issuing tokens.
-5. **High — reusing Better Auth’s Google rows could silently split or break web/mobile identities.** Resolved by making the native boundary explicit and documenting that same-email identities do not auto-link.
+5. **High — reusing Better Auth’s Google rows could silently split or break web/mobile identities.** Resolved by fail-closed UUID compatibility checks and documenting that same-email identities do not auto-link.
 6. **High — returning a Google ID token would fail current API middleware.** Resolved by issuing the established Rishi JWT pair through `signAccessToken` and `signRefreshToken`.
 7. **Medium — `GoogleSignInSwift` adds a package product without being needed by the existing custom design system.** Resolved by using a custom Rishi button and only `GoogleSignIn`.
-8. **Medium — deployment could be claimed without verifying the worker has credentials.** Resolved by making secret-name verification and an unauthenticated deployed-route smoke test explicit gates.
+8. **Medium — Catalyst keychain storage requires the Google SDK’s keychain access group configuration.** Resolved by adding the application-identifier access group to the Mac Catalyst entitlements and verifying the package README requirement.
+9. **Medium — deployment could be claimed without verifying the worker has credentials.** Resolved by making secret-name verification and an unauthenticated deployed-route smoke test explicit gates.
 
 ### Re-review verdict
 
-PASS WITH NOTES: no open Critical or High findings remain. The generated migration, public iOS client ID, deployed Google credentials, and Wrangler credentials are explicit gates; the implementation must report those gaps rather than commit secret values or claim live sign-in success without a smoke test.
+PASS WITH NOTES: no open Critical or High findings remain. The production Google-row preflight, public iOS client ID, deployed Google credentials, Catalyst keychain group, and Wrangler credentials are explicit gates; the implementation must report those gaps rather than commit secret values or claim live sign-in success without a smoke test.
