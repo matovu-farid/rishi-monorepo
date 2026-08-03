@@ -12,7 +12,7 @@ Add a second native authentication method that lets a user sign in with Google, 
 - The live mobile API contract is the custom `POST /auth/apple` route plus Rishi HS256 access/refresh JWTs.
 - `workers/worker/src/auth.ts` configures Better Auth and its tests exercise `/api/auth/sign-in/social`, but the Better Auth catch-all is not mounted in `workers/worker/src/index.ts`.
 - `workers/worker/src/middleware.ts` validates the custom Rishi access JWT, not a Better Auth bearer token.
-- The existing `account` table is already present for Better Auth identities and can store a Google provider account without a migration.
+- The existing `account` table is Better Auth-shaped and may contain non-UUID user IDs; it must not be reused by the native flow without a production-data migration.
 - The repository contains no Google client-ID values. Google client IDs are public configuration, but client secrets remain worker secrets and must never be committed.
 
 ## Chosen architecture
@@ -26,7 +26,7 @@ The worker verifies the token using Google’s rotating JWKS and checks:
 - signature and expiry are valid;
 - the token contains a non-empty stable `sub`.
 
-After verification, the worker looks up `account(provider_id = "google", account_id = sub)`. Existing identities reuse their existing Rishi user. A new Google identity creates a Rishi `user` row and a corresponding `account` row. Email is profile data only and is never used to auto-link an Apple or Google identity. The worker then issues the existing Rishi access and refresh JWTs and returns the same response shape consumed by the Apple client path.
+After verification, the worker looks up a dedicated `google_users` row keyed by the Google `sub`. Existing native identities reuse their UUID-backed Rishi user. A new Google identity creates a UUID-backed Rishi `user` row and a corresponding `google_users` row. Email is profile data only and is never used to auto-link an Apple or Google identity. The worker rejects identities whose account is already fenced for deletion, applies the existing KV-backed abuse limiter by IP, then issues the existing Rishi access and refresh JWTs and returns the same response shape consumed by the Apple client path.
 
 The app adds a Google button to the signed-out view, configures Google with an iOS client ID plus the worker’s server client ID, handles the reversed-client-ID callback URL, sends the returned ID token to `/auth/google`, and reuses the existing Keychain/session, current-user, sync, consent, and entitlement refresh sequence.
 
@@ -73,4 +73,4 @@ After implementation and verification, deploy the worker with the repository’s
 
 ### Re-review verdict
 
-PASS WITH NOTES: no open Critical or High findings remain. The remaining external prerequisite is configuration of the public iOS client ID and confirmation that the worker’s `GOOGLE_CLIENT_ID` is the matching server/web client ID.
+PASS WITH NOTES: no open Critical or High findings remain. The remaining external prerequisites are the generated Drizzle migration, configuration of the public iOS client ID, and confirmation that the worker’s `GOOGLE_CLIENT_ID` is the matching server/web client ID.
