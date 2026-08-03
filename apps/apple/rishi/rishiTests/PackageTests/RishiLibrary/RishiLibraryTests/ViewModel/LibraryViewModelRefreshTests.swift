@@ -140,4 +140,53 @@ struct LibraryViewModelRefreshTests {
         }
         #expect(vm.readingNow.count == 3)
     }
+
+    @Test("completed sync refreshes the mounted library and reveals newly synced books")
+    func refreshesAfterSyncStatusTransitionsToIdle() async throws {
+        let userId = UUID()
+        let bookStore = InMemoryBookStore()
+        let positionStore = SlowPositionStore(perReadDelay: .milliseconds(1))
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: bookStore,
+            positionStore: positionStore
+        )
+        let status = SyncStatus(isRunning: true)
+        let refreshes = RefreshEventRecorder()
+        let observer = LibrarySyncCompletionRefreshObserver(
+            refresh: {
+                await vm.refresh()
+                await refreshes.record()
+            }
+        )
+
+        await observer.statusChanged(from: nil, to: status.snapshot())
+
+        let syncedBook = Book(
+            userId: userId,
+            title: "Synced after completion",
+            formatType: .pdf,
+            fileURL: "synced.pdf"
+        )
+        try await bookStore.upsert(syncedBook)
+
+        status.apply(SyncStatusSnapshot(
+            lastSyncedAt: Date(),
+            pendingCount: 0,
+            isRunning: false,
+            lastError: nil
+        ))
+        await observer.statusChanged(from: true, to: status.snapshot())
+
+        #expect(await refreshes.count == 1)
+        #expect(vm.books.map(\.id) == [syncedBook.id])
+    }
+}
+
+private actor RefreshEventRecorder {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
+    }
 }

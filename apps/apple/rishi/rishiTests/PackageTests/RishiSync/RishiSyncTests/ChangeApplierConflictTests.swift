@@ -89,14 +89,16 @@ struct ChangeApplierConflictTests {
         bookStore: any BookStore,
         positionStore: any PositionStore,
         highlightStore: any HighlightStore,
-        metadata: any SyncMetadataStore
+        metadata: any SyncMetadataStore,
+        currentUserId: @escaping @Sendable () async -> UserID? = { nil }
     ) -> ChangeApplier {
         ChangeApplier(
             bookStore: bookStore,
             positionStore: positionStore,
             highlightStore: highlightStore,
             bookmarkStore: StubBookmarkStore(),
-            metadataStore: metadata
+            metadataStore: metadata,
+            currentUserId: currentUserId
         )
     }
 
@@ -123,6 +125,35 @@ struct ChangeApplierConflictTests {
     }
 
     // MARK: - Tests (≥6 required by plan)
+
+    @Test("Inbound changes for a different account are rejected without mutating stores")
+    func inboundChangeForDifferentAccountIsRejected() async throws {
+        let expectedUserId = UUID()
+        let activeUserId = UUID()
+        let position = Position(
+            bookId: UUID(),
+            locator: "pdf-v1:page:12",
+            percentComplete: 0.4,
+            updatedAt: Date(timeIntervalSince1970: 2_000_000_000)
+        )
+        let positionStore = StubPositionStore()
+        let metadata = StubMetadata()
+        let applier = makeApplier(
+            bookStore: StubBookStore(),
+            positionStore: positionStore,
+            highlightStore: StubHighlightStore(),
+            metadata: metadata,
+            currentUserId: { activeUserId }
+        )
+
+        let change = try positionChange(position, at: position.updatedAt)
+        let result = await applier.apply([change], expectedUserId: expectedUserId)
+
+        #expect(result.applied == 0)
+        #expect(result.errors.contains("account switched during inbound sync"))
+        #expect(await positionStore.snapshot().isEmpty)
+        #expect(await metadata.cleaned().isEmpty)
+    }
 
     @Test("Position: local newer than remote → conflict, no overwrite")
     func positionLocalNewerWins() async throws {

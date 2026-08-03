@@ -25,6 +25,10 @@ import Foundation
 /// so the inbound wave doesn't re-surface on the next outbound push.
 public final class ChangeApplier: Sendable {
 
+    private struct AccountSwitched: Error, CustomStringConvertible {
+        var description: String { "account switched during inbound sync" }
+    }
+
     public struct ApplyResult: Sendable, Equatable {
         public var applied: Int = 0
         public var skipped: Int = 0
@@ -65,12 +69,13 @@ public final class ChangeApplier: Sendable {
         self.bookMaterializer = bookMaterializer
     }
 
-    public func apply(_ changes: [SyncChange]) async -> ApplyResult {
+    public func apply(_ changes: [SyncChange], expectedUserId: UserID? = nil) async -> ApplyResult {
         var result = ApplyResult()
 
         for change in changes {
-            guard await accountIsActive() else {
-                result.errors.append("account switched during inbound sync")
+            do { try await ensureAccount(expectedUserId) }
+            catch {
+                result.errors.append(String(describing: error))
                 break
             }
             guard let kind = SyncEntityKind(rawValue: change.kind) else {
@@ -80,18 +85,19 @@ public final class ChangeApplier: Sendable {
             do {
                 switch kind {
                 case .position:
-                    try await applyPosition(change, into: &result)
+                    try await applyPosition(change, into: &result, expectedUserId: expectedUserId)
                 case .highlight:
-                    try await applyHighlight(change, into: &result)
+                    try await applyHighlight(change, into: &result, expectedUserId: expectedUserId)
                 case .book:
-                    try await applyBook(change, into: &result)
+                    try await applyBook(change, into: &result, expectedUserId: expectedUserId)
                 case .bookmark:
-                    try await applyBookmark(change, into: &result)
+                    try await applyBookmark(change, into: &result, expectedUserId: expectedUserId)
                 case .chapterIndex:
-                    try await applyChapterIndex(change, into: &result)
+                    try await applyChapterIndex(change, into: &result, expectedUserId: expectedUserId)
                 case .conversation, .message:
                     // Phase 9 will wire — record the cursor so we don't echo.
                     result.skipped += 1
+                    try await ensureAccount(expectedUserId)
                     try await metadataStore.markClean(
                         entityId: change.id,
                         kind: kind,
@@ -118,7 +124,7 @@ public final class ChangeApplier: Sendable {
 
     // MARK: - Per-kind appliers
 
-    private func applyPosition(_ change: SyncChange, into result: inout ApplyResult) async throws {
+    private func applyPosition(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         let remote = try SyncPayloadCodec.decodePosition(change.payload, fallbackUpdatedAt: change.updatedAt)
         if let local = try await positionStore.position(for: remote.bookId),
            local.updatedAt >= remote.updatedAt {
@@ -126,7 +132,9 @@ public final class ChangeApplier: Sendable {
             result.conflicts += 1
             return
         }
+        try await ensureAccount(expectedUserId)
         try await positionStore.upsert(remote)
+        try await ensureAccount(expectedUserId)
         try await metadataStore.markClean(
             entityId: remote.bookId,
             kind: .position,
@@ -136,14 +144,16 @@ public final class ChangeApplier: Sendable {
         result.applied += 1
     }
 
-    private func applyHighlight(_ change: SyncChange, into result: inout ApplyResult) async throws {
+    private func applyHighlight(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         if change.deleted {
             if try await metadataStore.pending(kind: .highlight, limit: 10_000)
                 .contains(where: { $0.entityId == change.id }) {
                 result.conflicts += 1
                 return
             }
+            try await ensureAccount(expectedUserId)
             try await highlightStore.delete(change.id)
+            try await ensureAccount(expectedUserId)
             try await metadataStore.markClean(
                 entityId: change.id,
                 kind: .highlight,
@@ -160,7 +170,9 @@ public final class ChangeApplier: Sendable {
             result.conflicts += 1
             return
         }
+        try await ensureAccount(expectedUserId)
         try await highlightStore.upsert(remote)
+        try await ensureAccount(expectedUserId)
         try await metadataStore.markClean(
             entityId: remote.id,
             kind: .highlight,
@@ -170,14 +182,16 @@ public final class ChangeApplier: Sendable {
         result.applied += 1
     }
 
-    private func applyBookmark(_ change: SyncChange, into result: inout ApplyResult) async throws {
+    private func applyBookmark(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         if change.deleted {
             if try await metadataStore.pending(kind: .bookmark, limit: 10_000)
                 .contains(where: { $0.entityId == change.id }) {
                 result.conflicts += 1
                 return
             }
+            try await ensureAccount(expectedUserId)
             try await bookmarkStore.delete(change.id)
+            try await ensureAccount(expectedUserId)
             try await metadataStore.markClean(
                 entityId: change.id,
                 kind: .bookmark,
@@ -194,7 +208,9 @@ public final class ChangeApplier: Sendable {
             result.conflicts += 1
             return
         }
+        try await ensureAccount(expectedUserId)
         try await bookmarkStore.upsert(remote)
+        try await ensureAccount(expectedUserId)
         try await metadataStore.markClean(
             entityId: remote.id,
             kind: .bookmark,
@@ -204,9 +220,10 @@ public final class ChangeApplier: Sendable {
         result.applied += 1
     }
 
-    private func applyChapterIndex(_ change: SyncChange, into result: inout ApplyResult) async throws {
+    private func applyChapterIndex(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         guard let chapterIndexPersistence else {
             result.skipped += 1
+            try await ensureAccount(expectedUserId)
             try await metadataStore.markClean(entityId: change.id, kind: .chapterIndex, lastSyncedAt: change.updatedAt, remoteEtag: nil)
             return
         }
@@ -215,18 +232,22 @@ public final class ChangeApplier: Sendable {
             result.conflicts += 1
             return
         }
+        try await ensureAccount(expectedUserId)
         try await chapterIndexPersistence.upsertChapterIndex(remote)
+        try await ensureAccount(expectedUserId)
         try await metadataStore.markClean(entityId: change.id, kind: .chapterIndex, lastSyncedAt: change.updatedAt, remoteEtag: nil)
         result.applied += 1
     }
 
-    private func applyBook(_ change: SyncChange, into result: inout ApplyResult) async throws {
+    private func applyBook(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         if try await metadataStore.pending(kind: .book, limit: 10_000).contains(where: { $0.entityId == change.id }) {
             result.conflicts += 1
             return
         }
         if change.deleted {
+            try await ensureAccount(expectedUserId)
             try await bookStore.delete(change.id)
+            try await ensureAccount(expectedUserId)
             try await metadataStore.forget(entityId: change.id, kind: .book)
             result.applied += 1
             return
@@ -242,6 +263,7 @@ public final class ChangeApplier: Sendable {
         } else {
             remote
         }
+        try await ensureAccount(expectedUserId)
         try await bookStore.upsert(materialized)
         if let position = try SyncPayloadCodec.decodeBookPosition(
             change.payload,
@@ -252,7 +274,9 @@ public final class ChangeApplier: Sendable {
                local.updatedAt >= position.updatedAt {
                 result.conflicts += 1
             } else {
+                try await ensureAccount(expectedUserId)
                 try await positionStore.upsert(position)
+                try await ensureAccount(expectedUserId)
                 try await metadataStore.markClean(
                     entityId: position.bookId,
                     kind: .position,
@@ -261,6 +285,7 @@ public final class ChangeApplier: Sendable {
                 )
             }
         }
+        try await ensureAccount(expectedUserId)
         try await metadataStore.markClean(
             entityId: remote.id,
             kind: .book,
@@ -271,5 +296,12 @@ public final class ChangeApplier: Sendable {
         // NOTE: File bytes pull-side is deferred to 07-04. The engine sees
         // the new book row and schedules a /api/sync/download-url + GET into
         // BookFileStorage on the next foreground sweep.
+    }
+
+    private func ensureAccount(_ expectedUserId: UserID?) async throws {
+        guard await accountIsActive() else { throw AccountSwitched() }
+        if let expectedUserId, await currentUserId() != expectedUserId {
+            throw AccountSwitched()
+        }
     }
 }

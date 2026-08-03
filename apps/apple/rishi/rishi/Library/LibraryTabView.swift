@@ -26,11 +26,25 @@ struct LibraryTabDependencies {
     let settings: SettingsContentDependencies
 }
 
+struct LibrarySyncCompletionRefreshObserver {
+    private let refresh: () async -> Void
+
+    init(refresh: @escaping () async -> Void) {
+        self.refresh = refresh
+    }
+
+    func statusChanged(from wasRunning: Bool?, to status: SyncStatusSnapshot) async {
+        guard wasRunning == true, !status.isRunning else { return }
+        await refresh()
+    }
+}
+
 struct LibraryTabView: View {
 
     let dependencies: LibraryTabDependencies
     let user: User
     let model: SignedInViewModel
+    let dataUseConsentGranted: Bool
     let onLibraryReadyForTrial: () -> Void
 
     @Environment(AppRouter.self) private var router
@@ -50,11 +64,13 @@ struct LibraryTabView: View {
         dependencies: LibraryTabDependencies,
         user: User,
         model: SignedInViewModel,
+        dataUseConsentGranted: Bool = false,
         onLibraryReadyForTrial: @escaping () -> Void = {},
     ) {
         self.dependencies = dependencies
         self.user = user
         self.model = model
+        self.dataUseConsentGranted = dataUseConsentGranted
         self.onLibraryReadyForTrial = onLibraryReadyForTrial
         _vm = State(initialValue: LibraryViewModel.make(
             bookStore: dependencies.bookStore,
@@ -140,8 +156,9 @@ struct LibraryTabView: View {
                 }
             }
             
-            .task(id: user.id) {
-                await model.performInitialLibrarySync(
+            .task(id: "\(user.id.uuidString)-\(dataUseConsentGranted)") {
+                await model.performInitialLibrarySyncIfConsented(
+                    consentGranted: dataUseConsentGranted,
                     refresh: { await vm.refresh() },
                     sync: {
                         if dependencies.readerDefaults.autoSync {
@@ -163,6 +180,10 @@ struct LibraryTabView: View {
                 // No first-book sheet is competing with the trial notice.
                 onLibraryReadyForTrial()
 
+            }
+            .onChange(of: dependencies.settings.syncStatus.isRunning) { wasRunning, isRunning in
+                guard wasRunning, !isRunning else { return }
+                Task { await vm.refresh() }
             }
         }
         .environment(vm)

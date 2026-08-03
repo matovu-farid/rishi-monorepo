@@ -137,6 +137,7 @@ struct SignedInContent: View {
 #endif
     @State private var model = SignedInViewModel()
     @State private var showDataUseConsent = false
+    @State private var dataUseConsentGranted = false
     @State private var retryVoiceAfterConsent = false
 
     var body: some View {
@@ -145,6 +146,7 @@ struct SignedInContent: View {
             dependencies: dependencies.library,
             user: user,
             model: model,
+            dataUseConsentGranted: dataUseConsentGranted,
             onLibraryReadyForTrial: onLibraryReadyForTrial
         )
 #if targetEnvironment(macCatalyst)
@@ -160,7 +162,8 @@ struct SignedInContent: View {
 #endif
         .task(id: user.id) {
             await dependencies.dataUseConsentStore.setCurrentUser(user.id.uuidString)
-            showDataUseConsent = !(await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString))
+            dataUseConsentGranted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
+            showDataUseConsent = !dataUseConsentGranted
         }
         .sheet(isPresented: $showDataUseConsent) {
             AIDataConsentView(
@@ -168,6 +171,7 @@ struct SignedInContent: View {
                     Task {
                         await dependencies.dataUseConsentStore.setCurrentUser(user.id.uuidString)
                         await dependencies.dataUseConsentStore.grant(for: user.id.uuidString)
+                        dataUseConsentGranted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
                         showDataUseConsent = false
                         if retryVoiceAfterConsent {
                             retryVoiceAfterConsent = false

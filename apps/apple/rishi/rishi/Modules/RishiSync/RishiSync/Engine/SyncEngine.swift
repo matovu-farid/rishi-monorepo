@@ -68,6 +68,7 @@ public actor SyncEngine {
         public let conversationStore: any ConversationStore
         public let messageStore: any MessageStore
         public let dataUseConsentProvider: any WorkerDataUseConsentProvider
+        public let currentUserId: @Sendable () async -> UserID?
         public let localSyncObjectBuilder: LocalSyncObjectBuilder?
 
         public init(
@@ -88,6 +89,7 @@ public actor SyncEngine {
             conversationStore: any ConversationStore,
             messageStore: any MessageStore,
             dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+            currentUserId: @escaping @Sendable () async -> UserID? = { nil },
             localSyncObjectBuilder: LocalSyncObjectBuilder? = nil
         ) {
             self.queue = queue
@@ -107,6 +109,7 @@ public actor SyncEngine {
             self.conversationStore = conversationStore
             self.messageStore = messageStore
             self.dataUseConsentProvider = dataUseConsentProvider
+            self.currentUserId = currentUserId
             self.localSyncObjectBuilder = localSyncObjectBuilder
         }
     }
@@ -133,6 +136,7 @@ public actor SyncEngine {
     private let messageStore: any MessageStore
     private let chatRefreshDelegate: (any ChatSyncRefreshDelegate)?
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
+    private let currentUserId: @Sendable () async -> UserID?
     private let localSyncObjectBuilder: LocalSyncObjectBuilder?
 
     // Plan 34-10 (SRP) — runOnce's three responsibilities extracted into
@@ -145,6 +149,8 @@ public actor SyncEngine {
     private var debouncer: PositionDebouncer!
     private var status: SyncStatus?
     private var accountGeneration = 0
+    private var activeWaveCount = 0
+    private var resetInProgress = false
 
     public init(
         config: SyncEngineConfig = .init(),
@@ -186,6 +192,7 @@ public actor SyncEngine {
         self.messageStore = messageStore
         self.chatRefreshDelegate = chatRefreshDelegate
         self.dataUseConsentProvider = dependencies.dataUseConsentProvider
+        self.currentUserId = dependencies.currentUserId
         self.localSyncObjectBuilder = dependencies.localSyncObjectBuilder
 
         // Plan 34-10 (SRP) — assemble the runOnce collaborators from the
@@ -196,7 +203,8 @@ public actor SyncEngine {
             messagesFetcher: messagesFetcher,
             conversationStore: conversationStore,
             messageStore: messageStore,
-            metadataStore: metadataStore
+            metadataStore: metadataStore,
+            currentUserId: dependencies.currentUserId
         )
         self.outboundDrainer = OutboundDrainer(dependencies: .init(
             queue: queue,
@@ -209,7 +217,8 @@ public actor SyncEngine {
             messageUploader: messageUploader,
             bookmarkUploader: bookmarkUploader,
             chapterIndexUploader: chapterIndexUploader,
-            dataUseConsentProvider: dependencies.dataUseConsentProvider
+            dataUseConsentProvider: dependencies.dataUseConsentProvider,
+            currentUserId: dependencies.currentUserId
         ))
         self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
 
@@ -330,8 +339,11 @@ public actor SyncEngine {
 
     /// Called by `PositionDebouncer` after the per-bookId window closes.
     fileprivate func commitPositionDirty(_ bookId: BookID) async {
+        let generation = accountGeneration
+        guard !resetInProgress else { return }
         do {
             try await metadataStore.markDirty(entityId: bookId, kind: .position)
+            guard generation == accountGeneration, !resetInProgress else { return }
             await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .position))
             await statusReporter.refreshPendingCount(on: status)
         } catch {
@@ -352,11 +364,18 @@ public actor SyncEngine {
         // the trace cleanly. Pure additive.
         let signpostState = syncSignposter.beginInterval("sync.wave")
         defer { syncSignposter.endInterval("sync.wave", signpostState) }
+        while resetInProgress {
+            await Task.yield()
+        }
+        activeWaveCount += 1
+        defer { activeWaveCount -= 1 }
         var wave = Wave()
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            await statusReporter.snapshotStatus(error: "Sync requires data-use consent", on: status)
             return wave
         }
         let waveGeneration = accountGeneration
+        let waveUserId = await currentUserId()
         statusReporter.setRunning(true, on: status)
         var inboundReadyForOutbound = true
 
@@ -378,7 +397,7 @@ public actor SyncEngine {
             }
             wave.fetched = changes.count
             if !changes.isEmpty {
-                let result = await applier.apply(changes)
+                let result = await applier.apply(changes, expectedUserId: waveUserId)
                 wave.applied = result.applied
                 wave.conflicts = result.conflicts
                 wave.skipped = result.skipped
@@ -398,7 +417,7 @@ public actor SyncEngine {
         //     no-op (regression-guarded by tests); the real merge runs here so
         //     the engine drives the stores directly without widening
         //     ChangeApplier's dep surface.
-        let chatMerge = await chatInboundMerger.merge()
+        let chatMerge = await chatInboundMerger.merge(expectedUserId: waveUserId)
         wave.applied += chatMerge.applied
         wave.conflicts += chatMerge.conflicts
         wave.errors.append(contentsOf: chatMerge.errors)
@@ -412,7 +431,9 @@ public actor SyncEngine {
             return wave
         }
 
-        guard waveGeneration == accountGeneration else {
+        let currentUserBeforeOutbound = await currentUserId()
+        guard waveGeneration == accountGeneration,
+              waveUserId == currentUserBeforeOutbound else {
             statusReporter.setRunning(false, on: status)
             return wave
         }
@@ -426,7 +447,7 @@ public actor SyncEngine {
         // 2. Outbound — drain the queue by kind, delegated to OutboundDrainer
         //    (plan 34-10). Per-kind buckets keep a book-only drain from
         //    swallowing position items as collateral.
-        let drain = await outboundDrainer.drain(limit: config.batchLimit)
+        let drain = await outboundDrainer.drain(limit: config.batchLimit, expectedUserId: waveUserId)
         wave.booksUploaded = drain.booksUploaded
         wave.positionsPushed = drain.positionsPushed
         wave.highlightsPushed = drain.highlightsPushed
@@ -441,13 +462,17 @@ public actor SyncEngine {
         // the Apple canonical encoder and reject a mismatch instead of
         // silently claiming sync completed. Legacy workers omit
         // snapshot_hash and remain compatible.
-        guard waveGeneration == accountGeneration else {
+        let currentUserBeforeVerification = await currentUserId()
+        guard waveGeneration == accountGeneration,
+              waveUserId == currentUserBeforeVerification else {
             statusReporter.setRunning(false, on: status)
             return wave
         }
         do {
             let snapshot = try await fetcher.fetchFullSnapshot()
-            guard waveGeneration == accountGeneration else {
+            let currentUserAfterFullSnapshot = await currentUserId()
+            guard waveGeneration == accountGeneration,
+                  waveUserId == currentUserAfterFullSnapshot else {
                 statusReporter.setRunning(false, on: status)
                 return wave
             }
@@ -458,7 +483,9 @@ public actor SyncEngine {
             } else {
                 localChanges = []
             }
-            guard waveGeneration == accountGeneration else {
+            let currentUserBeforeLocalProjection = await currentUserId()
+            guard waveGeneration == accountGeneration,
+                  waveUserId == currentUserBeforeLocalProjection else {
                 statusReporter.setRunning(false, on: status)
                 return wave
             }
@@ -534,14 +561,25 @@ public actor SyncEngine {
     /// A generation check prevents a wave that was suspended in network I/O
     /// from draining old-account records after sign-out.
     public func resetForAccountSwitch() async {
+        if resetInProgress {
+            while resetInProgress {
+                await Task.yield()
+            }
+            return
+        }
+        resetInProgress = true
         accountGeneration += 1
         await debouncer.cancelAll()
+        while activeWaveCount > 0 {
+            await Task.yield()
+        }
         await queue.clear()
         do {
             try await metadataStore.resetAll()
         } catch {
             Log.error("sync.reset_metadata.failed", error: error)
         }
+        resetInProgress = false
     }
 
     // MARK: - Status mutations

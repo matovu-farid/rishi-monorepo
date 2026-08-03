@@ -40,36 +40,51 @@ struct ChatInboundMerger: Sendable {
     private let conversationStore: any ConversationStore
     private let messageStore: any MessageStore
     private let metadataStore: any SyncMetadataStore
+    private let currentUserId: @Sendable () async -> UserID?
 
     init(
         conversationsFetcher: ConversationsFetcher,
         messagesFetcher: MessagesFetcher,
         conversationStore: any ConversationStore,
         messageStore: any MessageStore,
-        metadataStore: any SyncMetadataStore
+        metadataStore: any SyncMetadataStore,
+        currentUserId: @escaping @Sendable () async -> UserID? = { nil }
     ) {
         self.conversationsFetcher = conversationsFetcher
         self.messagesFetcher = messagesFetcher
         self.conversationStore = conversationStore
         self.messageStore = messageStore
         self.metadataStore = metadataStore
+        self.currentUserId = currentUserId
     }
 
     /// Pull conversations then messages, applying the merge policy above.
     /// Ordering (conversations before messages) is preserved exactly.
-    func merge() async -> MergeResult {
+    func merge(expectedUserId: UserID? = nil) async -> MergeResult {
         var result = MergeResult()
 
         do {
             let convos = try await conversationsFetcher.fetch()
             for convo in convos {
+                guard await isExpected(expectedUserId) else {
+                    result.errors.append("account switched during inbound chat sync")
+                    return result
+                }
                 // LWW: drop remote if local is newer-or-equal.
                 if let local = try await conversationStore.conversation(convo.id),
                    local.updatedAt >= convo.updatedAt {
                     result.conflicts += 1
                     continue
                 }
+                guard await isExpected(expectedUserId) else {
+                    result.errors.append("account switched during inbound chat sync")
+                    return result
+                }
                 try await conversationStore.upsert(convo)
+                guard await isExpected(expectedUserId) else {
+                    result.errors.append("account switched during inbound chat sync")
+                    return result
+                }
                 try await metadataStore.markClean(
                     entityId: convo.id,
                     kind: .conversation,
@@ -86,9 +101,21 @@ struct ChatInboundMerger: Sendable {
         do {
             let msgs = try await messagesFetcher.fetch()
             for msg in msgs {
+                guard await isExpected(expectedUserId) else {
+                    result.errors.append("account switched during inbound chat sync")
+                    return result
+                }
                 // Messages are append-only locally — server is canonical;
                 // unconditional upsert keyed by id is the right move.
+                guard await isExpected(expectedUserId) else {
+                    result.errors.append("account switched during inbound chat sync")
+                    return result
+                }
                 try await messageStore.upsert(msg)
+                guard await isExpected(expectedUserId) else {
+                    result.errors.append("account switched during inbound chat sync")
+                    return result
+                }
                 try await metadataStore.markClean(
                     entityId: msg.id,
                     kind: .message,
@@ -103,5 +130,10 @@ struct ChatInboundMerger: Sendable {
         }
 
         return result
+    }
+
+    private func isExpected(_ expectedUserId: UserID?) async -> Bool {
+        let current = await currentUserId()
+        return expectedUserId == current
     }
 }

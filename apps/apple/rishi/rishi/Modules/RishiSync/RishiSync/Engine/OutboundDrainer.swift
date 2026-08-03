@@ -40,6 +40,7 @@ struct OutboundDrainer: Sendable {
     private let bookmarkUploader: BookmarkUploader
     private let chapterIndexUploader: ChapterIndexUploader
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
+    private let currentUserId: @Sendable () async -> UserID?
 
     struct Dependencies {
         let queue: SyncQueue
@@ -53,6 +54,7 @@ struct OutboundDrainer: Sendable {
         let bookmarkUploader: BookmarkUploader
         let chapterIndexUploader: ChapterIndexUploader
         let dataUseConsentProvider: any WorkerDataUseConsentProvider
+        let currentUserId: @Sendable () async -> UserID?
     }
 
     init(dependencies: Dependencies) {
@@ -67,13 +69,18 @@ struct OutboundDrainer: Sendable {
         self.bookmarkUploader = dependencies.bookmarkUploader
         self.chapterIndexUploader = dependencies.chapterIndexUploader
         self.dataUseConsentProvider = dependencies.dataUseConsentProvider
+        self.currentUserId = dependencies.currentUserId
     }
 
     /// Drain up to `limit` queue items and push them by kind.
-    func drain(limit: Int) async -> DrainResult {
+    func drain(limit: Int, expectedUserId: UserID?) async -> DrainResult {
         var result = DrainResult()
 
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            return result
+        }
+        guard await isExpected(expectedUserId) else {
+            result.errors.append("account switched during outbound sync")
             return result
         }
 
@@ -100,8 +107,13 @@ struct OutboundDrainer: Sendable {
         }
 
         // Books — one upload per item (no batching API today).
-        for item in booksBucket {
+        for (index, item) in booksBucket.enumerated() {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(Array(booksBucket.dropFirst(index)) + positionsBucket + highlightsBucket + conversationsBucket + messagesBucket + bookmarksBucket + chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 if let book = try await bookStore.book(item.entityId) {
                     try await bookUploader.upload(book)
                     result.booksUploaded += 1
@@ -121,6 +133,11 @@ struct OutboundDrainer: Sendable {
         // Positions — batch push.
         if !positionsBucket.isEmpty {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(positionsBucket + highlightsBucket + conversationsBucket + messagesBucket + bookmarksBucket + chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 result.positionsPushed = try await positionUploader.pushPending(items: positionsBucket)
             } catch {
                 result.errors.append("position.push: \(error)")
@@ -131,6 +148,11 @@ struct OutboundDrainer: Sendable {
         // Highlights — batch push (live + tombstones).
         if !highlightsBucket.isEmpty {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(highlightsBucket + conversationsBucket + messagesBucket + bookmarksBucket + chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 result.highlightsPushed = try await highlightUploader.pushPending(items: highlightsBucket)
             } catch {
                 result.errors.append("highlight.push: \(error)")
@@ -141,6 +163,11 @@ struct OutboundDrainer: Sendable {
         // Conversations — batch push (Phase 16-04).
         if !conversationsBucket.isEmpty {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(conversationsBucket + messagesBucket + bookmarksBucket + chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 result.conversationsPushed = try await conversationUploader.pushPending(items: conversationsBucket)
             } catch {
                 result.errors.append("conversation.push: \(error)")
@@ -151,6 +178,11 @@ struct OutboundDrainer: Sendable {
         // Messages — batch push (Phase 16-04).
         if !messagesBucket.isEmpty {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(messagesBucket + bookmarksBucket + chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 result.messagesPushed = try await messageUploader.pushPending(items: messagesBucket)
             } catch {
                 result.errors.append("message.push: \(error)")
@@ -161,6 +193,11 @@ struct OutboundDrainer: Sendable {
         // Bookmarks — batch push (live + tombstones), Phase 37-08.
         if !bookmarksBucket.isEmpty {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(bookmarksBucket + chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 result.bookmarksPushed = try await bookmarkUploader.pushPending(items: bookmarksBucket)
             } catch {
                 result.errors.append("bookmark.push: \(error)")
@@ -170,6 +207,11 @@ struct OutboundDrainer: Sendable {
 
         if !chapterIndexesBucket.isEmpty {
             do {
+                guard await isExpected(expectedUserId) else {
+                    await requeue(chapterIndexesBucket)
+                    result.errors.append("account switched during outbound sync")
+                    return result
+                }
                 result.chapterIndexesPushed = try await chapterIndexUploader.pushPending(items: chapterIndexesBucket)
             } catch {
                 result.errors.append("chapter_index.push: \(error)")
@@ -178,5 +220,16 @@ struct OutboundDrainer: Sendable {
         }
 
         return result
+    }
+
+    private func isExpected(_ expectedUserId: UserID?) async -> Bool {
+        let current = await currentUserId()
+        return expectedUserId == current
+    }
+
+    private func requeue(_ items: [SyncQueueItem]) async {
+        for item in items {
+            await queue.enqueue(item)
+        }
     }
 }

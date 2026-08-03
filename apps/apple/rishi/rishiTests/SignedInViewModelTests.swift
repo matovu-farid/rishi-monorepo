@@ -78,6 +78,29 @@ struct SignedInViewModelTests {
         )
         #expect(await recorder.events == ["refresh", "sync", "refresh"])
     }
+
+    @Test("initial library sync waits for consent and retries after consent is granted")
+    func initialLibrarySyncIsConsentGated() async {
+        let model = SignedInViewModel()
+        let recorder = EventRecorder()
+        var consentGranted = false
+
+        await model.performInitialLibrarySync(
+            consent: { consentGranted },
+            refresh: { await recorder.record("refresh") },
+            sync: { await recorder.record("sync") }
+        )
+        #expect(await recorder.events.isEmpty)
+
+        consentGranted = true
+        await model.performInitialLibrarySync(
+            consent: { consentGranted },
+            refresh: { await recorder.record("refresh") },
+            sync: { await recorder.record("sync") }
+        )
+
+        #expect(await recorder.events == ["refresh", "sync", "refresh"])
+    }
 }
 
 private actor EventRecorder {

@@ -285,6 +285,7 @@ enum ServiceGraphFactory {
             conversationStore: conversationStore,
             messageStore: messageStore,
             dataUseConsentProvider: dataUseConsentProvider,
+            currentUserId: { await userIdBox.value },
             localSyncObjectBuilder: localSyncObjectBuilder
             ),
             chatRefreshDelegate: chatRefreshAdapter

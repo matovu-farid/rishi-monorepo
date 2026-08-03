@@ -20,12 +20,24 @@ import os
 @Suite("SyncEngine — runOnce orchestration + dirty marks", .serialized)
 struct SyncEngineTests {
 
+    private struct DeniedConsent: WorkerDataUseConsentProvider {
+        func hasCurrentDataUseConsent() async -> Bool { false }
+    }
+
+    private actor CompletionProbe {
+        private var completed = false
+
+        func markCompleted() { completed = true }
+        func isCompleted() -> Bool { completed }
+    }
+
     // MARK: - Stubs
 
     private actor StubMetadata: SyncMetadataStore {
         var dirty: [SyncPendingItem] = []
         var cleaned: [(UUID, SyncEntityKind)] = []
         var globalCursor: Date?
+        var resetCalls = 0
 
         func seedGlobalCursor(_ date: Date?) { globalCursor = date }
 
@@ -50,8 +62,16 @@ struct SyncEngineTests {
             dirty.removeAll { $0.entityId == entityId && $0.kind == kind }
         }
 
+        func resetAll() async throws {
+            dirty.removeAll()
+            cleaned.removeAll()
+            globalCursor = nil
+            resetCalls += 1
+        }
+
         func currentDirty() -> [SyncPendingItem] { dirty }
         func cleanedSnapshot() -> [(UUID, SyncEntityKind)] { cleaned }
+        func resetCallCount() -> Int { resetCalls }
     }
 
     private actor StubBookStore: BookStore {
@@ -83,6 +103,12 @@ struct SyncEngineTests {
         func highlight(_ id: HighlightID) async throws -> Highlight? { rows[id] }
         func upsert(_ highlight: Highlight) async throws { rows[highlight.id] = highlight }
         func delete(_ id: HighlightID) async throws { rows[id] = nil }
+    }
+
+    private actor StubChapterIndexPersistence: ChapterIndexPersistence {
+        func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+        func upsertChapterIndex(_ index: ChapterIndex) async throws {}
+        func markChapterIndexDirty(bookID: BookID) async throws {}
     }
 
     private actor StubConversationStore: ConversationStore {
@@ -157,7 +183,8 @@ struct SyncEngineTests {
         messageStore: any MessageStore = StubMessageStore(),
         workerClient: WorkerClient,
         fileStorage: BookFileStorage,
-        chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil
+        chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil,
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
     ) -> SyncEngine {
         let queue = SyncQueue(metadataStore: metadata)
         let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage, userIdProvider: { "test-user" })
@@ -166,10 +193,25 @@ struct SyncEngineTests {
         let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: workerClient, bookmarkStore: EngineStubBookmarkStore(), metadataStore: metadata)
+        let chapterIndexUploader = ChapterIndexUploader(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            persistence: StubChapterIndexPersistence(),
+            metadataStore: metadata
+        )
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
-        let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: EngineStubBookmarkStore(), metadataStore: metadata)
         let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
         let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
+        let testUserId = UUID()
+        let currentUserId: @Sendable () async -> UserID? = { testUserId }
+        let applier = ChangeApplier(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            highlightStore: highlightStore,
+            bookmarkStore: EngineStubBookmarkStore(),
+            metadataStore: metadata,
+            currentUserId: currentUserId
+        )
         return SyncEngine(
             config: config,
             dependencies: .init(
@@ -182,14 +224,17 @@ struct SyncEngineTests {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             bookmarkUploader: bookmarkUploader,
+            chapterIndexUploader: chapterIndexUploader,
             fetcher: fetcher,
             applier: applier,
             conversationsFetcher: conversationsFetcher,
             messagesFetcher: messagesFetcher,
             conversationStore: conversationStore,
             messageStore: messageStore,
+            dataUseConsentProvider: dataUseConsentProvider,
+            currentUserId: currentUserId
+            ),
             chatRefreshDelegate: chatRefreshDelegate
-            )
         )
     }
 
@@ -207,7 +252,162 @@ struct SyncEngineTests {
         """.utf8)
     }
 
+    private func waitForRequest(path: String) async throws {
+        for _ in 0..<100 {
+            if EngineMockURLProtocol.capturedSnapshot().contains(where: { $0.url?.path == path }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        throw TestTimeout.request(path)
+    }
+
+    private enum TestTimeout: Error {
+        case request(String)
+    }
+
     // MARK: - Tests
+
+    @Test("consent blocked runOnce reports the requirement without making a network request")
+    func runOnceBlockedByConsentReportsStatusWithoutNetwork() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        EngineMockURLProtocol.handler = { _ in
+            (500, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage,
+            dataUseConsentProvider: DeniedConsent()
+        )
+        let status = SyncStatus()
+        await engine.bind(status: status)
+
+        let wave = await engine.runOnce()
+
+        #expect(wave == SyncEngine.Wave())
+        #expect(EngineMockURLProtocol.capturedSnapshot().isEmpty)
+        #expect(status.snapshot().isRunning == false)
+        #expect(status.snapshot().lastError == "Sync requires data-use consent")
+    }
+
+    @Test("account reset waits for an active primary inbound wave before clearing account state")
+    func resetForAccountSwitchWaitsForActiveWave() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let positionStore = StubPositionStore()
+        let (storage, _) = try await makeFileStorage()
+        let fetchGate = DispatchSemaphore(value: 0)
+        defer { fetchGate.signal() }
+
+        let pendingBookId = UUID()
+        let pendingPosition = Position(bookId: pendingBookId, locator: "page:1", percentComplete: 0.2, updatedAt: Date())
+        await positionStore.seed(pendingPosition)
+        try await metadata.markDirty(entityId: pendingBookId, kind: .position)
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                fetchGate.wait()
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: positionStore,
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let waveTask = Task { await engine.runOnce() }
+        try await waitForRequest(path: "/api/sync/changes")
+
+        let resetProbe = CompletionProbe()
+        let resetTask = Task {
+            await engine.resetForAccountSwitch()
+            await resetProbe.markCompleted()
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await resetProbe.isCompleted() == false)
+
+        fetchGate.signal()
+        _ = await waveTask.value
+        await resetTask.value
+
+        #expect(await resetProbe.isCompleted())
+        #expect(await metadata.resetCallCount() == 1)
+        #expect(await metadata.currentDirty().isEmpty)
+        #expect(EngineMockURLProtocol.capturedSnapshot().allSatisfy { $0.url?.path != "/api/sync/push" })
+    }
+
+    @Test("account reset waits for a direct chat inbound wave before clearing account state")
+    func resetForAccountSwitchWaitsForActiveChatWave() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let chatGate = DispatchSemaphore(value: 0)
+        defer { chatGate.signal() }
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                chatGate.wait()
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let waveTask = Task { await engine.runOnce() }
+        try await waitForRequest(path: "/api/sync/conversations")
+
+        let resetProbe = CompletionProbe()
+        let resetTask = Task {
+            await engine.resetForAccountSwitch()
+            await resetProbe.markCompleted()
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await resetProbe.isCompleted() == false)
+
+        chatGate.signal()
+        _ = await waveTask.value
+        await resetTask.value
+
+        #expect(await resetProbe.isCompleted())
+        #expect(await metadata.resetCallCount() == 1)
+    }
 
     @Test("runOnce against 0-changes + 0-pending → applied == 0, no errors")
     func runOnceEmptyWave() async throws {

@@ -16,6 +16,17 @@ import SwiftUI
 @available(iOS 18.4, *)
 public struct SettingsScreen: View {
 
+    static func grantDataUseConsentAndSync(
+        userID: String,
+        consentStore: any DataUseConsentStore,
+        onSyncNow: @escaping @Sendable () async -> Void
+    ) async {
+        await consentStore.setCurrentUser(userID)
+        await consentStore.grant(for: userID)
+        guard await consentStore.isCurrent(for: userID) else { return }
+        await onSyncNow()
+    }
+
     public let user: User
     public let onSignOut: () async -> Void
     public let onDelete: () async throws -> Void
@@ -253,9 +264,12 @@ public struct SettingsScreen: View {
                 AIDataConsentView(
                     onAllow: {
                         Task {
-                            await dataUseConsentStore.setCurrentUser(user.id.uuidString)
-                            await dataUseConsentStore.grant(for: user.id.uuidString)
-                            dataUseConsentCurrent = true
+                            await Self.grantDataUseConsentAndSync(
+                                userID: user.id.uuidString,
+                                consentStore: dataUseConsentStore,
+                                onSyncNow: { onSyncNow() }
+                            )
+                            dataUseConsentCurrent = await dataUseConsentStore.isCurrent(for: user.id.uuidString)
                             showDataUseConsent = false
                         }
                     },

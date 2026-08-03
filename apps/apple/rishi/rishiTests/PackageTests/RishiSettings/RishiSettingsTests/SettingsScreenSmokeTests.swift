@@ -203,4 +203,31 @@ struct SettingsScreenSmokeTests {
         )
         _ = screen.body
     }
+
+    @Test("Allow grants current-user consent before requesting a sync")
+    func consentGrantPrecedesSyncCallback() async {
+        let userID = UUID().uuidString
+        let store = InMemoryDataUseConsentStore()
+        let events = ConsentSyncEventRecorder()
+
+        await SettingsScreen.grantDataUseConsentAndSync(
+            userID: userID,
+            consentStore: store,
+            onSyncNow: {
+                let isCurrent = await store.isCurrent(for: userID)
+                await events.record(isCurrent ? "sync-after-grant" : "sync-before-grant")
+            }
+        )
+
+        #expect(await store.isCurrent(for: userID))
+        #expect(await events.events == ["sync-after-grant"])
+    }
+}
+
+private actor ConsentSyncEventRecorder {
+    private(set) var events: [String] = []
+
+    func record(_ event: String) {
+        events.append(event)
+    }
 }

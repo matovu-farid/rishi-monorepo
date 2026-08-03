@@ -35,4 +35,22 @@ final class SignedInViewModel {
         await sync()
         await refresh()
     }
+
+    func performInitialLibrarySyncIfConsented(
+        consentGranted: Bool,
+        refresh: () async -> Void,
+        sync: () async -> Void
+    ) async {
+        guard consentGranted else { return }
+        await performInitialLibrarySync(refresh: refresh, sync: sync)
+    }
+
+    func performInitialLibrarySync(
+        consent: () -> Bool,
+        refresh: () async -> Void,
+        sync: () async -> Void
+    ) async {
+        guard consent() else { return }
+        await performInitialLibrarySync(refresh: refresh, sync: sync)
+    }
 }
