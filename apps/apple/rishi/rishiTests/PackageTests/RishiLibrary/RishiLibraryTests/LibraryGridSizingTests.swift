@@ -10,6 +10,6 @@ struct LibraryGridSizingTests {
 
     @Test("Tile width is a fixed, positive constant")
     func tileWidthIsFixedPositive() {
-        #expect(LibraryGrid.coverWidth == 145)
+        #expect(LibraryGrid.coverWidth == 150)
     }
 }
