@@ -29,6 +29,19 @@ private final class SlowPositionStore: PositionStore, @unchecked Sendable {
     func delete(_ id: PositionID) async throws {}
 }
 
+private final class SlowCoverExtractor: CoverExtractor, @unchecked Sendable {
+    let delay: Duration
+
+    init(delay: Duration) {
+        self.delay = delay
+    }
+
+    func extractCover(from _: URL) async -> Data? {
+        try? await Task.sleep(for: delay)
+        return Data([0, 1, 2])
+    }
+}
+
 @MainActor
 @Suite("LibraryViewModel.refresh — concurrent position fan-out (F-P0-03)")
 struct LibraryViewModelRefreshTests {
@@ -36,12 +49,18 @@ struct LibraryViewModelRefreshTests {
     private static func makeVM(
         userId: UserID,
         bookStore: any BookStore,
-        positionStore: any PositionStore
+        positionStore: any PositionStore,
+        root: URL? = nil,
+        coverExtractors: [String: any CoverExtractor] = [:]
     ) -> LibraryViewModel {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        let root = root ?? URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("VMRefresh-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let storage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let storage = BookFileStorage(
+            rootURL: root,
+            bookStore: bookStore,
+            coverExtractors: coverExtractors
+        )
         return LibraryViewModel(
             bookStore: bookStore,
             positionStore: positionStore,
@@ -75,6 +94,54 @@ struct LibraryViewModelRefreshTests {
         #expect(elapsed < .milliseconds(300),
                 "refresh() took \(elapsed) — expected < 300ms via concurrent fan-out (serial would be ~1000ms)")
         #expect(vm.books.count == 10)
+    }
+
+    @Test("refresh overlaps position and cold cover resolution")
+    func test_refreshOverlapsPositionAndCoverWork() async throws {
+        let userId = UUID()
+        let bookStore = InMemoryBookStore()
+        let root = URL.temporaryDirectory
+            .appendingPathComponent("VMRefresh-overlap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let relativeFile = "Books/overlap/book.pdf"
+        let sourceURL = root.appendingPathComponent(relativeFile)
+        try FileManager.default.createDirectory(
+            at: sourceURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data([7]).write(to: sourceURL)
+
+        let book = Book(
+            userId: userId,
+            title: "Overlap",
+            formatType: .pdf,
+            fileURL: relativeFile
+        )
+        try await bookStore.upsert(book)
+        let position = Position(bookId: book.id, locator: "loc", percentComplete: 0.5)
+        let positionStore = SlowPositionStore(
+            perReadDelay: .milliseconds(200),
+            positions: [book.id: position]
+        )
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: bookStore,
+            positionStore: positionStore,
+            root: root,
+            coverExtractors: [
+                "pdf": SlowCoverExtractor(delay: .milliseconds(200))
+            ]
+        )
+
+        let elapsed = await ContinuousClock().measure {
+            await vm.refresh()
+        }
+
+        #expect(elapsed < .milliseconds(360), "refresh took (elapsed); position and cover work should overlap")
+        #expect(vm.position(for: book.id)?.bookId == book.id)
+        #expect(vm.coverURLs[book.id] != nil)
     }
 
     @Test("refresh preserves correct (bookId → position) mapping after fan-out")

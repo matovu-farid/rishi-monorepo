@@ -38,10 +38,18 @@ struct SyncEngineTests {
         var cleaned: [(UUID, SyncEntityKind)] = []
         var globalCursor: Date?
         var resetCalls = 0
+        var markDirtyFailures = 0
+
+        private struct InjectedFailure: Error {}
 
         func seedGlobalCursor(_ date: Date?) { globalCursor = date }
+        func failNextMarkDirty() { markDirtyFailures += 1 }
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {
+            if markDirtyFailures > 0 {
+                markDirtyFailures -= 1
+                throw InjectedFailure()
+            }
             if !dirty.contains(where: { $0.entityId == entityId && $0.kind == kind }) {
                 dirty.append(SyncPendingItem(entityId: entityId, kind: kind))
             }
@@ -297,6 +305,193 @@ struct SyncEngineTests {
         #expect(EngineMockURLProtocol.capturedSnapshot().isEmpty)
         #expect(status.snapshot().isRunning == false)
         #expect(status.snapshot().lastError == "Sync requires data-use consent")
+    }
+
+    @Test("concurrent runOnce calls share one active wave")
+    func concurrentRunOnceCallsShareOneActiveWave() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let fetchGate = DispatchSemaphore(value: 0)
+        defer {
+            fetchGate.signal()
+            fetchGate.signal()
+        }
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                fetchGate.wait()
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let first = Task { await engine.runOnce() }
+        try await waitForRequest(path: "/api/sync/changes")
+        let second = Task { await engine.runOnce() }
+
+        try await Task.sleep(for: .milliseconds(50))
+        let activeWaveRequests = EngineMockURLProtocol
+            .capturedSnapshot()
+            .filter { $0.url?.path == "/api/sync/changes" }
+        #expect(activeWaveRequests.count == 1)
+
+        fetchGate.signal()
+        _ = await first.value
+        _ = await second.value
+    }
+
+    @Test("requestSync schedules a follow-up without overlapping the active wave")
+    func requestSyncSchedulesFollowUpWithoutOverlap() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let fetchGate = DispatchSemaphore(value: 0)
+        defer { fetchGate.signal(); fetchGate.signal() }
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                fetchGate.wait()
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let first = Task { await engine.runOnce() }
+        try await waitForRequest(path: "/api/sync/changes")
+        await engine.requestSync()
+
+        let beforeRelease = EngineMockURLProtocol
+            .capturedSnapshot()
+            .filter { $0.url?.path == "/api/sync/changes" }
+        #expect(beforeRelease.count == 1)
+
+        fetchGate.signal()
+        _ = await first.value
+
+        for _ in 0..<100 {
+            let count = EngineMockURLProtocol
+                .capturedSnapshot()
+                .filter { $0.url?.path == "/api/sync/changes" }
+                .count
+            if count >= 2 { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        let afterRelease = EngineMockURLProtocol
+            .capturedSnapshot()
+            .filter { $0.url?.path == "/api/sync/changes" }
+        #expect(afterRelease.count == 2)
+        fetchGate.signal()
+    }
+
+    @Test("account reset cancels queued import sync work")
+    func accountResetCancelsQueuedSyncWork() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let fetchGate = DispatchSemaphore(value: 0)
+        defer { fetchGate.signal(); fetchGate.signal() }
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                fetchGate.wait()
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let first = Task { await engine.runOnce() }
+        try await waitForRequest(path: "/api/sync/changes")
+        await engine.requestSync()
+        let reset = Task { await engine.resetForAccountSwitch() }
+
+        try await Task.sleep(for: .milliseconds(25))
+        fetchGate.signal()
+        await reset.value
+        _ = await first.value
+
+        let changeRequests = EngineMockURLProtocol
+            .capturedSnapshot()
+            .filter { $0.url?.path == "/api/sync/changes" }
+        #expect(changeRequests.count == 1)
+    }
+
+    @Test("markBookDirty retries one transient metadata failure")
+    func markBookDirtyRetriesTransientFailure() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let bookId = UUID()
+        await metadata.failNextMarkDirty()
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let marked = await engine.markBookDirty(bookId)
+
+        #expect(marked)
+        #expect(await metadata.currentDirty().contains {
+            $0.entityId == bookId && $0.kind == .book
+        })
     }
 
     @Test("account reset waits for an active primary inbound wave before clearing account state")

@@ -33,9 +33,9 @@ public actor ImportCoordinator {
     /// re-reads the user identity at import time — important if the user signs
     /// out and back in between sessions.
     ///
-    /// `onBookImported` is fired once per successful import — Phase 7 wires
-    /// this to `SyncEngine.markBookDirty(_:)` so SYNC-01 enqueues the upload
-    /// without RishiLibrary needing to know RishiSync exists.
+    /// `onBookImported` is fired once per successful import. Production wires
+    /// this to a local dirty mark plus coalesced background sync scheduling;
+    /// the callback must not await a network sync before returning.
     public init(
         storage: BookFileStorage,
         currentUserId: @escaping @Sendable () async -> UserID?,

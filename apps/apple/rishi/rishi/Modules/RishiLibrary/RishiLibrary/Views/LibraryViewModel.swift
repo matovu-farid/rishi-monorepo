@@ -183,8 +183,10 @@ public final class LibraryViewModel {
             // placeholder flash. Cover resolution warms the HEIC cache for
             // newly-imported books, locked by
             // `LibraryViewModelImportCoverRegressionTests`.
-            let positionsByBook = await positionLoader.positions(for: loaded)
-            let resolvedCovers = await coverResolver.coverURLs(for: loaded)
+            async let positionsTask = positionLoader.positions(for: loaded)
+            async let coversTask = coverResolver.coverURLs(for: loaded)
+            let positionsByBook = await positionsTask
+            let resolvedCovers = await coversTask
             self.books = loaded
             self.positionsByBookId = positionsByBook
             self.coverURLs = resolvedCovers

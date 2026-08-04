@@ -28,6 +28,47 @@ private let syncSignposter = OSSignposter(
 /// commits hop back through `commitPositionDirty` so all state mutations
 /// (queue, metadata store, SyncStatus) stay actor-isolated to the engine.
 public actor SyncEngine {
+    private final class WaveWaiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Wave, Never>?
+        private var cancelled = false
+
+        func install(_ continuation: CheckedContinuation<Wave, Never>) {
+            let resumeImmediately: Bool
+            lock.lock()
+            if cancelled {
+                resumeImmediately = true
+            } else {
+                self.continuation = continuation
+                resumeImmediately = false
+            }
+            lock.unlock()
+
+            if resumeImmediately {
+                continuation.resume(returning: Wave())
+            }
+        }
+
+        func cancel() {
+            let continuation: CheckedContinuation<Wave, Never>?
+            lock.lock()
+            cancelled = true
+            continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(returning: Wave())
+        }
+
+        func complete(_ wave: Wave) {
+            let continuation: CheckedContinuation<Wave, Never>?
+            lock.lock()
+            continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(returning: wave)
+        }
+    }
+
 
     /// Result snapshot for one `runOnce` wave.
     public struct Wave: Sendable, Equatable {
@@ -151,6 +192,12 @@ public actor SyncEngine {
     private var accountGeneration = 0
     private var activeWaveCount = 0
     private var resetInProgress = false
+    private var activeWaveTask: Task<Wave, Never>?
+    private var activeWaveToken: UUID?
+    private var scheduledSyncTask: Task<Void, Never>?
+    private var syncRequestPending = false
+    private var waveWaiterCounts: [UUID: Int] = [:]
+    private var activeDirtyMarkCount = 0
 
     public init(
         config: SyncEngineConfig = .init(),
@@ -251,14 +298,32 @@ public actor SyncEngine {
 
     // MARK: - Dirty marks
 
-    public func markBookDirty(_ bookId: BookID) async {
-        do {
-            try await metadataStore.markDirty(entityId: bookId, kind: .book)
-            await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
-            await statusReporter.refreshPendingCount(on: status)
-        } catch {
-            Log.error("sync.markBookDirty.failed", error: error)
+    @discardableResult
+    public func markBookDirty(_ bookId: BookID) async -> Bool {
+        while resetInProgress {
+            await Task.yield()
         }
+        activeDirtyMarkCount += 1
+        defer { activeDirtyMarkCount -= 1 }
+        let generation = accountGeneration
+        for attempt in 0..<2 {
+            do {
+                try await metadataStore.markDirty(entityId: bookId, kind: .book)
+                guard generation == accountGeneration, !resetInProgress else {
+                    return false
+                }
+                await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
+                await statusReporter.refreshPendingCount(on: status)
+                return true
+            } catch {
+                guard attempt == 0 else {
+                    Log.error("sync.markBookDirty.failed", error: error)
+                    return false
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        return false
     }
 
     /// Persists a book deletion after its local row/file has been removed.
@@ -353,10 +418,95 @@ public actor SyncEngine {
 
     // MARK: - Sync wave
 
+    /// Runs one full sync wave, sharing an active wave with concurrent callers.
+    /// Actor isolation alone is insufficient here because the wave suspends for
+    /// network and storage awaits, allowing another caller to re-enter.
+    @discardableResult
+    public func runOnce() async -> Wave {
+        guard !resetInProgress else { return Wave() }
+
+        let task: Task<Wave, Never>
+        let token: UUID
+        if let activeWaveTask {
+            task = activeWaveTask
+            token = activeWaveToken!
+        } else {
+            token = UUID()
+            task = Task { [weak self] in
+                guard let self else { return Wave() }
+                return await self.performRunOnce()
+            }
+            activeWaveTask = task
+            activeWaveToken = token
+            waveWaiterCounts[token] = 0
+            Task { [weak self] in
+                _ = await task.value
+                await self?.clearActiveWave(token: token)
+            }
+        }
+        waveWaiterCounts[token, default: 0] += 1
+
+        let waiter = WaveWaiter()
+        Task {
+            waiter.complete(await task.value)
+        }
+        let result = await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Wave, Never>) in
+                waiter.install(continuation)
+            }
+        }, onCancel: {
+            waiter.cancel()
+        })
+        let wasCancelled = Task.isCancelled
+        let remainingWaiters = max(0, (waveWaiterCounts[token] ?? 1) - 1)
+        if remainingWaiters == 0, activeWaveToken != token {
+            waveWaiterCounts[token] = nil
+        } else {
+            waveWaiterCounts[token] = remainingWaiters
+        }
+        if wasCancelled, remainingWaiters == 0, activeWaveToken == token {
+            task.cancel()
+        }
+        return wasCancelled ? Wave() : result
+    }
+
+    private func clearActiveWave(token: UUID) {
+        waveWaiterCounts[token] = nil
+        guard activeWaveToken == token else { return }
+        activeWaveTask = nil
+        activeWaveToken = nil
+    }
+
+    /// Requests a background sync without waiting for its network work. Calls
+    /// arriving during an active wave collapse into one follow-up wave.
+    public func requestSync() {
+        guard !resetInProgress else { return }
+        syncRequestPending = true
+        guard scheduledSyncTask == nil else { return }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.drainSyncRequests()
+        }
+        scheduledSyncTask = task
+    }
+
+    private func drainSyncRequests() async {
+        while syncRequestPending {
+            guard !Task.isCancelled else {
+                scheduledSyncTask = nil
+                return
+            }
+            syncRequestPending = false
+            _ = await runOnce()
+        }
+        scheduledSyncTask = nil
+    }
+
     /// One full sync wave: refresh queue → fetch + apply remote → drain
     /// outbound queue by kind → snapshot status.
     @discardableResult
-    public func runOnce() async -> Wave {
+    private func performRunOnce() async -> Wave {
         // Phase 19 Plan 19-08 (F-P2-04) — wrap the full sync wave so the
         // BGTask + silent-push + manual paths share one Instruments
         // interval. The endInterval is in a `defer` so errors thrown
@@ -364,9 +514,7 @@ public actor SyncEngine {
         // the trace cleanly. Pure additive.
         let signpostState = syncSignposter.beginInterval("sync.wave")
         defer { syncSignposter.endInterval("sync.wave", signpostState) }
-        while resetInProgress {
-            await Task.yield()
-        }
+        guard !resetInProgress, !Task.isCancelled else { return Wave() }
         activeWaveCount += 1
         defer { activeWaveCount -= 1 }
         var wave = Wave()
@@ -568,8 +716,26 @@ public actor SyncEngine {
             return
         }
         resetInProgress = true
+        syncRequestPending = false
+        let scheduledTask = scheduledSyncTask
+        scheduledSyncTask = nil
+        scheduledTask?.cancel()
+
+        let activeTask = activeWaveTask
+        let activeToken = activeWaveToken
+        activeWaveTask = nil
+        activeWaveToken = nil
+        activeTask?.cancel()
+        _ = await activeTask?.value
+        if let activeToken {
+            waveWaiterCounts[activeToken] = nil
+        }
+        await scheduledTask?.value
         accountGeneration += 1
         await debouncer.cancelAll()
+        while activeDirtyMarkCount > 0 {
+            await Task.yield()
+        }
         while activeWaveCount > 0 {
             await Task.yield()
         }

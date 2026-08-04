@@ -305,29 +305,28 @@ enum ServiceGraphFactory {
             pdfCache: pdfThumbnailCache,
             epubCache: epubUnpackedCache
         )
-        let syncAfterBookImported: @Sendable (BookID) async -> Void = { [syncEngine] bookId in
-            await syncEngine.markBookDirty(bookId)
-            await syncEngine.syncNow()
+        let syncAfterBookImported: @Sendable (BookID) async -> Void = {
+            [syncEngine, bookStore, bookFileStorage, bookPrewarmer] bookId in
+            let markedDirty = await syncEngine.markBookDirty(bookId)
+
+            Task.detached(priority: .userInitiated) {
+                guard let book = try? await bookStore.book(bookId) else {
+                    return
+                }
+                let url = bookFileStorage.absoluteFileURL(for: book)
+                await bookPrewarmer.prewarm(book: book, fileURL: url)
+            }
+
+            if markedDirty {
+                await syncEngine.requestSync()
+            }
         }
         let importCoordinator = ImportCoordinator(
             storage: bookFileStorage,
             currentUserId: {
                 await userIdBox.value
             },
-            onBookImported: {
-                [syncAfterBookImported, bookStore, bookFileStorage, bookPrewarmer] bookId
-                in
-
-                await syncAfterBookImported(bookId)
-
-                Task.detached(priority: .userInitiated) {
-                    guard let book = try? await bookStore.book(bookId) else {
-                        return
-                    }
-                    let url = bookFileStorage.absoluteFileURL(for: book)
-                    await bookPrewarmer.prewarm(book: book, fileURL: url)
-                }
-            }
+            onBookImported: syncAfterBookImported
         )
 
         let sampleBookInstaller = SampleBookInstaller(
