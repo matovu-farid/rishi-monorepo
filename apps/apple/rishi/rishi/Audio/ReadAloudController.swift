@@ -52,6 +52,10 @@ final class ReadAloudController {
     private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
     private var readiumSynthesizerGeneration: UInt64?
     private(set) var readiumState: PublicationSpeechSynthesizer.State = .stopped
+    /// Readium's pause API cancels and recreates the current utterance. Keep
+    /// its task alive and pause the shared player directly so resume continues
+    /// from the current audio position.
+    private var isReadiumPlaybackPaused = false
     private var readiumPublication: Publication?
     private var readiumPrefetcher: ReadiumTTSPrefetchCoordinator?
     private var hasStartedReadAloudSession = false
@@ -221,7 +225,7 @@ final class ReadAloudController {
         #if DEBUG
         if testSpeakingOverride { return true }
         #endif
-        if case .playing = readiumState { return true }
+        if case .playing = readiumState, !isReadiumPlaybackPaused { return true }
         if bridge != nil, ttsState.status == .playing { return true }
         return false
     }
@@ -319,9 +323,12 @@ final class ReadAloudController {
     #endif
 
     func togglePlayback() async {
-        if let readiumSynthesizer {
-            isPageEntryPrefetchEligible = ttsState.status == .playing
-            readiumSynthesizer.pauseOrResume()
+        if readiumSynthesizer != nil {
+            if isReadiumPlaybackPaused {
+                await resumeReadiumPlayback()
+            } else if case .playing = readiumState {
+                await pauseReadiumPlayback()
+            }
         } else if let bridge {
             if ttsState.status == .playing {
                 isPageEntryPrefetchEligible = true
@@ -345,10 +352,8 @@ final class ReadAloudController {
             return
         }
         wantsAutoResumeAfterVoice = true
-        if let readiumSynthesizer {
-            if case .playing = readiumState {
-                readiumSynthesizer.pauseOrResume()
-            }
+        if readiumSynthesizer != nil {
+            await pauseReadiumPlayback()
         } else if let bridge {
             await bridge.pause()
         }
@@ -381,13 +386,31 @@ final class ReadAloudController {
     /// without marking it as a voice handoff (which would request auto-resume).
     private func pauseForSystemAudioEvent() async {
         guard isActivelySpeaking else { return }
-        if let readiumSynthesizer {
-            if case .playing = readiumState {
-                readiumSynthesizer.pauseOrResume()
-            }
+        if readiumSynthesizer != nil {
+            await pauseReadiumPlayback()
         } else {
             await bridge?.pause()
         }
+    }
+
+    private func pauseReadiumPlayback() async {
+        guard !isReadiumPlaybackPaused,
+              case .playing = readiumState
+        else { return }
+
+        await ttsEngine.pause()
+        isReadiumPlaybackPaused = true
+        isPageEntryPrefetchEligible = true
+        ttsState.update(status: .paused)
+    }
+
+    private func resumeReadiumPlayback() async {
+        guard isReadiumPlaybackPaused else { return }
+
+        await ttsEngine.resume()
+        isReadiumPlaybackPaused = false
+        isPageEntryPrefetchEligible = false
+        ttsState.update(status: .playing)
     }
 
     /// Claims the shared playback session before Readium starts delivering
@@ -557,6 +580,7 @@ final class ReadAloudController {
         await readiumPrefetcher?.stop()
         readiumPrefetcher = nil
         readiumPublication = nil
+        isReadiumPlaybackPaused = false
         if let bridge {
             await bridge.stop()
             self.bridge = nil
@@ -653,6 +677,7 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         case .stopped:
             invalidatePlaybackGeneration()
             nowPlayingController?.detach()
+            isReadiumPlaybackPaused = false
             isPageEntryPrefetchEligible = true
             followCreditRemaining = 0
             #if DEBUG

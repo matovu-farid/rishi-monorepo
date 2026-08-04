@@ -77,10 +77,27 @@ struct TTSEngineTests {
                 return false
             }
         }
+        let lifecycleCallsBeforePause = fakeEngine.calls.filter { call in
+            switch call {
+            case .attach, .start, .resetNode:
+                return true
+            default:
+                return false
+            }
+        }
         await engine.pause()
         #expect(fakeEngine.calls.contains(.pause))
         await engine.resume()
         #expect(fakeEngine.calls.contains(.resume))
+        let lifecycleCallsAfterResume = fakeEngine.calls.filter { call in
+            switch call {
+            case .attach, .start, .resetNode:
+                return true
+            default:
+                return false
+            }
+        }
+        #expect(lifecycleCallsAfterResume == lifecycleCallsBeforePause)
         await engine.stop()
     }
 
