@@ -24,6 +24,7 @@ final class MacAccountMenuModel {
         var onSignOut: () -> Void
         var onDeleteAccount: () -> Void = {}
         var onEditUsername: () -> Void = {}
+        var onCopyUsername: () -> Void = {}
         var onOpenPrivacy: () -> Void
         var onOpenTerms: () -> Void
 
@@ -37,6 +38,7 @@ final class MacAccountMenuModel {
             onSignOut: @escaping () -> Void,
             onDeleteAccount: @escaping () -> Void = {},
             onEditUsername: @escaping () -> Void = {},
+            onCopyUsername: @escaping () -> Void = {},
             onOpenPrivacy: @escaping () -> Void,
             onOpenTerms: @escaping () -> Void
         ) {
@@ -49,12 +51,15 @@ final class MacAccountMenuModel {
             self.onSignOut = onSignOut
             self.onDeleteAccount = onDeleteAccount
             self.onEditUsername = onEditUsername
+            self.onCopyUsername = onCopyUsername
             self.onOpenPrivacy = onOpenPrivacy
             self.onOpenTerms = onOpenTerms
         }
     }
 
     private(set) var payload: Payload?
+    private(set) var usernameCopied = false
+    private var copyFeedbackGeneration = 0
     var deleteConfirmationPresented = false
     var deleteError: String?
     var onDeleteConfirmed: () async throws -> Void = {}
@@ -62,8 +67,30 @@ final class MacAccountMenuModel {
 
     nonisolated init() {}
 
-    func update(_ payload: Payload) { self.payload = payload }
-    func clear() { self.payload = nil }
+    func update(_ payload: Payload) {
+        self.payload = payload
+        copyFeedbackGeneration += 1
+        usernameCopied = false
+    }
+
+    func clear() {
+        payload = nil
+        copyFeedbackGeneration += 1
+        usernameCopied = false
+    }
+
+    func copyUsername() {
+        guard let username = payload?.userUsername, !username.isEmpty else { return }
+        payload?.onCopyUsername()
+        usernameCopied = true
+        copyFeedbackGeneration += 1
+        let generation = copyFeedbackGeneration
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard copyFeedbackGeneration == generation else { return }
+            usernameCopied = false
+        }
+    }
 
     func requestDelete() {
         deleteError = nil

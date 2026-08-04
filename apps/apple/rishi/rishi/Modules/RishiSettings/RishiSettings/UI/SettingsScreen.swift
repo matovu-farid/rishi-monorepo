@@ -30,6 +30,7 @@ public struct SettingsScreen: View {
     public let user: User
     public let onSignOut: () async -> Void
     public let onEditUsername: () -> Void
+    public let onCopyUsername: (String) -> Void
     public let onDelete: () async throws -> Void
     public let onDeleted: () -> Void
     public let onDismiss: () -> Void
@@ -119,6 +120,7 @@ public struct SettingsScreen: View {
         dataUseConsentStore: any DataUseConsentStore = InMemoryDataUseConsentStore(),
         onRevokeDataUse: @escaping @Sendable () async -> Void = {},
         onEditUsername: @escaping () -> Void = {},
+        onCopyUsername: @escaping (String) -> Void = UsernameClipboard.copy,
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
         onDeleted: @escaping () -> Void,
@@ -145,6 +147,7 @@ public struct SettingsScreen: View {
         self.dataUseConsentStore = dataUseConsentStore
         self.onRevokeDataUse = onRevokeDataUse
         self.onEditUsername = onEditUsername
+        self.onCopyUsername = onCopyUsername
         self.onSignOut = onSignOut
         self.onDelete = onDelete
         self.onDeleted = onDeleted
@@ -170,7 +173,8 @@ public struct SettingsScreen: View {
                         }
                         showDeleteConfirm = true
                     },
-                    onEditUsername: onEditUsername
+                    onEditUsername: onEditUsername,
+                    onCopyUsername: onCopyUsername
                 )
                 BillingSection(
                     entitlement: billingEntitlement,

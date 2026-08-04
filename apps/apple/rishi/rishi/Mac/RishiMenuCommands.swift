@@ -295,6 +295,18 @@ private struct AccountMenuItems: View {
                 .disabled(true)
             Text(payload.userEmail ?? "Email unavailable")
                 .disabled(true)
+            if let username = payload.userUsername, !username.isEmpty {
+                Button {
+                    account.copyUsername()
+                } label: {
+                    Label(
+                        "Copy Username",
+                        systemImage: account.usernameCopied ? "checkmark" : "doc.on.doc"
+                    )
+                }
+                .accessibilityIdentifier("mac-account-username-copy")
+                .accessibilityLabel(account.usernameCopied ? "Username copied" : "Copy username")
+            }
             Button("Edit Username…") { payload.onEditUsername() }
         } else {
             Text("Not signed in")

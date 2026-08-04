@@ -3,6 +3,10 @@ import Testing
 import Foundation
 import SwiftUI
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 
 
 
@@ -204,6 +208,18 @@ struct SettingsScreenSmokeTests {
         )
         _ = screen.body
     }
+
+#if canImport(UIKit)
+    @Test("UsernameClipboard writes the exact username")
+    func usernameClipboardWritesExactValue() {
+        let previous = UIPasteboard.general.string
+        defer { UIPasteboard.general.string = previous }
+
+        UsernameClipboard.copy("reader_one")
+
+        #expect(UIPasteboard.general.string == "reader_one")
+    }
+#endif
 
     @Test("Allow grants current-user consent before requesting a sync")
     func consentGrantPrecedesSyncCallback() async {

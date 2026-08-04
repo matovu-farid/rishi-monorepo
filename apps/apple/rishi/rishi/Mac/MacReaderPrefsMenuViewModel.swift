@@ -155,6 +155,10 @@ final class MacReaderPrefsMenuViewModel {
                 Task { @MainActor in await signOut() }
             },
             onDeleteAccount: {},
+            onCopyUsername: { [userUsername] in
+                guard let userUsername, !userUsername.isEmpty else { return }
+                UsernameClipboard.copy(userUsername)
+            },
             onOpenPrivacy: { self.open(.privacyPolicy) },
             onOpenTerms: { self.open(.termsOfUse) }
         )

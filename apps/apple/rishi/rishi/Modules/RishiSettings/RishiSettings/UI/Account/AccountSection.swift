@@ -18,17 +18,22 @@ struct AccountSection: View {
     public let onSignOut: () async -> Void
     public let onShowDeleteFlow: () -> Void
     public let onEditUsername: () -> Void
+    public let onCopyUsername: (String) -> Void
+    @State private var usernameCopied = false
+    @State private var copyFeedbackGeneration = 0
 
     public init(
         user: User,
         onSignOut: @escaping () async -> Void,
         onShowDeleteFlow: @escaping () -> Void,
-        onEditUsername: @escaping () -> Void = {}
+        onEditUsername: @escaping () -> Void = {},
+        onCopyUsername: @escaping (String) -> Void = UsernameClipboard.copy
     ) {
         self.user = user
         self.onSignOut = onSignOut
         self.onShowDeleteFlow = onShowDeleteFlow
         self.onEditUsername = onEditUsername
+        self.onCopyUsername = onCopyUsername
     }
 
     public var body: some View {
@@ -43,20 +48,61 @@ struct AccountSection: View {
                     .foregroundStyle(RishiColor.textSecondary)
                     .accessibilityIdentifier("settings-account-email")
             }
-            Button {
-                onEditUsername()
-            } label: {
+            if let username = user.username, !username.isEmpty {
                 HStack {
-                    Text("Username")
-                        .font(RishiTypography.body)
-                        .foregroundStyle(RishiColor.textPrimary)
-                    Spacer()
-                    Text(user.username ?? "Not set")
-                        .font(RishiTypography.caption)
-                        .foregroundStyle(RishiColor.textSecondary)
+                    Button {
+                        onEditUsername()
+                    } label: {
+                        HStack {
+                            Text("Username")
+                                .font(RishiTypography.body)
+                                .foregroundStyle(RishiColor.textPrimary)
+                            Spacer()
+                            Text(username)
+                                .font(RishiTypography.caption)
+                                .foregroundStyle(RishiColor.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("settings-account-username")
+
+                    Button {
+                        onCopyUsername(username)
+                        usernameCopied = true
+                        copyFeedbackGeneration += 1
+                        let generation = copyFeedbackGeneration
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            guard copyFeedbackGeneration == generation else { return }
+                            usernameCopied = false
+                        }
+                    } label: {
+                        Image(systemName: usernameCopied ? "checkmark" : "doc.on.doc")
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(RishiColor.textSecondary)
+                    .accessibilityLabel(usernameCopied ? "Username copied" : "Copy username")
+                    .accessibilityIdentifier("settings-account-username-copy")
                 }
+            } else {
+                Button {
+                    onEditUsername()
+                } label: {
+                    HStack {
+                        Text("Username")
+                            .font(RishiTypography.body)
+                            .foregroundStyle(RishiColor.textPrimary)
+                        Spacer()
+                        Text("Not set")
+                            .font(RishiTypography.caption)
+                            .foregroundStyle(RishiColor.textSecondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settings-account-username")
             }
-            .accessibilityIdentifier("settings-account-username")
             Button("Sign Out") {
                 // KEEP: onSignOut is supplied by the host; the underlying
                 // signOut runs against an actor (RishiAuthService). Outer Task
@@ -76,6 +122,10 @@ struct AccountSection: View {
             Text("Account")
                 .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.textPrimary)
+        }
+        .onChange(of: user.username) { _, _ in
+            copyFeedbackGeneration += 1
+            usernameCopied = false
         }
     }
 }
