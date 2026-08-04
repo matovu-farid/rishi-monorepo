@@ -30,15 +30,20 @@ struct OnboardingUITests {
         #expect(source.contains("Button(\"Not now\", action: onSkip)"))
     }
 
-    @Test("Audio is not declared as an iOS background mode")
-    func audioIsNotABackgroundMode() throws {
-        let source = try String(
-            contentsOf: Self.rishiRoot().appendingPathComponent("rishi/Info.plist"),
-            encoding: .utf8
+    @Test("Background modes match the supported audio and sync features")
+    func backgroundModesMatchSupportedFeatures() throws {
+        let data = try Data(
+            contentsOf: Self.rishiRoot().appendingPathComponent("rishi/Info.plist")
         )
+        let propertyList = try PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        )
+        let dictionary = try #require(propertyList as? [String: Any])
+        let modes = try #require(dictionary["UIBackgroundModes"] as? [String])
 
-        #expect(!source.contains("<key>UIBackgroundModes</key>"))
-        #expect(!source.contains("<string>audio</string>"))
+        #expect(Set(modes) == Set(["audio", "processing"]))
     }
 
     @Test("Onboarding CTA stays full width in compact layouts")
