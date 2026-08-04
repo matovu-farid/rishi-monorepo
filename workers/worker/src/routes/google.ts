@@ -3,9 +3,16 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
-import { account, deletionState, user } from "../db/schema";
+import { account, deletionState, user, usernames } from "../db/schema";
 import { createDb, type WorkerDb } from "../db/drizzle";
 import { signAccessToken, signRefreshToken } from "../jwt";
+import {
+  ensureUsername,
+  generateUsernameCandidate,
+  isUsernameAllocationError,
+  isUsernameConflict,
+  UsernameAllocationError,
+} from "../usernames";
 import {
   checkRateLimit,
   rateLimitSubjectKey,
@@ -34,6 +41,7 @@ type GoogleUser = {
   email: string | null;
   emailVerified: boolean;
   image: string | null;
+  username: string;
 };
 
 type ExistingUserResult =
@@ -125,7 +133,8 @@ async function resolveExistingUser(
     return { kind: "deleting" };
   }
 
-  return { kind: "user", user: linkedUser };
+  const username = await ensureUsername(db, linkedUser.id, linkedUser.name);
+  return { kind: "user", user: { ...linkedUser, username } };
 }
 
 function identityConflict(
@@ -182,25 +191,36 @@ async function resolveGoogleUser(
     updatedAt: now,
   };
 
-  try {
-    await db.batch([
-      db.insert(user).values(newUser),
-      db.insert(account).values(newAccount),
-    ]);
-  } catch (error) {
-    // The deterministic account primary key serializes concurrent first
-    // sign-ins without needing a new migration or a hand-written constraint.
-    const winner = await findAccountByGoogleSubject(db, sub);
-    if (winner) return resolveExistingUser(db, winner);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const username = generateUsernameCandidate(name);
+    try {
+      await db.batch([
+        db.insert(user).values(newUser),
+        db.insert(usernames).values({
+          userId,
+          username,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        db.insert(account).values(newAccount),
+      ]);
+      return { kind: "user", user: { ...newUser, username } };
+    } catch (error) {
+      // The deterministic account primary key serializes concurrent first
+      // sign-ins without needing a new migration or a hand-written constraint.
+      const winner = await findAccountByGoogleSubject(db, sub);
+      if (winner) return resolveExistingUser(db, winner);
 
-    const conflictingAccount = await findAccountById(db, deterministicId);
-    if (identityConflict(conflictingAccount, sub)) {
-      return { kind: "migration" };
+      if (isUsernameConflict(error)) continue;
+
+      const conflictingAccount = await findAccountById(db, deterministicId);
+      if (identityConflict(conflictingAccount, sub)) {
+        return { kind: "migration" };
+      }
+      throw error;
     }
-    throw error;
   }
-
-  return resolveExistingUser(db, newAccount);
+  throw new UsernameAllocationError();
 }
 
 googleRoutes.post("/google", async (c) => {
@@ -266,9 +286,16 @@ googleRoutes.post("/google", async (c) => {
         id: resolved.user.id,
         email: resolved.user.email,
         name: resolved.user.name,
+        username: resolved.user.username,
       },
     });
   } catch (error) {
+    if (isUsernameAllocationError(error)) {
+      return c.json({
+        error: "Username service unavailable",
+        code: "USERNAME_UNAVAILABLE",
+      }, 503);
+    }
     console.error("google sign-in failed", {
       error: error instanceof Error ? error.message : String(error),
     });

@@ -197,6 +197,7 @@ struct SettingsScreenSmokeTests {
             billingEntitlement: .init(isGranted: true),
             onSubscribe: {},
             onSignOut: {},
+            onEditUsername: {},
             onDelete: {},
             onDeleted: {},
             onDismiss: {}

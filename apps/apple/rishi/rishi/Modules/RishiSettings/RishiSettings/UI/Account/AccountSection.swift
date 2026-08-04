@@ -17,15 +17,18 @@ struct AccountSection: View {
     public let user: User
     public let onSignOut: () async -> Void
     public let onShowDeleteFlow: () -> Void
+    public let onEditUsername: () -> Void
 
     public init(
         user: User,
         onSignOut: @escaping () async -> Void,
-        onShowDeleteFlow: @escaping () -> Void
+        onShowDeleteFlow: @escaping () -> Void,
+        onEditUsername: @escaping () -> Void = {}
     ) {
         self.user = user
         self.onSignOut = onSignOut
         self.onShowDeleteFlow = onShowDeleteFlow
+        self.onEditUsername = onEditUsername
     }
 
     public var body: some View {
@@ -40,6 +43,20 @@ struct AccountSection: View {
                     .foregroundStyle(RishiColor.textSecondary)
                     .accessibilityIdentifier("settings-account-email")
             }
+            Button {
+                onEditUsername()
+            } label: {
+                HStack {
+                    Text("Username")
+                        .font(RishiTypography.body)
+                        .foregroundStyle(RishiColor.textPrimary)
+                    Spacer()
+                    Text(user.username ?? "Not set")
+                        .font(RishiTypography.caption)
+                        .foregroundStyle(RishiColor.textSecondary)
+                }
+            }
+            .accessibilityIdentifier("settings-account-username")
             Button("Sign Out") {
                 // KEEP: onSignOut is supplied by the host; the underlying
                 // signOut runs against an actor (RishiAuthService). Outer Task

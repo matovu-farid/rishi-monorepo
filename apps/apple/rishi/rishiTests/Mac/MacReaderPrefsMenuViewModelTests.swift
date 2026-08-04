@@ -47,7 +47,8 @@ struct MacReaderPrefsMenuViewModelTests {
     
     private func makeVM(
         spy: Spy,
-        email: String? = "a@b.com"
+        email: String? = "a@b.com",
+        username: String? = "reader_one"
     ) -> (MacReaderPrefsMenuViewModel, theme: Box<ReaderTheme>, autoSync: Box<Bool>) {
         let theme = Box(ReaderTheme.light)
         let autoSync = Box(true)
@@ -60,6 +61,7 @@ struct MacReaderPrefsMenuViewModelTests {
             autoSync: Binding(get: { autoSync.value }, set: { autoSync.value = $0 }),
             syncStatus: SyncStatus(),
             userEmail: email,
+            userUsername: username,
             loadSettings: { spy.loaded },
             saveSettings: { settings in spy.saved.append(settings) },
             runManualSync: { spy.syncCount += 1 },
@@ -168,6 +170,19 @@ struct MacReaderPrefsMenuViewModelTests {
         #expect(spy.signOutCount == 1)
         #expect(spy.signedOutCallback == 1)
         #expect(spy.opened.count == 2)
+    }
+
+    @Test("account payload exposes and refreshes the username")
+    func usernameRefreshesAccountPayload() {
+        let spy = Spy()
+        let (vm, _, _) = makeVM(spy: spy, username: "reader_one")
+
+        #expect(vm.makeAccountPayload().userUsername == "reader_one")
+
+        vm.updateUsername("reader_two")
+
+        #expect(vm.userUsername == "reader_two")
+        #expect(vm.makeAccountPayload().userUsername == "reader_two")
     }
 
     @Test("empty email resolves to nil (submenu falls back to 'Not signed in')")

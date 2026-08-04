@@ -9,6 +9,7 @@ import {
   verifyAccessToken,
 } from "../jwt";
 import { findOrCreateUser } from "../findOrCreateUser";
+import { isUsernameAllocationError } from "../usernames";
 import { createDb, WorkerDb } from "../db/drizzle";
 import { allowancePeriod, appleUsers, retainedAppleEntitlement, retainedAppleTransaction, restoredAppleEntitlement } from "../db/schema";
 import { encryptSiwaRefreshToken } from "../siwa-token-crypto";
@@ -356,9 +357,16 @@ authRoutes.post("/apple", async (c) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        username: user.username,
       },
     });
   } catch (err) {
+    if (isUsernameAllocationError(err)) {
+      return c.json({
+        error: "Username service unavailable",
+        code: "USERNAME_UNAVAILABLE",
+      }, 503);
+    }
     console.error("apple sign-in failed", {
       stage: failureStage,
       error: err instanceof Error ? err.message : String(err),

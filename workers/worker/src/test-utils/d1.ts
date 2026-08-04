@@ -23,9 +23,35 @@ type TestD1Options = {
 const migrationsDirectory = new URL("../../drizzle/migrations/", import.meta.url);
 
 export function getTestMigrationFiles(): string[] {
-  return readdirSync(migrationsDirectory)
-    .filter((name) => /^\d+_.+\.sql$/.test(name))
-    .sort();
+  const entries = readdirSync(migrationsDirectory, { withFileTypes: true });
+  const legacy = entries
+    .filter((entry) => entry.isFile() && /^\d+_.+\.sql$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  const nested = entries
+    .filter((entry) => entry.isDirectory() && /^\d+_.+$/.test(entry.name))
+    .map((entry) => `${entry.name}/migration.sql`)
+    .filter((name) => {
+      try {
+        readFileSync(new URL(name.replace(/\/migration\.sql$/, "/snapshot.json"), migrationsDirectory), "utf8");
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+
+  const hasLegacyBase = legacy.some((name) => name.startsWith("0000_"));
+  const hasLegacyEntitlement = legacy.some((name) => name.startsWith("0007_"));
+  const nestedToApply = nested.filter((name) => {
+    // These timestamped directories are pre-existing full-schema replacements
+    // for applied top-level history. Do not replay them when their authoritative
+    // top-level migration is present; Wrangler excludes them for the same reason.
+    if (hasLegacyBase && name.startsWith("20260713060447_")) return false;
+    if (hasLegacyEntitlement && name.startsWith("20260801174843_")) return false;
+    return true;
+  });
+  return [...legacy, ...nestedToApply];
 }
 
 export function readTestMigration(name: string): string {
@@ -79,7 +105,9 @@ export function createTestD1(
       return statement;
     },
     async batch(statements: BoundStatement[]) {
-      return Promise.all(statements.map((statement) => statement.run()));
+      const [first, ...rest] = statements;
+      if (!first) return [];
+      return [await first.run(), ...await Promise.all(rest.map((statement) => statement.run()))];
     },
     close() {
       sqlite.close();

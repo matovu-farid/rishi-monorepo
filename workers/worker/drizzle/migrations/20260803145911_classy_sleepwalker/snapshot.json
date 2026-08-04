@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "1f097f90-11b8-4a03-a48d-469bbb6f6503",
+  "id": "38e0115a-6d31-4fdd-9ba9-0a22c43b48a2",
   "prevIds": [
-    "770d4129-f245-45f1-b74c-22d68d144b05"
+    "1f097f90-11b8-4a03-a48d-469bbb6f6503"
   ],
   "ddl": [
     {
@@ -124,6 +124,10 @@
     },
     {
       "name": "user_api_usage",
+      "entityType": "tables"
+    },
+    {
+      "name": "usernames",
       "entityType": "tables"
     },
     {
@@ -3036,6 +3040,46 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "usernames"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "username",
+      "entityType": "columns",
+      "table": "usernames"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "usernames"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "usernames"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "id",
       "entityType": "columns",
       "table": "verification"
@@ -3546,6 +3590,21 @@
     },
     {
       "columns": [
+        "user_id"
+      ],
+      "tableTo": "user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_usernames_user_id_user_id_fk",
+      "entityType": "fks",
+      "table": "usernames"
+    },
+    {
+      "columns": [
         "book_id",
         "page_number"
       ],
@@ -3792,6 +3851,15 @@
       "nameExplicit": false,
       "name": "user_api_usage_pk",
       "table": "user_api_usage",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "nameExplicit": false,
+      "name": "usernames_pk",
+      "table": "usernames",
       "entityType": "pks"
     },
     {
@@ -4120,6 +4188,15 @@
       "name": "session_token_unique",
       "entityType": "uniques",
       "table": "session"
+    },
+    {
+      "columns": [
+        "username"
+      ],
+      "nameExplicit": false,
+      "name": "usernames_username_unique",
+      "entityType": "uniques",
+      "table": "usernames"
     }
   ],
   "renames": []

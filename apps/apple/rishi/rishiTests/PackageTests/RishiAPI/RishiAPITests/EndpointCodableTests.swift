@@ -6,6 +6,37 @@ import Testing
 @Suite("Endpoint Codable + path correctness")
 struct EndpointCodableTests {
 
+    @Test func userDecodesOptionalUsername() throws {
+        let json = #"{"id":"00000000-0000-0000-0000-000000000001","email":"reader@example.com","name":"Reader","username":"reader_one"}"#
+        let user = try JSONDecoder().decode(User.self, from: Data(json.utf8))
+
+        #expect(user.username == "reader_one")
+    }
+
+    @Test func userDecodesWithoutUsernameForCompatibility() throws {
+        let json = #"{"id":"00000000-0000-0000-0000-000000000001","email":"reader@example.com","name":"Reader"}"#
+        let user = try JSONDecoder().decode(User.self, from: Data(json.utf8))
+
+        #expect(user.username == nil)
+    }
+
+    @Test func userUpdateEndpointUsesPatchAndEncodesUsername() throws {
+        let endpoint = UserUpdateEndpoint(username: "reader_one")
+        let body = try JSONEncoder().encode(endpoint.body)
+        let json = String(decoding: body, as: UTF8.self)
+
+        #expect(endpoint.method == .PATCH)
+        #expect(endpoint.path == "/api/user")
+        #expect(json == #"{"username":"reader_one"}"#)
+    }
+
+    @Test func userUpdateEndpointDecodesUpdatedUser() throws {
+        let json = #"{"id":"00000000-0000-0000-0000-000000000001","email":"reader@example.com","name":"Reader","username":"reader_two"}"#
+        let user = try JSONDecoder().decode(UserUpdateEndpoint.Response.self, from: Data(json.utf8))
+
+        #expect(user.username == "reader_two")
+    }
+
     // MARK: - Auth
     //
     // Phase 15 plan 07: the legacy custom `/api/auth/apple` endpoint

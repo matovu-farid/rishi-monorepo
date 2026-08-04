@@ -512,7 +512,7 @@ app.use(
       "X-Dev-Bypass",
       "X-Rishi-Data-Use-Consent",
     ],
-    allowMethods: ["GET", "POST", "OPTIONS", "DELETE"],
+    allowMethods: ["GET", "POST", "OPTIONS", "DELETE", "PATCH"],
     credentials: true,
   }),
 );

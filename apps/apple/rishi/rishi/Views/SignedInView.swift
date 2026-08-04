@@ -84,6 +84,9 @@ struct SignedInView: View {
     @Environment(\.appDependencies) private var appDependencies
     @Environment(CurrentUserBox.self) private var currentUserBox
     @Environment(\.signOut) private var signOut
+#if targetEnvironment(macCatalyst)
+    @State private var showUsernameEditor = false
+#endif
 
     private var services: BootstrappedServices? { appDependencies?.services }
     private var user: User? {
@@ -97,6 +100,11 @@ struct SignedInView: View {
 
     var body: some View {
         if let services, let user {
+#if targetEnvironment(macCatalyst)
+            let editUsername: @MainActor () -> Void = { showUsernameEditor = true }
+#else
+            let editUsername: @MainActor () -> Void = {}
+#endif
             SignedInContent(
                 dependencies: SignedInContentDependencies.make(
                     services: services,
@@ -110,9 +118,23 @@ struct SignedInView: View {
                 services: services,
                 user: user,
                 onSignedOut: { signOut() },
-                account: appDependencies?.macAccountMenu
+                account: appDependencies?.macAccountMenu,
+                onEditUsername: editUsername
             )
             .accountDeletionAlerts(account: appDependencies?.macAccountMenu)
+#if targetEnvironment(macCatalyst)
+            .sheet(isPresented: $showUsernameEditor) {
+                UsernameEditorView(username: user.username) { username in
+                    let updated = try await services.workerClient.send(
+                        UserUpdateEndpoint(username: username)
+                    )
+                    await MainActor.run {
+                        currentUserBox.signIn(user: updated)
+                    }
+                    return updated
+                }
+            }
+#endif
         } else {
             VStack {
 #if DEBUG
@@ -305,6 +327,7 @@ extension View {
         user: User,
         onSignedOut: @escaping @MainActor @Sendable () -> Void,
         account: MacAccountMenuModel?,
+        onEditUsername: @escaping @MainActor () -> Void = {},
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) -> some View {
         #if targetEnvironment(macCatalyst)
@@ -314,6 +337,7 @@ extension View {
                     user: user,
                     onSignedOut: onSignedOut,
                     account: account,
+                    onEditUsername: onEditUsername,
                     pdfViewMode: pdfViewMode
                 )
             )
@@ -332,6 +356,7 @@ extension View {
         let user: User
         let onSignedOut: @MainActor @Sendable () -> Void
         let account: MacAccountMenuModel?
+        let onEditUsername: @MainActor () -> Void
         let pdfViewMode: Binding<PDFViewModeSetting>?
 
         init(
@@ -339,6 +364,7 @@ extension View {
             user: User,
             onSignedOut: @escaping @MainActor @Sendable () -> Void,
             account: MacAccountMenuModel?,
+            onEditUsername: @escaping @MainActor () -> Void,
             pdfViewMode: Binding<PDFViewModeSetting>?
         ) {
             self.services = services
@@ -352,6 +378,7 @@ extension View {
             )
             self.user = user
             self.account = account
+            self.onEditUsername = onEditUsername
             self.pdfViewMode = pdfViewMode
         }
 
@@ -367,6 +394,10 @@ extension View {
                 .onChange(of: services.billing.entitlementSnapshotStore.resolution) { _, _ in
                     updateAccountPayload()
                 }
+                .onChange(of: user.username) { _, _ in
+                    vm.updateUsername(user.username)
+                    updateAccountPayload()
+                }
                 .onDisappear { account?.clear() }
         }
 
@@ -379,6 +410,7 @@ extension View {
             }
             var payload = vm.makeAccountPayload(subscriptionAction: action)
             payload.onDeleteAccount = { account?.requestDelete() }
+            payload.onEditUsername = onEditUsername
             account?.onDeleteConfirmed = {
                 try await services.accountDeletionCoordinator(
                     userId: user.id,

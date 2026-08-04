@@ -33,6 +33,7 @@ struct SettingsContent: View {
 
     @Environment(\.signOut) private var signOut
     @Environment(CurrentUserBox.self) private var currentUserBox
+    @State private var displayedUser: User
     @State private var customerEntitlements = CustomerEntitlements.shared
 
     @State private var initialAudio: TTSSettings = .default
@@ -40,6 +41,18 @@ struct SettingsContent: View {
     @State private var showSubscriptions = false
     @State private var pendingSubscriptionConfirmation = false
     @State private var showSubscriptionConfirmation = false
+    @State private var showUsernameEditor = false
+
+    init(
+        dependencies: SettingsContentDependencies,
+        user: User,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.dependencies = dependencies
+        self.user = user
+        self.onDismiss = onDismiss
+        _displayedUser = State(initialValue: user)
+    }
 
     private var hasActiveStoreKitSubscription: Bool {
         guard let groupID = dependencies.groupID?.value else { return false }
@@ -52,7 +65,7 @@ struct SettingsContent: View {
                 let defaults = dependencies.readerDefaults
                 let sync = dependencies.syncEngine
                 SettingsScreen(
-                    user: user,
+                    user: displayedUser,
                     readerTheme: Binding(
                         get: { defaults.theme },
                         set: { defaults.theme = $0 }
@@ -84,6 +97,7 @@ struct SettingsContent: View {
                     storeKitIsSubscribed: hasActiveStoreKitSubscription,
                     dataUseConsentStore: dependencies.dataUseConsentStore,
                     onRevokeDataUse: dependencies.onRevokeDataUse,
+                    onEditUsername: { showUsernameEditor = true },
                     onSignOut: {
                         await MainActor.run {
                             onDismiss()
@@ -105,6 +119,18 @@ struct SettingsContent: View {
 #endif
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .sheet(isPresented: $showUsernameEditor) {
+            UsernameEditorView(username: displayedUser.username) { username in
+                let updated = try await dependencies.workerClient.send(
+                    UserUpdateEndpoint(username: username)
+                )
+                await MainActor.run {
+                    displayedUser = updated
+                    currentUserBox.signIn(user: updated)
+                }
+                return updated
             }
         }
         .task {

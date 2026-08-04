@@ -3,12 +3,14 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy --minify",
+    "deploy": "bun run verify:migrations && wrangler deploy --minify",
     "generate-types": "wrangler types",
     "type-check": "bun generate-types && tsc",
     "db:generate:ledger": "drizzle-kit generate --config=drizzle-do.config.ts",
-    "migrate:remote": "bunx wrangler d1 migrations apply rishi --remote",
-    "migrate:local": "bunx wrangler d1 migrations apply rishi"
+    "verify:migrations": "bun run scripts/verify-migration-pattern.ts",
+    "migrate:remote": "bun run verify:migrations && bunx wrangler d1 migrations apply rishi --remote",
+    "migrate:local": "bun run verify:migrations && bunx wrangler d1 migrations apply rishi",
+    "backfill:usernames": "bun run scripts/usernames-backfill.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.64",
@@ -36,6 +38,7 @@
     "reflect-metadata": "^0.2.2",
     "resend": "^6.12.3",
     "stripe": "^22.2.0",
+    "unique-username-generator": "^1.5.1",
     "zod": "^4.1.13"
   },
   "devDependencies": {

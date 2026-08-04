@@ -28,9 +28,10 @@ describe("account deletion migration", () => {
     const migrationFiles = getTestMigrationFiles();
     const targetMigration = migrationFiles.find((name) => name.includes("account_deletion"));
     expect(targetMigration).toBeDefined();
+    const targetIndex = migrationFiles.indexOf(targetMigration!);
 
     const d1 = createTestD1(":memory:", {
-      migrations: migrationFiles.filter((name) => name < targetMigration!),
+      migrations: migrationFiles.slice(0, targetIndex),
     });
     const db = createDb(d1);
     const timestamp = new Date(1_000);

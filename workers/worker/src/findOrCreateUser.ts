@@ -1,9 +1,14 @@
 import { Effect } from "effect";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { DrizzleD1Database } from "drizzle-orm/d1";
 import { WorkerDb } from "./db/drizzle";
-import { appleUsers, user } from "./db/schema";
+import { appleUsers, user, usernames } from "./db/schema";
+import {
+  ensureUsername,
+  generateUsernameCandidate,
+  isUsernameConflict,
+  UsernameAllocationError,
+} from "./usernames";
 export interface AppleIdentity {
   sub: string;
   email?: string;
@@ -30,7 +35,10 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
     );
 
     if (existing && existing.user?.id) {
-      return existing.user;
+      const username = yield* Effect.tryPromise(() =>
+        ensureUsername(db, existing.user!.id, existing.user!.name),
+      );
+      return { ...existing.user, username };
     }
     const userId = randomUUID();
     const userData = {
@@ -56,27 +64,47 @@ export const findOrCreateUser = (db: WorkerDb, identity: AppleIdentity) =>
     };
     const resolvedUser = yield* Effect.tryPromise({
       try: async () => {
-        try {
-          await db.insert(user).values(userData);
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const username = generateUsernameCandidate(identity.sub);
+          try {
+            await db.batch([
+              db.insert(user).values(userData),
+              db.insert(usernames).values({
+                userId,
+                username,
+                createdAt: userData.createdAt,
+                updatedAt: userData.updatedAt,
+              }),
+              db.insert(appleUsers).values(appleUser),
+            ]);
+            return { ...userData, username };
+          } catch (err) {
+            // D1 batches are atomic. The test D1 adapter intentionally keeps
+            // its lightweight batch surface, so clean up the attempted rows
+            // before retrying or resolving a concurrent Apple winner.
+            await db.delete(usernames).where(eq(usernames.userId, userId));
+            await db.delete(user).where(eq(user.id, userId));
+            if (isUsernameConflict(err)) continue;
 
-          await db.insert(appleUsers).values(appleUser);
-
-          return userData;
-        } catch (err) {
-          await db.delete(user).where(eq(user.id, userId));
-
-          if (isAppleSubjectUniqueConflict(err)) {
-            const concurrent = await db.query.appleUsers.findFirst({
-              where: { appleUserId: identity.sub },
-              with: { user: true },
-            });
-            if (concurrent?.user?.id) {
-              return concurrent.user;
+            if (isAppleSubjectUniqueConflict(err)) {
+              const concurrent = await db.query.appleUsers.findFirst({
+                where: { appleUserId: identity.sub },
+                with: { user: true },
+              });
+              if (concurrent?.user?.id) {
+                const concurrentUsername = await ensureUsername(
+                  db,
+                  concurrent.user.id,
+                  concurrent.user.name,
+                );
+                return { ...concurrent.user, username: concurrentUsername };
+              }
             }
-          }
 
-          throw err;
+            throw err;
+          }
         }
+        throw new UsernameAllocationError();
       },
       catch(error) {
         console.log(error);

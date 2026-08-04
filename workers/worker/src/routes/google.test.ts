@@ -12,6 +12,7 @@ const { state, jwtState, rateState, tables } = vi.hoisted(() => {
     image: { __col: "image" },
     createdAt: { __col: "createdAt" },
     updatedAt: { __col: "updatedAt" },
+    username: { __col: "username" },
     status: { __col: "status" },
   } as const;
 
@@ -20,11 +21,13 @@ const { state, jwtState, rateState, tables } = vi.hoisted(() => {
       user: { ...columns, __table: "user" },
       account: { ...columns, __table: "account" },
       deletionState: { ...columns, __table: "deletionState" },
+      usernames: { ...columns, __table: "usernames" },
     },
     state: {
       users: [] as Array<Record<string, unknown>>,
       accounts: [] as Array<Record<string, unknown>>,
       deletionStates: [] as Array<Record<string, unknown>>,
+      usernames: [] as Array<Record<string, unknown>>,
       forceAccountConflict: false,
       conflictWinner: null as {
         user: Record<string, unknown>;
@@ -66,15 +69,18 @@ function tableRows(table: { __table: string }) {
   if (table.__table === "user") return state.users;
   if (table.__table === "account") return state.accounts;
   if (table.__table === "deletionState") return state.deletionStates;
+  if (table.__table === "usernames") return state.usernames;
   throw new Error(`Unexpected table ${table.__table}`);
 }
 
 function restore(rows: {
   users: Array<Record<string, unknown>>;
   accounts: Array<Record<string, unknown>>;
+  usernames: Array<Record<string, unknown>>;
 }) {
   state.users.splice(0, state.users.length, ...rows.users);
   state.accounts.splice(0, state.accounts.length, ...rows.accounts);
+  state.usernames.splice(0, state.usernames.length, ...rows.usernames);
 }
 
 vi.mock("../db/schema", () => tables);
@@ -90,6 +96,13 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("../db/drizzle", () => ({
   createDb: vi.fn(() => ({
+    query: {
+      usernames: {
+        findFirst({ where }: { where: { userId: string } }) {
+          return state.usernames.find((row) => row.userId === where.userId);
+        },
+      },
+    },
     select() {
       return {
         from(table: { __table: string }) {
@@ -115,6 +128,9 @@ vi.mock("../db/drizzle", () => ({
       const statement = {
         values(next: Record<string, unknown>) {
           values = next;
+          return statement;
+        },
+        onConflictDoNothing() {
           return statement;
         },
         async run() {
@@ -148,6 +164,7 @@ vi.mock("../db/drizzle", () => ({
       const snapshot = {
         users: [...state.users],
         accounts: [...state.accounts],
+        usernames: [...state.usernames],
       };
       try {
         for (const statement of statements) await statement.run();
@@ -155,6 +172,10 @@ vi.mock("../db/drizzle", () => ({
           (row, index) => state.accounts.findIndex((candidate) => candidate.id === row.id) !== index,
         );
         if (duplicate) throw new Error("UNIQUE constraint failed: account.id");
+        const duplicateUsername = state.usernames.find(
+          (row, index) => state.usernames.findIndex((candidate) => candidate.username === row.username) !== index,
+        );
+        if (duplicateUsername) throw new Error("UNIQUE constraint failed: usernames.username");
         if (state.forceAccountConflict) {
           if (state.conflictWinner) {
             state.users.push({ ...state.conflictWinner.user });
@@ -205,6 +226,7 @@ function resetState() {
   state.users.length = 0;
   state.accounts.length = 0;
   state.deletionStates.length = 0;
+  state.usernames.length = 0;
   state.deletedUserIds.length = 0;
   state.forceAccountConflict = false;
   state.conflictWinner = null;
@@ -393,6 +415,7 @@ describe("POST /auth/google", () => {
       id: "22222222-2222-4222-8222-222222222222",
       name: "Winner",
       email: "signed@example.com",
+      username: "winner",
     };
     const winnerAccount = {
       id: "google:google-sub-1",
@@ -402,6 +425,7 @@ describe("POST /auth/google", () => {
     };
     state.forceAccountConflict = true;
     state.conflictWinner = { user: winnerUser, account: winnerAccount };
+    state.usernames.push({ userId: winnerUser.id, username: "winner" });
 
     const response = await call();
     const body = await response.json() as { userId: string };

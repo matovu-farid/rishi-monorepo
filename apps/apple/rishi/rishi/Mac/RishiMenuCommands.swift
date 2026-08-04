@@ -290,8 +290,16 @@ private struct AccountMenuItems: View {
         
         
         
-        Text(payload?.userEmail ?? "Not signed in")
-            .disabled(true)
+        if let payload {
+            Text(payload.userUsername ?? "Username not set")
+                .disabled(true)
+            Text(payload.userEmail ?? "Email unavailable")
+                .disabled(true)
+            Button("Edit Username…") { payload.onEditUsername() }
+        } else {
+            Text("Not signed in")
+                .disabled(true)
+        }
         Text(Self.aboutLine)
             .disabled(true)
         Divider()

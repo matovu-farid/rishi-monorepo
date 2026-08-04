@@ -37,6 +37,7 @@ struct MacAccountMenuModelTests {
         model.update(
             MacAccountMenuModel.Payload(
                 userEmail: "a@b.com",
+                userUsername: "reader_one",
                 onManageSubscription: {},
                 onSignOut: {},
                 onOpenPrivacy: {},
@@ -45,9 +46,31 @@ struct MacAccountMenuModelTests {
         )
         #expect(model.payload != nil)
         #expect(model.payload?.userEmail == "a@b.com")
+        #expect(model.payload?.userUsername == "reader_one")
         
         
         #expect(model.payload?.userEmail != "Not signed in")
+    }
+
+    @Test("payload routes username editing")
+    func payloadUsernameEditFires() {
+        var editFired = false
+        let model = MacAccountMenuModel()
+        model.update(
+            MacAccountMenuModel.Payload(
+                userEmail: "a@b.com",
+                userUsername: "reader_one",
+                onManageSubscription: {},
+                onSignOut: {},
+                onEditUsername: { editFired = true },
+                onOpenPrivacy: {},
+                onOpenTerms: {}
+            )
+        )
+
+        model.payload?.onEditUsername()
+
+        #expect(editFired)
     }
 
     

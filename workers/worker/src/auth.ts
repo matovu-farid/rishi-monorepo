@@ -20,6 +20,7 @@ import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import type Stripe from "stripe";
 
 import { mintAppleClientSecret } from "./auth-apple-secret";
+import { ensureUsername } from "./usernames";
 
 // ─── has_pro session projection (Phase 17-01) ───────────────────────────────
 // iOS RishiBilling/Service/EntitlementService.swift:75 calls GET /api/auth/get-session
@@ -161,6 +162,19 @@ export async function createAuth(env: Env) {
     emailAndPassword: { enabled: env.ENABLE_TEST_AUTH === "true" },
     user: {
       deleteUser: { enabled: true },
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (createdUser) => {
+            // Better Auth's memory adapter is used by the auth unit tests and
+            // has no D1 `prepare` binding. Production D1 always has it, so a
+            // real Worker request never skips username allocation here.
+            if (typeof env.DB?.prepare !== "function") return;
+            await ensureUsername(db, createdUser.id, createdUser.name);
+          },
+        },
+      },
     },
     socialProviders: {
       google: {

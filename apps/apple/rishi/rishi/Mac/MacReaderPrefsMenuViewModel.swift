@@ -50,6 +50,7 @@ final class MacReaderPrefsMenuViewModel {
 
     
     private let userEmail: String?
+    private(set) var userUsername: String?
 
 
     init(
@@ -59,6 +60,7 @@ final class MacReaderPrefsMenuViewModel {
         autoSync: Binding<Bool>,
         syncStatus: SyncStatus,
         userEmail: String?,
+        userUsername: String? = nil,
         loadSettings: @escaping () async -> TTSSettings,
         saveSettings: @escaping (TTSSettings) async -> Void,
         runManualSync: @escaping () async -> Void,
@@ -74,6 +76,7 @@ final class MacReaderPrefsMenuViewModel {
         self.autoSync = autoSync
         self.syncStatus = syncStatus
         self.userEmail = userEmail
+        self.userUsername = userUsername
         self.loadSettings = loadSettings
         self.saveSettings = saveSettings
         self.runManualSync = runManualSync
@@ -139,6 +142,7 @@ final class MacReaderPrefsMenuViewModel {
     func makeAccountPayload() -> MacAccountMenuModel.Payload {
         MacAccountMenuModel.Payload(
             userEmail: (userEmail?.isEmpty == false) ? userEmail : nil,
+            userUsername: (userUsername?.isEmpty == false) ? userUsername : nil,
             subscriptionAction: .subscribe,
             onSubscribe: presentSubscriptions,
             onManageSubscription: { [presentManageSubscription] in
@@ -154,6 +158,10 @@ final class MacReaderPrefsMenuViewModel {
             onOpenPrivacy: { self.open(.privacyPolicy) },
             onOpenTerms: { self.open(.termsOfUse) }
         )
+    }
+
+    func updateUsername(_ username: String?) {
+        userUsername = username
     }
 
     func makeAccountPayload(subscriptionAction: MacAccountMenuModel.SubscriptionAction) -> MacAccountMenuModel.Payload {
@@ -200,6 +208,7 @@ extension MacReaderPrefsMenuViewModel {
             autoSync: Binding(get: { defaults.autoSync }, set: { defaults.autoSync = $0 }),
             syncStatus: services.sync.status,
             userEmail: user.email,
+            userUsername: user.username,
             loadSettings: { await store.load(userId: userId) },
             saveSettings: { settings in await store.save(settings, userId: userId) },
             

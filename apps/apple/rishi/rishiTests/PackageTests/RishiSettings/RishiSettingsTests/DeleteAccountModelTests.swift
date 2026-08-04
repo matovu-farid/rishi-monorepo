@@ -29,7 +29,8 @@ struct DeleteAccountModelTests {
         let section = AccountSection(
             user: user,
             onSignOut: {},
-            onShowDeleteFlow: {}
+            onShowDeleteFlow: {},
+            onEditUsername: {}
         )
         _ = section.body
     }
@@ -45,7 +46,8 @@ struct DeleteAccountModelTests {
         let section = AccountSection(
             user: user,
             onSignOut: {},
-            onShowDeleteFlow: {}
+            onShowDeleteFlow: {},
+            onEditUsername: {}
         )
         _ = section.body
     }
@@ -60,9 +62,31 @@ struct DeleteAccountModelTests {
         let section = AccountSection(
             user: user,
             onSignOut: {},
-            onShowDeleteFlow: {}
+            onShowDeleteFlow: {},
+            onEditUsername: {}
         )
         _ = section.body
+    }
+
+    @Test("AccountSection constructs with the username editor callback")
+    func accountSectionConstructsWithUsernameEditor() {
+        let section = AccountSection(
+            user: User(email: "reader@example.com", username: nil),
+            onSignOut: {},
+            onShowDeleteFlow: {},
+            onEditUsername: {}
+        )
+
+        _ = section.body
+    }
+
+    @Test("UsernameEditorView constructs when the account has no username")
+    func usernameEditorConstructsWithoutUsername() {
+        let editor = UsernameEditorView(username: nil) { _ in
+            User(email: "reader@example.com", username: "reader_one")
+        }
+
+        _ = editor.body
     }
 
     // MARK: - DeleteAccountModel.runDelete

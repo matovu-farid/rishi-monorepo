@@ -15,7 +15,8 @@
 			"binding": "DB",
 			"database_name": "rishi",
 			"database_id": "970159b7-ca91-49c1-bae8-feb43b24a7e6",
-			"migrations_dir": "drizzle/migrations"
+			"migrations_dir": "drizzle/migrations",
+			"migrations_pattern": "drizzle/migrations/{*.sql,20260803145911_classy_sleepwalker/migration.sql}"
 		}
 	],
 	"r2_buckets": [

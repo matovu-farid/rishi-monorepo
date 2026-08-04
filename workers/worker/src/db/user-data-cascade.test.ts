@@ -25,6 +25,7 @@ import {
   usageAuditLog,
   usageReservation,
   userApiUsage,
+  usernames,
 } from "./schema";
 
 function userCascade(table: Parameters<typeof getTableConfig>[0]) {
@@ -52,6 +53,7 @@ describe("user-owned database relationships", () => {
     ["user_api_usage", "user_id"],
     ["session", "user_id"],
     ["passkey", "user_id"],
+    ["usernames", "user_id"],
   ] as const;
 
   it("cascade user deletion through every user-owned table", () => {
@@ -74,6 +76,7 @@ describe("user-owned database relationships", () => {
       userApiUsage,
       session,
       passkey,
+      usernames,
     ]) {
       expect(userCascade(table).some((foreignKey) => foreignKey.onDelete === "cascade")).toBe(true);
     }
