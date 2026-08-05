@@ -24,13 +24,32 @@ private func makeReadiumEngineFactory(
 }
 
 private func makeReadiumTokenizerFactory(
-    granularity: CustomTTSTokenizer.Granularity
+    granularity: CustomTTSTokenizer.Granularity,
+    selectionText: Locator.Text? = nil
 ) -> PublicationSpeechSynthesizer.TokenizerFactory {
-    { language in
-        CustomTTSTokenizer.tokenize(
+    var didTrimSelection = false
+    return { language in
+        let tokenizer = CustomTTSTokenizer.tokenize(
             defaultLanguage: language,
             granularity: granularity
         )
+        return { content in
+            if !didTrimSelection, let selectionText {
+                if let trimmed = CustomTTSTokenizer.trimming(
+                    content,
+                    before: selectionText
+                ) {
+                    didTrimSelection = true
+                    return try tokenizer(trimmed)
+                }
+                // Do not consume the one-shot trim while Readium is still
+                // yielding a non-text element before the selected passage.
+                if content is TextualContentElement {
+                    didTrimSelection = true
+                }
+            }
+            return try tokenizer(content)
+        }
     }
 }
 
@@ -107,6 +126,17 @@ final class ReadAloudController {
     }
 
     func startReader(vm: ReaderViewModel) async {
+        await startReader(vm: vm, startLocator: nil)
+    }
+
+    func startReader(vm: ReaderViewModel, from startLocator: Locator) async {
+        await startReader(vm: vm, startLocator: startLocator)
+    }
+
+    private func startReader(
+        vm: ReaderViewModel,
+        startLocator explicitStartLocator: Locator?
+    ) async {
         guard let publication = vm.publication else { return }
         let generation = beginPlaybackGeneration()
 
@@ -131,7 +161,8 @@ final class ReadAloudController {
             userId: userId
         )
         let tokenizerFactory = makeReadiumTokenizerFactory(
-            granularity: tokenizerGranularity
+            granularity: tokenizerGranularity,
+            selectionText: explicitStartLocator?.text
         )
 
         guard let synthesizer = PublicationSpeechSynthesizer(
@@ -183,7 +214,12 @@ final class ReadAloudController {
         // page during an animated EPUB turn. Query the navigator-backed live
         // locator immediately before starting so playback cannot rewind to
         // the last callback's page.
-        let startLocator = await vm.currentVisibleLocatorForReadAloud()
+        let startLocator: Locator?
+        if let explicitStartLocator {
+            startLocator = explicitStartLocator
+        } else {
+            startLocator = await vm.currentVisibleLocatorForReadAloud()
+        }
         guard isCurrentPlaybackGeneration(generation) else { return }
 
         // Readium owns publication iteration. The custom tokenizer supplied

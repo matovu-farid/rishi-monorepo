@@ -25,19 +25,24 @@ public struct EPUBHighlightContextMenu: View {
     public let onDismiss: () -> Void
     /// Plan 09-06 (CHAT-05) — when non-nil, surfaces "Ask about this".
     public let onAskAboutThis: (() -> Void)?
+    /// When non-nil, surfaces a play action that starts narration at the
+    /// selected Readium locator.
+    public let onReadAloudFrom: (() -> Void)?
 
     public init(
         selectionFrame: CGRect?,
         onColor: @escaping (HighlightColor) -> Void,
         onAddNote: @escaping () -> Void,
         onDismiss: @escaping () -> Void,
-        onAskAboutThis: (() -> Void)? = nil
+        onAskAboutThis: (() -> Void)? = nil,
+        onReadAloudFrom: (() -> Void)? = nil
     ) {
         self.selectionFrame = selectionFrame
         self.onColor = onColor
         self.onAddNote = onAddNote
         self.onDismiss = onDismiss
         self.onAskAboutThis = onAskAboutThis
+        self.onReadAloudFrom = onReadAloudFrom
     }
 
     public var body: some View {
@@ -46,7 +51,8 @@ public struct EPUBHighlightContextMenu: View {
                 onColor: onColor,
                 onAddNote: onAddNote,
                 onDelete: nil, // brand-new selection — delete only meaningful for existing rows
-                onAskAboutThis: onAskAboutThis
+                onAskAboutThis: onAskAboutThis,
+                onReadAloudFrom: onReadAloudFrom
             )
             .position(menuCenter(in: proxy.size))
             .contentShape(Rectangle())

@@ -57,6 +57,7 @@ public struct ReaderScreen: View {
 
     private let onReadAloud: (() -> Void)?
     private let onPageTurn: @MainActor () async -> Void
+    private let onReadAloudFrom: ((Locator) -> Void)?
 
     private let voicePresenter: (any ReaderVoicePresenter)?
     
@@ -130,6 +131,7 @@ public struct ReaderScreen: View {
         bookmarkStore: (any BookmarkStore)? = nil,
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
+        onReadAloudFrom: ((Locator) -> Void)? = nil,
         onPageTurn: @escaping @MainActor () async -> Void = {},
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
@@ -143,6 +145,7 @@ public struct ReaderScreen: View {
         self.highlightStore = highlightStore
         self.bookmarkStore = bookmarkStore
         self.bookmarkMarkDirty = bookmarkMarkDirty
+        self.onReadAloudFrom = onReadAloudFrom
         self.onReadAloud = onReadAloud
         self.onPageTurn = onPageTurn
         self.voicePresenter = voicePresenter
@@ -260,6 +263,16 @@ public struct ReaderScreen: View {
                                     contextProvider: { await viewModel.liveVoiceContext() },
                                     initialQuote: quote.isEmpty ? nil : quote
                                 )
+                            }
+                        },
+                        onReadAloudFrom: onReadAloudFrom.map { onReadAloudFrom in
+                            {
+                                guard let locator = pending.locator.toReadiumLocator() else {
+                                    return
+                                }
+                                pendingSelection = nil
+                                coordinatorRef.coordinator?.clearSelection()
+                                onReadAloudFrom(locator)
                             }
                         }
                     )
@@ -854,7 +867,11 @@ public struct ReaderScreen: View {
             ReaderPageNavigator(
                 viewModel: viewModel,
                 coordinatorRef: coordinatorRef,
-                onPageTurn: onPageTurn
+                onPageTurn: {
+                    pendingSelection = nil
+                    coordinatorRef.coordinator?.clearSelection()
+                    await onPageTurn()
+                }
             )
         }
 

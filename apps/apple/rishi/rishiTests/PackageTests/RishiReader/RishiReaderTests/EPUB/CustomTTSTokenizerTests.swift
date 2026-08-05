@@ -88,6 +88,23 @@ struct CustomTTSTokenizerTests {
         ])
     }
 
+    @Test("trims the first content element before the selected position")
+    func trimsBeforeSelection() throws {
+        let content = makeTextContent("Before the selection. Selected text continues here.")
+        let trimmed = try #require(
+            CustomTTSTokenizer.trimming(
+                content,
+                before: Locator.Text(
+                    before: "Before the selection. ",
+                    highlight: "Selected"
+                )
+            ) as? TextContentElement
+        )
+
+        #expect(trimmed.text == "Selected text continues here.")
+        #expect(trimmed.segments.first?.locator.text.highlight == trimmed.text)
+    }
+
     @Test("packs sentences when sentence granularity is requested")
     func packsSentencesWhenRequested() throws {
         let content = makeTextContent(

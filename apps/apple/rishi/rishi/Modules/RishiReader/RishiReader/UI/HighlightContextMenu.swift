@@ -21,21 +21,38 @@ public struct HighlightContextMenu: View {
     /// affordance that opens the chat sheet with the selection text
     /// prefilled as a quote. Nil hides the button.
     public let onAskAboutThis: (() -> Void)?
+    /// When non-nil, surfaces a play action that starts narration at the
+    /// selected position.
+    public let onReadAloudFrom: (() -> Void)?
 
     public init(
         onColor: @escaping (HighlightColor) -> Void,
         onAddNote: @escaping () -> Void,
         onDelete: (() -> Void)? = nil,
-        onAskAboutThis: (() -> Void)? = nil
+        onAskAboutThis: (() -> Void)? = nil,
+        onReadAloudFrom: (() -> Void)? = nil
     ) {
         self.onColor = onColor
         self.onAddNote = onAddNote
         self.onDelete = onDelete
         self.onAskAboutThis = onAskAboutThis
+        self.onReadAloudFrom = onReadAloudFrom
     }
 
     public var body: some View {
         HStack(spacing: RishiSpacing.s) {
+            if let onReadAloudFrom {
+                Button(action: onReadAloudFrom) {
+                    Image(systemName: "play.fill")
+                        .font(RishiTypography.body)
+                        .foregroundStyle(RishiColor.textPrimary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("highlight.readAloudFromHere")
+                .accessibilityLabel(A11yLabel.readerReadAloudFromHere)
+            }
+
             ForEach(HighlightColor.allCases, id: \.self) { color in
                 Button(action: { onColor(color) }) {
                     Circle()

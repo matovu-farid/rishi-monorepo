@@ -100,10 +100,12 @@ struct ReaderA11yLabelsTests {
         #expect(s.contains("A11yLabel.readerHighlightColor"))
         #expect(s.contains("A11yLabel.readerAddNote"))
         #expect(s.contains("A11yLabel.readerDeleteHighlight"))
+        #expect(s.contains("A11yLabel.readerReadAloudFromHere"))
         // Identifiers used by UI tests in plan 12-06.
         #expect(s.contains("highlight.color."))
         #expect(s.contains("highlight.addNote"))
         #expect(s.contains("highlight.delete"))
+        #expect(s.contains("highlight.readAloudFromHere"))
     }
 
     @Test("Toolbar buttons declare stable accessibility identifiers")

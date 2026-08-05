@@ -15,6 +15,55 @@ public enum CustomTTSTokenizer {
         case sentence
     }
 
+    /// Returns the first content element with text before a selection removed.
+    /// Readium's HTML iterator and PDF iterator both begin at a containing
+    /// element/page, so a selection start needs this small text-level trim to
+    /// avoid replaying the passage before the user's selected position.
+    /// Returns `nil` when the selection cannot be located in the element.
+    static func trimming(
+        _ content: ContentElement,
+        before selection: Locator.Text
+    ) -> ContentElement? {
+        guard let textContent = content as? TextContentElement,
+              let highlight = selection.highlight,
+              !highlight.isEmpty,
+              let fullText = textContent.text,
+              !fullText.isEmpty
+        else { return nil }
+
+        let selectionRange: Range<String.Index>?
+        if let before = selection.before,
+           let contextualRange = fullText.range(of: before + highlight)
+        {
+            selectionRange = contextualRange
+        } else {
+            selectionRange = fullText.range(of: highlight)
+        }
+        guard let selectionRange else { return nil }
+        guard selectionRange.lowerBound != fullText.startIndex else {
+            return content
+        }
+
+        let remainingText = String(fullText[selectionRange.lowerBound...])
+        guard !remainingText.isEmpty else { return nil }
+
+        let sourceSegment = textContent.segments.first
+        let locator = textContent.locator.copy(text: { text in
+            text = Locator.Text(highlight: remainingText)
+        })
+        let segment = TextContentElement.Segment(
+            locator: locator,
+            text: remainingText,
+            attributes: sourceSegment?.attributes ?? []
+        )
+        return TextContentElement(
+            locator: locator,
+            role: textContent.role,
+            segments: [segment],
+            attributes: textContent.attributes
+        )
+    }
+
     /// Builds a tokenizer using the publication's fallback language.
     /// Segment-level language attributes still take precedence, as handled by
     /// `makeTextContentTokenizer`.

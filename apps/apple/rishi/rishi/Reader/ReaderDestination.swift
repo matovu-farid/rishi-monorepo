@@ -69,6 +69,8 @@ struct ReaderDestination: View {
     let onRequestPaywall: (String) -> Void
     let pdfViewMode: Binding<PDFViewModeSetting>?
 
+    @State private var readAloudStartTask: Task<Void, Never>?
+    @State private var readAloudStartRequest = UUID()
     @State private var vm: ReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
     @State private var syncBinding: ReaderPositionSyncBinding? = nil
@@ -112,33 +114,8 @@ struct ReaderDestination: View {
 
 
             bookmarkMarkDirty: { [dependencies] id in await dependencies.syncEngine.markBookmarkDirty(id) },
-            onReadAloud: {
-                Task {
-                    if let reason = await EntitlementAIGate.gateAIFeature(
-                        .narration,
-                        store: dependencies.entitlementSnapshotStore,
-                        coordinator: dependencies.entitlementRefreshCoordinator
-                    ) {
-                        pendingNarrationUpgradePrompt = reason
-                        return
-                    }
-
-                    if readAloud == nil {
-                        readAloud = ReadAloudController(
-                            ttsEngine: dependencies.ttsEngine,
-                            ttsState: dependencies.ttsState,
-                            ttsSettingsStore: dependencies.ttsSettingsStore,
-                            ttsPrewarmer: dependencies.ttsPrewarmer,
-                            ttsPresence: dependencies.ttsPresenceController,
-                            coordidator: dependencies.ttsCoordinator,
-                            userId: userId,
-                            nowPlayingController: dependencies.nowPlayingController,
-                            bookFileStorage: dependencies.bookFileStorage
-                        )
-                    }
-                    await readAloud?.startReader(vm: vm)
-                }
-            } ,
+            onReadAloud: { startReadAloud() },
+            onReadAloudFrom: { locator in startReadAloud(from: locator) },
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
@@ -196,6 +173,9 @@ struct ReaderDestination: View {
         }
         .onDisappear {
             syncBinding = nil
+            readAloudStartTask?.cancel()
+            readAloudStartTask = nil
+            readAloudStartRequest = UUID()
 
             Task {
                 await dependencies.voicePresenter.parkSession()
@@ -343,5 +323,38 @@ struct ReaderDestination: View {
         )
         readAloud = controller
         return controller
+    }
+
+    @MainActor
+    private func startReadAloud(from startLocator: Locator? = nil) {
+        readAloudStartTask?.cancel()
+        let request = UUID()
+        readAloudStartRequest = request
+        readAloudStartTask = Task { @MainActor in
+            defer {
+                if readAloudStartRequest == request {
+                    readAloudStartTask = nil
+                }
+            }
+            if let reason = await EntitlementAIGate.gateAIFeature(
+                .narration,
+                store: dependencies.entitlementSnapshotStore,
+                coordinator: dependencies.entitlementRefreshCoordinator
+            ) {
+                pendingNarrationUpgradePrompt = reason
+                return
+            }
+
+            guard !Task.isCancelled, readAloudStartRequest == request else {
+                return
+            }
+
+            let controller = ensureReadAloudController()
+            if let startLocator {
+                await controller.startReader(vm: vm, from: startLocator)
+            } else {
+                await controller.startReader(vm: vm)
+            }
+        }
     }
 }

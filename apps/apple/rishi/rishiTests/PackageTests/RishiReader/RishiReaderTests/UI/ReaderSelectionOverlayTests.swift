@@ -37,6 +37,38 @@ struct ReaderSelectionOverlayTests {
         #expect(screen.contains("return true"))
     }
 
+    @Test("Selection menu exposes a read-aloud-from-here action")
+    func readAloudFromHereWiring() throws {
+        let menu = try Self.source(named: "HighlightContextMenu.swift", in: Self.readerUIDir())
+        let positioned = try Self.source(named: "EPUBHighlightContextMenu.swift", in: Self.readerUIDir())
+        let screen = try Self.source(named: "ReaderScreen.swift", in: Self.readerUIDir())
+
+        #expect(menu.contains("onReadAloudFrom"))
+        #expect(menu.contains("highlight.readAloudFromHere"))
+        #expect(menu.contains("play.fill"))
+        #expect(positioned.contains("onReadAloudFrom"))
+        #expect(screen.contains("onReadAloudFrom: onReadAloudFrom.map"))
+        #expect(screen.contains("pending.locator.toReadiumLocator()"))
+        #expect(screen.contains("onReadAloudFrom(locator)"))
+    }
+
+    @Test("Read Aloud keeps a selection locator separate from visible-locator startup")
+    func readAloudSelectionStartContract() throws {
+        let controller = try Self.source(
+            named: "ReadAloudController.swift",
+            in: Self.appRoot().appendingPathComponent("rishi", isDirectory: true)
+        )
+        let destination = try String(
+            contentsOf: Self.appRoot().appendingPathComponent("rishi/Reader/ReaderDestination.swift"),
+            encoding: .utf8
+        )
+
+        #expect(controller.contains("func startReader(vm: ReaderViewModel, from startLocator: Locator)"))
+        #expect(controller.contains("synthesizer.start(from: startLocator)"))
+        #expect(destination.contains("startReadAloud(from: Locator? = nil)"))
+        #expect(destination.contains("EntitlementAIGate.gateAIFeature"))
+    }
+
     private static func readerUIDir() -> URL {
         appRoot()
             .appendingPathComponent("rishi/Modules/RishiReader/RishiReader/UI", isDirectory: true)

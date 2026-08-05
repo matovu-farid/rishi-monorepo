@@ -22,6 +22,7 @@ public enum A11yLabel {
     public static let readerOpenBookmarks:   String = "Bookmarks"
     public static let readerSearch:          String = "Search in book"
     public static let readerReadAloud:       String = "Read aloud"
+    public static let readerReadAloudFromHere: String = "Read aloud from here"
     public static let readerStopReadAloud:   String = "Stop reading"
     public static let readerHighlightColor:  String = "Highlight color"
     public static let readerAddNote:         String = "Add note"
