@@ -56,6 +56,7 @@ public struct ReaderScreen: View {
     private let bookmarkMarkDirty: ((BookmarkID) async -> Void)?
 
     private let onReadAloud: (() -> Void)?
+    private let onPageTurn: @MainActor () async -> Void
 
     private let voicePresenter: (any ReaderVoicePresenter)?
     
@@ -129,6 +130,7 @@ public struct ReaderScreen: View {
         bookmarkStore: (any BookmarkStore)? = nil,
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
+        onPageTurn: @escaping @MainActor () async -> Void = {},
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
@@ -142,6 +144,7 @@ public struct ReaderScreen: View {
         self.bookmarkStore = bookmarkStore
         self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloud = onReadAloud
+        self.onPageTurn = onPageTurn
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
@@ -411,6 +414,36 @@ public struct ReaderScreen: View {
                 )
             ) { _ in
                 Task { await bookmarkToggle?.toggle() }
+            }
+
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: RishiCommand.readerWindowPageForward
+                )
+            ) { note in
+                guard let direction = RishiCommand.readerWindowPageDirection(
+                    for: note,
+                    bookID: viewModel.book.id,
+                    sheetIsPresented: activeSheet != nil
+                ) else { return }
+                coordinatorRef.coordinator?.handleArrowKey(
+                    direction == .forward ? .arrowRight : .arrowLeft
+                )
+            }
+
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: RishiCommand.readerWindowPageBackward
+                )
+            ) { note in
+                guard let direction = RishiCommand.readerWindowPageDirection(
+                    for: note,
+                    bookID: viewModel.book.id,
+                    sheetIsPresented: activeSheet != nil
+                ) else { return }
+                coordinatorRef.coordinator?.handleArrowKey(
+                    direction == .forward ? .arrowRight : .arrowLeft
+                )
             }
 
             //
@@ -820,7 +853,8 @@ public struct ReaderScreen: View {
         private var pageNavigator: ReaderPageNavigator {
             ReaderPageNavigator(
                 viewModel: viewModel,
-                coordinatorRef: coordinatorRef
+                coordinatorRef: coordinatorRef,
+                onPageTurn: onPageTurn
             )
         }
 

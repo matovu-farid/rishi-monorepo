@@ -41,6 +41,7 @@ public struct ReaderView: UIViewControllerRepresentable {
     public let onSelectionChange: (Selection?) -> Void
     public let onPageForward: () -> Void
     public let onPageBackward: () -> Void
+    public let onEscape: () -> Bool
     /// Phase 21 — single-tap callback driven by a UIKit
     /// `UITapGestureRecognizer` attached directly to the engine's
     /// container view with `cancelsTouchesInView = false`. This replaces
@@ -69,6 +70,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
         onPageForward: @escaping () -> Void = {},
         onPageBackward: @escaping () -> Void = {},
+        onEscape: @escaping () -> Bool = { false },
         onTap: @escaping (CGPoint) -> Void = { _ in },
         coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
@@ -79,6 +81,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         self.onSelectionChange = onSelectionChange
         self.onPageForward = onPageForward
         self.onPageBackward = onPageBackward
+        self.onEscape = onEscape
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
     }
@@ -88,6 +91,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         c.onSelectionChange = onSelectionChange
         c.onPageForward = onPageForward
         c.onPageBackward = onPageBackward
+        c.onEscape = onEscape
         c.onTap = onTap
         coordinatorRef.coordinator = c
         return c
@@ -99,6 +103,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.onPageForward = onPageForward
         context.coordinator.onPageBackward = onPageBackward
+        context.coordinator.onEscape = onEscape
         context.coordinator.onTap = onTap
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
@@ -112,6 +117,9 @@ public struct ReaderView: UIViewControllerRepresentable {
         // Refresh closure to track SwiftUI re-renders (the screen owns
         // state that the closure captures — pendingSelection bindings, etc).
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onPageForward = onPageForward
+        context.coordinator.onPageBackward = onPageBackward
+        context.coordinator.onEscape = onEscape
         context.coordinator.onTap = onTap
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator

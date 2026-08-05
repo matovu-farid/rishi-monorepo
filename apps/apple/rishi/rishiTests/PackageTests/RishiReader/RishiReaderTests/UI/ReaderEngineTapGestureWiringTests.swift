@@ -143,6 +143,24 @@ struct ReaderEngineTapGestureWiringTests {
         #expect(backwardCount == 1)
     }
 
+    @Test("EPUB Escape invokes and consumes the selection dismissal callback")
+    func epubEscapeInvokesDismissalCallback() {
+        var count = 0
+        let coordinator = ReaderNavigatorCoordinator(viewModel: makeEPUBViewModel())
+        coordinator.onEscape = { count += 1; return true }
+
+        #expect(coordinator.handleEscape() == true)
+        #expect(count == 1)
+    }
+
+    @Test("EPUB Escape can pass through when no selection is pending")
+    func epubEscapePassesThroughWithoutSelection() {
+        let coordinator = ReaderNavigatorCoordinator(viewModel: makeEPUBViewModel())
+        coordinator.onEscape = { false }
+
+        #expect(coordinator.handleEscape() == false)
+    }
+
     // MARK: - Fixtures
 
     private func makePDFViewModel() -> PDFReaderViewModel {

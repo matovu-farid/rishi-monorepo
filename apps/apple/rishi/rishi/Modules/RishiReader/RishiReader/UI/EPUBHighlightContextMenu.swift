@@ -60,6 +60,12 @@ public struct EPUBHighlightContextMenu: View {
                 .onTapGesture { onDismiss() }
                 .allowsHitTesting(true)
         )
+#if targetEnvironment(macCatalyst)
+        .onKeyPress(.escape) {
+            onDismiss()
+            return KeyPress.Result.handled
+        }
+#endif
     }
 
     private func menuCenter(in containerSize: CGSize) -> CGPoint {
