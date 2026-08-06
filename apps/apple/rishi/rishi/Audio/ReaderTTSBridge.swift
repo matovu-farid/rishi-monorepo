@@ -20,6 +20,7 @@ final class ReaderTTSBridge {
     private let onParagraphsExhausted: () async -> [String]
 
     private let onParagraphsBeforeStart: () async -> [String]
+    private let sessionToken: UUID
 
     private var paragraphs: [String] = []
     private var currentIndex = 0
@@ -36,7 +37,8 @@ final class ReaderTTSBridge {
         coordinator: AudioSessionCoordinator,
         onPassageChange: @escaping (Int?) -> Void,
         onParagraphsExhausted: @escaping () async -> [String] = { [] },
-        onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
+        onParagraphsBeforeStart: @escaping () async -> [String] = { [] },
+        sessionToken: UUID = UUID()
     ) {
         self.engine = engine
         self.state = state
@@ -46,6 +48,7 @@ final class ReaderTTSBridge {
         self.onPassageChange = onPassageChange
         self.onParagraphsExhausted = onParagraphsExhausted
         self.onParagraphsBeforeStart = onParagraphsBeforeStart
+        self.sessionToken = sessionToken
 
         self.advanceWatcher = ParagraphAdvanceWatcher(state: state)
         self.readAhead = ReadAheadCoordinator(prewarmer: prewarmer)
@@ -85,7 +88,6 @@ final class ReaderTTSBridge {
         paragraphs = []
         currentIndex = 0
         onPassageChange(nil)
-        state.update(status: .stopped)
     }
 
     func pause() async {
@@ -173,7 +175,10 @@ final class ReaderTTSBridge {
             voice: settings.voice,
             model: settings.model,
             speed: settings.speed,
-            passageId: String(currentIndex)
+            passageId: String(currentIndex),
+            sessionToken: sessionToken,
+            utteranceToken: UUID(),
+            requestToken: UUID()
         )
 
         await readAhead.warm(
@@ -184,7 +189,11 @@ final class ReaderTTSBridge {
             speed: settings.speed
         )
         await engine.start(request: request)
-        state.update(status: .playing)
+        // Engines retain terminal failures. Do not turn a failed request into
+        // apparent playback while the bridge is awaiting its completion.
+        if state.typedFailure == nil, state.status != .error {
+            state.update(status: .playing)
+        }
     }
 
     private func advance() async {
@@ -227,5 +236,3 @@ final class ReaderTTSBridge {
         return true
     }
 }
-
-

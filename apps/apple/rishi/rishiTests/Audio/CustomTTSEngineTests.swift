@@ -129,6 +129,32 @@ struct CustomTTSEngineTests {
             return
         }
     }
+
+    @Test("typed allowance failure records the request token snapshot")
+    func recordsTypedAllowanceFailureTokens() async {
+        let state = TTSPlaybackState()
+        let sessionToken = UUID()
+        let player = AllowanceFailingTTSPlayer()
+        let engine = CustomTTSEngine(
+            player: player,
+            state: state,
+            settingsStore: InMemoryTTSSettingsStore(),
+            userId: UserID(),
+            sessionToken: sessionToken,
+            voices: [englishVoice]
+        )
+
+        let result = await engine.speak(
+            text: "Allowance failure.",
+            delay: 0,
+            voiceOrLanguage: .left(englishVoice)
+        ) { _ in }
+
+        #expect(result.isSuccess == false)
+        #expect(state.typedFailure == .narration(message: "narration exhausted"))
+        #expect(state.typedFailureTokens?.sessionToken == sessionToken)
+        #expect(await player.request?.sessionToken == sessionToken)
+    }
 }
 
 private actor SpeakCompletionFlag {
@@ -270,6 +296,22 @@ private actor FinishWithoutPlayPlayer: TTSPlaying {
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "finished without playing"]
         )
+    }
+
+    func pause() async {}
+    func resume() async {}
+    func stop() async {}
+}
+
+private actor AllowanceFailingTTSPlayer: TTSPlaying {
+    private(set) var request: TTSStreamRequest?
+
+    func start(request: TTSStreamRequest) async {
+        self.request = request
+    }
+
+    func waitUntilFinished() async throws {
+        throw WorkerAllowanceError.narration(message: "narration exhausted")
     }
 
     func pause() async {}

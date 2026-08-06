@@ -40,6 +40,7 @@ import Foundation
         /// engine down).
         private var engineRunning = false
         private var playbackGeneration = 0
+        private var activeRequestTokens: TTSPlaybackTokenSnapshot?
         private var didStartForGeneration = 0
         private var settledGeneration = 0
         private var pendingResult: Result<Void, Error>?
@@ -62,22 +63,26 @@ import Foundation
         // MARK: - Public surface
 
         public func start(request: TTSStreamRequest) async {
-            // Tear down any in-flight session.
-            await teardown()
-            settle(.failure(CancellationError()), generation: playbackGeneration)
+            // Invalidate the old generation before awaiting cancellation so a
+            // late feed/pipe callback cannot write into the replacement.
             playbackGeneration += 1
-            didStartForGeneration = 0
-            pendingResult = nil
+            let generation = playbackGeneration
+            activeRequestTokens = request.tokenSnapshot
             if let existing = waiter {
                 waiter = nil
                 existing.resume(throwing: CancellationError())
             }
+            pendingResult = nil
+            // Tear down any in-flight session.
+            await teardown()
+            didStartForGeneration = 0
             firstBufferScheduled = false
             // Always leave `.stopped` before returning, including cache hits.
             // Speak completion uses waitUntilFinished, not residual status.
             let observable = state
             await MainActor.run {
-                observable.error = nil
+                observable.activate(tokens: request.tokenSnapshot)
+                if observable.typedFailure == nil { observable.error = nil }
                 observable.update(status: .loading)
             }
             // Single-audio-owner invariant: let the coordinator stop us if another
@@ -108,39 +113,38 @@ import Foundation
                 let chunkLookup = ChunkLookup()
                 let inspected = decoder.pcmStream().map {
                     [weak self, chunkLookup] chunk -> PCMChunk in
-                    await chunkLookup.record(chunk)
-                    await self?.onBufferScheduled(chunk: chunk)
-                    return chunk
-                }
+                        await chunkLookup.record(chunk)
+                    await self?.onBufferScheduled(chunk: chunk, generation: generation)
+                        return chunk
+                    }
 
                 pipeTask = Task { [weak self, engine, chunkLookup] in
                     for await finishedId in engine.play(inspected) {
                         if Task.isCancelled { return }
                         if let chunk = await chunkLookup.take(finishedId) {
-                            await self?.onBufferComplete(chunk: chunk)
+                            await self?.onBufferComplete(chunk: chunk, generation: generation)
                         }
                     }
                 }
 
                 // KEEP: actor-owned feed loop; consumes mp3 bytes and forwards
                 // them to the active decoder actor. No main hop.
-                feedTask = Task { [weak self, streamer, request] in
+                feedTask = Task { [weak self, streamer, request, decoder, generation] in
                     do {
                         for try await chunk in await streamer.stream(request) {
                             if Task.isCancelled { return }
-                            guard let dec = await self?.currentDecoder() else {
+                            guard await self?.isCurrent(generation: generation, tokens: request.tokenSnapshot) == true else {
                                 return
                             }
-                            try await dec.append(
+                            try await decoder.append(
                                 chunk,
                                 passageId: request.passageId
                             )
                         }
-                        if let dec = await self?.currentDecoder() {
-                            await dec.finish()
-                        }
+                        guard await self?.isCurrent(generation: generation, tokens: request.tokenSnapshot) == true else { return }
+                        await decoder.finish()
                     } catch {
-                        await self?.fail(with: error)
+                        await self?.fail(with: error, generation: generation, tokens: request.tokenSnapshot)
                     }
                 }
             } catch {
@@ -159,11 +163,16 @@ import Foundation
 
         public func stop() async {
             // The ONLY place the long-lived engine is torn down + session released.
+            let stoppedGeneration = playbackGeneration
+            // Settle and fence before awaiting cancellation so an old callback
+            // cannot win the replacement generation while teardown is pending.
+            settle(.failure(CancellationError()), generation: stoppedGeneration)
+            playbackGeneration += 1
+            activeRequestTokens = nil
             await teardown()
             engine.stop()
             engineRunning = false
             await coordinator.releaseActiveMode(.tts)
-            settle(.failure(CancellationError()), generation: playbackGeneration)
         }
 
         public func waitUntilFinished() async throws {
@@ -189,7 +198,9 @@ import Foundation
 
         // MARK: - Internals
 
-        private func currentDecoder() -> MP3StreamDecoder? { activeDecoder }
+        private func isCurrent(generation: Int, tokens: TTSPlaybackTokenSnapshot) -> Bool {
+            playbackGeneration == generation && activeRequestTokens == tokens
+        }
 
         private func settle(_ result: Result<Void, Error>, generation: Int) {
             guard generation == playbackGeneration else { return }
@@ -204,7 +215,8 @@ import Foundation
             }
         }
 
-        private func onBufferScheduled(chunk: PCMChunk) async {
+        private func onBufferScheduled(chunk: PCMChunk, generation: Int) async {
+            guard generation == playbackGeneration else { return }
             let observable = state
             if await state.status == .paused {
                 return
@@ -232,7 +244,8 @@ import Foundation
             }
         }
 
-        private func onBufferComplete(chunk: PCMChunk) async {
+        private func onBufferComplete(chunk: PCMChunk, generation: Int) async {
+            guard generation == playbackGeneration else { return }
             if chunk.isFinal {
                 // The last buffer of this passage drained. Long-lived engine: do NOT
                 // stop the engine or release the session here — they stay live for
@@ -253,33 +266,49 @@ import Foundation
             }
         }
 
-        private func teardown() async {
+        private func teardown(awaitFeed: Bool = true) async {
             // Cancel BOTH tasks first so neither resists the decoder-finish
             // signal, then finish the decoder so its pcmStream() completes,
             // which lets engine.play(_:)'s internal `for try await` exit
             // cleanly. The completions drain in `pipeTask` ends shortly after
             // because the engine's continuation calls `.finish()` when the
             // input ends.
-            feedTask?.cancel()
-            pipeTask?.cancel()
+            let feed = feedTask
+            let pipe = pipeTask
+            feed?.cancel()
+            pipe?.cancel()
             feedTask = nil
             pipeTask = nil
+            if awaitFeed { await feed?.value }
+            await pipe?.value
             if let decoder = activeDecoder {
                 await decoder.finish()
             }
             activeDecoder = nil
         }
 
-        private func fail(with error: Error) async {
-            await teardown()
+        private func fail(
+            with error: Error,
+            generation: Int,
+            tokens: TTSPlaybackTokenSnapshot
+        ) async {
+            guard isCurrent(generation: generation, tokens: tokens) else { return }
+            await teardown(awaitFeed: false)
+            guard isCurrent(generation: generation, tokens: tokens) else { return }
             engine.stop()
             engineRunning = false
             await coordinator.releaseActiveMode(.tts)
             let message = String(describing: error)
             let observable = state
+            let requestTokens = activeRequestTokens
             await MainActor.run {
-                observable.update(status: .error)
-                observable.error = message
+                if let allowance = error as? WorkerAllowanceError,
+                   let requestTokens {
+                    observable.recordTypedFailure(allowance, tokens: requestTokens)
+                } else if observable.typedFailure == nil {
+                    observable.update(status: .error)
+                    observable.error = message
+                }
             }
             Log.event(
                 "tts.engine.error",

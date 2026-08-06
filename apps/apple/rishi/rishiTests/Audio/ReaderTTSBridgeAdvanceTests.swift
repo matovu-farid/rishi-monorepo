@@ -152,6 +152,33 @@ struct ReaderTTSBridgeAdvanceTests {
         #expect(!env.recorder.nonNilIndices.contains(1))
         #expect(!env.recorder.nonNilIndices.contains(2))
     }
+
+    @Test("bails on typed allowance failure without advancing")
+    func bailsOnAllowanceFailureWithoutAdvancing() async {
+        let state = TTSPlaybackState()
+        let engine = FakeTTSEngine(
+            state: state,
+            script: .allowance(.narration(message: "narration exhausted"))
+        )
+        let tracker = TTSPassageTracker()
+        let bridge = ReaderTTSBridge(
+            engine: engine,
+            state: state,
+            tracker: tracker,
+            prewarmer: TTSPrewarmer(source: NoopChunkSource()),
+            settingsStore: InMemoryTTSSettingsStore(),
+            userId: UserID(),
+            coordinator: AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator()),
+            onPassageChange: { _ in }
+        )
+
+        await bridge.start(paragraphs: ["alpha", "bravo"])
+        await waitUntil(timeout: 2) { state.typedFailure != nil }
+
+        #expect(state.typedFailure == .narration(message: "narration exhausted"))
+        #expect(startedPassageIds(engine) == ["0"])
+        await bridge.stop()
+    }
 }
 
 

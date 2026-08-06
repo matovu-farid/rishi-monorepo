@@ -70,6 +70,65 @@ struct ReadAloudControllerTests {
         await controller.stop()
     }
 
+    @Test("typed allowance failure is sticky until endSession and observers are one-shot")
+    func typedAllowanceFailureIsStickyUntilEndSession() {
+        let state = TTSPlaybackState()
+        let snapshot = TTSPlaybackTokenSnapshot(
+            sessionToken: UUID(),
+            utteranceToken: UUID(),
+            requestToken: UUID()
+        )
+        var calls = 0
+        let observerID = state.observeTypedFailure { error, receivedSnapshot in
+            calls += 1
+            #expect(error.kind == .trial)
+            #expect(receivedSnapshot == snapshot)
+        }
+
+        state.activate(tokens: snapshot)
+        state.recordTypedFailure(.trial(message: "trial exhausted"), tokens: snapshot)
+        state.update(status: .stopped)
+
+        #expect(calls == 1)
+        #expect(state.typedFailure == .trial(message: "trial exhausted"))
+        #expect(state.typedFailureTokens == snapshot)
+        #expect(state.status == .error)
+
+        state.recordTypedFailure(.trial(message: "second"), tokens: snapshot)
+        #expect(calls == 1)
+
+        state.removeTypedFailureObserver(observerID)
+        state.endSession()
+        #expect(state.typedFailure == nil)
+        #expect(state.typedFailureTokens == nil)
+        #expect(state.status == .idle)
+    }
+
+    @Test("late allowance failures from an older active request are ignored")
+    func lateAllowanceFailureFromOlderRequestIsIgnored() {
+        let state = TTSPlaybackState()
+        let session = UUID()
+        let utterance = UUID()
+        let oldRequest = UUID()
+        let newRequest = UUID()
+        let oldTokens = TTSPlaybackTokenSnapshot(
+            sessionToken: session,
+            utteranceToken: utterance,
+            requestToken: oldRequest
+        )
+        let newTokens = TTSPlaybackTokenSnapshot(
+            sessionToken: session,
+            utteranceToken: utterance,
+            requestToken: newRequest
+        )
+
+        state.activate(tokens: newTokens)
+        state.recordTypedFailure(.narration(message: "stale"), tokens: oldTokens)
+
+        #expect(state.typedFailure == nil)
+        #expect(state.activeTokenSnapshot == newTokens)
+    }
+
     @Test("Readium narration start activates the playback spoken-audio session")
     func readiumNarrationStartActivatesSpokenAudioSession() async {
         let configurator = FakeAudioSessionConfigurator()

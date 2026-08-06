@@ -27,6 +27,7 @@ public enum TTSFailureAlert {
     /// "session ended" posture rather than implying nothing ever started.
     @MainActor
     public static func clear(_ state: TTSPlaybackState) {
+        guard state.typedFailure == nil else { return }
         state.error = nil
         if state.status == .error {
             state.update(status: .stopped)
@@ -52,7 +53,7 @@ private struct TTSFailureAlertModifier: ViewModifier {
         content.alert(
             TTSFailureAlert.title,
             isPresented: Binding(
-                get: { state.status == .error },
+                get: { state.status == .error && state.typedFailure == nil },
                 set: { presented in
                     if presented == false { TTSFailureAlert.clear(state) }
                 }

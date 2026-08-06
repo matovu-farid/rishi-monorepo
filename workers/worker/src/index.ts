@@ -52,6 +52,7 @@ import { userRoutes } from "./routes/user";
 import { retryPendingDeletions } from "./account-deletion";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { InsufficientAllowanceError } from "./durable-objects/user-usage-ledger/errors";
+import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
@@ -881,21 +882,8 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
       reservationId = reservation.reservationId;
       pendingReservationId = reservationId;
     } catch (reserveErr) {
-      if (InsufficientAllowanceError.isInstance(reserveErr)) {
-        // Ledger message is plan-aware (trial credits vs paid narration).
-        const message =
-          typeof (reserveErr as { message?: unknown }).message === "string" &&
-          (reserveErr as { message: string }).message.length > 0
-            ? (reserveErr as { message: string }).message
-            : "Trial credits are exhausted";
-        return c.json(
-          {
-            error: message,
-            code: "INSUFFICIENT_ALLOWANCE",
-          },
-          402,
-        );
-      }
+      const allowance = getInsufficientAllowancePayload(reserveErr);
+      if (allowance) return c.json(allowance, 402);
       throw reserveErr;
     }
 
@@ -1107,21 +1095,8 @@ app.post(
       reservationId = reservation.reservationId;
       pendingReservationId = reservationId;
     } catch (reserveErr) {
-      if (InsufficientAllowanceError.isInstance(reserveErr)) {
-        // Ledger message is plan-aware (trial credits vs paid narration).
-        const message =
-          typeof (reserveErr as { message?: unknown }).message === "string" &&
-          (reserveErr as { message: string }).message.length > 0
-            ? (reserveErr as { message: string }).message
-            : "Trial credits are exhausted";
-        return c.json(
-          {
-            error: message,
-            code: "INSUFFICIENT_ALLOWANCE",
-          },
-          402,
-        );
-      }
+      const allowance = getInsufficientAllowancePayload(reserveErr);
+      if (allowance) return c.json(allowance, 402);
       throw reserveErr;
     }
 

@@ -18,18 +18,21 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
     private let state: TTSPlaybackState
     private let settingsStore: any TTSSettingsStore
     private let userId: UserID
+    private let sessionToken: UUID
 
     init(
         player: any TTSPlaying,
         state: TTSPlaybackState,
         settingsStore: any TTSSettingsStore,
         userId: UserID,
+        sessionToken: UUID = UUID(),
         voices: [TTSVoice] = CustomTTSEngine.defaultVoices
     ) {
         self.player = player
         self.state = state
         self.settingsStore = settingsStore
         self.userId = userId
+        self.sessionToken = sessionToken
         self.availableVoices = voices
     }
 
@@ -55,6 +58,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
         voiceOrLanguage: Either<TTSVoice, Language>,
         onSpeakRange: @escaping (Range<String.Index>) -> Void
     ) async -> Result<Void, TTSError> {
+        var activeTokens: TTSPlaybackTokenSnapshot?
         do {
             try Task.checkCancellation()
 
@@ -93,7 +97,11 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             // Worker rejects text above TTS_MAX_CHARS_PER_REQUEST. Long EPUB
             // paragraphs must be split or play fails with http_400 and used
             // to advance as if the utterance succeeded.
-            let pieces = Self.requestPieces(for: text)
+            let pieces = ParagraphChunker.chunkForTTS(
+                text,
+                maxChars: Self.maxCharsPerRequest
+            )
+            let utteranceToken = UUID()
             Log.event("tts.readaloud.speak.begin", data: [
                 "textLen": String(text.count),
                 "textPrefix": textPrefix,
@@ -108,8 +116,12 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                         text: piece,
                         voice: voice.identifier,
                         model: settings.model,
-                        speed: settings.speed
+                        speed: settings.speed,
+                        sessionToken: sessionToken,
+                        utteranceToken: utteranceToken,
+                        requestToken: UUID()
                     )
+                    activeTokens = request.tokenSnapshot
                     let piecePrefix = String(piece.prefix(60))
                         .replacingOccurrences(of: "\n", with: " ")
                     Log.event("tts.readaloud.speak.piece", data: [
@@ -137,6 +149,12 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
 
             return .success(())
         } catch {
+            if let allowance = error as? WorkerAllowanceError,
+               let activeTokens {
+                await MainActor.run {
+                    state.recordTypedFailure(allowance, tokens: activeTokens)
+                }
+            }
             let message = String(describing: error)
             Log.event("tts.readaloud.speak.end", level: .error, data: [
                 "result": "failure",
@@ -148,12 +166,6 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
 
     /// Matches `workers/worker` `TTS_MAX_CHARS_PER_REQUEST`.
     private static let maxCharsPerRequest = 4000
-
-    private static func requestPieces(for text: String) -> [String] {
-        guard text.count > maxCharsPerRequest else { return [text] }
-        let pieces = ParagraphChunker.chunk(text, maxChars: maxCharsPerRequest)
-        return pieces.isEmpty ? [text] : pieces
-    }
 
     private nonisolated(unsafe) static let defaultVoices: [TTSVoice] = VoiceCatalog.all.map { identifier in
         TTSVoice(

@@ -11,14 +11,16 @@ private func makeReadiumEngineFactory(
     player: any TTSPlaying,
     state: TTSPlaybackState,
     settingsStore: any TTSSettingsStore,
-    userId: UserID
+    userId: UserID,
+    sessionToken: UUID
 ) -> PublicationSpeechSynthesizer.EngineFactory {
     {
         CustomTTSEngine(
             player: player,
             state: state,
             settingsStore: settingsStore,
-            userId: userId
+            userId: userId,
+            sessionToken: sessionToken
         )
     }
 }
@@ -66,6 +68,10 @@ final class ReadAloudController {
     private let userId: UserID
     private let nowPlayingController: NowPlayingController?
     private let bookFileStorage: BookFileStorage?
+    private let onAllowanceFailure: (@MainActor (WorkerAllowanceError) -> Void)?
+    private var typedFailureObserverID: UUID?
+    private var typedFailureObserverGeneration: UInt64 = 0
+    private var isDisposed = false
 
     private(set) var bridge: ReaderTTSBridge? = nil
     private(set) var readiumSynthesizer: PublicationSpeechSynthesizer? = nil
@@ -97,6 +103,19 @@ final class ReadAloudController {
     /// prevents a cancelled/replaced start from attaching Now Playing controls
     /// or starting a synthesizer after one of its prerequisite awaits returns.
     private var playbackGeneration: UInt64 = 0
+    private var playbackSessionToken: UUID?
+    private var keyboardParagraphNavigationTask: Task<Void, Never>?
+    private var keyboardParagraphNavigationGeneration: UInt64 = 0
+    private var keyboardParagraphNavigationTaskID: UInt64 = 0
+    private var playbackTeardownDepth = 0
+
+    private var isStoppingPlayback: Bool {
+        playbackTeardownDepth > 0
+    }
+
+    var keyboardParagraphNavigationGenerationForCallbacks: UInt64 {
+        keyboardParagraphNavigationGeneration
+    }
     private(set) var wantsAutoResumeAfterVoice = false
     /// Test seam: force `isActivelySpeaking` without a live synthesizer.
     #if DEBUG
@@ -112,7 +131,8 @@ final class ReadAloudController {
         coordidator: AudioSessionCoordinator,
         userId: UserID,
         nowPlayingController: NowPlayingController? = nil,
-        bookFileStorage: BookFileStorage? = nil
+        bookFileStorage: BookFileStorage? = nil,
+        onAllowanceFailure: (@MainActor (WorkerAllowanceError) -> Void)? = nil
     ) {
         self.ttsEngine = ttsEngine
         self.ttsState = ttsState
@@ -123,6 +143,8 @@ final class ReadAloudController {
         self.coordinator = coordidator
         self.nowPlayingController = nowPlayingController
         self.bookFileStorage = bookFileStorage
+        self.onAllowanceFailure = onAllowanceFailure
+        installTypedFailureObserver()
     }
 
     func startReader(vm: ReaderViewModel) async {
@@ -137,6 +159,8 @@ final class ReadAloudController {
         vm: ReaderViewModel,
         startLocator explicitStartLocator: Locator?
     ) async {
+        isDisposed = false
+        installTypedFailureObserver()
         guard let publication = vm.publication else { return }
         let generation = beginPlaybackGeneration()
 
@@ -146,6 +170,8 @@ final class ReadAloudController {
         isPageEntryPrefetchEligible = false
         await stopCurrentPlayback()
         guard isCurrentPlaybackGeneration(generation) else { return }
+        let sessionToken = UUID()
+        playbackSessionToken = sessionToken
 
         let settings = await ttsSettingsStore.load(userId: userId)
         guard isCurrentPlaybackGeneration(generation) else { return }
@@ -158,7 +184,8 @@ final class ReadAloudController {
             player: ttsEngine,
             state: ttsState,
             settingsStore: ttsSettingsStore,
-            userId: userId
+            userId: userId,
+            sessionToken: sessionToken
         )
         let tokenizerFactory = makeReadiumTokenizerFactory(
             granularity: tokenizerGranularity,
@@ -258,6 +285,7 @@ final class ReadAloudController {
     /// Whether speech is in flight (Readium utterance or legacy bridge).
     /// Used for page-turn intent: only then can a swipe mean "follow paragraph".
     var isActivelySpeaking: Bool {
+        guard !isStoppingPlayback else { return false }
         #if DEBUG
         if testSpeakingOverride { return true }
         #endif
@@ -511,12 +539,16 @@ final class ReadAloudController {
         onParagraphsExhausted: @escaping () async -> [String] = { [] },
         onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
     ) async {
+        isDisposed = false
+        installTypedFailureObserver()
         guard !paragraphs.isEmpty else { return }
         let generation = beginPlaybackGeneration()
 
         isPageEntryPrefetchEligible = false
         await stopCurrentPlayback()
         guard isCurrentPlaybackGeneration(generation) else { return }
+        let sessionToken = UUID()
+        playbackSessionToken = sessionToken
 
         let wrappedOnParagraphsExhausted: () async -> [String] = { [weak self] in
             let nextParagraphs = await onParagraphsExhausted()
@@ -540,7 +572,8 @@ final class ReadAloudController {
             coordinator: coordinator,
             onPassageChange: onPassageChange,
             onParagraphsExhausted: wrappedOnParagraphsExhausted,
-            onParagraphsBeforeStart: onParagraphsBeforeStart
+            onParagraphsBeforeStart: onParagraphsBeforeStart,
+            sessionToken: sessionToken
         )
         bridge = newBridge
         hasStartedReadAloudSession = true
@@ -587,15 +620,19 @@ final class ReadAloudController {
         let settings = await ttsSettingsStore.load(userId: userId)
         guard canPrefetchPageEntry else { return }
 
-        await ttsPrewarmer.warm(requests: [
+        let pieces = ParagraphChunker.chunkForTTS(
+            paragraph,
+            maxChars: ReadiumTTSPrefetchRequestBuilder.maxCharsPerRequest
+        )
+        await ttsPrewarmer.warm(requests: pieces.map {
             TTSStreamRequest(
-                text: paragraph,
+                text: $0,
                 voice: settings.voice,
                 model: settings.model,
                 speed: settings.speed,
                 passageId: nil
             )
-        ])
+        })
     }
 
     func updateCurrentParagraph(for index: Int?) {
@@ -606,7 +643,19 @@ final class ReadAloudController {
         currentParagraph = paragraphs[index]
     }
 
-    private func stopCurrentPlayback() async {
+    private func teardownPlaybackSession() async {
+        playbackTeardownDepth += 1
+        defer { playbackTeardownDepth -= 1 }
+
+        let inFlightKeyboardNavigation = keyboardParagraphNavigationTask
+        keyboardParagraphNavigationGeneration &+= 1
+        keyboardParagraphNavigationTask?.cancel()
+        keyboardParagraphNavigationTask = nil
+        // A bridge navigation can be suspended inside the engine. Wait for it
+        // to return before stopping the bridge so an old request cannot resume
+        // and publish `.playing` after this teardown or a replacement session.
+        await inFlightKeyboardNavigation?.value
+
         nowPlayingController?.detach()
         Log.event("tts.nav.stop", data: [
             "hadSynthesizer": readiumSynthesizer != nil ? "1" : "0",
@@ -625,14 +674,104 @@ final class ReadAloudController {
         readiumSynthesizer = nil
         readiumSynthesizerGeneration = nil
         readiumState = .stopped
+        playbackSessionToken = nil
         followCreditRemaining = 0
         #if DEBUG
         testSpeakingOverride = false
         #endif
-        ttsState.update(status: .stopped)
+        ttsState.endSession()
         // The controller owns the Readium lifecycle, so it releases the
         // coordinator only when a session actually stops—not between passages.
         await coordinator.releaseActiveMode(.tts)
+    }
+
+    private func stopCurrentPlayback() async {
+        await teardownPlaybackSession()
+    }
+
+    private func handleTypedAllowanceFailure(
+        _ failure: WorkerAllowanceError,
+        tokens: TTSPlaybackTokenSnapshot,
+        playbackGeneration: UInt64,
+        observerGeneration: UInt64
+    ) async {
+        guard isValidTypedFailure(
+            tokens: tokens,
+            playbackGeneration: playbackGeneration,
+            observerGeneration: observerGeneration
+        ) else { return }
+
+        await teardownPlaybackSession()
+
+        // Teardown yields to the engine. A replacement start or disposal may
+        // have happened while it was suspended, so never show the prompt for
+        // the session that the user has already moved away from.
+        guard isValidTypedFailure(
+            tokens: tokens,
+            playbackGeneration: playbackGeneration,
+            observerGeneration: observerGeneration,
+            allowClearedState: true
+        ) else { return }
+        onAllowanceFailure?(failure)
+        if !isDisposed { installTypedFailureObserver() }
+    }
+
+    private func installTypedFailureObserver() {
+        guard !isDisposed, typedFailureObserverID == nil else { return }
+        let observerGeneration = typedFailureObserverGeneration
+        typedFailureObserverID = ttsState.observeTypedFailure { [weak self] failure, tokens in
+            guard let self else { return }
+            let playbackGeneration = self.playbackGeneration
+            guard self.isValidTypedFailure(
+                tokens: tokens,
+                playbackGeneration: playbackGeneration,
+                observerGeneration: observerGeneration
+            ) else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.isValidTypedFailure(
+                          tokens: tokens,
+                          playbackGeneration: playbackGeneration,
+                          observerGeneration: observerGeneration
+                      )
+                else { return }
+                await self.handleTypedAllowanceFailure(
+                    failure,
+                    tokens: tokens,
+                    playbackGeneration: playbackGeneration,
+                    observerGeneration: observerGeneration
+                )
+            }
+        }
+    }
+
+    private func isValidTypedFailure(
+        tokens: TTSPlaybackTokenSnapshot,
+        playbackGeneration: UInt64,
+        observerGeneration: UInt64,
+        allowClearedState: Bool = false
+    ) -> Bool {
+        guard !isDisposed,
+              typedFailureObserverID != nil,
+              typedFailureObserverGeneration == observerGeneration,
+              self.playbackGeneration == playbackGeneration
+        else { return false }
+
+        if allowClearedState {
+            return playbackSessionToken == nil
+                || playbackSessionToken == tokens.sessionToken
+        }
+        return playbackSessionToken == tokens.sessionToken
+            && ttsState.typedFailureTokens == tokens
+    }
+
+    func dispose() {
+        isDisposed = true
+        typedFailureObserverGeneration &+= 1
+        if let typedFailureObserverID {
+            ttsState.removeTypedFailureObserver(typedFailureObserverID)
+            self.typedFailureObserverID = nil
+        }
     }
 
     private func beginPlaybackGeneration() -> UInt64 {
@@ -784,8 +923,10 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         readiumSynthesizer = nil
         readiumSynthesizerGeneration = nil
         readiumState = .stopped
-        ttsState.error = String(describing: error)
-        ttsState.update(status: .error)
+        if ttsState.typedFailure == nil {
+            ttsState.error = String(describing: error)
+            ttsState.update(status: .error)
+        }
         Task { [coordinator] in
             await coordinator.releaseActiveMode(.tts)
         }

@@ -177,9 +177,16 @@ struct ReaderDestination: View {
             readAloudStartTask = nil
             readAloudStartRequest = UUID()
 
-            Task {
+            let controller = readAloud
+            Task { @MainActor [weak self, controller] in
                 await dependencies.voicePresenter.parkSession()
-                await readAloud?.stop()
+                await controller?.stop()
+                controller?.dispose()
+                if let self, let controller,
+                   let current = self.readAloud,
+                   current === controller {
+                    self.readAloud = nil
+                }
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -319,7 +326,10 @@ struct ReaderDestination: View {
             coordidator: dependencies.ttsCoordinator,
             userId: userId,
             nowPlayingController: dependencies.nowPlayingController,
-            bookFileStorage: dependencies.bookFileStorage
+            bookFileStorage: dependencies.bookFileStorage,
+            onAllowanceFailure: { failure in
+                pendingNarrationUpgradePrompt = readAloudUpgradeReason(for: failure)
+            }
         )
         readAloud = controller
         return controller
@@ -357,4 +367,8 @@ struct ReaderDestination: View {
             }
         }
     }
+}
+
+func readAloudUpgradeReason(for failure: WorkerAllowanceError) -> AIFeatureBlockReason {
+    failure.kind == .trial ? .trialExhausted : .narrationAllowanceExhausted
 }

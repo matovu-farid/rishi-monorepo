@@ -127,6 +127,78 @@ public actor WorkerClient {
         
         await makeStream(endpoint)
     }
+
+    /// Downloads and validates one complete binary response.
+    public func downloadData<E: WorkerStreamingEndpoint>(_ endpoint: E) async throws -> Data {
+        var lastError: Error?
+        for attempt in 1...maxAttempts {
+            if attempt > 1 {
+                try await Task.sleep(for: .seconds(pow(2.0, Double(attempt - 1)) * 0.5))
+            }
+            do {
+                return try await downloadAttempt(endpoint)
+            } catch RishiError.unauthenticated {
+                try await refreshAccessToken()
+                return try await downloadAttempt(endpoint)
+            } catch let error as RishiError {
+                if case .networkFailure(let urlError) = error,
+                   isRetryable(urlError),
+                   attempt < maxAttempts {
+                    lastError = error
+                    continue
+                }
+                throw error
+            } catch {
+                throw error
+            }
+        }
+        throw lastError ?? RishiError.network(code: "download_failed", message: "")
+    }
+
+    private func downloadAttempt<E: WorkerStreamingEndpoint>(_ endpoint: E) async throws -> Data {
+        let request = try await buildStreamingRequest(for: endpoint)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError {
+            throw RishiError.networkFailure(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw RishiError.network(code: "invalid_response", message: "")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 401 { throw RishiError.unauthenticated }
+            if let allowance = Self.decodeAllowanceError(from: data, status: http.statusCode) {
+                throw allowance
+            }
+            let fields = decodeWorkerErrorFields(from: data, status: http.statusCode)
+            throw RishiError.network(code: fields.code, message: fields.message)
+        }
+        if let encoding = http.value(forHTTPHeaderField: "Content-Encoding"),
+           encoding.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "identity" {
+            throw RishiError.network(code: "invalid_content_encoding", message: "Complete audio must not be encoded")
+        }
+        guard let contentType = http.value(forHTTPHeaderField: "Content-Type") else {
+            throw RishiError.network(code: "invalid_content_type", message: "Missing Content-Type")
+        }
+        let mediaType = contentType.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard mediaType == "audio/mpeg" else {
+            throw RishiError.network(code: "invalid_content_type", message: "Expected audio/mpeg")
+        }
+        guard let contentLength = http.value(forHTTPHeaderField: "Content-Length"),
+              let expected = Int(contentLength.trimmingCharacters(in: .whitespacesAndNewlines)),
+              expected >= 0, expected == data.count else {
+            throw RishiError.network(code: "invalid_content_length", message: "Content-Length does not match body")
+        }
+        return data
+    }
     private func makeStream<E: WorkerStreamingEndpoint>(
         _ endpoint: E
     ) -> AsyncThrowingStream<Data, Error> {
@@ -190,6 +262,11 @@ public actor WorkerClient {
             throw RishiError.network(code: "invalid_response", message: "")
         }
         guard (200..<300).contains(http.statusCode) else {
+            var body = Data()
+            for try await byte in bytes { body.append(byte) }
+            if let allowance = Self.decodeAllowanceError(from: body, status: http.statusCode) {
+                throw allowance
+            }
             throw RishiError.network(code: "http_\(http.statusCode)", message: "")
         }
 
@@ -235,6 +312,9 @@ public actor WorkerClient {
         case 401:
             throw RishiError.unauthenticated
         case 400..<500:
+            if let allowance = Self.decodeAllowanceError(from: data, status: status) {
+                throw allowance
+            }
             let (code, message) = decodeWorkerErrorFields(from: data, status: status)
             throw RishiError.network(code: code, message: message)
         case 500..<600:
@@ -280,6 +360,32 @@ public actor WorkerClient {
             return (flat.code, flat.error)
         }
         return nil
+    }
+
+    private static func decodeAllowanceError(from data: Data, status: Int) -> WorkerAllowanceError? {
+        guard status == 402,
+              let flat = try? JSONDecoder().decode(FlatErrorEnvelope.self, from: data),
+              flat.code == WorkerErrorCode.insufficientAllowance
+        else { return nil }
+
+        let normalizedKind = flat.allowanceKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let kind: WorkerAllowanceKind
+        if normalizedKind == WorkerAllowanceKind.trial.rawValue {
+            kind = .trial
+        } else if normalizedKind == WorkerAllowanceKind.narration.rawValue {
+            kind = .narration
+        } else if flat.error.lowercased().contains("narration allowance") ||
+                    flat.error.lowercased().contains("billing period") {
+            // Older workers omitted allowance_kind for paid narration. Keep
+            // that compatibility behavior while remaining strict on `code`.
+            kind = .narration
+        } else {
+            kind = .trial
+        }
+        switch kind {
+        case .trial: return .trial(message: flat.error)
+        case .narration: return .narration(message: flat.error)
+        }
     }
 
     private func isRetryable(_ urlError: URLError) -> Bool {

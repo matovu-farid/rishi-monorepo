@@ -53,9 +53,10 @@ enum ReadiumTTSPrefetchRequestBuilder {
         let startIndex = currentTokenIndex.map { $0 + 1 } ?? 0
         var requests: [TTSStreamRequest] = []
         for candidate in candidates.dropFirst(startIndex) {
-            let pieces = candidate.text.count <= maxCharsPerRequest
-                ? [candidate.text]
-                : ParagraphChunker.chunk(candidate.text, maxChars: maxCharsPerRequest)
+            let pieces = ParagraphChunker.chunkForTTS(
+                candidate.text,
+                maxChars: maxCharsPerRequest
+            )
             for piece in pieces where !piece.isEmpty {
                 requests.append(
                     TTSStreamRequest(

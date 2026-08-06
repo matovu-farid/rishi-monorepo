@@ -30,6 +30,16 @@ import Foundation
 struct ParagraphChunkerTests {
 
     @Test
+    func tts_chunking_uses_worker_utf16_limit() {
+        let input = String(repeating: "😀", count: 2_001)
+        let output = ParagraphChunker.chunkForTTS(input, maxChars: 4_000)
+
+        #expect(output.count == 2)
+        #expect(output.allSatisfy { $0.utf16.count <= 4_000 })
+        #expect(output.joined() == input)
+    }
+
+    @Test
     func empty_input_returns_empty() {
         #expect(ParagraphChunker.chunk("") == [])
     }

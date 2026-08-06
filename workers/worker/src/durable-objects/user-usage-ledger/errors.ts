@@ -1,9 +1,16 @@
+export type AllowanceKind = "trial" | "narration";
+
 export class InsufficientAllowanceError extends Error {
   readonly code = "INSUFFICIENT_ALLOWANCE" as const;
+  readonly allowanceKind: AllowanceKind;
 
-  constructor(message = "Trial credits are exhausted") {
+  constructor(
+    message = "Trial credits are exhausted",
+    allowanceKind: AllowanceKind = "trial",
+  ) {
     super(message);
     this.name = "InsufficientAllowanceError";
+    this.allowanceKind = allowanceKind;
     Object.setPrototypeOf(this, InsufficientAllowanceError.prototype);
   }
 
@@ -16,7 +23,8 @@ export class InsufficientAllowanceError extends Error {
     return (
       typeof err === "object" &&
       err !== null &&
-      (err as { name?: unknown }).name === "InsufficientAllowanceError"
+      ((err as { name?: unknown }).name === "InsufficientAllowanceError" ||
+        (err as { code?: unknown }).code === "INSUFFICIENT_ALLOWANCE")
     );
   }
 }

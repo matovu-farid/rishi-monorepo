@@ -129,6 +129,21 @@ public nonisolated enum ParagraphChunker {
         return output
     }
 
+    /// Splits text into requests that fit the Worker's UTF-16 length limit.
+    /// The normal paragraph chunker measures Swift `Character`s, while the
+    /// Worker validates JavaScript `text.length` (UTF-16 code units). Keep
+    /// this boundary in the shared text layer so playback and prefetch use
+    /// exactly the same request sizing rule.
+    public nonisolated static func chunkForTTS(
+        _ text: String,
+        maxChars: Int = 4000
+    ) -> [String] {
+        guard !text.isEmpty else { return [] }
+        return chunk(text, maxChars: maxChars).flatMap {
+            splitUTF16($0, maxChars: maxChars)
+        }
+    }
+
     // MARK: - Blank-line splitting
 
     /// Split on blank-line boundaries (`\n\s*\n`).
@@ -169,6 +184,33 @@ public nonisolated enum ParagraphChunker {
     }
 
     // MARK: - Oversize subdivision
+
+    private nonisolated static func splitUTF16(
+        _ text: String,
+        maxChars: Int
+    ) -> [String] {
+        guard text.utf16.count > maxChars else { return [text] }
+
+        var output: [String] = []
+        var start = text.startIndex
+        var cursor = start
+        var units = 0
+        while cursor < text.endIndex {
+            let next = text.index(after: cursor)
+            let nextUnits = text[cursor..<next].utf16.count
+            if units > 0, units + nextUnits > maxChars {
+                output.append(String(text[start..<cursor]))
+                start = cursor
+                units = 0
+            }
+            units += nextUnits
+            cursor = next
+        }
+        if start < text.endIndex {
+            output.append(String(text[start..<text.endIndex]))
+        }
+        return output.isEmpty ? [text] : output
+    }
 
     /// Subdivide a paragraph whose `.count > maxChars` into a list of chunks
     /// each `.count <= maxChars`. Uses SentenceSplitter to find natural sentence

@@ -44,4 +44,11 @@ struct ErrorEnvelope: Codable, Sendable, Hashable {
 struct FlatErrorEnvelope: Codable, Sendable, Hashable {
     let error: String
     let code: String
+    let allowanceKind: String?
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case code
+        case allowanceKind = "allowance_kind"
+    }
 }

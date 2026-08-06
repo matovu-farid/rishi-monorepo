@@ -281,6 +281,42 @@ struct TTSEngineTests {
         // Either .error (preferred) or .stopped (if test completes too fast)
         #expect(final == .error || final == .stopped)
     }
+
+    @Test("typed allowance failure is recorded with the active request tokens")
+    @MainActor
+    func typedAllowanceFailureRecordsTokens() async {
+        let source = TypedAllowanceSource()
+        let streamer = TTSStreamer(source: source)
+        let fakeAudioSession = FakeAudioSessionConfigurator()
+        let coordinator = AudioSessionCoordinator(configurator: fakeAudioSession)
+        let fakeEngine = FakeAudioEngine()
+        let decoderFactory: TTSEngine.DecoderFactory = { format in
+            try MP3StreamDecoder(targetFormat: format)
+        }
+        let state = TTSPlaybackState()
+        let engine = TTSEngine(
+            streamer: streamer,
+            decoderFactory: decoderFactory,
+            engine: fakeEngine,
+            coordinator: coordinator,
+            state: state
+        )
+        let request = TTSStreamRequest(
+            text: "allowance",
+            voice: "alloy",
+            speed: 1.0,
+            sessionToken: UUID(),
+            utteranceToken: UUID(),
+            requestToken: UUID()
+        )
+
+        await engine.start(request: request)
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        #expect(state.typedFailure == .trial(message: "trial exhausted"))
+        #expect(state.typedFailureTokens == request.tokenSnapshot)
+        await engine.stop()
+    }
 }
 
 /// Thread-safe collector for the tracker's emitted passage ids — the consumer
@@ -311,6 +347,14 @@ private actor BlockingMP3Source: TTSChunkSource {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+private struct TypedAllowanceSource: TTSChunkSource {
+    func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: WorkerAllowanceError.trial(message: "trial exhausted"))
         }
     }
 }

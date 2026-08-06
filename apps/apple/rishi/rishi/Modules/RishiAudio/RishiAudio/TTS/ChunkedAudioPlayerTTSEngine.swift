@@ -24,6 +24,7 @@ import Foundation
         /// Bumps on every `start` so async `didFinish` from a prior `stop()`
         /// cannot mark the new session `.stopped` before it has played.
         private var playbackGeneration = 0
+        private var activeRequestTokens: TTSPlaybackTokenSnapshot?
         /// Set to `playbackGeneration` when `didStart` fires for that generation.
         private var didStartForGeneration = 0
         private var settledGeneration = 0
@@ -43,9 +44,10 @@ import Foundation
         }
 
         public func start(request: TTSStreamRequest) async {
-            await stop()
             playbackGeneration += 1
+            activeRequestTokens = request.tokenSnapshot
             let generation = playbackGeneration
+            await stopCurrent(invalidate: false)
             beginGeneration(generation)
 
             // Always leave `.stopped` before returning, including cache hits.
@@ -53,7 +55,8 @@ import Foundation
             let textPrefix = String(request.text.prefix(60))
                 .replacingOccurrences(of: "\n", with: " ")
             await MainActor.run {
-                state.error = nil
+                state.activate(tokens: request.tokenSnapshot)
+                if state.typedFailure == nil { state.error = nil }
                 state.currentPassageId = request.passageId
                 state.update(status: .loading)
             }
@@ -80,7 +83,7 @@ import Foundation
                 }
             }
 
-            let stream = makeAudioStream(request: request)
+            let stream = makeAudioStream(request: request, generation: generation)
             player.start(stream, type: kAudioFileMP3Type)
             monitorForPlaybackFailure(generation: generation)
         }
@@ -94,12 +97,26 @@ import Foundation
         }
 
         public func stop() async {
+            await stopCurrent(invalidate: true)
+        }
+
+        private func stopCurrent(invalidate: Bool) async {
+            let stoppedGeneration = playbackGeneration
+            if invalidate {
+                // Resume waiters before fencing the generation; settle() only
+                // accepts the generation that owns the waiter.
+                settle(.failure(CancellationError()), generation: stoppedGeneration)
+                playbackGeneration += 1
+                activeRequestTokens = nil
+            }
+            let bridge = bridgeTask
             bridgeTask?.cancel()
             bridgeTask = nil
             monitorTask?.cancel()
             monitorTask = nil
+            await bridge?.value
             player.stop()
-            settle(.failure(CancellationError()), generation: playbackGeneration)
+            // The cancellation result was delivered before invalidation above.
         }
 
         public func waitUntilFinished() async throws {
@@ -147,25 +164,42 @@ import Foundation
             }
         }
 
-        private func makeAudioStream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        private func makeAudioStream(
+            request: TTSStreamRequest,
+            generation: Int
+        ) -> AsyncThrowingStream<Data, Error> {
             AsyncThrowingStream { continuation in
-                let upstream = Task { [streamer] in
+                let upstream = Task { [weak self, streamer] in
                     do {
-                        for try await chunk in await streamer.stream(request) {
+                for try await chunk in await streamer.stream(request) {
                             if Task.isCancelled {
                                 continuation.finish()
                                 return
                             }
                             continuation.yield(chunk.data)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
+                }
+                continuation.finish()
+            } catch {
+                if let allowance = error as? WorkerAllowanceError,
+                   let self,
+                   await self.isCurrent(generation: generation, tokens: request.tokenSnapshot) {
+                    await MainActor.run {
+                        state.recordTypedFailure(allowance, tokens: request.tokenSnapshot)
+                    }
+                }
+                continuation.finish(throwing: error)
                     }
                 }
                 bridgeTask = upstream
                 continuation.onTermination = { _ in upstream.cancel() }
             }
+        }
+
+        private func isCurrent(
+            generation: Int,
+            tokens: TTSPlaybackTokenSnapshot
+        ) -> Bool {
+            playbackGeneration == generation && activeRequestTokens == tokens
         }
 
         private func monitorForPlaybackFailure(generation: Int) {
@@ -242,7 +276,7 @@ import Foundation
                 return
             }
             await MainActor.run {
-                // Do not clobber a failure that already won the race.
+                // Do not clobber a typed or generic failure that already won.
                 guard state.status != .error else { return }
                 state.update(status: .stopped)
             }
@@ -269,6 +303,7 @@ import Foundation
             // and can race with waiters. Status/error are enough for speak().
             let text = message ?? "TTS playback failed"
             await MainActor.run {
+                guard state.typedFailure == nil else { return }
                 state.update(status: .error)
                 state.error = text
             }

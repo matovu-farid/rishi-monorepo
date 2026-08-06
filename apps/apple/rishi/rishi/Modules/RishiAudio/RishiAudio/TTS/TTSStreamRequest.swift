@@ -9,18 +9,43 @@ public struct TTSStreamRequest: Sendable, Equatable {
     public let model: String
     public let speed: Double
     public let passageId: String?
+    public let sessionToken: UUID
+    public let utteranceToken: UUID
+    public let requestToken: UUID
 
     public init(
         text: String,
         voice: String,
         model: String = TTSModelCatalog.defaultModel,
         speed: Double,
-        passageId: String? = nil
+        passageId: String? = nil,
+        sessionToken: UUID = UUID(),
+        utteranceToken: UUID = UUID(),
+        requestToken: UUID = UUID()
     ) {
         self.text = text
         self.voice = voice
         self.model = model
         self.speed = speed
         self.passageId = passageId
+        self.sessionToken = sessionToken
+        self.utteranceToken = utteranceToken
+        self.requestToken = requestToken
+    }
+
+    public var tokenSnapshot: TTSPlaybackTokenSnapshot {
+        TTSPlaybackTokenSnapshot(
+            sessionToken: sessionToken,
+            utteranceToken: utteranceToken,
+            requestToken: requestToken
+        )
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.text == rhs.text
+            && lhs.voice == rhs.voice
+            && lhs.model == rhs.model
+            && lhs.speed == rhs.speed
+            && lhs.passageId == rhs.passageId
     }
 }
