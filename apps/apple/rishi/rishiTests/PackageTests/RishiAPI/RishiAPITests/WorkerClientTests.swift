@@ -148,6 +148,26 @@ struct WorkerClientTests {
         }
     }
 
+    @Test func sendPreservesVoiceAllowanceErrorCode() async {
+        let (client, _) = makeClient()
+        MockURLProtocol.setHandler { _ in
+            (
+                self.http(402),
+                Data(#"{"error":"Voice Chat allowance exhausted","code":"INSUFFICIENT_PAID_ALLOWANCE"}"#.utf8)
+            )
+        }
+
+        do {
+            _ = try await client.send(PingEndpoint())
+            Issue.record("expected typed voice allowance error")
+        } catch let RishiError.network(code, message) {
+            #expect(code == WorkerErrorCode.insufficientPaidAllowance)
+            #expect(message == "Voice Chat allowance exhausted")
+        } catch {
+            Issue.record("wrong error \(error)")
+        }
+    }
+
     @Test func sendPreservesTypedAllowanceEvenIfWorkerStatusIs500() async {
         let (client, _) = makeClient()
         MockURLProtocol.setHandler { _ in

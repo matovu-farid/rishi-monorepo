@@ -824,6 +824,8 @@ public actor RealtimeVoiceSession {
             return "You already have a voice session running. Close it before starting another."
         case .insufficientCredits:
             return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
+        case .insufficientPaidAllowance:
+            return "You've used your plan's Voice Chat time for this period. Upgrade to keep using voice chat."
         case .mintFailed:
             return "The voice service couldn't start your session. Try again in a moment."
         case .unauthorized:

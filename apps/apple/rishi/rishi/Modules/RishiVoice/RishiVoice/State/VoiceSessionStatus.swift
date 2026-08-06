@@ -50,8 +50,10 @@ public enum KeyFetchFailure: Sendable, Equatable {
 public enum VoiceSessionStartFailure: Sendable, Equatable {
     /// 409 — this account already has a live voice session.
     case alreadyActive
-    /// 402 — fewer than 2 trial credits remain (or paid-plan equivalent exhausted).
+    /// 402 — fewer than 2 trial credits remain.
     case insufficientCredits
+    /// 402 — the paid Voice Chat allowance cannot fund the minimum session.
+    case insufficientPaidAllowance
     /// 502 — the ledger session was created but the OpenAI mint failed. Retryable.
     case mintFailed
     /// 401 — session expired / signed out.
@@ -72,6 +74,7 @@ public enum VoiceSessionStartFailure: Sendable, Equatable {
             switch code {
             case WorkerErrorCode.voiceSessionAlreadyActive: return .alreadyActive
             case WorkerErrorCode.insufficientTrialCredits:  return .insufficientCredits
+            case WorkerErrorCode.insufficientPaidAllowance: return .insufficientPaidAllowance
             case WorkerErrorCode.openAIMintFailed:          return .mintFailed
             default:                                         return .serviceUnavailable
             }

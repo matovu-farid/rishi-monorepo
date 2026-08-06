@@ -23,8 +23,10 @@ public enum WorkerErrorCode {
 
     /// 409 — this account already has a live voice session.
     public static let voiceSessionAlreadyActive = "VOICE_SESSION_ALREADY_ACTIVE"
-    /// 402 — fewer than 2 trial credits remain (or the paid-plan equivalent).
+    /// 402 — fewer than 2 trial credits remain.
     public static let insufficientTrialCredits = "INSUFFICIENT_TRIAL_CREDITS"
+    /// 402 — the paid Voice Chat allowance cannot fund the minimum session.
+    public static let insufficientPaidAllowance = "INSUFFICIENT_PAID_ALLOWANCE"
     /// 502 — the ledger session was created but OpenAI's client-secret mint failed. Retryable.
     public static let openAIMintFailed = "OPENAI_MINT_FAILED"
 

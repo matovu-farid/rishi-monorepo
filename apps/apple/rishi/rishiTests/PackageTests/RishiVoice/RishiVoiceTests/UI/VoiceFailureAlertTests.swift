@@ -61,11 +61,23 @@ struct VoiceFailureAlertTests {
         #expect(alert.primaryAction == .retry)
     }
 
-    @Test("keyFetch(.unknown) with detail → detail as message + retry")
+    @Test("paid allowance exhaustion uses paid copy and upgrade action")
+    func paidAllowanceExhausted() {
+        let alert = VoiceFailureAlert(
+            reason: .sessionStart(.insufficientPaidAllowance),
+            message: "raw worker detail"
+        )
+
+        #expect(alert.title == "Voice Chat allowance used up")
+        #expect(alert.message == "You've used your plan's Voice Chat time for this period. Upgrade to keep using voice chat.")
+        #expect(alert.primaryAction == .upgrade)
+    }
+
+    @Test("keyFetch(.unknown) with detail → safe fallback copy + retry")
     func keyFetchUnknownWithDetail() {
         let alert = VoiceFailureAlert(reason: .keyFetch(.unknown("realtime fault")), message: nil)
         #expect(alert.title == "Couldn't start the session")
-        #expect(alert.message == "realtime fault")
+        #expect(alert.message == "An unexpected error occurred.")
         #expect(alert.primaryAction == .retry)
     }
 
@@ -101,11 +113,11 @@ struct VoiceFailureAlertTests {
         #expect(alert.primaryAction == .retry)
     }
 
-    @Test("unknown with message → message as body + retry")
+    @Test("unknown with detail → safe fallback copy + retry")
     func unknownWithMessage() {
         let alert = VoiceFailureAlert(reason: .unknown("Realtime SDK fault"), message: nil)
         #expect(alert.title == "Something went wrong")
-        #expect(alert.message == "Realtime SDK fault")
+        #expect(alert.message == "An unexpected error occurred.")
         #expect(alert.primaryAction == .retry)
     }
 
@@ -117,21 +129,30 @@ struct VoiceFailureAlertTests {
         #expect(alert.primaryAction == .retry)
     }
 
+    @Test("raw caller detail cannot replace safe copy for an unknown failure")
+    func unknownCallerMessageCannotReplaceSafeCopy() {
+        let alert = VoiceFailureAlert(
+            reason: .unknown(""),
+            message: "Server error (INTERNAL_ERROR): provider internals"
+        )
+
+        #expect(alert.message == "An unexpected error occurred.")
+    }
+
     // MARK: - Caller override
 
-    @Test("caller-supplied message wins over default body copy")
-    func messageOverrideWins() {
+    @Test("caller-supplied transport detail cannot replace safe body copy")
+    func messageOverrideIsIgnored() {
         let alert = VoiceFailureAlert(reason: .connect, message: "Custom override")
         #expect(alert.title == "Couldn't connect")
-        #expect(alert.message == "Custom override")
-        // Override does not change the affordance discriminator.
+        #expect(alert.message == "The voice service couldn't be reached. Try again in a moment.")
         #expect(alert.primaryAction == .retry)
     }
 
-    @Test("caller override on micDenied keeps openSettings affordance")
-    func messageOverrideKeepsAction() {
+    @Test("caller transport detail cannot replace microphone copy")
+    func messageOverrideCannotReplaceMicCopy() {
         let alert = VoiceFailureAlert(reason: .micDenied, message: "Override")
-        #expect(alert.message == "Override")
+        #expect(alert.message == "Allow microphone access in Settings to talk with the AI.")
         #expect(alert.primaryAction == .openSettings)
     }
 

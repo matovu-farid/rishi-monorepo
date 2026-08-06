@@ -7,9 +7,7 @@ import Foundation
 /// Maps a ``VoiceSessionFailureReason`` to the user-facing title/message copy
 /// and the single primary affordance ("Open Settings" for `.micDenied`,
 /// "See plans" for exhaustion / insufficient credits, dismiss-only for
-/// `.sessionEndFailed`, "Try again" for other retryable reasons). A
-/// caller-supplied `message` override (e.g. `VoiceSessionState.lastError`)
-/// wins over the default body copy.
+/// `.sessionEndFailed`, and "Try again" for other retryable reasons).
 ///
 /// Kept pure (no UIKit / SwiftUI): the app layer owns the Settings deep-link
 /// and the alert presentation; this type only carries the strings + the
@@ -28,7 +26,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         /// non-exhaustion reason).
         case retry
         /// Open the same paywall path as the Voice Chat entry upgrade prompt
-        /// (`.sessionStart(.insufficientCredits)` and exhaustion-shaped
+        /// (`.sessionStart(.insufficientCredits)`,
+        /// `.sessionStart(.insufficientPaidAllowance)`, and exhaustion-shaped
         /// terminal reasons).
         case upgrade
         /// Acknowledge-only — reserved for rare terminal cases with no
@@ -42,7 +41,9 @@ public struct VoiceFailureAlert: Equatable, Sendable {
 
     public init(reason: VoiceSessionFailureReason, message: String?) {
         self.title = Self.title(for: reason)
-        self.message = message ?? Self.bodyCopy(for: reason)
+        // The caller message can originate from a transport/provider error.
+        // Always use classified copy so server internals never reach users.
+        self.message = Self.bodyCopy(for: reason)
         self.primaryAction = Self.primaryAction(for: reason)
     }
 
@@ -52,7 +53,7 @@ public struct VoiceFailureAlert: Equatable, Sendable {
             return .requestDataUseConsent
         case .micDenied:
             return .openSettings
-        case .sessionStart(.insufficientCredits):
+        case .sessionStart(.insufficientCredits), .sessionStart(.insufficientPaidAllowance):
             return .upgrade
         case .sessionTerminated(let terminationReason) where Self.isExhaustionReason(terminationReason):
             return .upgrade
@@ -88,7 +89,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         case .sessionStart(let failure):
             switch failure {
             case .alreadyActive:        return "Voice chat already active"
-            case .insufficientCredits:  return "Trial credits used up"
+            case .insufficientCredits: return "Trial credits used up"
+            case .insufficientPaidAllowance: return "Voice Chat allowance used up"
             case .mintFailed:           return "Voice unavailable"
             case .unauthorized:         return "Sign-in required"
             case .serviceUnavailable:   return "Voice unavailable"
@@ -136,8 +138,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
                 return "The voice service is temporarily unavailable. Please try again soon."
             case .network:
                 return "Check your internet connection and try again."
-            case .unknown(let detail):
-                return detail.isEmpty ? "An unexpected error occurred." : detail
+            case .unknown:
+                return "An unexpected error occurred."
             }
         case .sessionStart(let failure):
             switch failure {
@@ -145,6 +147,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
                 return "You already have a voice session running. Close it before starting another."
             case .insufficientCredits:
                 return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
+            case .insufficientPaidAllowance:
+                return "You've used your plan's Voice Chat time for this period. Upgrade to keep using voice chat."
             case .mintFailed:
                 return "The voice service couldn't start your session. Try again in a moment."
             case .unauthorized:
@@ -153,8 +157,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
                 return "The voice service is temporarily unavailable. Please try again soon."
             case .network:
                 return "Check your internet connection and try again."
-            case .unknown(let detail):
-                return detail.isEmpty ? "An unexpected error occurred." : detail
+            case .unknown:
+                return "An unexpected error occurred."
             }
         case .callRegistration(let failure):
             switch failure {
@@ -170,8 +174,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
                 return "The voice service is temporarily unavailable. Please try again soon."
             case .network:
                 return "Check your internet connection and try again."
-            case .unknown(let detail):
-                return detail.isEmpty ? "An unexpected error occurred." : detail
+            case .unknown:
+                return "An unexpected error occurred."
             }
         case .connect:
             return "The voice service couldn't be reached. Try again in a moment."
@@ -183,8 +187,8 @@ public struct VoiceFailureAlert: Equatable, Sendable {
             return Self.sessionTerminatedBody(for: reason)
         case .sessionEndFailed:
             return "Voice chat closed on this device, but we couldn't confirm it with the server. It should clear on its own shortly."
-        case .unknown(let msg):
-            return msg.isEmpty ? "An unexpected error occurred." : msg
+        case .unknown:
+            return "An unexpected error occurred."
         }
     }
 
@@ -195,15 +199,15 @@ public struct VoiceFailureAlert: Equatable, Sendable {
         case .trialCreditsExhausted:
             return "You've used all 300 trial voice credits. Upgrade to keep using voice chat."
         case .planVoiceAllowanceExhausted:
-            return "You've used your plan's Voice Chat time for this period."
+            return "You've used your plan's Voice Chat time for this period. Upgrade to keep using voice chat."
         case .registrationTimeout:
             return "We couldn't confirm the voice connection in time. Please try again."
         case .providerHangupFailed:
             return "Voice chat ended unexpectedly. Please try again."
         case .inactivityTimeout:
             return "Voice chat ended due to inactivity."
-        case .unknown(let raw):
-            return "Voice chat ended (\(raw))."
+        case .unknown:
+            return "Voice chat ended unexpectedly. Please try again."
         }
     }
 }
