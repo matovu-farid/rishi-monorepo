@@ -16,6 +16,7 @@
 **/.claude/
 /CLAUDE.md
 docs/superpowers/plans/
+apps/apple/docs/
 apps/mobile/__tests__/rag/chunker-parity.test.ts
 
 # Tool caches

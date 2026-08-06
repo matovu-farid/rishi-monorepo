@@ -18,11 +18,11 @@
 		C10000000000000000000007 /* USearch in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000007 /* USearch */; };
 		C10000000000000000000008 /* ChunkedAudioPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000008 /* ChunkedAudioPlayer */; };
 		C10000000000000000000009 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000009 /* LiveKitWebRTC */; };
-		D10000000000000000000010 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000010 /* GoogleSignIn */; };
-		D10000000000000000000011 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000011 /* GoogleSignInSwift */; };
 		D10000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* ReadiumShared */; };
 		D10000000000000000000002 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000002 /* ReadiumNavigator */; };
 		D10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* ReadiumZIPFoundation */; };
+		D10000000000000000000010 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000010 /* GoogleSignIn */; };
+		D10000000000000000000011 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000011 /* GoogleSignInSwift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -526,10 +526,10 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = rishi/Info.plist;
 				GOOGLE_IOS_CLIENT_ID = "127421659754-133f16auknua5elranhufrgmhu1m95cq.apps.googleusercontent.com";
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.127421659754-133f16auknua5elranhufrgmhu1m95cq";
 				GOOGLE_SERVER_CLIENT_ID = "127421659754-dp421g459b4n471vgo2rb8qml3hmp90s.apps.googleusercontent.com";
+				INFOPLIST_FILE = rishi/Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
@@ -575,10 +575,10 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = rishi/Info.plist;
 				GOOGLE_IOS_CLIENT_ID = "127421659754-133f16auknua5elranhufrgmhu1m95cq.apps.googleusercontent.com";
 				GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.127421659754-133f16auknua5elranhufrgmhu1m95cq";
 				GOOGLE_SERVER_CLIENT_ID = "127421659754-dp421g459b4n471vgo2rb8qml3hmp90s.apps.googleusercontent.com";
+				INFOPLIST_FILE = rishi/Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
