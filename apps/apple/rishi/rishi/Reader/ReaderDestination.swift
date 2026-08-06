@@ -178,14 +178,15 @@ struct ReaderDestination: View {
             readAloudStartRequest = UUID()
 
             let controller = readAloud
-            Task { @MainActor [weak self, controller] in
-                await dependencies.voicePresenter.parkSession()
+            let readAloudBinding = $readAloud
+            Task { @MainActor [controller, voicePresenter = dependencies.voicePresenter, readAloudBinding] in
+                await voicePresenter.parkSession()
                 await controller?.stop()
                 controller?.dispose()
-                if let self, let controller,
-                   let current = self.readAloud,
+                if let controller,
+                   let current = readAloudBinding.wrappedValue,
                    current === controller {
-                    self.readAloud = nil
+                    readAloudBinding.wrappedValue = nil
                 }
             }
         }

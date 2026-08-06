@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 
 
@@ -44,6 +45,17 @@ struct CatalystReaderWindow: View {
                         onRequestPaywall: { _ in },
                         pdfViewMode: $presentation.requestedMode
                     )
+                }
+                .background {
+                    ReaderWindowKeyObserver {
+                        guard scenePhase == .active else { return }
+                        coordinator.activate(
+                            input,
+                            theme: services.settings.readerDefaults.theme,
+                            pdfViewMode: isPDFReader ? services.settings.readerDefaults.pdfViewMode : nil
+                        )
+                    }
+                    .frame(width: 0, height: 0)
                 }
                 .readerPrefsMenuPublisher(
                     services: services,
@@ -122,6 +134,55 @@ struct CatalystReaderWindow: View {
     private var signedInUser: User? {
         guard case .signedIn(let user) = currentUser.state else { return nil }
         return user
+    }
+}
+
+private struct ReaderWindowKeyObserver: UIViewRepresentable {
+    let onBecameKey: () -> Void
+
+    func makeUIView(context: Context) -> KeyWindowProbeView {
+        let view = KeyWindowProbeView()
+        view.onBecameKey = onBecameKey
+        return view
+    }
+
+    func updateUIView(_ uiView: KeyWindowProbeView, context: Context) {
+        uiView.onBecameKey = onBecameKey
+    }
+}
+
+private final class KeyWindowProbeView: UIView {
+    var onBecameKey: (() -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowBecameKey(_:)),
+            name: UIWindow.didBecomeKeyNotification,
+            object: nil
+        )
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window?.isKeyWindow == true {
+            onBecameKey?()
+        }
+    }
+
+    @objc private func windowBecameKey(_ note: Notification) {
+        guard let keyWindow = note.object as? UIWindow,
+              keyWindow === window else { return }
+        onBecameKey?()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }
 

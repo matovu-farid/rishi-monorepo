@@ -71,6 +71,10 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageBackward: () -> Void = {}
 
+    /// Dismisses a pending selection when Escape is pressed. Returns true
+    /// when the callback consumed the key and false when it should pass on.
+    public var onEscape: () -> Bool = { false }
+
     /// The focused Catalyst PDF presentation mode. EPUB ignores this value.
     public var pdfViewMode: PDFViewModeSetting = .continuous {
         didSet {
@@ -142,6 +146,12 @@ public final class ReaderNavigatorCoordinator: NSObject {
         case .passThrough:
             return false
         }
+    }
+
+    /// Routes Escape through the screen-owned selection state.
+    @discardableResult
+    public func handleEscape() -> Bool {
+        onEscape()
     }
 
     /// Moves a Continuous PDF by one viewport with a small overlap so the
@@ -440,6 +450,9 @@ public final class ReaderNavigatorCoordinator: NSObject {
         _ = nav.addObserver(.key(.arrowDown) { [weak self] in
             self?.handleArrowKey(.arrowDown) ?? false
         })
+        _ = nav.addObserver(.key(.escape) { [weak self] in
+            self?.handleEscape() ?? false
+        })
         #endif
         self.navigator = nav
         #if targetEnvironment(macCatalyst)
@@ -610,6 +623,12 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
             "href": locator.href.string,
             "prog": locator.locations.progression.map { String(format: "%.4f", $0) } ?? "",
         ])
+        if !isProgrammatic {
+            // Native swipes and scrolls do not pass through the screen's
+            // explicit page-turn actions, so clear any stale text selection
+            // before the menu can remain anchored to the old location.
+            onSelectionChange(nil)
+        }
         viewModel.didChangeLocation(
             locator,
             isProgrammatic: isProgrammatic

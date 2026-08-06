@@ -56,7 +56,6 @@ public struct ReaderScreen: View {
     private let bookmarkMarkDirty: ((BookmarkID) async -> Void)?
 
     private let onReadAloud: (() -> Void)?
-    private let onPageTurn: @MainActor () async -> Void
     private let onReadAloudFrom: ((Locator) -> Void)?
 
     private let voicePresenter: (any ReaderVoicePresenter)?
@@ -132,7 +131,6 @@ public struct ReaderScreen: View {
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         onReadAloudFrom: ((Locator) -> Void)? = nil,
-        onPageTurn: @escaping @MainActor () async -> Void = {},
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
@@ -147,7 +145,6 @@ public struct ReaderScreen: View {
         self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloudFrom = onReadAloudFrom
         self.onReadAloud = onReadAloud
-        self.onPageTurn = onPageTurn
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
@@ -172,8 +169,9 @@ public struct ReaderScreen: View {
             onSelectionChange: { selection in
                 highlightInteractor.handleSelectionChange(selection)
             },
-            onPageForward: { pageNavigator.goNext() },
-            onPageBackward: { pageNavigator.goPrev() },
+            onPageForward: goForward,
+            onPageBackward: goBackward,
+            onEscape: dismissPendingSelection,
             onTap: { location in
                 let resolver = ReaderTapRegionResolver()
                 let decision = resolver.decide(
@@ -186,10 +184,9 @@ public struct ReaderScreen: View {
                         chrome.toggle()
                     }
                 case .nextPage:
-
-                    pageNavigator.goNext()
+                    goForward()
                 case .previousPage:
-                    pageNavigator.goPrev()
+                    goBackward()
                 }
             },
 
@@ -198,104 +195,16 @@ public struct ReaderScreen: View {
     }
 
     public var body: some View {
+        readerScreenBody
+    }
+
+    private var readerScreenBody: some View {
         ZStack {
             background
 
-            #if canImport(UIKit)
+            readerPlatformLayer
 
-         
-
-                GeometryReader { proxy in
-                    Reader
-                        .onAppear { readerAreaSize = proxy.size }
-                        .onChange(of: proxy.size) { _, newSize in
-                            readerAreaSize = newSize
-                        }
-                }
-                .ignoresSafeArea(edges: readerIgnoredSafeAreaEdges)
-                .padding(.top, readerMacTopTrim)
-                .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
-
-                if ReaderEdgeArrowPolicy.shouldShow(
-                    idiom: UIDevice.current.userInterfaceIdiom
-                ) && !(isCatalystPDF && activePDFViewMode == .continuous) {
-                    HStack {
-                        EPUBEdgeArrowButton(
-                            systemName: "chevron.left",
-                            label: "Previous page",
-                            action: { pageNavigator.goPrev() }
-                        )
-                        Spacer()
-                        EPUBEdgeArrowButton(
-                            systemName: "chevron.right",
-                            label: "Next page",
-                            action: { pageNavigator.goNext() }
-                        )
-                    }
-                    .padding(.horizontal, RishiSpacing.m)
-                    .allowsHitTesting(true)
-                }
-
-                if let pending = pendingSelection {
-                    EPUBHighlightContextMenu(
-                        selectionFrame: pending.frame,
-                        onColor: { color in
-                            highlightInteractor.saveHighlight(
-                                pending: pending,
-                                color: color
-                            )
-                        },
-                        onAddNote: {
-                            highlightInteractor.startNoteFlow(for: pending)
-                        },
-                        onDismiss: {
-                            pendingSelection = nil
-                            coordinatorRef.coordinator?.clearSelection()
-                        },
-                        onAskAboutThis: voicePresenter.map { presenter in
-                            {
-                                let quote = pending.locator.text
-                                pendingSelection = nil
-                                coordinatorRef.coordinator?.clearSelection()
-                                presenter.presentVoice(
-                                    bookId: viewModel.book.id,
-                                    context: viewModel.voiceContext(),
-                                    contextProvider: { await viewModel.liveVoiceContext() },
-                                    initialQuote: quote.isEmpty ? nil : quote
-                                )
-                            }
-                        },
-                        onReadAloudFrom: onReadAloudFrom.map { onReadAloudFrom in
-                            {
-                                guard let locator = pending.locator.toReadiumLocator() else {
-                                    return
-                                }
-                                pendingSelection = nil
-                                coordinatorRef.coordinator?.clearSelection()
-                                onReadAloudFrom(locator)
-                            }
-                        }
-                    )
-                    .transition(.opacity)
-                }
-            #else
-
-                Text("EPUB reader requires iOS or Mac Catalyst")
-                    .font(RishiTypography.body)
-                    .foregroundStyle(RishiColor.textPrimary)
-            #endif
-
-            if chrome.isVisible {
-                VStack {
-                    Spacer()
-                    EPUBProgressIndicator(
-                        totalProgression: viewModel.latestLocator?.locations
-                            .totalProgression
-                    )
-                    .padding(.bottom, RishiSpacing.m)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
+            progressIndicatorLayer
         }
 
         .overlay {
@@ -369,19 +278,9 @@ public struct ReaderScreen: View {
         .onReceive(
             NotificationCenter.default.publisher(
                 for: EPUBMacCommandNotification.fontStep
-            )
-        ) { note in
-            let delta =
-                (note.userInfo?[EPUBMacCommandNotification.fontStepDelta]
-                    as? Int) ?? 0
-            guard delta != 0 else { return }
-            var typo = viewModel.typography
-            typo.fontSize = EPUBFontStepCalculator.step(
-                from: typo.fontSize,
-                delta: delta
-            )
-            viewModel.typography = typo
-        }
+            ),
+            perform: handleFontStepNotification
+        )
         #if canImport(UIKit)
             .epubSpread { mode in
                 currentSpread = mode
@@ -396,10 +295,7 @@ public struct ReaderScreen: View {
                 guard let theme = note.object as? ReaderTheme else { return }
                 viewModel.theme = theme
             }
-            .onChange(of: colorScheme) { _, _ in
-                guard viewModel.theme == .matchDevice else { return }
-                applyPreferences()
-            }
+            .onChange(of: colorScheme) { _, _ in applyPreferencesForColorSchemeChange() }
             .onChange(of: currentSpread) { _, _ in applyPreferences() }
 
             .onChange(of: readAloudParagraph) { _, _ in
@@ -429,45 +325,23 @@ public struct ReaderScreen: View {
                 Task { await bookmarkToggle?.toggle() }
             }
 
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: RishiCommand.readerWindowPageForward
-                )
-            ) { note in
-                guard let direction = RishiCommand.readerWindowPageDirection(
-                    for: note,
-                    bookID: viewModel.book.id,
-                    sheetIsPresented: activeSheet != nil
-                ) else { return }
-                coordinatorRef.coordinator?.handleArrowKey(
-                    direction == .forward ? .arrowRight : .arrowLeft
-                )
-            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: RishiCommand.pageForward
+                ),
+                perform: handlePageForwardCommand
+            )
 
             .onReceive(
                 NotificationCenter.default.publisher(
-                    for: RishiCommand.readerWindowPageBackward
-                )
-            ) { note in
-                guard let direction = RishiCommand.readerWindowPageDirection(
-                    for: note,
-                    bookID: viewModel.book.id,
-                    sheetIsPresented: activeSheet != nil
-                ) else { return }
-                coordinatorRef.coordinator?.handleArrowKey(
-                    direction == .forward ? .arrowRight : .arrowLeft
-                )
-            }
+                    for: RishiCommand.pageBackward
+                ),
+                perform: handlePageBackwardCommand
+            )
 
-            //
-
-            .readerSheet(item: $activeSheet) { sheet in
-                sheetContent(for: sheet)
-            }
+            .readerSheet(item: $activeSheet, content: sheetContent)
         #endif
         #if !os(macOS) && !targetEnvironment(macCatalyst)
-
-            //
 
             .toolbar {
                 trailingToolbarContent
@@ -481,7 +355,6 @@ public struct ReaderScreen: View {
                 navBarVisibility(forChromeVisible: chrome.isVisible),
                 for: .bottomBar
             )
-
             .readerNavBarAppearance(readerBarColor)
             .navigationTitle(viewModel.book.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -514,7 +387,6 @@ public struct ReaderScreen: View {
         #endif
 
         .onDisappear {
-
             Task { await viewModel.flush() }
         }
 
@@ -523,11 +395,97 @@ public struct ReaderScreen: View {
 
     private var isCatalystPDF: Bool {
         #if targetEnvironment(macCatalyst)
-        return viewModel.book.formatType == .pdf
+            return viewModel.book.formatType == .pdf
         #else
-        return false
+            return false
         #endif
     }
+
+    private func handleFontStepNotification(_ note: Notification) {
+        let delta =
+            (note.userInfo?[EPUBMacCommandNotification.fontStepDelta] as? Int) ?? 0
+        guard delta != 0 else { return }
+        var typography = viewModel.typography
+        typography.fontSize = EPUBFontStepCalculator.step(
+            from: typography.fontSize,
+            delta: delta
+        )
+        viewModel.typography = typography
+    }
+
+    private func handlePageForwardCommand(_ note: Notification) {
+        guard activeSheet == nil, pageCommandTargetsThisReader(note) else { return }
+        coordinatorRef.coordinator?.handleArrowKey(.arrowRight)
+    }
+
+    private func handlePageBackwardCommand(_ note: Notification) {
+        guard activeSheet == nil, pageCommandTargetsThisReader(note) else { return }
+        coordinatorRef.coordinator?.handleArrowKey(.arrowLeft)
+    }
+
+    private func pageCommandTargetsThisReader(_ note: Notification) -> Bool {
+        #if targetEnvironment(macCatalyst)
+            guard let targetBookID = note.userInfo?[RishiCommand.targetBookIDKey] as? BookID else {
+                return false
+            }
+            return targetBookID == viewModel.book.id
+        #else
+            return true
+        #endif
+    }
+
+    @ViewBuilder
+    private var readerPlatformLayer: some View {
+        #if canImport(UIKit)
+            GeometryReader { proxy in
+                readerGeometryContent(in: proxy)
+            }
+            .ignoresSafeArea(edges: readerIgnoredSafeAreaEdges)
+            .padding(.top, readerMacTopTrim)
+            .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
+
+            pendingSelectionOverlay
+
+            if shouldShowEdgeArrows {
+                HStack {
+                    EPUBEdgeArrowButton(
+                        systemName: "chevron.left",
+                        label: "Previous page",
+                        action: goBackward
+                    )
+                    Spacer()
+                    EPUBEdgeArrowButton(
+                        systemName: "chevron.right",
+                        label: "Next page",
+                        action: goForward
+                    )
+                }
+                .padding(.horizontal, RishiSpacing.m)
+                .allowsHitTesting(true)
+                .zIndex(1)
+            }
+        #else
+            Text("EPUB reader requires iOS or Mac Catalyst")
+                .font(RishiTypography.body)
+                .foregroundStyle(RishiColor.textPrimary)
+        #endif
+    }
+
+    @ViewBuilder
+    private var progressIndicatorLayer: some View {
+        if chrome.isVisible {
+            VStack {
+                Spacer()
+                EPUBProgressIndicator(
+                    totalProgression: viewModel.latestLocator?.locations
+                        .totalProgression
+                )
+                .padding(.bottom, RishiSpacing.m)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
 
     //
 
@@ -866,17 +824,106 @@ public struct ReaderScreen: View {
         private var pageNavigator: ReaderPageNavigator {
             ReaderPageNavigator(
                 viewModel: viewModel,
-                coordinatorRef: coordinatorRef,
-                onPageTurn: {
+                coordinatorRef: coordinatorRef
+            )
+        }
+
+        private var shouldShowEdgeArrows: Bool {
+            ReaderEdgeArrowPolicy.shouldShow(
+                idiom: UIDevice.current.userInterfaceIdiom
+            ) && !(isCatalystPDF && activePDFViewMode == .continuous)
+        }
+
+        private func readerGeometryContent(in proxy: GeometryProxy) -> some View {
+            Reader
+                .onAppear { readerAreaSize = proxy.size }
+                .onChange(of: proxy.size) { _, newSize in
+                    readerAreaSize = newSize
+                }
+        }
+
+        @ViewBuilder
+        private func pendingSelectionMenu(for pending: SelectionContext) -> some View {
+            EPUBHighlightContextMenu(
+                selectionFrame: pending.frame,
+                onColor: { color in
+                    highlightInteractor.saveHighlight(
+                        pending: pending,
+                        color: color
+                    )
+                },
+                onAddNote: {
+                    highlightInteractor.startNoteFlow(for: pending)
+                },
+                onDismiss: {
                     pendingSelection = nil
                     coordinatorRef.coordinator?.clearSelection()
-                    await onPageTurn()
-                }
+                },
+                onAskAboutThis: askAboutThisAction(for: pending),
+                onReadAloudFrom: readAloudFromAction(for: pending)
             )
+            .transition(.opacity)
+        }
+
+        @ViewBuilder
+        private var pendingSelectionOverlay: some View {
+            if let pending = pendingSelection {
+                pendingSelectionMenu(for: pending)
+            }
         }
 
         private var readAloudPresenter: ReaderReadAloudPresenter {
             ReaderReadAloudPresenter(coordinatorRef: coordinatorRef)
+        }
+
+        private func goForward() {
+            dismissPendingSelection()
+            pageNavigator.goNext()
+        }
+
+        private func goBackward() {
+            dismissPendingSelection()
+            pageNavigator.goPrev()
+        }
+
+        @discardableResult
+        private func dismissPendingSelection() -> Bool {
+            guard pendingSelection != nil else { return false }
+            pendingSelection = nil
+            coordinatorRef.coordinator?.clearSelection()
+            return true
+        }
+
+        private func askAboutThisAction(for pending: SelectionContext) -> (() -> Void)? {
+            guard let presenter = voicePresenter else { return nil }
+            let bookId = viewModel.book.id
+            let context = viewModel.voiceContext()
+            let quote = pending.locator.text
+            let contextProvider: ReaderVoiceContextProvider = { [viewModel] in
+                try await viewModel.liveVoiceContext()
+            }
+            return { [coordinatorRef, context, contextProvider, bookId, quote] in
+                pendingSelection = nil
+                coordinatorRef.coordinator?.clearSelection()
+                presenter.presentVoice(
+                    bookId: bookId,
+                    context: context,
+                    contextProvider: contextProvider,
+                    initialQuote: quote.isEmpty ? nil : quote
+                )
+            }
+        }
+
+        private func readAloudFromAction(for pending: SelectionContext) -> (() -> Void)? {
+            guard let onReadAloudFrom,
+                  let locator = pending.locator.toReadiumLocator() else {
+                return nil
+            }
+            return { [coordinatorRef, locator] in
+                pendingSelection = nil
+                coordinatorRef.coordinator?.clearSelection()
+                onReadAloudFrom(locator)
+            }
         }
 
         private var highlightInteractor: EPUBHighlightInteractor {
@@ -896,6 +943,11 @@ public struct ReaderScreen: View {
                 theme: resolvedTheme,
                 spread: currentSpread
             )
+        }
+
+        private func applyPreferencesForColorSchemeChange() {
+            guard viewModel.theme == .matchDevice else { return }
+            applyPreferences()
         }
     #endif
 }

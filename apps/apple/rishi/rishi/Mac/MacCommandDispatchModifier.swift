@@ -9,6 +9,9 @@ struct MacCommandDispatchModifier: ViewModifier {
 
     @Environment(AppRouter.self) private var router
     @Environment(\.macCommandRouter) private var commandRouter
+    #if targetEnvironment(macCatalyst)
+        @Environment(ReaderWindowCoordinator.self) private var readerWindows
+    #endif
 
     func body(content: Content) -> some View {
         content
@@ -64,11 +67,24 @@ struct MacCommandDispatchModifier: ViewModifier {
             }
 
         case .pageForward:
-            NotificationCenter.default.post(name: RishiCommand.pageForward, object: nil)
+            postPageCommand(RishiCommand.pageForward)
 
         case .pageBackward:
-            NotificationCenter.default.post(name: RishiCommand.pageBackward, object: nil)
+            postPageCommand(RishiCommand.pageBackward)
         }
+    }
+
+    private func postPageCommand(_ name: Notification.Name) {
+        #if targetEnvironment(macCatalyst)
+            guard let bookID = readerWindows.activeReader?.id.bookID else { return }
+            NotificationCenter.default.post(
+                name: name,
+                object: nil,
+                userInfo: [RishiCommand.targetBookIDKey: bookID]
+            )
+        #else
+            NotificationCenter.default.post(name: name, object: nil)
+        #endif
     }
 
     private func mapReaderTheme(_ macTheme: MacReaderTheme) -> ReaderTheme {

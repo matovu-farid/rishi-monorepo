@@ -56,6 +56,7 @@ enum RishiCommand {
     static let addBookmark  = Notification.Name("RishiCommand.addBookmark")
     static let pageForward  = Notification.Name("RishiCommand.pageForward")
     static let pageBackward = Notification.Name("RishiCommand.pageBackward")
+    static let targetBookIDKey = "targetBookID"
 
     static let fontStep     = Notification.Name("RishiCommand.fontStep")
     
