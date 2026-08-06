@@ -23,9 +23,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  */
 
 // ─── Capture the args passed to openai.audio.speech.create ──────────────────
-const { speechCalls, speechAudioBytes } = vi.hoisted(() => ({
+const { speechCalls, speechAudioBytes, ledgerState } = vi.hoisted(() => ({
   speechCalls: [] as Array<Record<string, unknown>>,
   speechAudioBytes: new Uint8Array([1, 2, 3, 4]),
+  ledgerState: { reserveError: null as unknown },
 }))
 
 vi.mock("openai", () => {
@@ -253,7 +254,10 @@ const env = {
   } as unknown as R2Bucket,
   USER_USAGE_LEDGER: {
     getByName: () => ({
-      reserveTts: async () => ({ reservationId: "reservation_test" }),
+      reserveTts: async () => {
+        if (ledgerState.reserveError) throw ledgerState.reserveError
+        return { reservationId: "reservation_test" }
+      },
       commitTtsReservation: async () => undefined,
       releaseTtsReservation: async () => undefined,
       getEntitlementSnapshot: async () => ({}),
@@ -322,6 +326,7 @@ async function computeKey(
 
 beforeEach(() => {
   speechCalls.length = 0
+  ledgerState.reserveError = null
   setUser("user_alice")
 })
 
@@ -366,6 +371,23 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
     const bytes = new Uint8Array(await res.arrayBuffer())
     expect(bytes.length).toBe(speechAudioBytes.length)
     expect(speechCalls.length).toBe(1)
+  })
+
+  it("serialized trial exhaustion becomes a typed 402 allowance response", async () => {
+    ledgerState.reserveError = {
+      name: "Error",
+      message: "Trial credits are exhausted",
+    }
+
+    const res = await callSpeech({ text: "hello world", voice: "alloy", speed: 1.0 })
+
+    expect(res.status).toBe(402)
+    expect(await res.json()).toEqual({
+      error: "Trial credits are exhausted",
+      code: "INSUFFICIENT_ALLOWANCE",
+      allowance_kind: "trial",
+    })
+    expect(speechCalls).toHaveLength(0)
   })
 
   it("old shape: { input, voice } (no `text` key) -> 400 missing-text envelope", async () => {

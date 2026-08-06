@@ -174,7 +174,7 @@ public actor WorkerClient {
         }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 { throw RishiError.unauthenticated }
-            if let allowance = Self.decodeAllowanceError(from: data, status: http.statusCode) {
+            if let allowance = Self.decodeAllowanceError(from: data) {
                 throw allowance
             }
             let fields = decodeWorkerErrorFields(from: data, status: http.statusCode)
@@ -264,7 +264,7 @@ public actor WorkerClient {
         guard (200..<300).contains(http.statusCode) else {
             var body = Data()
             for try await byte in bytes { body.append(byte) }
-            if let allowance = Self.decodeAllowanceError(from: body, status: http.statusCode) {
+            if let allowance = Self.decodeAllowanceError(from: body) {
                 throw allowance
             }
             throw RishiError.network(code: "http_\(http.statusCode)", message: "")
@@ -312,7 +312,7 @@ public actor WorkerClient {
         case 401:
             throw RishiError.unauthenticated
         case 400..<500:
-            if let allowance = Self.decodeAllowanceError(from: data, status: status) {
+            if let allowance = Self.decodeAllowanceError(from: data) {
                 throw allowance
             }
             let (code, message) = decodeWorkerErrorFields(from: data, status: status)
@@ -323,6 +323,9 @@ public actor WorkerClient {
             // 502 OPENAI_MINT_FAILED after the ledger session exists). Blind
             // retries then hit 409 VOICE_SESSION_ALREADY_ACTIVE. Only empty /
             // unparseable 5xx bodies keep the transient-retry path.
+            if let allowance = Self.decodeAllowanceError(from: data) {
+                throw allowance
+            }
             if let appError = decodeTypedWorkerError(from: data) {
                 throw RishiError.network(code: appError.code, message: appError.message)
             }
@@ -362,9 +365,12 @@ public actor WorkerClient {
         return nil
     }
 
-    private static func decodeAllowanceError(from data: Data, status: Int) -> WorkerAllowanceError? {
-        guard status == 402,
-              let flat = try? JSONDecoder().decode(FlatErrorEnvelope.self, from: data),
+    private static func decodeAllowanceError(from data: Data) -> WorkerAllowanceError? {
+        // The worker contract uses HTTP 402, but the stable typed code is the
+        // authoritative signal. Keeping this independent of status preserves
+        // the upgrade path if an older worker or intermediary incorrectly
+        // returns the typed envelope with a 5xx status.
+        guard let flat = try? JSONDecoder().decode(FlatErrorEnvelope.self, from: data),
               flat.code == WorkerErrorCode.insufficientAllowance
         else { return nil }
 

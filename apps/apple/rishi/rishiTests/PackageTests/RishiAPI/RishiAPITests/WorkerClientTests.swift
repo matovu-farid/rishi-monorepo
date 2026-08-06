@@ -34,7 +34,8 @@ struct WorkerClientTests {
 
     private func makeClient(
         token: String? = "test-token",
-        devBypass: Bool = false
+        devBypass: Bool = false,
+        consented: Bool = false
     ) -> (WorkerClient, URL) {
         MockURLProtocol.reset()
         let config = URLSessionConfiguration.ephemeral
@@ -45,6 +46,9 @@ struct WorkerClientTests {
             baseURL: base,
             session: session,
             tokenProvider: StaticTokenProvider(token),
+            dataUseConsentProvider: consented
+                ? AlwaysAllowWorkerDataUseConsentProvider()
+                : NoWorkerDataUseConsentProvider(),
             devBypassEnabled: devBypass
         )
         return (client, base)
@@ -120,6 +124,65 @@ struct WorkerClientTests {
         } catch let RishiError.network(code, message) {
             #expect(code == "forbidden")
             #expect(message == "Pro required")
+        } catch {
+            Issue.record("wrong error \(error)")
+        }
+    }
+
+    @Test func sendDecodesCanonicalAllowanceResponse() async {
+        let (client, _) = makeClient()
+        MockURLProtocol.setHandler { _ in
+            (
+                self.http(402),
+                Data(#"{"error":"Trial credits are exhausted","code":"INSUFFICIENT_ALLOWANCE","allowance_kind":"trial"}"#.utf8)
+            )
+        }
+
+        do {
+            _ = try await client.send(PingEndpoint())
+            Issue.record("expected WorkerAllowanceError")
+        } catch let error as WorkerAllowanceError {
+            #expect(error == .trial(message: "Trial credits are exhausted"))
+        } catch {
+            Issue.record("wrong error \(error)")
+        }
+    }
+
+    @Test func sendPreservesTypedAllowanceEvenIfWorkerStatusIs500() async {
+        let (client, _) = makeClient()
+        MockURLProtocol.setHandler { _ in
+            (
+                self.http(500),
+                Data(#"{"error":"Trial credits are exhausted","code":"INSUFFICIENT_ALLOWANCE","allowance_kind":"trial"}"#.utf8)
+            )
+        }
+
+        do {
+            _ = try await client.send(PingEndpoint())
+            Issue.record("expected WorkerAllowanceError")
+        } catch let error as WorkerAllowanceError {
+            #expect(error == .trial(message: "Trial credits are exhausted"))
+        } catch {
+            Issue.record("wrong error \(error)")
+        }
+    }
+
+    @Test func downloadDecodesCanonicalAllowanceResponse() async {
+        let (client, _) = makeClient(consented: true)
+        MockURLProtocol.setHandler { _ in
+            (
+                self.http(402),
+                Data(#"{"error":"Trial credits are exhausted","code":"INSUFFICIENT_ALLOWANCE","allowance_kind":"trial"}"#.utf8)
+            )
+        }
+
+        do {
+            _ = try await client.downloadData(
+                SpeechStreamEndpoint(body: .init(text: "hello", voice: "alloy"))
+            )
+            Issue.record("expected WorkerAllowanceError")
+        } catch let error as WorkerAllowanceError {
+            #expect(error == .trial(message: "Trial credits are exhausted"))
         } catch {
             Issue.record("wrong error \(error)")
         }
@@ -237,6 +300,52 @@ struct WorkerClientTests {
             Issue.record("expected throw")
         } catch let RishiError.decoding(msg) {
             #expect(msg.contains("PingResponse") || msg.contains("decode"))
+        } catch {
+            Issue.record("wrong error \(error)")
+        }
+    }
+
+    @Test func streamingTypedAllowanceErrorWinsEvenIfWorkerStatusIs500() async throws {
+        let (client, _) = makeClient(consented: true)
+        let message = "Trial credits are exhausted"
+        MockURLProtocol.setHandler { _ in
+            (
+                self.http(500),
+                Data(#"{"error":"Trial credits are exhausted","code":"INSUFFICIENT_ALLOWANCE","allowance_kind":"trial"}"#.utf8)
+            )
+        }
+
+        let stream = await client.stream(
+            SpeechStreamEndpoint(body: .init(text: "hello", voice: "alloy"))
+        )
+        do {
+            for try await _ in stream { }
+            Issue.record("expected WorkerAllowanceError")
+        } catch let error as WorkerAllowanceError {
+            #expect(error == .trial(message: message))
+        } catch {
+            Issue.record("wrong error \(error)")
+        }
+    }
+
+    @Test func streamingTypedAllowanceErrorDecodesCanonical402Response() async throws {
+        let (client, _) = makeClient(consented: true)
+        let message = "Trial credits are exhausted"
+        MockURLProtocol.setHandler { _ in
+            (
+                self.http(402),
+                Data(#"{"error":"Trial credits are exhausted","code":"INSUFFICIENT_ALLOWANCE","allowance_kind":"trial"}"#.utf8)
+            )
+        }
+
+        let stream = await client.stream(
+            SpeechStreamEndpoint(body: .init(text: "hello", voice: "alloy"))
+        )
+        do {
+            for try await _ in stream { }
+            Issue.record("expected WorkerAllowanceError")
+        } catch let error as WorkerAllowanceError {
+            #expect(error == .trial(message: message))
         } catch {
             Issue.record("wrong error \(error)")
         }

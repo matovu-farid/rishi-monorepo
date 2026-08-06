@@ -51,7 +51,6 @@ import { error } from "node:console";
 import { userRoutes } from "./routes/user";
 import { retryPendingDeletions } from "./account-deletion";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
-import { InsufficientAllowanceError } from "./durable-objects/user-usage-ledger/errors";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
 export { requireAuth } from "./middleware";
