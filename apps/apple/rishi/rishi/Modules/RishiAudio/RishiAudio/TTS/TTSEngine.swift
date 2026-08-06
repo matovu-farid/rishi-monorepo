@@ -82,7 +82,9 @@ import Foundation
             let observable = state
             await MainActor.run {
                 observable.activate(tokens: request.tokenSnapshot)
-                if observable.typedFailure == nil { observable.error = nil }
+                if observable.typedFailure == nil {
+                    observable.clearFailure()
+                }
                 observable.update(status: .loading)
             }
             // Single-audio-owner invariant: let the coordinator stop us if another
@@ -309,9 +311,8 @@ import Foundation
                 if let allowance = error as? WorkerAllowanceError,
                    let requestTokens {
                     observable.recordTypedFailure(allowance, tokens: requestTokens)
-                } else if observable.typedFailure == nil {
-                    observable.update(status: .error)
-                    observable.error = message
+                } else if let userFacingError = TTSUserFacingError.classify(error) {
+                    observable.recordUserFacingFailure(userFacingError)
                 }
             }
             Log.event(

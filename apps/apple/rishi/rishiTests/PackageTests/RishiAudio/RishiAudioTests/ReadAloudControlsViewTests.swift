@@ -54,7 +54,7 @@ struct ReadAloudControlsViewTests {
     }
 
     @MainActor
-    @Test("TTSFailureAlert.message falls back when state.error is nil")
+    @Test("TTSFailureAlert uses sanitized user-facing copy")
     func ttsErrorAlertMessageFallback() {
         let state = TTSPlaybackState()
         state.update(status: .error)
@@ -62,7 +62,7 @@ struct ReadAloudControlsViewTests {
         #expect(TTSFailureAlert.message(for: state) == TTSFailureAlert.defaultMessage)
 
         state.error = "Network down"
-        #expect(TTSFailureAlert.message(for: state) == "Network down")
+        #expect(TTSFailureAlert.message(for: state) == TTSFailureAlert.defaultMessage)
     }
 
     @Test("VoiceCatalog.all is the reader voice preset list")

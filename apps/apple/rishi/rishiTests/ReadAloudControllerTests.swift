@@ -129,6 +129,25 @@ struct ReadAloudControllerTests {
         #expect(state.activeTokenSnapshot == newTokens)
     }
 
+    @Test("teardown can preserve allowance state for the upgrade presentation")
+    func allowanceStateSurvivesTeardownBoundary() {
+        let state = TTSPlaybackState()
+        let tokens = TTSPlaybackTokenSnapshot(
+            sessionToken: UUID(),
+            utteranceToken: UUID(),
+            requestToken: UUID()
+        )
+        state.activate(tokens: tokens)
+        state.recordTypedFailure(.trial(message: "credits exhausted"), tokens: tokens)
+
+        state.endSession(preservingFailure: true)
+
+        #expect(state.typedFailure?.kind == .trial)
+        #expect(state.userFacingFailure == .trialExhausted)
+        #expect(state.activeTokenSnapshot == nil)
+        #expect(state.status == .idle)
+    }
+
     @Test("Readium narration start activates the playback spoken-audio session")
     func readiumNarrationStartActivatesSpokenAudioSession() async {
         let configurator = FakeAudioSessionConfigurator()

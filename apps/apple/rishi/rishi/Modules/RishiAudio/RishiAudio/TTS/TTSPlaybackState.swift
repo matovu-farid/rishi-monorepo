@@ -38,6 +38,7 @@ public final class TTSPlaybackState {
     public private(set) var activeTokenSnapshot: TTSPlaybackTokenSnapshot?
     public private(set) var typedFailure: WorkerAllowanceError?
     public private(set) var typedFailureTokens: TTSPlaybackTokenSnapshot?
+    public private(set) var userFacingFailure: TTSUserFacingError?
 
     public typealias TypedFailureObserver = @MainActor (
         WorkerAllowanceError,
@@ -82,29 +83,47 @@ public final class TTSPlaybackState {
         typedFailureTokens = tokens
         error = failure.message
         status = .error
+        userFacingFailure = TTSUserFacingError.classify(failure)
 
         let observers = Array(typedFailureObservers.values)
         for observer in observers {
             observer(failure, tokens)
         }
     }
+
+    public func recordUserFacingFailure(_ failure: TTSUserFacingError) {
+        guard typedFailure == nil else { return }
+        userFacingFailure = failure
+        error = nil
+        status = .error
+    }
+
+    public func clearFailure() {
+        guard typedFailure == nil else { return }
+        userFacingFailure = nil
+        error = nil
+        if status == .error { status = .stopped }
+    }
     
 
     /// Ends the shared playback session and clears its sticky typed failure.
-    public func endSession() {
+    public func endSession(preservingFailure: Bool = false) {
         status = .idle
         currentPassageId = nil
         elapsed = 0
-        error = nil
-        typedFailure = nil
-        typedFailureTokens = nil
+        if !preservingFailure {
+            error = nil
+            typedFailure = nil
+            typedFailureTokens = nil
+            userFacingFailure = nil
+        }
         activeTokenSnapshot = nil
     }
 
     /// Backwards-compatible reset for callers that only need to clear UI
     /// fields. A typed allowance failure is cleared only by `endSession()`.
     public func reset() {
-        guard typedFailure == nil else { return }
+        guard typedFailure == nil, userFacingFailure == nil else { return }
         update(status: .idle)
         currentPassageId = nil
         elapsed = 0

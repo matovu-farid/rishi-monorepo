@@ -28,6 +28,8 @@ struct ChunkedAudioPlayerTTSEngineTests {
 
         #expect(state.typedFailure == .narration(message: "narration exhausted"))
         #expect(state.typedFailureTokens == request.tokenSnapshot)
+        #expect(state.userFacingFailure == .narrationExhausted)
+        #expect(state.status == .error)
         await engine.stop()
     }
 }

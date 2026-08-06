@@ -14,12 +14,10 @@ public enum TTSFailureAlert {
 
     public static let defaultMessage = "Something went wrong while reading aloud."
 
-    /// User-facing message for the alert: the engine-supplied `state.error`
-    /// when present, otherwise the generic fallback copy.
+    /// User-facing message comes only from the sanitized error taxonomy.
     @MainActor
     public static func message(for state: TTSPlaybackState) -> String {
-        if let error = state.error, !error.isEmpty { return error }
-        return defaultMessage
+        state.userFacingFailure?.message ?? defaultMessage
     }
 
     /// Clears the error condition so the alert dismisses and the controls leave
@@ -28,10 +26,7 @@ public enum TTSFailureAlert {
     @MainActor
     public static func clear(_ state: TTSPlaybackState) {
         guard state.typedFailure == nil else { return }
-        state.error = nil
-        if state.status == .error {
-            state.update(status: .stopped)
-        }
+        state.clearFailure()
     }
 }
 
@@ -40,25 +35,35 @@ public extension View {
     /// `state.error` (or a fallback) with a single "Dismiss" button that clears
     /// the error. Apply on the reader content so errors surface even when the
     /// control bar is hidden.
-    func ttsErrorAlert(state: TTSPlaybackState) -> some View {
-        modifier(TTSFailureAlertModifier(state: state))
+    func ttsErrorAlert(
+        state: TTSPlaybackState,
+        onRetry: (@MainActor () -> Void)? = nil
+    ) -> some View {
+        modifier(TTSFailureAlertModifier(state: state, onRetry: onRetry))
     }
 }
 
 @MainActor
 private struct TTSFailureAlertModifier: ViewModifier {
     @Bindable var state: TTSPlaybackState
+    let onRetry: (@MainActor () -> Void)?
 
     func body(content: Content) -> some View {
         content.alert(
             TTSFailureAlert.title,
             isPresented: Binding(
-                get: { state.status == .error && state.typedFailure == nil },
+                get: { state.userFacingFailure != nil && state.typedFailure == nil },
                 set: { presented in
                     if presented == false { TTSFailureAlert.clear(state) }
                 }
             )
         ) {
+            if state.userFacingFailure?.canRetry == true, let onRetry {
+                Button("Try Again") {
+                    TTSFailureAlert.clear(state)
+                    onRetry()
+                }
+            }
             Button("Dismiss", role: .cancel) {
                 TTSFailureAlert.clear(state)
             }

@@ -154,6 +154,10 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                 await MainActor.run {
                     state.recordTypedFailure(allowance, tokens: activeTokens)
                 }
+            } else if let userFacingError = TTSUserFacingError.classify(error) {
+                await MainActor.run {
+                    state.recordUserFacingFailure(userFacingError)
+                }
             }
             let message = String(describing: error)
             Log.event("tts.readaloud.speak.end", level: .error, data: [

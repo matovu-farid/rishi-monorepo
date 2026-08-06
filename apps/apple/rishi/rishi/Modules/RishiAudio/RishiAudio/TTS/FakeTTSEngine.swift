@@ -133,8 +133,7 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
             settle(.failure(TTSEnginePlaybackError.finishedWithoutPlaying))
         case .error:
             await MainActor.run {
-                observable.update(status: .error)
-                observable.error = "FakeTTSEngine scripted error"
+                observable.recordUserFacingFailure(.audioPlayback)
             }
             settle(.failure(TTSEnginePlaybackError.playbackFailed("FakeTTSEngine scripted error")))
         case .allowance(let failure):

@@ -502,6 +502,7 @@ final class ReadAloudController {
 
     func repeatCurrent() async {
         if let readiumSynthesizer, let currentLocator {
+            await coordinator.requestActiveMode(.tts)
             readiumSynthesizer.start(from: currentLocator)
         } else {
             await bridge?.repeatCurrent()
@@ -643,7 +644,7 @@ final class ReadAloudController {
         currentParagraph = paragraphs[index]
     }
 
-    private func teardownPlaybackSession() async {
+    private func teardownPlaybackSession(preservingFailure: Bool = false) async {
         playbackTeardownDepth += 1
         defer { playbackTeardownDepth -= 1 }
 
@@ -672,14 +673,13 @@ final class ReadAloudController {
         }
         readiumSynthesizer?.stop()
         readiumSynthesizer = nil
-        readiumSynthesizerGeneration = nil
         readiumState = .stopped
         playbackSessionToken = nil
         followCreditRemaining = 0
         #if DEBUG
         testSpeakingOverride = false
         #endif
-        ttsState.endSession()
+        ttsState.endSession(preservingFailure: preservingFailure)
         // The controller owns the Readium lifecycle, so it releases the
         // coordinator only when a session actually stops—not between passages.
         await coordinator.releaseActiveMode(.tts)
@@ -701,7 +701,10 @@ final class ReadAloudController {
             observerGeneration: observerGeneration
         ) else { return }
 
-        await teardownPlaybackSession()
+        // Keep the typed failure alive while the controller tears down the
+        // Readium session. This prevents the generic alert from racing the
+        // upgrade sheet and ensures the observer's signal survives teardown.
+        await teardownPlaybackSession(preservingFailure: true)
 
         // Teardown yields to the engine. A replacement start or disposal may
         // have happened while it was suspended, so never show the prompt for
@@ -918,14 +921,12 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
         guard let generation = readiumSynthesizerGeneration,
               isCurrentPlaybackGeneration(generation)
         else { return }
-        invalidatePlaybackGeneration()
         nowPlayingController?.detach()
-        readiumSynthesizer = nil
-        readiumSynthesizerGeneration = nil
         readiumState = .stopped
         if ttsState.typedFailure == nil {
-            ttsState.error = String(describing: error)
-            ttsState.update(status: .error)
+            if let userFacingError = TTSUserFacingError.classify(error) {
+                ttsState.recordUserFacingFailure(userFacingError)
+            }
         }
         Task { [coordinator] in
             await coordinator.releaseActiveMode(.tts)

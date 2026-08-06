@@ -124,7 +124,13 @@ struct ReaderDestination: View {
         )
 
 
-        .ttsErrorAlert(state: dependencies.ttsState)
+        .ttsErrorAlert(
+            state: dependencies.ttsState,
+            onRetry: { [weak readAloud] in
+                guard let readAloud else { return }
+                Task { @MainActor in await readAloud.repeatCurrent() }
+            }
+        )
         .task {
 
 
@@ -290,14 +296,21 @@ struct ReaderDestination: View {
                 .presentationDetents([.medium])
             }
         }
-        .sheet(item: $pendingNarrationUpgradePrompt) { reason in
+        .sheet(
+            item: $pendingNarrationUpgradePrompt,
+            onDismiss: { dependencies.ttsState.endSession() }
+        ) { reason in
             AIFeatureUpgradePrompt(
                 reason: reason,
                 onUpgrade: {
                     pendingNarrationUpgradePrompt = nil
+                    dependencies.ttsState.endSession()
                     onRequestPaywall("narration_exhausted")
                 },
-                onDismiss: { pendingNarrationUpgradePrompt = nil }
+                onDismiss: {
+                    pendingNarrationUpgradePrompt = nil
+                    dependencies.ttsState.endSession()
+                }
             )
         }
         .sheet(item: Binding(

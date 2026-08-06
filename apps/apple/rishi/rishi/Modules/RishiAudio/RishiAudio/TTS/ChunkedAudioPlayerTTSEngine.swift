@@ -56,7 +56,7 @@ import Foundation
                 .replacingOccurrences(of: "\n", with: " ")
             await MainActor.run {
                 state.activate(tokens: request.tokenSnapshot)
-                if state.typedFailure == nil { state.error = nil }
+                if state.typedFailure == nil { state.clearFailure() }
                 state.currentPassageId = request.passageId
                 state.update(status: .loading)
             }
@@ -304,8 +304,7 @@ import Foundation
             let text = message ?? "TTS playback failed"
             await MainActor.run {
                 guard state.typedFailure == nil else { return }
-                state.update(status: .error)
-                state.error = text
+                state.recordUserFacingFailure(.audioPlayback)
             }
             Log.event(
                 "tts.player.failed",
