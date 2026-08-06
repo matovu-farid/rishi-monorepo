@@ -118,6 +118,11 @@ final class VoiceSessionPresenter {
     /// be created. Survives `clearFailure()` so Try again can unblock the server.
     private var staleRishiSessionId: String?
 
+    /// Identifies the presenter-owned session currently allowed to update
+    /// failure UI. A terminal callback can arrive after local teardown, so a
+    /// callback from an older session must never clobber a newer one.
+    private var activeSessionToken: UUID?
+
     init(
         coordinator: AudioSessionCoordinator,
         workerClient: WorkerClient,
@@ -250,6 +255,8 @@ final class VoiceSessionPresenter {
         currentLanguage = language
         self.currentPageProvider = currentPageProvider
         self.currentReaderSessionIdentity = readerSessionIdentity
+        let sessionToken = UUID()
+        activeSessionToken = sessionToken
 
         // Consent can be revoked while stale-session cleanup and other
         // asynchronous startup work is in flight. Re-check immediately before
@@ -362,6 +369,9 @@ final class VoiceSessionPresenter {
             dataUseConsentProvider: dataUseConsentProvider,
             sessionCoordinator: sessionCoordinatorFactory(),
             controlSocketFactory: controlSocketFactory,
+            onTerminalFailure: { [weak self] reason in
+                await self?.handleTerminalFailure(reason, sessionToken: sessionToken)
+            },
             responderFactory: responderFactory,
             chapterIndexResponderFactory: responderFactory == nil ? effectiveChapterIndexResponderFactory : nil,
             chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
@@ -370,9 +380,19 @@ final class VoiceSessionPresenter {
             readerSessionIdentity: readerSessionIdentity,
             embedderPrewarm: embedderPrewarm
         )
+
+        guard activeSessionToken == sessionToken, isPresenting else {
+            await session.end()
+            return
+        }
         self.session = session
         await sessionRegistry.register(session)
         startupTrace.mark("transport_object_registered")
+
+        guard activeSessionToken == sessionToken, isPresenting else {
+            await closeAbandonedSession(session)
+            return
+        }
 
         // Install the single transcript stream continuation before connecting.
         // The lookup below can be slow, but the realtime event pump must not
@@ -388,6 +408,11 @@ final class VoiceSessionPresenter {
             activeParagraphText: nil,
             preflighted: true
         )
+
+        guard activeSessionToken == sessionToken, isPresenting else {
+            await closeAbandonedSession(session)
+            return
+        }
         startupTrace.mark("transport_start_returned", data: [
             "status": String(describing: state.status),
         ])
@@ -566,6 +591,7 @@ final class VoiceSessionPresenter {
 
         // Dismiss first — before local teardown / delivery.
         isPresenting = false
+        activeSessionToken = nil
 
         await sessionRegistry.close()
 
@@ -744,6 +770,16 @@ final class VoiceSessionPresenter {
         return false
     }
 
+    private func closeAbandonedSession(_ session: RealtimeVoiceSession) async {
+        guard let id = await session.end() else { return }
+        noteRishiSessionId(id)
+        if sessionRegistry.state != .closing {
+            await sessionRegistry.close()
+        } else if let coordinator = sessionCoordinatorFactory() {
+            _ = await deliverEndWithRetries(rishiSessionId: id, using: coordinator)
+        }
+    }
+
     func retry() async {
         if let id = await session?.rishiSessionId {
             noteRishiSessionId(id)
@@ -788,6 +824,7 @@ final class VoiceSessionPresenter {
         }
         failure = nil
         pendingFailure = nil
+        activeSessionToken = nil
         bridgeTask?.cancel()
         bridgeTask = nil
         session = nil
@@ -826,6 +863,15 @@ final class VoiceSessionPresenter {
 
             failure = alert
         }
+    }
+
+    private func handleTerminalFailure(
+        _ reason: VoiceSessionFailureReason,
+        sessionToken: UUID
+    ) async {
+        guard activeSessionToken == sessionToken else { return }
+        enterFailure(reason: reason)
+        await sessionRegistry.close()
     }
 
     func promotePendingFailure() {

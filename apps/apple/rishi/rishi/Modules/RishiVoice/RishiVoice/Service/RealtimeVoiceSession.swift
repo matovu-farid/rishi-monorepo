@@ -49,6 +49,7 @@ public actor RealtimeVoiceSession {
     public typealias BookContextResponderFactory = @Sendable (UUID) -> BookContextResponder
     public typealias ChapterIndexCoordinatorFactory = @Sendable (UUID, String) async -> ChapterIndexCoordinator?
     public typealias ChapterIndexBookContextResponderFactory = @Sendable (UUID, ChapterIndexCoordinator?, String?) -> BookContextResponder
+    public typealias TerminalFailureHandler = @Sendable (VoiceSessionFailureReason) async -> Void
 
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let coordinator: AudioSessionCoordinator
@@ -69,6 +70,7 @@ public actor RealtimeVoiceSession {
     /// only `connect()` can, and that failure is handled inside
     /// `ControlWebSocketClient`'s reconnect loop, not here.
     private let controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)?
+    private let onTerminalFailure: TerminalFailureHandler?
     private let responderFactory: BookContextResponderFactory?
     private let chapterIndexResponderFactory: ChapterIndexBookContextResponderFactory?
     private let chapterIndexCoordinatorFactory: ChapterIndexCoordinatorFactory?
@@ -128,6 +130,7 @@ public actor RealtimeVoiceSession {
         dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         sessionCoordinator: (any VoiceSessionCoordinating)? = nil,
         controlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)? = nil,
+        onTerminalFailure: TerminalFailureHandler? = nil,
         responderFactory: BookContextResponderFactory? = nil,
         chapterIndexResponderFactory: ChapterIndexBookContextResponderFactory? = nil,
         chapterIndexCoordinatorFactory: ChapterIndexCoordinatorFactory? = nil,
@@ -154,6 +157,7 @@ public actor RealtimeVoiceSession {
         self.state = state
         self.sessionCoordinator = sessionCoordinator
         self.controlSocketFactory = controlSocketFactory
+        self.onTerminalFailure = onTerminalFailure
         self.responderFactory = responderFactory
         self.chapterIndexResponderFactory = chapterIndexResponderFactory
         self.chapterIndexCoordinatorFactory = chapterIndexCoordinatorFactory
@@ -616,6 +620,7 @@ public actor RealtimeVoiceSession {
         await controlSocket?.disconnect()
         await coordinator.releaseActiveMode(.voice)
         await fail(reason: .sessionTerminated(reason: reason), message: Self.sessionTerminatedMessage(reason))
+        await onTerminalFailure?(.sessionTerminated(reason: reason))
         currentBookContext = nil
         currentLanguage = nil
         activeVoiceSession = nil

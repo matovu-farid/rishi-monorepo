@@ -173,7 +173,32 @@ struct VoiceSessionPresenterParkTests {
         func sendClientAck() async {}
     }
 
-    private func makePresenter(client: ParkTestRealtimeClient) -> VoiceSessionPresenter {
+    private final class TerminalCallbackBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var callback: (@Sendable (ControlTerminalSignal) async -> Void)?
+
+        func set(_ callback: @escaping @Sendable (ControlTerminalSignal) async -> Void) {
+            lock.withLock { self.callback = callback }
+        }
+
+        func waitForCallback() async -> Bool {
+            for _ in 0 ..< 100 {
+                if lock.withLock({ callback != nil }) { return true }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return false
+        }
+
+        func fire(_ signal: ControlTerminalSignal) async {
+            let callback = lock.withLock { self.callback }
+            await callback?(signal)
+        }
+    }
+
+    private func makePresenter(
+        client: ParkTestRealtimeClient,
+        terminalCallback: TerminalCallbackBox? = nil
+    ) -> VoiceSessionPresenter {
         let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
         let worker = WorkerClient(
             baseURL: URL(string: "https://example.invalid")!,
@@ -191,13 +216,17 @@ struct VoiceSessionPresenterParkTests {
             clientFactory: { client },
             keyFetcherFactory: { ParkTestKeyFetcher() },
             sessionCoordinatorFactory: { NoOpSessionCoordinator() },
-            controlSocketFactory: { _, _ in NoOpControlSocket() }
+            controlSocketFactory: { _, callback in
+                terminalCallback?.set(callback)
+                return NoOpControlSocket()
+            }
         )
     }
 
     private func makePresenter(
         client: ParkTestRealtimeClient,
-        sessionCoordinator: any VoiceSessionCoordinating
+        sessionCoordinator: any VoiceSessionCoordinating,
+        terminalCallback: TerminalCallbackBox? = nil
     ) -> VoiceSessionPresenter {
         let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
         let worker = WorkerClient(
@@ -216,7 +245,10 @@ struct VoiceSessionPresenterParkTests {
             clientFactory: { client },
             keyFetcherFactory: { ParkTestKeyFetcher() },
             sessionCoordinatorFactory: { sessionCoordinator },
-            controlSocketFactory: { _, _ in NoOpControlSocket() }
+            controlSocketFactory: { _, callback in
+                terminalCallback?.set(callback)
+                return NoOpControlSocket()
+            }
         )
     }
 
@@ -268,6 +300,72 @@ struct VoiceSessionPresenterParkTests {
         await presenter.requestEnd()
         #expect(presenter.getSession() == nil)
         #expect(presenter.isPresenting == false)
+    }
+
+    @Test("terminal allowance failure closes voice chrome and prepares upgrade alert")
+    func terminalAllowanceFailureClosesChromeAndPreparesUpgradeAlert() async {
+        let terminalCallback = TerminalCallbackBox()
+        let presenter = makePresenter(
+            client: ParkTestRealtimeClient(),
+            terminalCallback: terminalCallback
+        )
+
+        await presenter.start(bookId: UUID())
+        #expect(await terminalCallback.waitForCallback())
+        await terminalCallback.fire(
+            ControlTerminalSignal(
+                rishiSessionId: "rishi-test",
+                reason: .planVoiceAllowanceExhausted
+            )
+        )
+
+        #expect(presenter.isPresenting == false)
+        #expect(presenter.pendingFailure?.primaryAction == .upgrade)
+        #expect(presenter.sessionRegistry.activeSession == nil)
+    }
+
+    @Test("terminal trial-credit failure closes voice chrome and prepares upgrade alert")
+    func terminalTrialCreditFailureClosesChromeAndPreparesUpgradeAlert() async {
+        let terminalCallback = TerminalCallbackBox()
+        let presenter = makePresenter(
+            client: ParkTestRealtimeClient(),
+            terminalCallback: terminalCallback
+        )
+
+        await presenter.start(bookId: UUID())
+        #expect(await terminalCallback.waitForCallback())
+        await terminalCallback.fire(
+            ControlTerminalSignal(
+                rishiSessionId: "rishi-test",
+                reason: .trialCreditsExhausted
+            )
+        )
+
+        #expect(presenter.isPresenting == false)
+        #expect(presenter.pendingFailure?.primaryAction == .upgrade)
+    }
+
+    @Test("terminal callback arriving after End does not reopen failure UI")
+    func terminalCallbackAfterEndIsIgnored() async {
+        let terminalCallback = TerminalCallbackBox()
+        let presenter = makePresenter(
+            client: ParkTestRealtimeClient(),
+            terminalCallback: terminalCallback
+        )
+
+        await presenter.start(bookId: UUID())
+        #expect(await terminalCallback.waitForCallback())
+        await presenter.requestEnd()
+        await terminalCallback.fire(
+            ControlTerminalSignal(
+                rishiSessionId: "rishi-test",
+                reason: .trialCreditsExhausted
+            )
+        )
+
+        #expect(presenter.isPresenting == false)
+        #expect(presenter.failure == nil)
+        #expect(presenter.pendingFailure == nil)
     }
 
     @Test("starting after optimistic End waits for one ledger delivery")

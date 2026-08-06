@@ -61,6 +61,13 @@ final class VoiceSessionRegistry {
     }
 
     func register(_ session: any VoiceSessionRegistrySession) async {
+        // A prior session may have been detached while its server end is
+        // still being delivered. Do not let a replacement become active until
+        // that delivery has finished; otherwise the old delivery can later
+        // transition the registry to `.ended` underneath the new session.
+        while state == .closing || deliveryTask != nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         expiryTask?.cancel()
         activeSession = session
         state = .live
@@ -141,6 +148,7 @@ final class VoiceSessionRegistry {
                 }
             }
             self.state = .ended
+            self.deliveryTask = nil
         }
     }
 
