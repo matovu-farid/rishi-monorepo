@@ -317,6 +317,40 @@ struct TTSEngineTests {
         #expect(state.typedFailureTokens == request.tokenSnapshot)
         await engine.stop()
     }
+
+    @Test("setup-time allowance failure is recorded with the active request tokens")
+    @MainActor
+    func setupAllowanceFailureRecordsTokens() async {
+        let fakeAudioSession = FakeAudioSessionConfigurator()
+        let coordinator = AudioSessionCoordinator(configurator: fakeAudioSession)
+        let streamer = TTSStreamer(source: TypedAllowanceSource())
+        let fakeEngine = FakeAudioEngine()
+        let decoderFactory: TTSEngine.DecoderFactory = { _ in
+            throw WorkerAllowanceError.trial(message: "trial exhausted during setup")
+        }
+        let state = TTSPlaybackState()
+        let engine = TTSEngine(
+            streamer: streamer,
+            decoderFactory: decoderFactory,
+            engine: fakeEngine,
+            coordinator: coordinator,
+            state: state
+        )
+        let request = TTSStreamRequest(
+            text: "allowance",
+            voice: "alloy",
+            speed: 1.0,
+            sessionToken: UUID(),
+            utteranceToken: UUID(),
+            requestToken: UUID()
+        )
+
+        await engine.start(request: request)
+
+        #expect(state.typedFailure == .trial(message: "trial exhausted during setup"))
+        #expect(state.typedFailureTokens == request.tokenSnapshot)
+        await engine.stop()
+    }
 }
 
 /// Thread-safe collector for the tracker's emitted passage ids — the consumer

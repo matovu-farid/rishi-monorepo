@@ -148,7 +148,11 @@ import Foundation
                     }
                 }
             } catch {
-                await fail(with: error)
+                await fail(
+                    with: error,
+                    generation: generation,
+                    tokens: request.tokenSnapshot
+                )
             }
         }
 
