@@ -6,6 +6,30 @@ import UIKit
 
 #if targetEnvironment(macCatalyst)
 
+@MainActor
+@Observable
+final class CatalystReaderSubscriptionPresentationState {
+    var isPresented = false
+    private(set) var pendingConfirmation = false
+    var showConfirmation = false
+
+    func handlePaywallRequest(_ feature: String) {
+        _ = feature
+        isPresented = true
+    }
+
+    func markPurchaseProcessed() {
+        pendingConfirmation = true
+        isPresented = false
+    }
+
+    func presentConfirmationAfterDismissal() {
+        guard pendingConfirmation else { return }
+        pendingConfirmation = false
+        showConfirmation = true
+    }
+}
+
 struct ReaderWindowCoordinatorConfiguration: ViewModifier {
     let coordinator: ReaderWindowCoordinator
 
@@ -26,6 +50,7 @@ struct ReaderWindowCoordinatorConfiguration: ViewModifier {
 struct CatalystReaderWindow: View {
     let input: ReaderWindowInput
     @State private var presentationState = PDFReaderPresentationState()
+    @State private var subscriptionState = CatalystReaderSubscriptionPresentationState()
 
     @Environment(\.appDependencies) private var appDependencies
     @Environment(CurrentUserBox.self) private var currentUser
@@ -34,6 +59,7 @@ struct CatalystReaderWindow: View {
 
     var body: some View {
         @Bindable var presentation = presentationState
+        @Bindable var subscriptions = subscriptionState
         Group {
             if let services = appDependencies?.services,
                let user = signedInUser,
@@ -42,9 +68,36 @@ struct CatalystReaderWindow: View {
                     ReaderDestinationView(
                         route: input.route,
                         hint: nil,
-                        onRequestPaywall: { _ in },
+                        onRequestPaywall: subscriptionState.handlePaywallRequest,
                         pdfViewMode: $presentation.requestedMode
                     )
+                }
+                .sheet(isPresented: $subscriptions.isPresented, onDismiss: {
+                    Task { @MainActor in
+                        await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+                            reason: .foreground
+                        )
+                        subscriptionState.presentConfirmationAfterDismissal()
+                    }
+                }) {
+                    SubscriptionsView(
+                        dependencies: SubscriptionDependencies(
+                            groupID: services.billing.groupID,
+                            entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                            restoreService: services.billing.restoreService
+                        ),
+                        onPurchaseProcessed: {
+                            subscriptionState.markPurchaseProcessed()
+                        }
+                    )
+                    .environment(services.billing.entitlementSnapshotStore)
+                    .environment(services.billing.manageSubscriptionPresenter)
+                    .environment(Store.shared)
+                }
+                .alert("Subscription active", isPresented: $subscriptions.showConfirmation) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("Thank you for subscribing. Your plan is now active.")
                 }
                 .background {
                     ReaderWindowKeyObserver {

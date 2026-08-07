@@ -70,6 +70,7 @@ public struct SubscriptionsView: View {
     @State private var appAccountToken: UUID?
 
     private let onPurchaseCompleted: () -> Void
+    private let onPurchaseProcessed: @MainActor () async -> Void
 
     private var isPaidActive: Bool {
         let serverPaid = entitlementStore.resolvedSnapshot?.isPaidActive == true
@@ -92,15 +93,21 @@ public struct SubscriptionsView: View {
 
     public init(
         dependencies: SubscriptionDependencies,
-        onPurchaseCompleted: @escaping () -> Void = {}
+        onPurchaseCompleted: @escaping () -> Void = {},
+        onPurchaseProcessed: @escaping @MainActor () async -> Void = {}
     ) {
         self.dependencies = dependencies
         self.onPurchaseCompleted = onPurchaseCompleted
+        self.onPurchaseProcessed = onPurchaseProcessed
     }
 
-    public init(onPurchaseCompleted: @escaping () -> Void = {}) {
+    public init(
+        onPurchaseCompleted: @escaping () -> Void = {},
+        onPurchaseProcessed: @escaping @MainActor () async -> Void = {}
+    ) {
         self.dependencies = nil
         self.onPurchaseCompleted = onPurchaseCompleted
+        self.onPurchaseProcessed = onPurchaseProcessed
     }
 
     private var groupID: GroupId? {
@@ -310,6 +317,7 @@ public struct SubscriptionsView: View {
                 reason: .foreground
             )
         }
+        await onPurchaseProcessed()
     }
 
     private func restorePurchases() async {

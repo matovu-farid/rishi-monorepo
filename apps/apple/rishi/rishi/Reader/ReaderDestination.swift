@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 import ReadiumShared
 
 struct ReaderDestinationDependencies {
@@ -52,6 +53,21 @@ struct ReaderDestinationDependencies {
     }
 }
 
+@MainActor
+@Observable
+final class ReaderPaywallRequestHandoff {
+    private var pendingRequest: String?
+
+    func queue(_ request: String) {
+        pendingRequest = request
+    }
+
+    func takeAfterPromptDismissal() -> String? {
+        defer { pendingRequest = nil }
+        return pendingRequest
+    }
+}
+
 
 
 
@@ -75,6 +91,7 @@ struct ReaderDestination: View {
     @State private var readAloud: ReadAloudController? = nil
     @State private var syncBinding: ReaderPositionSyncBinding? = nil
     @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
+    @State private var paywallRequestHandoff = ReaderPaywallRequestHandoff()
 
     @State private var voiceEntry: ReaderVoiceEntry
     @State private var showVoiceTextChat = false
@@ -298,14 +315,16 @@ struct ReaderDestination: View {
         }
         .sheet(
             item: $pendingNarrationUpgradePrompt,
-            onDismiss: { dependencies.ttsState.endSession() }
+            onDismiss: {
+                dependencies.ttsState.endSession()
+                forwardPaywallRequestIfNeeded()
+            }
         ) { reason in
             AIFeatureUpgradePrompt(
                 reason: reason,
                 onUpgrade: {
+                    paywallRequestHandoff.queue("narration_exhausted")
                     pendingNarrationUpgradePrompt = nil
-                    dependencies.ttsState.endSession()
-                    onRequestPaywall("narration_exhausted")
                 },
                 onDismiss: {
                     pendingNarrationUpgradePrompt = nil
@@ -316,16 +335,24 @@ struct ReaderDestination: View {
         .sheet(item: Binding(
             get: { voiceEntry.pendingUpgradePrompt },
             set: { newValue in if newValue == nil { voiceEntry.dismissUpgradePrompt() } }
-        )) { reason in
+        ), onDismiss: {
+            forwardPaywallRequestIfNeeded()
+        }) { reason in
             AIFeatureUpgradePrompt(
                 reason: reason,
                 onUpgrade: {
+                    paywallRequestHandoff.queue("voice_chat_exhausted")
                     voiceEntry.dismissUpgradePrompt()
-                    onRequestPaywall("voice_chat_exhausted")
                 },
                 onDismiss: { voiceEntry.dismissUpgradePrompt() }
             )
         }
+    }
+
+    @MainActor
+    private func forwardPaywallRequestIfNeeded() {
+        guard let request = paywallRequestHandoff.takeAfterPromptDismissal() else { return }
+        onRequestPaywall(request)
     }
 
     @MainActor
