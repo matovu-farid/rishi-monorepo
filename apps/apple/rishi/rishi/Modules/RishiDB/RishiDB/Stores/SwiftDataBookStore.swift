@@ -110,6 +110,25 @@ public final class SwiftDataBookStore: BookStore, Sendable {
         }
     }
 
+    public func deleteIfUnchanged(_ id: BookID, matching expected: Book?) async throws -> Bool {
+        try await dbStore.write { context in
+            var descriptor = FetchDescriptor<BookEntity>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 1
+            guard let entity = try context.fetch(descriptor).first else { return expected == nil }
+            guard entity.bookValue == expected else { return false }
+            try Self.deleteAll(context, of: PositionEntity.self, matching: #Predicate { $0.bookId == id })
+            try Self.deleteAll(context, of: HighlightEntity.self, matching: #Predicate { $0.bookId == id })
+            try Self.deleteAll(context, of: BookmarkEntity.self, matching: #Predicate { $0.bookId == id })
+            let indexIDs = try context.fetch(FetchDescriptor<ChapterIndexEntity>(predicate: #Predicate { $0.bookID == id })).map(\.id)
+            for indexID in indexIDs {
+                try Self.deleteAll(context, of: ChapterSummaryEntity.self, matching: #Predicate { $0.indexID == indexID })
+            }
+            try Self.deleteAll(context, of: ChapterIndexEntity.self, matching: #Predicate { $0.bookID == id })
+            try Self.deleteAll(context, of: BookEntity.self, matching: #Predicate { $0.id == id })
+            return true
+        }
+    }
+
     public func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? {
         try await dbStore.read { context in
             var descriptor = FetchDescriptor<ChapterIndexEntity>(predicate: #Predicate { $0.bookID == bookID && $0.contentVersion == contentVersion })

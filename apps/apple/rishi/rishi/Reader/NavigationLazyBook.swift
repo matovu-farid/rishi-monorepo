@@ -13,6 +13,7 @@ import SwiftUI
 
 struct NavigationLazyBook<Content: View>: View {
     let bookId: BookID
+    let ownerId: UserID?
     let bookStore: any BookStore
     let content: (Book) -> Content
 
@@ -26,12 +27,19 @@ struct NavigationLazyBook<Content: View>: View {
     
     init(bookId: BookID,
          hint: Book? = nil,
+         ownerId: UserID? = nil,
          bookStore: any BookStore,
          @ViewBuilder content: @escaping (Book) -> Content) {
         self.bookId = bookId
+        self.ownerId = ownerId
         self.bookStore = bookStore
         self.content = content
-        self._book = State(initialValue: hint)
+        self._book = State(
+            initialValue: hint.flatMap { candidate in
+                guard ownerId == nil || candidate.userId == ownerId else { return nil }
+                return candidate
+            }
+        )
     }
 
     var body: some View {
@@ -45,7 +53,11 @@ struct NavigationLazyBook<Content: View>: View {
         }
         .task(id: bookId) {
             if book == nil {
-                book = try? await bookStore.book(bookId)
+                let loaded = try? await bookStore.book(bookId)
+                guard let loaded,
+                      ownerId == nil || loaded.userId == ownerId
+                else { return }
+                book = loaded
             }
         }
     }

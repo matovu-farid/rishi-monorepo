@@ -7,13 +7,13 @@ import Foundation
 ///     clears `lastError` only on the running edge (`running ? nil : ...`);
 ///   - `refreshPendingCount(on:)` — re-read `metadataStore.pendingCount()`,
 ///     keep the rest;
-///   - `snapshotStatus(error:on:)` — publish the post-wave cursor + pending
-///     count + the first wave error.
+///   - `snapshotStatus(error:on:completedAt:)` — publish the pending count,
+///     first wave error, and (only on success) the completion time of the wave.
 ///
 /// The `SyncStatus?` is late-bound on the engine (via `bind(status:)`), so it
 /// is passed in per call rather than held — each method is a guard-let no-op
-/// when no status is bound, exactly as the inline versions were. Behavior is
-/// byte-identical to the methods it replaces.
+/// when no status is bound, exactly as the inline versions were. The status
+/// timestamp intentionally represents wave completion, not the remote cursor.
 struct SyncStatusReporter: Sendable {
 
     private let metadataStore: any SyncMetadataStore
@@ -45,12 +45,12 @@ struct SyncStatusReporter: Sendable {
         ))
     }
 
-    func snapshotStatus(error: String?, on status: SyncStatus?) async {
+    func snapshotStatus(error: String?, on status: SyncStatus?, completedAt: Date?) async {
         guard let status else { return }
-        let cursor = try? await metadataStore.globalLastSyncedAt()
-        let pending = (try? await metadataStore.pendingCount()) ?? 0
+        let previous = status.snapshot()
+        let pending = (try? await metadataStore.pendingCount()) ?? previous.pendingCount
         status.apply(SyncStatusSnapshot(
-            lastSyncedAt: cursor,
+            lastSyncedAt: error == nil ? (completedAt ?? Date()) : previous.lastSyncedAt,
             pendingCount: pending,
             isRunning: false,
             lastError: error

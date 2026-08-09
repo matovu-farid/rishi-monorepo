@@ -326,17 +326,21 @@ public actor SyncEngine {
         return false
     }
 
-    /// Persists a book deletion after its local row/file has been removed.
-    /// The book uploader turns this metadata-only queue item into a remote
-    /// tombstone, so deletion is not lost just because the BookStore no
-    /// longer has a live Book value.
-    public func markBookDeleted(_ bookId: BookID) async {
+    /// Persists a book deletion before its local row/file is removed. The
+    /// caller must not destroy local material until this succeeds: the
+    /// metadata tombstone is the durable hand-off to the outbound queue.
+    public func markBookDeleted(_ bookId: BookID) async throws {
         do {
             try await metadataStore.markTombstone(entityId: bookId, kind: .book)
             await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
             await statusReporter.refreshPendingCount(on: status)
+            Log.event("sync.book.delete.queued", level: .info, data: [
+                "book_id": bookId.uuidString,
+            ])
+            requestSync()
         } catch {
             Log.error("sync.markBookDeleted.failed", error: error)
+            throw error
         }
     }
 
@@ -477,6 +481,113 @@ public actor SyncEngine {
         activeWaveToken = nil
     }
 
+    private struct PageConsumption: Sendable {
+        var wave: Wave
+        var readyForOutbound: Bool
+        var aborted: Bool
+        var reachedTerminalPage: Bool
+        var terminalPageComplete: Bool
+    }
+
+    private func consumePages(
+        scope: SyncCursorScope,
+        generation: Int,
+        userId: UserID?
+    ) async throws -> PageConsumption {
+        let storedCursor = try await metadataStore.cursorState(for: scope)
+        var cursor = storedCursor?.accountGeneration == generation ? storedCursor?.cursor : nil
+        var result = PageConsumption(
+            wave: Wave(),
+            readyForOutbound: true,
+            aborted: false,
+            reachedTerminalPage: false,
+            terminalPageComplete: false
+        )
+
+        while true {
+            let page = try await fetcher.fetchPage(scope: scope, cursor: cursor)
+            result.wave.fetched += page.changes.count
+            guard !Task.isCancelled else {
+                result.aborted = true
+                return result
+            }
+            if !page.changes.isEmpty {
+                let applied = await applier.apply(page.changes, expectedUserId: userId)
+                result.wave.applied += applied.applied
+                result.wave.conflicts += applied.conflicts
+                result.wave.skipped += applied.skipped
+                result.wave.errors.append(contentsOf: applied.errors)
+                if !applied.errors.isEmpty {
+                    result.readyForOutbound = false
+                    return result
+                }
+            }
+            guard await isCurrent(generation: generation, userId: userId) else {
+                result.aborted = true
+                return result
+            }
+
+            if page.hasMore {
+                guard let nextCursor = page.nextCursor else {
+                    result.wave.errors.append("fetch: cursor page missing next_cursor")
+                    result.readyForOutbound = false
+                    return result
+                }
+                guard await isCurrent(generation: generation, userId: userId) else {
+                    result.aborted = true
+                    return result
+                }
+                try await metadataStore.saveCursorState(.init(
+                    scope: scope,
+                    cursor: nextCursor,
+                    accountGeneration: generation
+                ))
+                cursor = nextCursor
+            } else {
+                result.reachedTerminalPage = true
+                result.terminalPageComplete = page.projectionComplete
+                if scope == .events {
+                    // Event cursors are append-only sequence numbers. Unlike
+                    // projection/recovery cursors, reaching the end does not
+                    // mean the cursor should be deleted; doing so would make
+                    // every later wave replay the entire event ledger.
+                    if let nextCursor = page.nextCursor {
+                        guard await isCurrent(generation: generation, userId: userId) else {
+                            result.aborted = true
+                            return result
+                        }
+                        try await metadataStore.saveCursorState(.init(
+                            scope: scope,
+                            cursor: nextCursor,
+                            accountGeneration: generation
+                        ))
+                    }
+                } else if page.projectionComplete {
+                    guard await isCurrent(generation: generation, userId: userId) else {
+                        result.aborted = true
+                        return result
+                    }
+                    try await metadataStore.clearCursorState(for: scope, accountGeneration: generation)
+                }
+                return result
+            }
+        }
+    }
+
+    private func merge(_ page: PageConsumption, into wave: inout Wave) {
+        wave.fetched += page.wave.fetched
+        wave.applied += page.wave.applied
+        wave.conflicts += page.wave.conflicts
+        wave.skipped += page.wave.skipped
+        wave.errors.append(contentsOf: page.wave.errors)
+    }
+
+    private func isCurrent(generation: Int, userId: UserID?) async -> Bool {
+        guard !Task.isCancelled, generation == accountGeneration else { return false }
+        let currentUser = await currentUserId()
+        return userId == currentUser
+    }
+
     /// Requests a background sync without waiting for its network work. Calls
     /// arriving during an active wave collapse into one follow-up wave.
     public func requestSync() {
@@ -519,7 +630,7 @@ public actor SyncEngine {
         defer { activeWaveCount -= 1 }
         var wave = Wave()
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
-            await statusReporter.snapshotStatus(error: "Sync requires data-use consent", on: status)
+            await statusReporter.snapshotStatus(error: "Sync requires data-use consent", on: status, completedAt: nil)
             return wave
         }
         let waveGeneration = accountGeneration
@@ -535,23 +646,89 @@ public actor SyncEngine {
             inboundReadyForOutbound = false
         }
 
-        // 1. Inbound — fetch + apply remote changes.
+        // 1. Inbound — consume cursor pages and commit progress only after
+        // the page has been applied successfully. A separate recovery plane
+        // resumes incomplete projections without resetting incremental work.
+        // 1a. Consume the append-only event stream first. This is the
+        // authoritative deletion/retry plane; the materialized projection
+        // below remains as a compatibility and repair pass. A rolling deploy
+        // may briefly have an older Worker without /events, so failure of
+        // this additive plane must fall back to the projection pull.
         do {
-            let snapshot = try await fetcher.fetchSnapshot()
-            let changes = snapshot.changes
-            guard !Task.isCancelled else {
+            let eventResult = try await consumePages(
+                scope: .events,
+                generation: waveGeneration,
+                userId: waveUserId
+            )
+            merge(eventResult, into: &wave)
+            if eventResult.aborted {
                 statusReporter.setRunning(false, on: status)
                 return wave
             }
-            wave.fetched = changes.count
-            if !changes.isEmpty {
-                let result = await applier.apply(changes, expectedUserId: waveUserId)
-                wave.applied = result.applied
-                wave.conflicts = result.conflicts
-                wave.skipped = result.skipped
-                wave.errors.append(contentsOf: result.errors)
-                if !result.errors.isEmpty {
-                    inboundReadyForOutbound = false
+            inboundReadyForOutbound = eventResult.readyForOutbound
+        } catch {
+            wave.errors.append("events: \(error)")
+            Log.event("sync.events.unavailable", level: .warning, data: [
+                "error": String(describing: error),
+            ])
+        }
+
+        do {
+            let existingRecovery = try await metadataStore.recoveryState()
+            let recoveryIsCurrent = existingRecovery?.accountGeneration == waveGeneration
+            let pageResult: PageConsumption
+            if recoveryIsCurrent {
+                pageResult = try await consumePages(
+                    scope: .recovery,
+                    generation: waveGeneration,
+                    userId: waveUserId
+                )
+            } else {
+                if existingRecovery != nil {
+                    guard await isCurrent(generation: waveGeneration, userId: waveUserId) else {
+                        statusReporter.setRunning(false, on: status)
+                        return wave
+                    }
+                    try await metadataStore.clearRecoveryState(accountGeneration: existingRecovery!.accountGeneration)
+                }
+                pageResult = try await consumePages(
+                    scope: .incremental,
+                    generation: waveGeneration,
+                    userId: waveUserId
+                )
+            }
+            merge(pageResult, into: &wave)
+            if pageResult.aborted {
+                statusReporter.setRunning(false, on: status)
+                return wave
+            }
+            inboundReadyForOutbound = inboundReadyForOutbound && pageResult.readyForOutbound
+            if pageResult.readyForOutbound,
+               pageResult.reachedTerminalPage,
+               pageResult.terminalPageComplete,
+               recoveryIsCurrent {
+                // A complete recovery is the promotion boundary. The next
+                // incremental request establishes a new high-water mark;
+                // no recovery cursor or stale incremental cursor survives it.
+                guard await isCurrent(generation: waveGeneration, userId: waveUserId) else {
+                    statusReporter.setRunning(false, on: status)
+                    return wave
+                }
+                try await metadataStore.clearRecoveryState(accountGeneration: waveGeneration)
+                try await metadataStore.clearCursorState(for: .incremental, accountGeneration: waveGeneration)
+            } else if pageResult.readyForOutbound,
+                      pageResult.reachedTerminalPage,
+                      !pageResult.terminalPageComplete {
+                let currentRecovery = try await metadataStore.recoveryState()
+                if currentRecovery?.accountGeneration != waveGeneration {
+                    guard await isCurrent(generation: waveGeneration, userId: waveUserId) else {
+                        statusReporter.setRunning(false, on: status)
+                        return wave
+                    }
+                    try await metadataStore.saveRecoveryState(.init(
+                        reason: .incompleteProjection,
+                        accountGeneration: waveGeneration
+                    ))
                 }
             }
         } catch {
@@ -587,7 +764,7 @@ public actor SyncEngine {
         }
 
         guard inboundReadyForOutbound else {
-            await statusReporter.snapshotStatus(error: wave.errors.first, on: status)
+            await statusReporter.snapshotStatus(error: wave.errors.first, on: status, completedAt: nil)
             statusReporter.setRunning(false, on: status)
             return wave
         }
@@ -605,11 +782,8 @@ public actor SyncEngine {
         wave.chapterIndexesPushed = drain.chapterIndexesPushed
         wave.errors.append(contentsOf: drain.errors)
 
-        // Final read-back: the Worker returns the hash of its generated
-        // projection. Re-encode the client-side SyncObject projection with
-        // the Apple canonical encoder and reject a mismatch instead of
-        // silently claiming sync completed. Legacy workers omit
-        // snapshot_hash and remain compatible.
+        // Final read-back is advisory. It never changes operational success;
+        // upload/fetch/apply failures above remain the only wave errors.
         let currentUserBeforeVerification = await currentUserId()
         guard waveGeneration == accountGeneration,
               waveUserId == currentUserBeforeVerification else {
@@ -617,7 +791,12 @@ public actor SyncEngine {
             return wave
         }
         do {
-            let snapshot = try await fetcher.fetchFullSnapshot()
+            let page = try await fetcher.fetchPage(scope: .incremental, cursor: nil)
+            let snapshot = SyncObject(
+                changes: page.changes,
+                remoteHash: page.snapshotHashWithoutTimestamps,
+                isTruncated: page.isTruncated || !page.projectionComplete
+            )
             let currentUserAfterFullSnapshot = await currentUserId()
             guard waveGeneration == accountGeneration,
                   waveUserId == currentUserAfterFullSnapshot else {
@@ -637,37 +816,34 @@ public actor SyncEngine {
                 statusReporter.setRunning(false, on: status)
                 return wave
             }
-            let clientObject = SyncObject(
-                changes: snapshot.merging(localChanges: localChanges).changes,
-                remoteHash: snapshot.remoteHash,
-                isTruncated: snapshot.isTruncated
+            let localObject = SyncObject(changes: localChanges)
+            let observation = try SyncIntegrityVerifier().observe(
+                remote: snapshot,
+                local: localObject,
+                pendingLocalCount: try await metadataStore.pendingCount(),
+                scope: .incremental,
+                hashVersion: page.snapshotHashVersion,
+                projectionComplete: page.projectionComplete
             )
-            if clientObject.isTruncated {
-                wave.errors.append("sync verification incomplete: projection truncated")
-            } else if let remoteHash = clientObject.remoteHash {
-                let clientHash = try clientObject.canonicalHash()
-                if clientHash != remoteHash {
-                    let diff = snapshot.diff(against: clientObject)
-                    Log.event("sync.verification.mismatch", level: .error, data: [
-                        "remote_hash": remoteHash,
-                        "client_hash": clientHash,
-                        "remote_changes": String(snapshot.changes.count),
-                        "client_changes": String(clientObject.changes.count),
-                        "diff_count": String(diff.count),
-                        "diff": diff.prefix(50).joined(separator: ";"),
-                    ])
-                    wave.errors.append("sync verification mismatch")
-                }
-            }
-            if try await metadataStore.pendingCount() > 0 {
-                wave.errors.append("sync verification has pending local changes")
-            }
+            Log.event("sync.verification.observed", level: .info, data: [
+                "classification": observation.classification.rawValue,
+                "scope": observation.scope.rawValue,
+                "diff_count": String(observation.diffPaths.count),
+                "hash_version": page.snapshotHashVersion ?? "legacy",
+                "projection_complete": String(page.projectionComplete),
+            ])
         } catch {
-            wave.errors.append("verify: \(error)")
+            Log.event("sync.verification.unavailable", level: .warning, data: [
+                "reason": "redacted",
+            ])
         }
 
         // 3. Snapshot SyncStatus for the UI.
-        await statusReporter.snapshotStatus(error: wave.errors.first, on: status)
+        await statusReporter.snapshotStatus(
+            error: wave.errors.first,
+            on: status,
+            completedAt: wave.errors.isEmpty ? Date() : nil
+        )
 
         // 3b. Phase 16-05 — fire the chat-refresh delegate so the
         //     Conversations tab re-reads from the store after an inbound
@@ -745,6 +921,12 @@ public actor SyncEngine {
         } catch {
             Log.error("sync.reset_metadata.failed", error: error)
         }
+        status?.apply(SyncStatusSnapshot(
+            lastSyncedAt: nil,
+            pendingCount: 0,
+            isRunning: false,
+            lastError: nil
+        ))
         resetInProgress = false
     }
 

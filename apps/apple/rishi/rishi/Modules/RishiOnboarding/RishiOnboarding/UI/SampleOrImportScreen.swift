@@ -29,11 +29,11 @@ public struct SampleOrImportScreen: View {
                     .foregroundStyle(RishiColor.accent)
                     .accessibilityHidden(true)
 
-                Text("Add your first book")
+                Text("Bring a book to Rishi")
                     .font(RishiTypography.titleM)
                     .foregroundStyle(RishiColor.textPrimary)
 
-                Text("Pick a sample to get started, or import an EPUB / PDF from Files (on iPhone or iPad) or drag-and-drop on Mac.")
+                Text("Import something you’re reading and we’ll show you how to listen and talk about it. You can also try a sample book.")
                     .font(RishiTypography.body)
                     .foregroundStyle(RishiColor.textSecondary)
                     .multilineTextAlignment(.center)
@@ -41,24 +41,24 @@ public struct SampleOrImportScreen: View {
             }
         } actions: {
             VStack(spacing: RishiSpacing.m) {
-                Button(action: onUseSample) {
-                    Text("Use sample book")
+                Button(action: onImport) {
+                    Text("Import your book")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
                         .onboardingCTAWidth()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(RishiColor.accent)
-                .accessibilityIdentifier("onboarding-sample-use")
+                .accessibilityIdentifier("onboarding-sample-import")
 
-                Button(action: onImport) {
-                    Text("Import a book")
+                Button(action: onUseSample) {
+                    Text("Use a sample book")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, RishiSpacing.m)
                         .onboardingCTAWidth()
                 }
                 .buttonStyle(.bordered)
-                .accessibilityIdentifier("onboarding-sample-import")
+                .accessibilityIdentifier("onboarding-sample-use")
 
                 Button("Skip for now", action: onSkip)
                     .foregroundStyle(RishiColor.textSecondary)

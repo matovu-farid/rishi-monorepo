@@ -31,17 +31,20 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     private let entitlementSnapshotStore: EntitlementSnapshotStore?
 
     private let onRequestPaywall: (String) -> Void
+    private let onVoiceStarted: (@MainActor () -> Void)?
 
     init(
         voicePresenter: VoiceSessionPresenter,
         voiceLanguageProvider: @escaping @MainActor () -> VoiceLanguageOption,
         entitlementSnapshotStore: EntitlementSnapshotStore? = nil,
-        onRequestPaywall: @escaping (String) -> Void
+        onRequestPaywall: @escaping (String) -> Void,
+        onVoiceStarted: (@MainActor () -> Void)? = nil
     ) {
         self.voicePresenter = voicePresenter
         self.voiceLanguageProvider = voiceLanguageProvider
         self.entitlementSnapshotStore = entitlementSnapshotStore
         self.onRequestPaywall = onRequestPaywall
+        self.onVoiceStarted = onVoiceStarted
     }
 
     func presentVoice(
@@ -56,6 +59,7 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
 
             if let reason = entitlementSnapshotStore?.blockReason(for: .voiceChat) {
                 pendingUpgradePrompt = reason
+                voicePresenter.cancelPrewarm()
                 return
             }
 
@@ -83,7 +87,7 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
                 )
             }
 
-            await voicePresenter.start(
+            let outcome = await voicePresenter.start(
                 bookId: bookId,
                 language: voiceLanguageProvider().rawValue,
                 initialQuote: initialQuote,
@@ -91,6 +95,11 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
                 currentPageProvider: currentPageProvider,
                 readerSessionIdentity: readerSessionIdentity
             )
+            if outcome == .live {
+                onVoiceStarted?()
+            } else {
+                voicePresenter.cancelPrewarm()
+            }
         }
     }
 

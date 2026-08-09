@@ -5,7 +5,7 @@ import { createDb } from "../db/drizzle";
 
 import { requireAuth } from "../middleware";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { and, desc, eq, gt, lt } from "drizzle-orm";
 
 /**
  * Chat sync — Phase 16-03 Task 1.
@@ -22,8 +22,9 @@ import { and, desc, eq, gt } from "drizzle-orm";
  *    user reads are physically impossible without a session swap.
  *
  * Conflict resolution: Last-Writer-Wins on (id, updated_at). On conflict the
- * server overwrites title + updated_at only; bookId stays immutable in v1
- * (book attachment is a property of conversation creation, not editing).
+ * server overwrites title + updated_at only when the incoming timestamp is
+ * strictly newer; bookId stays immutable in v1 (book attachment is a property
+ * of conversation creation, not editing).
  */
 
 const RowSchema = z.object({
@@ -76,6 +77,12 @@ conversationsRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
           updatedAt: row.updated_at,
           // bookId intentionally NOT updated — book attachment is immutable in v1.
         },
+        // Only a strictly newer client version may replace the existing row.
+        // Stale and equal retries remain idempotent and cannot overwrite it.
+        where: and(
+          eq(conversations.userId, userId),
+          lt(conversations.updatedAt, row.updated_at),
+        ),
       });
     applied += 1;
   }

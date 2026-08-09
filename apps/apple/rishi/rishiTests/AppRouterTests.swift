@@ -41,6 +41,33 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
+    @Test("reader tour request is account-scoped and one-shot")
+    func readerTourRequestIsAccountScopedAndOneShot() {
+        let router = AppRouter()
+        let userID = UUID()
+        let otherUserID = UUID()
+        let bookID = UUID()
+
+        router.requestReaderTour(for: bookID, userID: userID)
+
+        #expect(!router.takeReaderTour(for: bookID, userID: otherUserID))
+        #expect(router.takeReaderTour(for: bookID, userID: userID))
+        #expect(!router.takeReaderTour(for: bookID, userID: userID))
+    }
+
+    @Test("clearing reader tour request does not affect persisted navigation")
+    func clearingReaderTourRequestLeavesNavigationPersistenceUntouched() {
+        let router = AppRouter()
+        let bookID = UUID()
+        router.requestReaderTour(for: bookID, userID: UUID())
+        router.clearReaderTourRequest()
+        router.path.append(ReaderRoute.epub(bookID))
+
+        let cells = router.persistCells()
+        #expect(!cells.openBookIdRaw.isEmpty)
+        #expect(NavigationPath.decodeFromStorage(cells.openBookIdRaw).count == 1)
+    }
+
     
 
     @Test("Unknown/garbage deep link leaves path empty")
@@ -65,7 +92,7 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
-    @Test("shareRedeem deep link is a no-op (path stays empty)")
+    @Test("shareRedeem deep link is queued without changing navigation")
     func shareRedeemNoOp() {
         let router = AppRouter()
         router.handle(

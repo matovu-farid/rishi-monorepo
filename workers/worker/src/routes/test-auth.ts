@@ -187,11 +187,21 @@ testAuthRoutes.delete("/users/:email", async (c) => {
     .from(books)
     .where(eq(books.userId, userId))
     .all();
+  const otherUserBooks = await db
+    .select()
+    .from(books)
+    .all();
+  const referencedByOtherUsers = new Set(
+    otherUserBooks
+      .filter((book) => book.userId !== userId)
+      .flatMap((book) => [book.fileR2Key, book.coverR2Key])
+      .filter((key): key is string => Boolean(key)),
+  );
 
   let r2ObjectsRemoved = 0;
   for (const b of userBooks) {
     for (const key of [b.fileR2Key, b.coverR2Key]) {
-      if (!key) continue;
+      if (!key || referencedByOtherUsers.has(key)) continue;
       try {
         await c.env.BOOK_STORAGE.delete(key);
         r2ObjectsRemoved++;

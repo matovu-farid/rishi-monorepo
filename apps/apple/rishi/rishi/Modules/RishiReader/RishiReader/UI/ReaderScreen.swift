@@ -67,13 +67,15 @@ public struct ReaderScreen: View {
     private let readAloudLocator: Locator?
     private let pdfViewMode: PDFViewModeSetting
     private let pdfViewModeBinding: Binding<PDFViewModeSetting>?
+    private let keepChromeVisible: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var chrome: ReaderChromeController = {
+    @State private var chrome: ReaderChromeController
 
+    private static func makeChrome(keepVisible: Bool) -> ReaderChromeController {
         #if DEBUG
             let uitestVisible =
                 ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
@@ -86,24 +88,24 @@ public struct ReaderScreen: View {
         #if targetEnvironment(macCatalyst)
             let alwaysVisible = true
         #else
-            let alwaysVisible = false
+            let alwaysVisible = keepVisible
         #endif
         #if canImport(UIKit)
             return ReaderChromeController(
                 accessibility: UIKitAccessibilityProvider(),
                 autoHideDelay: autoHide,
-                initiallyVisible: uitestVisible,
+                initiallyVisible: uitestVisible || keepVisible,
                 alwaysVisible: alwaysVisible
             )
         #else
             return ReaderChromeController(
                 accessibility: PreviewAccessibility(),
                 autoHideDelay: autoHide,
-                initiallyVisible: uitestVisible,
+                initiallyVisible: uitestVisible || keepVisible,
                 alwaysVisible: alwaysVisible
             )
         #endif
-    }()
+    }
 
     #if canImport(UIKit)
         @State private var pendingSelection: SelectionContext?
@@ -135,7 +137,8 @@ public struct ReaderScreen: View {
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
         pdfViewMode: PDFViewModeSetting = .continuous,
-        pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil
+        pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
+        keepChromeVisible: Bool = false
     ) {
         self.viewModel = viewModel
         self.appDefaultTheme = appDefaultTheme
@@ -150,6 +153,8 @@ public struct ReaderScreen: View {
         self.readAloudLocator = readAloudLocator
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
+        self.keepChromeVisible = keepChromeVisible
+        self._chrome = State(initialValue: Self.makeChrome(keepVisible: keepChromeVisible))
     }
 
     private var activePDFViewMode: PDFViewModeSetting {

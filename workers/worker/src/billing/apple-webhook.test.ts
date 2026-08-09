@@ -104,10 +104,13 @@ function makeDeps(
   const sendSilentPush = vi.fn(async () => {
     if (opts.apns === "reject") throw new Error("apns failed");
   });
+  const sendAlertPush = vi.fn(async () => {
+    if (opts.apns === "reject") throw new Error("apns failed");
+  });
 
   const apns =
     opts.apns === "set" || opts.apns === "reject"
-      ? { sendSilentPush }
+      ? { sendSilentPush, sendAlertPush }
       : null;
 
   const verifyJws = vi.fn(async (jws: string) => {
@@ -144,6 +147,7 @@ function makeDeps(
       findUserIdByOriginalTransactionId,
       findDevicesByUserId,
       sendSilentPush,
+      sendAlertPush,
       reconcileRetainedTransaction,
       upsertRestoredEntitlement,
       updateLiveLedger,

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, gt, inArray, lte, ne, or } from "drizzle-orm";
+import { and, eq, gt, inArray, lte, or } from "drizzle-orm";
 import type { WorkerDb } from "./db/drizzle";
 import {
   appleNotificationsLog,
@@ -9,6 +9,7 @@ import {
   deletionState,
   retainedAppleEntitlement,
   retainedAppleTransaction,
+  sharePackages,
   subscription,
   user,
   verification,
@@ -18,6 +19,7 @@ import { mintAppleClientSecret } from "./auth-apple-secret";
 import { createStripeClient } from "./billing/stripe";
 import { hashAppleIdentity, hashAppleOriginalTransaction, mergeRetentionSnapshot, retentionExpiresAt } from "./entitlement-retention";
 import type { AccountEntitlementSnapshot } from "./durable-objects/user-usage-ledger/types";
+import { deleteUnreferencedR2Objects, referencedR2Keys } from "./shares/shareReferences";
 
 type DeletionStatus = "revoked" | "legacy_no_token" | "revocation_unavailable";
 
@@ -132,45 +134,24 @@ async function revokeAppleAuthorization(
   return "revocation_unavailable";
 }
 
-async function deleteR2Objects(
-  bucket: R2Bucket,
-  keys: Array<string | null>,
-): Promise<number> {
-  const uniqueKeys = [...new Set(keys.filter((key): key is string => Boolean(key)))];
-  await Promise.all(uniqueKeys.map((key) => bucket.delete(key)));
-  return uniqueKeys.length;
-}
-
 async function deleteR2PrefixObjects(
+  db: WorkerDb,
   bucket: R2Bucket,
   prefixes: string[],
 ): Promise<number> {
+  const candidates: string[] = [];
   let removed = 0;
   for (const prefix of prefixes) {
-    // Always restart from the first page after deleting. Advancing a cursor
-    // while mutating the listing can skip keys when objects disappear between
-    // pages; repeating until empty is both bounded by the number of objects
-    // and safe for late-arriving uploads.
+    let cursor: string | undefined;
     while (true) {
-      const page = await bucket.list({ prefix, limit: 1000 });
-      const keys = page.objects.map((object) => object.key);
-      if (keys.length === 0) break;
-      removed += await deleteR2Objects(bucket, keys);
+      const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+      candidates.push(...page.objects.map((object) => object.key));
+      if (!page.truncated || !page.cursor) break;
+      cursor = page.cursor;
     }
   }
+  removed += (await deleteUnreferencedR2Objects(db, bucket, candidates)).length;
   return removed;
-}
-
-async function verifyR2PrefixesEmpty(
-  bucket: R2Bucket,
-  prefixes: string[],
-): Promise<void> {
-  for (const prefix of prefixes) {
-    const page = await bucket.list({ prefix, limit: 1 });
-    if (page.objects.length > 0) {
-      throw new Error("account deletion verification found a user-scoped R2 object");
-    }
-  }
 }
 
 async function verifyDeletion(
@@ -183,8 +164,9 @@ async function verifyDeletion(
     throw new Error("account deletion verification found the user row");
   }
 
+  const referenced = await referencedR2Keys(db, r2Keys);
   for (const key of r2Keys) {
-    if (await bucket.head(key)) {
+    if (await bucket.head(key) && !referenced.has(key)) {
       throw new Error("account deletion verification found an R2 object");
     }
   }
@@ -299,13 +281,13 @@ export async function deleteAccount(
   // request is a successful no-op rather than a reason to retain a tombstone.
   if (!userRow) {
     await ledger.purgeAccountData();
-    const r2ObjectsRemoved = await deleteR2PrefixObjects(env.BOOK_STORAGE, [
+    const r2ObjectsRemoved = await deleteR2PrefixObjects(db, env.BOOK_STORAGE, [
       `books/${userId}/`,
       `covers/${userId}/`,
-    ]);
-    await verifyR2PrefixesEmpty(env.BOOK_STORAGE, [
-      `books/${userId}/`,
-      `covers/${userId}/`,
+      // Remove orphaned objects written by the pre-reference-count share
+      // implementation, while preserving any legacy item still referenced in
+      // D1.
+      "shares/",
     ]);
     return {
       deletionId: randomUUID(),
@@ -316,16 +298,9 @@ export async function deleteAccount(
   }
 
   const deletionId = randomUUID();
-
-  const [appleRow, userBooks, userAppleSubscriptions] = await Promise.all([
-    db.select().from(appleUsers).where(eq(appleUsers.userId, userId)).get(),
-    db.select({ id: books.id, fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key })
-      .from(books).where(eq(books.userId, userId)).all(),
-    db.select().from(appleSubscriptions).where(eq(appleSubscriptions.userId, userId)).all(),
-  ]);
-  const verificationEmail = userRow?.email ?? appleRow?.email;
-  const verificationIdentifiers = [userId, ...(verificationEmail ? [verificationEmail] : [])];
   const markerNow = new Date();
+  // Fence new share creation before taking the ownership snapshot. Share
+  // creation checks this durable marker before copying any R2 objects.
   await db.insert(deletionState).values({
     userId,
     deletionId,
@@ -338,6 +313,23 @@ export async function deleteAccount(
     target: deletionState.userId,
     set: { deletionId, ledgerName: userId, status: "pending", retryAt: new Date(markerNow.getTime() + 60_000), updatedAt: markerNow },
   });
+
+  const [appleRow, userBooks, userAppleSubscriptions, userSharePackages] = await Promise.all([
+    db.select().from(appleUsers).where(eq(appleUsers.userId, userId)).get(),
+    db.select({ id: books.id, fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key })
+      .from(books).where(eq(books.userId, userId)).all(),
+    db.select().from(appleSubscriptions).where(eq(appleSubscriptions.userId, userId)).all(),
+    db.select({ id: sharePackages.id })
+      .from(sharePackages)
+      .where(or(
+        eq(sharePackages.senderUserId, userId),
+        eq(sharePackages.recipientUserId, userId),
+        eq(sharePackages.claimedBy, userId),
+      ))
+      .all(),
+  ]);
+  const verificationEmail = userRow?.email ?? appleRow?.email;
+  const verificationIdentifiers = [userId, ...(verificationEmail ? [verificationEmail] : [])];
   const entitlementSnapshot = await ledger.snapshotAccountEntitlements();
   await retainAppleEntitlements(db, env, appleRow, userAppleSubscriptions, entitlementSnapshot, markerNow.getTime());
 
@@ -362,41 +354,73 @@ export async function deleteAccount(
   logDeletionStage("stripe", userId, deletionId, { customerPresent: Boolean(userRow?.stripeCustomerId) });
   await anonymizeStripeCustomer(env, userRow?.stripeCustomerId ?? null);
 
-  logDeletionStage("r2", userId, deletionId, { objectCount: userBooks.length * 2 });
+  logDeletionStage("r2", userId, deletionId, {
+    objectCount: userBooks.length * 2,
+    sharePackageCount: userSharePackages.length,
+  });
   const candidateR2Keys = userBooks.flatMap((book) => [book.fileR2Key, book.coverR2Key])
     .filter((key): key is string => Boolean(key));
-  const sharedR2References = candidateR2Keys.length > 0
-    ? await db.select({ fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key })
-      .from(books)
-      .where(and(
-        ne(books.userId, userId),
-        or(
-          inArray(books.fileR2Key, candidateR2Keys),
-          inArray(books.coverR2Key, candidateR2Keys),
-        ),
-      )).all()
-    : [];
-  const protectedR2Keys = new Set(sharedR2References.flatMap((book) => [book.fileR2Key, book.coverR2Key])
-    .filter((key): key is string => Boolean(key)));
-  const r2Keys = candidateR2Keys.filter((key) => !protectedR2Keys.has(key));
-  const r2ObjectsRemoved = await deleteR2Objects(
-    env.BOOK_STORAGE,
-    r2Keys,
-  );
+  const r2Keys = candidateR2Keys;
   const userR2Prefixes = [`books/${userId}/`, `covers/${userId}/`];
-  const sweptBeforeDelete = await deleteR2PrefixObjects(env.BOOK_STORAGE, userR2Prefixes);
+  const sweptBeforeDelete = await deleteR2PrefixObjects(
+    db,
+    env.BOOK_STORAGE,
+    userR2Prefixes,
+  );
 
   logDeletionStage("d1", userId, deletionId);
   await db.update(deletionState)
     .set({ status: "purging", retryAt: new Date(Date.now() + 60_000), updatedAt: new Date() })
     .where(eq(deletionState.userId, userId));
   await ledger.purgeAccountData();
+  // Share items are references to source objects. Remove their rows before
+  // deleting the user's books so the final reference-counted sweep can
+  // release both sender-owned and recipient-owned packages safely. The
+  // recipient's imported book is stored under that account's normal prefix
+  // and is intentionally not touched here.
+  if (userSharePackages.length > 0) {
+    await db.delete(sharePackages).where(inArray(
+      sharePackages.id,
+      userSharePackages.map(({ id }) => id),
+    ));
+  }
+  // Re-enumerate after the first package snapshot. A share request that passed
+  // the deletion fence immediately before it was written can otherwise be
+  // absent from the initial snapshot.
+  const lateSharePackages = await db.select({ id: sharePackages.id })
+    .from(sharePackages)
+    .where(or(
+      eq(sharePackages.senderUserId, userId),
+      eq(sharePackages.recipientUserId, userId),
+      eq(sharePackages.claimedBy, userId),
+    )).all();
+  if (lateSharePackages.length > 0) {
+    await db.delete(sharePackages).where(inArray(
+      sharePackages.id,
+      lateSharePackages.map(({ id }) => id),
+    ));
+  }
+  // The book rows may have pointed at objects that are not discoverable by a
+  // prefix listing in a mocked or eventually-consistent bucket. Release the
+  // owner's references explicitly before deleting the rows. If R2 fails, the
+  // user row and deletion marker remain so the operation can be retried.
+  const snapshottedObjectsRemoved = (await deleteUnreferencedR2Objects(
+    db,
+    env.BOOK_STORAGE,
+    r2Keys,
+    { ignoreBookUserId: userId },
+  )).length;
+
   await deleteRows(db, userId, userAppleSubscriptions.map((row) => row.appleTransactionId), verificationIdentifiers);
 
   // A presigned upload issued before deletion can still arrive after the
   // initial key snapshot. Sweep again after the parent row is gone; retries
   // of an already-deleted account repeat this safe user-scoped sweep.
-  const sweptAfterDelete = await deleteR2PrefixObjects(env.BOOK_STORAGE, userR2Prefixes);
+  const sweptAfterDelete = await deleteR2PrefixObjects(
+    db,
+    env.BOOK_STORAGE,
+    [...userR2Prefixes, "shares/"],
+  );
 
   logDeletionStage("verify", userId, deletionId);
   await verifyDeletion(
@@ -405,13 +429,11 @@ export async function deleteAccount(
     userId,
     r2Keys,
   );
-  await verifyR2PrefixesEmpty(env.BOOK_STORAGE, userR2Prefixes);
-
   return {
     deletionId,
     alreadyDeleted: false,
     revocationStatus,
-    r2ObjectsRemoved: r2ObjectsRemoved + sweptBeforeDelete + sweptAfterDelete,
+    r2ObjectsRemoved: snapshottedObjectsRemoved + sweptBeforeDelete + sweptAfterDelete,
   };
 }
 

@@ -14,6 +14,7 @@ struct PositionUploaderTests {
     private actor StubMetadata: SyncMetadataStore {
         var cleanCalls: [(UUID, SyncEntityKind, Date, String?)] = []
         var forgetCalls: [(UUID, SyncEntityKind)] = []
+        var conditionalAcknowledgementResult = true
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
@@ -27,10 +28,17 @@ struct PositionUploaderTests {
         func forget(entityId: UUID, kind: SyncEntityKind) async throws {
             forgetCalls.append((entityId, kind))
         }
+        func markCleanIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+            guard conditionalAcknowledgementResult else { return false }
+            cleanCalls.append((entityId, kind, lastSyncedAt, remoteEtag))
+            return true
+        }
+        func recordRemoteSeen(entityId: UUID, kind: SyncEntityKind, updatedAt: Date) async throws {}
 
         func cleanedIds() -> [UUID] { cleanCalls.map(\.0) }
         func cleanCount() -> Int { cleanCalls.count }
         func cleanCursors() -> [Date] { cleanCalls.map(\.2) }
+        func setConditionalAcknowledgementResult(_ value: Bool) { conditionalAcknowledgementResult = value }
     }
 
     private actor StubPositionStore: PositionStore {
@@ -121,6 +129,41 @@ struct PositionUploaderTests {
         #expect(cleaned == [bookId])
         let cursors = await metadata.cleanCursors()
         #expect(cursors.first?.timeIntervalSince1970 == acceptedAtUnix)
+    }
+
+    @Test("Conditional acknowledgement failure leaves position pending and returns zero")
+    func conditionalAcknowledgementFailureIsNotCounted() async throws {
+        PositionUploaderMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        await metadata.setConditionalAcknowledgementResult(false)
+        let positionStore = StubPositionStore()
+        let bookStore = StubBookStore()
+        let bookId = UUID()
+        await positionStore.seed([Position(
+            id: UUID(),
+            bookId: bookId,
+            locator: "pdf-v1:page:5",
+            percentComplete: 0.25,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )])
+        PositionUploaderMockURLProtocol.handler = { _ in
+            (200, Data("{ \"accepted_at\": 946684800 }".utf8), nil)
+        }
+
+        let uploader = PositionUploader(
+            workerClient: workerClient,
+            positionStore: positionStore,
+            bookStore: bookStore,
+            metadataStore: metadata
+        )
+        let pushed = try await uploader.pushPending(items: [
+            SyncQueueItem(entityId: bookId, kind: .position)
+        ])
+
+        #expect(pushed == 0)
+        #expect(await metadata.cleanCount() == 0)
     }
 
     @Test("Empty input → 0 pushed, no HTTP call issued")

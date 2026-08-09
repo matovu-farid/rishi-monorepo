@@ -37,8 +37,11 @@ public final class HighlightUploader: Sendable {
         var changes: [SyncChange] = []
         var liveIds: [UUID] = []
         var tombstoneIds: [UUID] = []
+        var expectedDirtyAt: [UUID: Date] = [:]
 
         for item in items where item.kind == .highlight {
+            let capturedDirtyAt = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .highlight)
+            expectedDirtyAt[item.entityId] = capturedDirtyAt
             if let highlight = try await highlightStore.highlight(item.entityId) {
                 do {
                     let payload = try SyncPayloadCodec.encodeHighlight(highlight)
@@ -48,7 +51,7 @@ public final class HighlightUploader: Sendable {
                         payload: payload,
                         // v1 highlights don't carry updatedAt; createdAt is monotone enough
                         // for "newest wins" merge-by-id resolution in ChangeApplier.
-                        updatedAt: try await metadataStore.dirtyAt(entityId: highlight.id, kind: .highlight) ?? highlight.createdAt,
+                        updatedAt: capturedDirtyAt ?? highlight.createdAt,
                         deleted: false
                     ))
                     liveIds.append(item.entityId)
@@ -61,7 +64,7 @@ public final class HighlightUploader: Sendable {
                     kind: SyncEntityKind.highlight.rawValue,
                     id: item.entityId,
                     payload: SyncOpaqueJSON(data: Data("{}".utf8)),
-                    updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .highlight) ?? Date(),
+                    updatedAt: capturedDirtyAt ?? Date(),
                     deleted: true
                 ))
                 tombstoneIds.append(item.entityId)
@@ -76,17 +79,27 @@ public final class HighlightUploader: Sendable {
             "tombstones": String(tombstoneIds.count),
         ])
 
+        var acknowledgedCount = 0
         for id in liveIds {
-            try await metadataStore.markClean(
+            if try await metadataStore.markCleanIfUnchanged(
                 entityId: id,
                 kind: .highlight,
+                expectedDirtyAt: expectedDirtyAt[id],
                 lastSyncedAt: response.acceptedAt,
                 remoteEtag: nil
-            )
+            ) { acknowledgedCount += 1 }
         }
         for id in tombstoneIds {
-            try await metadataStore.forget(entityId: id, kind: .highlight)
+            if try await metadataStore.acknowledgeTombstoneIfUnchanged(
+                entityId: id,
+                kind: .highlight,
+                expectedDirtyAt: expectedDirtyAt[id],
+                lastSyncedAt: response.acceptedAt,
+                remoteEtag: nil
+            ) {
+                acknowledgedCount += 1
+            }
         }
-        return liveIds.count + tombstoneIds.count
+        return acknowledgedCount
     }
 }

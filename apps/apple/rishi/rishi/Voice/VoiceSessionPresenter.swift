@@ -26,9 +26,23 @@ struct VoiceStartupTrace: Sendable {
     }
 }
 
+enum VoiceStartOutcome: Equatable {
+    case live
+    case alreadyStarting
+    case alreadyLive
+    case rejected
+}
+
 @MainActor
 @Observable
 final class VoiceSessionPresenter {
+
+    private struct PendingPrewarm {
+        let userID: UserID
+        let bookID: BookID
+        let client: any RealtimeClientAPI
+        let task: Task<Void, Never>
+    }
 
     let state: VoiceSessionState
 
@@ -89,6 +103,7 @@ final class VoiceSessionPresenter {
     /// Prevents repeated taps/lifecycle callbacks from creating overlapping
     /// server sessions while the first start is suspended on network work.
     private var isStarting = false
+    private var pendingPrewarm: PendingPrewarm?
 
     /// Feature flag for the no-card-credit-trial voice-session flow (session
     /// create → WebRTC connect → call-ID registration → control WebSocket).
@@ -195,6 +210,39 @@ final class VoiceSessionPresenter {
     }
     func getSession()->RealtimeVoiceSession? { self.session}
 
+    func prewarmVoiceChat(for bookID: BookID, userID: UserID) {
+        guard userIdProvider() == userID else { return }
+        if let pendingPrewarm,
+           pendingPrewarm.userID == userID,
+           pendingPrewarm.bookID == bookID {
+            return
+        }
+        cancelPrewarm()
+        let client = clientFactory()
+        let task = Task { await client.prewarm() }
+        pendingPrewarm = PendingPrewarm(userID: userID, bookID: bookID, client: client, task: task)
+    }
+
+    func cancelPrewarm() {
+        guard let pendingPrewarm else { return }
+        self.pendingPrewarm = nil
+        pendingPrewarm.task.cancel()
+        Task { await pendingPrewarm.client.cancelPrewarm() }
+    }
+
+    private func takePrewarm(for bookID: BookID?, userID: UserID?) -> PendingPrewarm? {
+        guard let pendingPrewarm else { return nil }
+        self.pendingPrewarm = nil
+        guard let bookID, let userID,
+              pendingPrewarm.bookID == bookID,
+              pendingPrewarm.userID == userID else {
+            pendingPrewarm.task.cancel()
+            Task { await pendingPrewarm.client.cancelPrewarm() }
+            return nil
+        }
+        return pendingPrewarm
+    }
+
     func start(
         bookId: BookID?,
         language: String = "en",
@@ -202,11 +250,19 @@ final class VoiceSessionPresenter {
         bookContext: BookContextSnapshot? = nil,
         currentPageProvider: CurrentPageContextProvider? = nil,
         readerSessionIdentity: ReaderSessionIdentity? = nil
-    ) async {
+    ) async -> VoiceStartOutcome {
 
-        guard !isStarting else { return }
+        guard !isStarting else { return .alreadyStarting }
         isStarting = true
         defer { isStarting = false }
+        let pendingPrewarm = takePrewarm(for: bookId, userID: userIdProvider())
+        var handedPrewarmToSession = false
+        defer {
+            if !handedPrewarmToSession, let pendingPrewarm {
+                pendingPrewarm.task.cancel()
+                Task { await pendingPrewarm.client.cancelPrewarm() }
+            }
+        }
         let startupTrace = VoiceStartupTrace()
         startupTrace.mark("requested", data: [
             "hasBook": String(bookId != nil),
@@ -216,7 +272,7 @@ final class VoiceSessionPresenter {
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
             state.recordError("Data use consent required")
             enterFailure(reason: .dataUseConsentRequired)
-            return
+            return .rejected
         }
 
         if await resumeParkedSessionIfEligible(
@@ -227,7 +283,7 @@ final class VoiceSessionPresenter {
             currentPageProvider: currentPageProvider,
             readerSessionIdentity: readerSessionIdentity
         ) {
-            return
+            return .live
         }
 
         restoreStaleSessionIdFromPersistenceOrSession()
@@ -243,7 +299,7 @@ final class VoiceSessionPresenter {
         await awaitPendingEndDelivery()
         await endStaleServerSessionIfNeeded()
 
-        guard !isPresenting else { return }
+        guard !isPresenting else { return .alreadyLive }
         isPresenting = true
 
         failure = nil
@@ -264,13 +320,13 @@ final class VoiceSessionPresenter {
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
             state.recordError("Data use consent required")
             enterFailure(reason: .dataUseConsentRequired)
-            return
+            return .rejected
         }
 
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
             enterFailure(reason: .unknown("Sign in required"))
-            return
+            return .rejected
         }
 
         state.reset()
@@ -289,7 +345,15 @@ final class VoiceSessionPresenter {
         )
         startupTrace.mark("conversation_lookup_started")
 
-        let adapter = clientFactory()
+        let adapter = pendingPrewarm?.client ?? clientFactory()
+        handedPrewarmToSession = pendingPrewarm != nil
+        // A session start can fail before RealtimeVoiceSession reaches its
+        // normal disconnect path (for example, a consent change between the
+        // presenter and session checks). Always clear any adapter-only
+        // prewarm left behind by that attempt.
+        defer {
+            Task { await adapter.cancelPrewarm() }
+        }
         let fetcher = keyFetcherFactory()
 
         let chapterDependenciesProvider: (@Sendable (BookID) async -> (ChapterIndexCoordinator?, String?))? =
@@ -383,7 +447,7 @@ final class VoiceSessionPresenter {
 
         guard activeSessionToken == sessionToken, isPresenting else {
             await session.end()
-            return
+            return .rejected
         }
         self.session = session
         await sessionRegistry.register(session)
@@ -391,7 +455,7 @@ final class VoiceSessionPresenter {
 
         guard activeSessionToken == sessionToken, isPresenting else {
             await closeAbandonedSession(session)
-            return
+            return .rejected
         }
 
         // Install the single transcript stream continuation before connecting.
@@ -406,12 +470,13 @@ final class VoiceSessionPresenter {
             pageText: nil,
             outline: metadataContext?.outline,
             activeParagraphText: nil,
-            preflighted: true
+            preflighted: true,
+            prewarmed: pendingPrewarm != nil
         )
 
         guard activeSessionToken == sessionToken, isPresenting else {
             await closeAbandonedSession(session)
-            return
+            return .rejected
         }
         startupTrace.mark("transport_start_returned", data: [
             "status": String(describing: state.status),
@@ -432,7 +497,10 @@ final class VoiceSessionPresenter {
                 bridgeTask?.cancel()
                 bridgeTask = nil
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled,
+                  activeSessionToken == sessionToken,
+                  isPresenting,
+                  self.session === session else { return .rejected }
             Log.event(
                 "voice.presenter.lookup.failed",
                 level: .error,
@@ -442,7 +510,7 @@ final class VoiceSessionPresenter {
             )
             state.recordError(String(describing: error))
             enterFailure(reason: .unknown(String(describing: error)))
-            return
+            return .rejected
         }
 
         // End/cancel may have closed this session while lookup was pending.
@@ -450,7 +518,7 @@ final class VoiceSessionPresenter {
         // session.
         guard let currentSession = self.session,
               currentSession === session,
-              isPresenting else { return }
+              isPresenting else { return .rejected }
 
         if case .failed = state.status {
             // Keep the existing failure/retry handling below. A failed
@@ -498,7 +566,8 @@ final class VoiceSessionPresenter {
                 currentPage: metadataContext?.currentPage,
                 pageText: nil,
                 outline: metadataContext?.outline,
-                activeParagraphText: nil
+                activeParagraphText: nil,
+                prewarmed: false
             )
         }
 
@@ -518,7 +587,16 @@ final class VoiceSessionPresenter {
                 noteRishiSessionId(id)
             }
             enterFailure(reason: reason)
+            return .rejected
         }
+
+        guard activeSessionToken == sessionToken,
+              isPresenting,
+              state.status == .live else {
+            await closeAbandonedSession(session)
+            return .rejected
+        }
+        return .live
     }
 
     /// Park the live session when the user dismisses voice chrome so a quick
@@ -564,7 +642,9 @@ final class VoiceSessionPresenter {
         state.reset()
         await session.updateReaderContext(language: language, bookContext: metadataContext)
         await sessionRegistry.resume()
-        return true
+        return isPresenting
+            && self.session === session
+            && sessionRegistry.state == .live
     }
 
     private static func metadataOnly(_ context: BookContextSnapshot?) -> BookContextSnapshot? {
@@ -584,6 +664,7 @@ final class VoiceSessionPresenter {
     /// cover swipe, and audio preemption. Does **not** gate delivery on
     /// `isPresenting` (optimistic dismiss clears it first).
     func requestEnd() async {
+        cancelPrewarm()
         // Nothing left to tear down (and not mid-present) — ignore double tap.
         guard session != nil || isPresenting else { return }
         guard !isRequestingEnd else { return }

@@ -43,6 +43,50 @@ struct SyncMetadataStoreTests {
         #expect(pending == [SyncPendingItem(entityId: id, kind: .position)])
     }
 
+    @Test("each dirty mutation gets a new operation ID, while clean clears it")
+    func dirtyOperationIdRotates() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markDirty(entityId: id, kind: .book)
+        let first = try #require(await store.operationId(entityId: id, kind: .book))
+
+        try await store.markDirty(entityId: id, kind: .book)
+        #expect(try await store.operationId(entityId: id, kind: .book) != first)
+
+        try await store.markClean(
+            entityId: id,
+            kind: .book,
+            lastSyncedAt: Date(),
+            remoteEtag: nil
+        )
+        #expect(try await store.operationId(entityId: id, kind: .book) == nil)
+    }
+
+    @Test("missing or clean metadata cannot create an ephemeral operation ID")
+    func operationIdRequiresPendingMetadata() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        await #expect(throws: SyncMetadataError.missingPendingOperation(entityId: id, kind: .book)) {
+            try await store.ensureOperationId(entityId: id, kind: .book)
+        }
+        try await store.markClean(entityId: id, kind: .book, lastSyncedAt: Date(), remoteEtag: nil)
+        await #expect(throws: SyncMetadataError.missingPendingOperation(entityId: id, kind: .book)) {
+            try await store.ensureOperationId(entityId: id, kind: .book)
+        }
+    }
+
+    @Test("a tombstone receives a new operation ID")
+    func tombstoneOperationIdIsNew() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markDirty(entityId: id, kind: .book)
+        let liveOperation = try #require(await store.operationId(entityId: id, kind: .book))
+        try await store.markTombstone(entityId: id, kind: .book)
+
+        let deleteOperation = try #require(await store.operationId(entityId: id, kind: .book))
+        #expect(deleteOperation != liveOperation)
+    }
+
     @Test("markClean clears dirty + writes cursor + remote etag")
     func markCleanClearsAndWritesCursor() async throws {
         let store = try makeStore()
@@ -59,6 +103,103 @@ struct SyncMetadataStoreTests {
         #expect(cursor?.timeIntervalSince1970 == ts.timeIntervalSince1970)
         let globalCursor = try await store.globalLastSyncedAt()
         #expect(globalCursor?.timeIntervalSince1970 == ts.timeIntervalSince1970)
+    }
+
+    @Test("conditional clean preserves a newer local mutation")
+    func conditionalCleanPreservesNewerLocalMutation() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markDirty(entityId: id, kind: .book)
+        let expectedDirtyAt = try #require(await store.dirtyAt(entityId: id, kind: .book))
+
+        try await Task.sleep(for: .milliseconds(1))
+        try await store.markDirty(entityId: id, kind: .book)
+
+        let acknowledged = try await store.markCleanIfUnchanged(
+            entityId: id,
+            kind: .book,
+            expectedDirtyAt: expectedDirtyAt,
+            lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_001),
+            remoteEtag: nil
+        )
+
+        #expect(acknowledged == false)
+        #expect(try await store.pendingCount() == 1)
+    }
+
+    @Test("operation-aware acknowledgement refuses an older upload")
+    func operationAwareAcknowledgementRequiresMatchingOperation() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markDirty(entityId: id, kind: .book)
+        let dirtyAt = try #require(await store.dirtyAt(entityId: id, kind: .book))
+        let operation = try #require(await store.operationId(entityId: id, kind: .book))
+
+        let rejected = try await store.markCleanIfCurrent(
+            entityId: id,
+            kind: .book,
+            expectedDirtyAt: dirtyAt,
+            expectedOperationId: UUID(),
+            lastSyncedAt: Date(),
+            remoteEtag: nil
+        )
+        #expect(!rejected)
+        #expect(try await store.operationId(entityId: id, kind: .book) == operation)
+
+        let acknowledged = try await store.markCleanIfCurrent(
+            entityId: id,
+            kind: .book,
+            expectedDirtyAt: dirtyAt,
+            expectedOperationId: operation,
+            lastSyncedAt: Date(),
+            remoteEtag: nil
+        )
+        #expect(acknowledged)
+        #expect(try await store.pendingCount() == 0)
+    }
+
+    @Test("remote seen advances independently without clearing dirty state")
+    func remoteSeenPreservesDirtyState() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markDirty(entityId: id, kind: .position)
+        let remoteSeenAt = Date(timeIntervalSince1970: 1_700_000_002)
+
+        try await store.recordRemoteSeen(entityId: id, kind: .position, updatedAt: remoteSeenAt)
+
+        #expect(try await store.pendingCount() == 1)
+        #expect(try await store.lastSyncedAt(entityId: id, kind: .position) == nil)
+        #expect(try await store.remoteSeenAt(entityId: id, kind: .position) == remoteSeenAt)
+    }
+
+    @Test("legacy raw UUID metadata is reused without creating a kind-prefixed duplicate")
+    func legacyRawUUIDMetadataIsReused() async throws {
+        let container = try SyncMetadataStoreBootstrap.makeContainer(inMemory: true)
+        let id = UUID()
+        let expectedDirtyAt = Date(timeIntervalSince1970: 1_700_000_003)
+        let context = ModelContext(container)
+        context.insert(SyncMetadataRow(
+            entityId: id.uuidString,
+            entityType: SyncEntityKind.book.rawValue,
+            dirtyAt: expectedDirtyAt,
+            dirty: true
+        ))
+        try context.save()
+        let store = SwiftDataSyncMetadataStore(container: container)
+
+        let acknowledged = try await store.markCleanIfUnchanged(
+            entityId: id,
+            kind: .book,
+            expectedDirtyAt: expectedDirtyAt,
+            lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_004),
+            remoteEtag: "legacy-etag"
+        )
+
+        #expect(acknowledged)
+        #expect(try await store.pendingCount() == 0)
+        let rows = try context.fetch(FetchDescriptor<SyncMetadataRow>())
+        #expect(rows.count == 1)
+        #expect(rows.first?.entityId == id.uuidString)
     }
 
     @Test("pending(forKind:limit:) filters by kind and caps")
@@ -128,6 +269,27 @@ struct SyncMetadataStoreTests {
         #expect(try await store.dirtyAt(entityId: id, kind: .book) == nil)
     }
 
+    @Test("acknowledged book tombstones remain as clean barriers for re-import")
+    func acknowledgedTombstoneRemainsRecorded() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markTombstone(entityId: id, kind: .book)
+        let expectedDirtyAt = try #require(await store.dirtyAt(entityId: id, kind: .book))
+
+        let acknowledged = try await store.acknowledgeTombstoneIfUnchanged(
+            entityId: id,
+            kind: .book,
+            expectedDirtyAt: expectedDirtyAt,
+            lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_010),
+            remoteEtag: nil
+        )
+
+        #expect(acknowledged)
+        #expect(try await store.pendingCount() == 0)
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) == nil)
+        #expect(try await store.isTombstone(entityId: id, kind: .book))
+    }
+
     @Test("resetAll removes persisted cursors and dirty rows")
     func resetAllClearsAccountState() async throws {
         let store = try makeStore()
@@ -142,5 +304,57 @@ struct SyncMetadataStoreTests {
 
         #expect(try await store.pendingCount() == 0)
         #expect(try await store.globalLastSyncedAt() == nil)
+    }
+
+    @Test("incremental and recovery cursor states persist independently")
+    func cursorStatesPersistIndependently() async throws {
+        let store = try makeStore()
+        try await store.saveCursorState(.init(scope: .incremental, cursor: "incremental-1"))
+        try await store.saveCursorState(.init(scope: .recovery, cursor: "recovery-1"))
+
+        #expect(try await store.cursorState(for: .incremental)?.cursor == "incremental-1")
+        #expect(try await store.cursorState(for: .recovery)?.cursor == "recovery-1")
+
+        try await store.saveCursorState(.init(scope: .incremental, cursor: "incremental-2"))
+        #expect(try await store.cursorState(for: .incremental)?.cursor == "incremental-2")
+        #expect(try await store.cursorState(for: .recovery)?.cursor == "recovery-1")
+    }
+
+    @Test("recovery reason persists independently from cursor progress")
+    func recoveryReasonPersistsIndependently() async throws {
+        let store = try makeStore()
+        try await store.saveRecoveryState(.init(
+            reason: .incompleteProjection,
+            accountGeneration: 7
+        ))
+        try await store.saveCursorState(.init(
+            scope: .recovery,
+            cursor: "recovery-1",
+            accountGeneration: 7
+        ))
+
+        #expect(try await store.recoveryState() == .init(
+            reason: .incompleteProjection,
+            accountGeneration: 7
+        ))
+        #expect(try await store.cursorState(for: .recovery)?.cursor == "recovery-1")
+
+        try await store.clearRecoveryState()
+        #expect(try await store.recoveryState() == nil)
+        #expect(try await store.cursorState(for: .recovery)?.cursor == "recovery-1")
+    }
+
+    @Test("resetAll clears both durable cursor states")
+    func resetAllClearsCursorStates() async throws {
+        let store = try makeStore()
+        try await store.saveCursorState(.init(scope: .incremental, cursor: "incremental-1"))
+        try await store.saveCursorState(.init(scope: .recovery, cursor: "recovery-1"))
+        try await store.saveRecoveryState(.init(reason: .incompleteProjection))
+
+        try await store.resetAll()
+
+        #expect(try await store.cursorState(for: .incremental) == nil)
+        #expect(try await store.cursorState(for: .recovery) == nil)
+        #expect(try await store.recoveryState() == nil)
     }
 }

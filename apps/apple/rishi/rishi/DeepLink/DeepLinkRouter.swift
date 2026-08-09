@@ -84,7 +84,7 @@ struct DeepLinkRouter: Sendable {
     private func queryToken(_ url: URL) -> String? {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
-            .first(where: { $0.name == "token" })?
+            .first(where: { $0.name == "token" || $0.name == "t" })?
             .value
     }
 

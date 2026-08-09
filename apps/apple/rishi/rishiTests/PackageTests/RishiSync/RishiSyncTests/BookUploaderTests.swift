@@ -18,6 +18,7 @@ struct BookUploaderTests {
     /// In-memory metadata stub recording markClean calls for assertions.
     private actor StubMetadata: SyncMetadataStore {
         var cleanCalls: [(UUID, SyncEntityKind, Date, String?)] = []
+        var operationIds: [String: UUID] = [:]
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
@@ -29,6 +30,16 @@ struct BookUploaderTests {
         func lastSyncedAt(forKind kind: SyncEntityKind) async throws -> Date? { nil }
         func globalLastSyncedAt() async throws -> Date? { nil }
         func forget(entityId: UUID, kind: SyncEntityKind) async throws {}
+        func ensureOperationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID {
+            let key = "\(kind.rawValue):\(entityId.uuidString)"
+            if let existing = operationIds[key] { return existing }
+            let created = UUID()
+            operationIds[key] = created
+            return created
+        }
+        func operationId(entityId: UUID, kind: SyncEntityKind) async throws -> UUID? {
+            operationIds["\(kind.rawValue):\(entityId.uuidString)"]
+        }
 
         func calls() -> [(UUID, SyncEntityKind, Date, String?)] { cleanCalls }
     }
@@ -115,7 +126,7 @@ struct BookUploaderTests {
                 return (200, Data(), ["ETag": "\"abc123\""])
             }
             if request.url?.path == "/api/sync/push" {
-                return (200, Data("{\"accepted_at\": 946684800}".utf8), nil)
+                return (200, Data("{\"accepted_at\": 946684800,\"accepted\":true}".utf8), nil)
             }
             return (404, Data(), nil)
         }
@@ -135,6 +146,7 @@ struct BookUploaderTests {
         let changes = try #require(pushJSON["changes"] as? [[String: Any]])
         let payload = try #require(changes.first?["payload"] as? [String: Any])
         #expect(changes.first?["kind"] as? String == "book")
+        #expect(changes.first?["operation_id"] as? String != nil)
         #expect(payload["file_url"] == nil)
         #expect(payload["file_r2_key"] as? String == BookUploader.r2Key(for: book, userId: "001234.abcdef0123456789.1234"))
 
@@ -143,7 +155,74 @@ struct BookUploaderTests {
         #expect(calls.count == 1)
         #expect(calls.first?.0 == book.id)
         #expect(calls.first?.1 == .book)
+        #expect(calls.first?.2 == Date(timeIntervalSinceReferenceDate: 946684800))
         #expect(calls.first?.3 == "\"abc123\"")
+    }
+
+    @Test("Stale server acknowledgement does NOT markClean")
+    func staleServerAcknowledgementDoesNotMarkClean() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, root) = try await makeFileStorage()
+        let book = try makeBookOnDisk(in: root)
+        let uploader = BookUploader(
+            workerClient: workerClient,
+            metadataStore: metadata,
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" }
+        )
+
+        let presignedURL = "https://r2.example.invalid/books/\(book.id.uuidString).epub?sig=stale"
+        BookUploaderMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/upload-url" {
+                return (200, Data("{\"url\":\"\(presignedURL)\",\"expires_at\":946684800}".utf8), nil)
+            }
+            if request.url?.absoluteString == presignedURL {
+                return (200, Data(), nil)
+            }
+            if request.url?.path == "/api/sync/push" {
+                return (200, Data("{\"accepted_at\":946684800,\"accepted\":false}".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        await #expect(throws: BookUploader.UploadError.self) {
+            try await uploader.upload(book)
+        }
+        let calls = await metadata.calls()
+        #expect(calls.isEmpty)
+    }
+
+    @Test("Stale tombstone acknowledgement does NOT markClean")
+    func staleTombstoneAcknowledgementDoesNotMarkClean() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let uploader = BookUploader(
+            workerClient: workerClient,
+            metadataStore: metadata,
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" }
+        )
+
+        BookUploaderMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/push" {
+                return (200, Data("{\"accepted_at\":946684800,\"accepted\":false}".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        await #expect(throws: BookUploader.UploadError.self) {
+            try await uploader.uploadTombstone(UUID())
+        }
+        let calls = await metadata.calls()
+        #expect(calls.isEmpty)
     }
 
     @Test("Presigned-URL request failure (500) does NOT markClean")

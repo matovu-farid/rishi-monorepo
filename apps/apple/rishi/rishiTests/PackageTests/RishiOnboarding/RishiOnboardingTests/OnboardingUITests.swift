@@ -82,6 +82,57 @@ struct OnboardingUITests {
         ).body
     }
 
+    @Test("SampleOrImportScreen makes personal import the primary action")
+    func sampleOrImportMakesImportPrimary() throws {
+        let source = try String(
+            contentsOf: Self.rishiRoot()
+                .appendingPathComponent("rishi/Modules/RishiOnboarding/RishiOnboarding/UI/SampleOrImportScreen.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("Text(\"Import your book\")"))
+        #expect(source.contains("Text(\"Use a sample book\")"))
+        let importIndex = try #require(source.range(of: "Button(action: onImport)")?.lowerBound)
+        let sampleIndex = try #require(source.range(of: "Button(action: onUseSample)")?.lowerBound)
+        #expect(importIndex < sampleIndex)
+    }
+
+    @Test("Reader destination recreates its guided subtree after request resolution")
+    func readerDestinationRecreatesGuidedSubtree() throws {
+        let source = try String(
+            contentsOf: Self.rishiRoot()
+                .appendingPathComponent("rishi/Reader/ReaderDestinationView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains(".id(startReaderTour)"))
+    }
+
+    @Test("Prompt-originated multi-import chooses the first eligible reading format")
+    func multiImportKeepsGuidedBookEligible() throws {
+        let source = try String(
+            contentsOf: Self.rishiRoot()
+                .appendingPathComponent("rishi/Library/LibraryTabView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("successes.first(where:"))
+        #expect(source.contains("book.formatType == .epub || book.formatType == .pdf"))
+    }
+
+    @Test("Sign-out ends voice before account state is cleared")
+    func signOutEndsVoiceSession() throws {
+        let source = try String(
+            contentsOf: Self.rishiRoot()
+                .appendingPathComponent("rishi/RootView.swift"),
+            encoding: .utf8
+        )
+
+        let endIndex = try #require(source.range(of: "await deps.services?.voice.presenter.requestEnd()")?.lowerBound)
+        let signOutIndex = try #require(source.range(of: "await deps.performSignOut(currentUserBox: currentUserBox)")?.lowerBound)
+        #expect(endIndex < signOutIndex)
+    }
+
     @Test("VoiceLanguagePrimer constructs")
     func voiceLanguageConstructs() {
         _ = VoiceLanguagePrimer(

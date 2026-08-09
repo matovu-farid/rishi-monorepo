@@ -253,6 +253,9 @@ private struct SyncMenuItems: View {
         guard let status else { return "Not synced" }
         if status.isRunning { return "Syncing…" }
         if let error = status.lastError, !error.isEmpty {
+            if status.pendingCount > 0 {
+                return "Sync error: \(error) · \(status.pendingCount) pending"
+            }
             return "Sync error: \(error)"
         }
         if let last = status.lastSyncedAt {

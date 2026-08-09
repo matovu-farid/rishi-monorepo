@@ -83,6 +83,7 @@ struct ReaderDestination: View {
     let dependencies: ReaderDestinationDependencies
     let userId: UserID
     let onRequestPaywall: (String) -> Void
+    let startReaderTour: Bool
     let pdfViewMode: Binding<PDFViewModeSetting>?
 
     @State private var readAloudStartTask: Task<Void, Never>?
@@ -94,6 +95,7 @@ struct ReaderDestination: View {
     @State private var paywallRequestHandoff = ReaderPaywallRequestHandoff()
 
     @State private var voiceEntry: ReaderVoiceEntry
+    @State private var readerTour: ReaderOnboardingTourCoordinator?
     @State private var showVoiceTextChat = false
     @State private var voiceTextVM: ChatPanelViewModel?
 
@@ -102,6 +104,7 @@ struct ReaderDestination: View {
         dependencies: ReaderDestinationDependencies,
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void,
+        startReaderTour: Bool = false,
         pdfViewMode: Binding<PDFViewModeSetting>? = nil
     ) {
         let peeked = dependencies.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
@@ -112,13 +115,17 @@ struct ReaderDestination: View {
         self.dependencies = dependencies
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
+        self.startReaderTour = startReaderTour
         self.pdfViewMode = pdfViewMode
+        let tour = startReaderTour ? ReaderOnboardingTourCoordinator() : nil
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: dependencies.voicePresenter,
             voiceLanguageProvider: { dependencies.readerDefaults.voiceLanguage },
             entitlementSnapshotStore: dependencies.entitlementSnapshotStore,
-            onRequestPaywall: onRequestPaywall
+            onRequestPaywall: onRequestPaywall,
+            onVoiceStarted: { tour?.voiceChatStarted() }
         ))
+        self._readerTour = State(initialValue: tour)
     }
 
     var body: some View {
@@ -131,13 +138,17 @@ struct ReaderDestination: View {
 
 
             bookmarkMarkDirty: { [dependencies] id in await dependencies.syncEngine.markBookmarkDirty(id) },
-            onReadAloud: { startReadAloud() },
+            onReadAloud: {
+                readerTour?.readAloudTapped()
+                startReadAloud()
+            },
             onReadAloudFrom: { locator in startReadAloud(from: locator) },
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
             pdfViewMode: pdfViewMode?.wrappedValue ?? dependencies.readerDefaults.pdfViewMode,
-            pdfViewModeBinding: pdfViewMode
+            pdfViewModeBinding: pdfViewMode,
+            keepChromeVisible: startReaderTour
         )
 
 
@@ -150,10 +161,14 @@ struct ReaderDestination: View {
         )
         .task {
 
+            if startReaderTour {
+                dependencies.voicePresenter.prewarmVoiceChat(for: vm.book.id, userID: userId)
+            }
 
 
             vm.onUserNavigation = { locator in
                 Task { @MainActor in
+                    readerTour?.userNavigated()
                     guard let readAloud else { return }
                     let snapshot = readAloud.beginUserNavigationIntent()
                     let destinationParagraphs = await vm.paragraphsForUserNavigationIntent(at: locator)
@@ -203,6 +218,7 @@ struct ReaderDestination: View {
             let controller = readAloud
             let readAloudBinding = $readAloud
             Task { @MainActor [controller, voicePresenter = dependencies.voicePresenter, readAloudBinding] in
+                voicePresenter.cancelPrewarm()
                 await voicePresenter.parkSession()
                 await controller?.stop()
                 controller?.dispose()
@@ -262,6 +278,12 @@ struct ReaderDestination: View {
                     },
                     onOpenTextChat: { showVoiceTextChat = true }
                 )
+            }
+        }
+        .overlay(alignment: .top) {
+            if let readerTour {
+                ReaderOnboardingTourOverlay(coordinator: readerTour)
+                    .padding(.top, RishiSpacing.m)
             }
         }
         .sheet(isPresented: $showVoiceTextChat) {
@@ -370,6 +392,12 @@ struct ReaderDestination: View {
             bookFileStorage: dependencies.bookFileStorage,
             onAllowanceFailure: { failure in
                 pendingNarrationUpgradePrompt = readAloudUpgradeReason(for: failure)
+            },
+            onFirstUtteranceFinished: { [weak readerTour] in
+                readerTour?.firstUtteranceFinished()
+            },
+            onFirstUtteranceFailed: { [weak readerTour] in
+                readerTour?.readAloudFailed()
             }
         )
         readAloud = controller
@@ -393,6 +421,7 @@ struct ReaderDestination: View {
                 coordinator: dependencies.entitlementRefreshCoordinator
             ) {
                 pendingNarrationUpgradePrompt = reason
+                readerTour?.readAloudFailed()
                 return
             }
 

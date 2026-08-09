@@ -10,6 +10,7 @@ import StoreKit
 
 #if canImport(UIKit)
     import UIKit
+    import UserNotifications
 #endif
 
 @main
@@ -49,6 +50,7 @@ struct rishiApp: App {
                     // URL events continue to propagate to existing deep-link
                     // handlers.
                     _ = GoogleSignInCoordinator.handle(url)
+                    router.handle(url: url, bookStore: nil, conversationStore: nil)
                 }
                 .environment(currentUserBox)
                 .environment(\.appDependencies, deps)
@@ -156,7 +158,7 @@ struct rishiApp: App {
 
 #if canImport(UIKit)
 
-    final class RishiAppDelegate: NSObject, UIApplicationDelegate {
+    final class RishiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
 
         nonisolated(unsafe) static var shared: RishiAppDelegate =
             RishiAppDelegate(boot: true)
@@ -182,10 +184,50 @@ struct rishiApp: App {
                 deps.backgroundSyncLifecycle.registerSynchronously()
             }
 
+            UNUserNotificationCenter.current().delegate = self
             DispatchQueue.main.async {
-                UIApplication.shared.registerForRemoteNotifications()
+                // Registering for a device token does not show the permission
+                // prompt. The alert permission is requested in context by the
+                // library's notification primer.
+                application.registerForRemoteNotifications()
             }
             return true
+        }
+
+        func userNotificationCenter(
+            _ center: UNUserNotificationCenter,
+            willPresent notification: UNNotification,
+            withCompletionHandler completionHandler:
+                @escaping (UNNotificationPresentationOptions) -> Void
+        ) {
+            completionHandler([.banner, .sound, .badge])
+        }
+
+        func userNotificationCenter(
+            _ center: UNUserNotificationCenter,
+            didReceive response: UNNotificationResponse,
+            withCompletionHandler completionHandler: @escaping () -> Void
+        ) {
+            let userInfo = response.notification.request.content.userInfo
+            guard ShareNotificationRouting.isShareCreated(userInfo: userInfo) else {
+                completionHandler()
+                return
+            }
+
+            let sendableCompletionHandler = unsafeBitCast(
+                completionHandler,
+                to: (@Sendable () -> Void).self
+            )
+            Task {
+                await PendingShareStore.shared.enqueueShareNotification()
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: ShareNotificationRouting.notificationTapped,
+                        object: nil
+                    )
+                }
+                sendableCompletionHandler()
+            }
         }
 
         func application(
@@ -193,7 +235,10 @@ struct rishiApp: App {
             open url: URL,
             options: [UIApplication.OpenURLOptionsKey: Any] = [:]
         ) -> Bool {
-            GoogleSignInCoordinator.handle(url)
+            if case .shareRedeem(let token) = DeepLinkRouter().route(url) {
+                Task { await PendingShareStore.shared.enqueue(token: token) }
+            }
+            return GoogleSignInCoordinator.handle(url)
         }
 
         func application(

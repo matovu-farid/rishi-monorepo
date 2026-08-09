@@ -13,6 +13,7 @@ import {
   bookmarks,
   chapterIndexes,
   chapterIndexChapters,
+  syncEvents,
 } from "../db/schema";
 import type { PullResponse } from "@rishi/shared/sync-types";
 
@@ -25,6 +26,18 @@ import type { PullResponse } from "@rishi/shared/sync-types";
 // See workers/worker/src/routes/changes.ts for the canonical conversion.
 const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
 const fromSecondsSinceRef = (s: number) => s * 1000 + REFERENCE_DATE_OFFSET_MS;
+const toSecondsSinceRefDate = (ms: number) => (ms - REFERENCE_DATE_OFFSET_MS) / 1000;
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 // ─── iOS SyncChange envelope schema ───────────────────────────────────────────
 // Matches apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/SyncAPI.swift
@@ -45,6 +58,7 @@ const SyncChangeSchema = z.object({
   payload: z.record(z.string(), z.unknown()),
   updated_at: z.number(),
   deleted: z.boolean(),
+  operation_id: z.string().min(1).max(256).optional(),
 });
 
 const PushBodySchema = z.object({
@@ -52,6 +66,7 @@ const PushBodySchema = z.object({
 });
 
 class SyncOwnershipConflict extends Error {}
+class SyncOperationConflict extends Error {}
 class InvalidBookR2Key extends Error {}
 class InvalidChapterIndex extends Error {
   constructor(message: string) {
@@ -124,7 +139,10 @@ export const syncRoutes = new Hono<{
 // ─── POST /push ────────────────────────────────────────────────────────────────
 // Accepts the iOS flat SyncChange envelope and dispatches per `kind` to the
 // matching D1 table. Returns {accepted_at: <seconds-since-2001>} as the
-// high-water-mark cursor iOS persists into sync_metadata.last_synced_at.
+// high-water-mark cursor plus `accepted`, which is false when a book LWW
+// change was ignored because the server already had a newer/equal row. The
+// Apple book uploader sends one book change per request, so this scalar is
+// unambiguous for that path.
 //
 // Per-kind dispatch (snake_case WirePayloads from SyncPayloadCodec.swift):
 //   - book         -> books table (LWW by updated_at, scoped to userId).
@@ -150,6 +168,111 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
+  const operationIdFor = (change: z.infer<typeof SyncChangeSchema>) =>
+    change.operation_id ?? `legacy:${change.kind}:${change.id}:${change.updated_at}:${change.deleted}:${canonicalJson(change.payload)}`;
+
+  type PushOutcomeStatus = "applied" | "duplicate" | "rejected";
+  type PushOutcome = { operation_id: string; status: PushOutcomeStatus; sequence: number | null };
+  const outcomes: PushOutcome[] = [];
+  const pushState = { accepted: true };
+  let inFlightEvent: { operationId: string; sequence: number | null } | null = null;
+
+  const startEvent = async (tx: ReturnType<typeof createDb>, change: z.infer<typeof SyncChangeSchema>) => {
+    const operationId = operationIdFor(change);
+    const payload = change.payload as Record<string, unknown>;
+    const idBoundKinds = new Set(["book", "highlight", "bookmark", "conversation", "message"]);
+    if (idBoundKinds.has(change.kind) && typeof payload.id === "string" && payload.id !== change.id) {
+      throw new SyncOperationConflict();
+    }
+    // Position changes update the parent book projection. Record that
+    // effective entity in the event log rather than the transient Position
+    // row ID, so the delete barrier and event cursor share one identity.
+    const effectiveEntityId = change.kind === "position" && typeof payload.book_id === "string"
+      ? payload.book_id
+      : change.id;
+    const existing = await tx
+      .select({
+        sequence: syncEvents.sequence,
+        status: syncEvents.status,
+        kind: syncEvents.kind,
+        entityId: syncEvents.entityId,
+        payload: syncEvents.payload,
+        updatedAt: syncEvents.updatedAt,
+        deleted: syncEvents.deleted,
+      })
+      .from(syncEvents)
+      .where(and(eq(syncEvents.userId, userId), eq(syncEvents.operationId, operationId)))
+      .get();
+    if (existing) {
+      const sameEnvelope = existing.kind === change.kind
+        && existing.entityId === effectiveEntityId
+        && existing.updatedAt === fromSecondsSinceRef(change.updated_at)
+        && existing.deleted === change.deleted
+        && canonicalJson(JSON.parse(existing.payload)) === canonicalJson(change.payload);
+      if (!sameEnvelope) throw new SyncOperationConflict();
+    }
+    if (existing?.status === "applied") {
+      outcomes.push({ operation_id: operationId, status: "duplicate", sequence: existing.sequence ?? null });
+      return { operationId, sequence: existing.sequence ?? null, terminal: true, pendingReplay: false };
+    }
+    if (existing?.status === "rejected") {
+      pushState.accepted = false;
+      outcomes.push({ operation_id: operationId, status: "rejected", sequence: existing.sequence ?? null });
+      return { operationId, sequence: existing.sequence ?? null, terminal: true, pendingReplay: false };
+    }
+    if (!existing) {
+      await tx.insert(syncEvents).values({
+        userId,
+        operationId,
+        kind: change.kind,
+        entityId: effectiveEntityId,
+        payload: JSON.stringify(change.payload),
+        updatedAt: fromSecondsSinceRef(change.updated_at),
+        deleted: change.deleted,
+        recordedAt: Date.now(),
+        status: "pending",
+      }).onConflictDoNothing();
+    }
+    const pending = await tx
+      .select({ sequence: syncEvents.sequence })
+      .from(syncEvents)
+      .where(and(eq(syncEvents.userId, userId), eq(syncEvents.operationId, operationId)))
+      .get();
+    return { operationId, sequence: pending?.sequence ?? null, terminal: false, pendingReplay: existing?.status === "pending" };
+  };
+
+  const settleEvent = async (
+    tx: ReturnType<typeof createDb>,
+    operationId: string,
+    status: Exclude<PushOutcomeStatus, "duplicate">,
+    sequence: number | null,
+  ) => {
+    await tx.update(syncEvents).set({ status }).where(and(
+      eq(syncEvents.userId, userId),
+      eq(syncEvents.operationId, operationId),
+    ));
+    if (status === "rejected") pushState.accepted = false;
+    outcomes.push({ operation_id: operationId, status, sequence });
+    if (inFlightEvent?.operationId === operationId) inFlightEvent = null;
+  };
+
+  const hasAppliedBookDelete = async (tx: ReturnType<typeof createDb>, bookId: string) => {
+    const tombstone = await tx
+      .select({ sequence: syncEvents.sequence })
+      .from(syncEvents)
+      .where(and(
+        eq(syncEvents.userId, userId),
+        eq(syncEvents.kind, "book"),
+        eq(syncEvents.entityId, bookId),
+        eq(syncEvents.deleted, true),
+        eq(syncEvents.status, "applied"),
+      ))
+      .orderBy(desc(syncEvents.sequence))
+      .limit(1)
+      .get();
+    return tombstone !== undefined;
+  };
+
   // D1 has no interactive transactions: drizzle's db.transaction() emits a SQL
   // BEGIN that D1 rejects ("Failed query: begin", confirmed via wrangler tail).
   // Apply changes sequentially instead (each statement autocommits). Push is
@@ -158,6 +281,11 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
   try {
     await (async (tx) => {
     for (const change of body.changes) {
+      const event = await startEvent(tx as ReturnType<typeof createDb>, change);
+      if (event.terminal) continue;
+      inFlightEvent = { operationId: event.operationId, sequence: event.sequence };
+      const settle = (status: Exclude<PushOutcomeStatus, "duplicate">) =>
+        settleEvent(tx as ReturnType<typeof createDb>, event.operationId, status, event.sequence);
       // ── chapter_index (atomic parent envelope + normalized children) ────
       if (change.kind === "chapter_index") {
         const bookId = change.id;
@@ -165,12 +293,18 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
         const ownedBook = await tx
-          .select({ userId: books.userId })
+          .select({ userId: books.userId, isDeleted: books.isDeleted })
           .from(books)
           .where(eq(books.id, bookId))
           .get();
         if (!ownedBook) throw new SyncOwnershipConflict();
         if (ownedBook.userId !== userId) throw new SyncOwnershipConflict();
+        if (ownedBook.isDeleted) {
+          // A deleted book is a closed identity. Its derived index is also
+          // closed; a stale offline index must not recreate child state.
+          await settle("rejected");
+          continue;
+        }
 
         const parent = {
           id: p.id,
@@ -258,6 +392,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         await tx.batch(
           [parentUpsert, childDeletes, ...childStatements] as Parameters<typeof tx.batch>[0],
         );
+        await settle("applied");
         continue;
       }
 
@@ -265,7 +400,20 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       if (change.kind === "book") {
         const p = change.payload as Record<string, unknown>;
         const bookId = (p.id as string) ?? change.id;
-        if (!bookId) continue;
+        if (!bookId) {
+          await settle("rejected");
+          continue;
+        }
+        if (typeof p.id === "string" && p.id !== change.id) {
+          await settle("rejected");
+          continue;
+        }
+        if (!change.deleted && await hasAppliedBookDelete(tx as ReturnType<typeof createDb>, bookId)) {
+          // A book identity is permanently closed after an applied delete,
+          // even if a projection cleanup removed the row later.
+          await settle("rejected");
+          continue;
+        }
 
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
@@ -296,6 +444,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
           .where(and(eq(books.id, bookId), eq(books.userId, userId)))
           .get();
 
+        let bookAccepted = true;
         if (!existing) {
           const ownedByAnotherUser = await tx
             .select({ userId: books.userId })
@@ -320,6 +469,36 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             updatedAt: pushedUpdatedAtMs,
             createdAt: pushedUpdatedAtMs,
           } as typeof books.$inferInsert);
+        } else if (existing.isDeleted && !change.deleted) {
+          // A deleted book ID is permanently closed. Re-imports receive a
+          // fresh client identity, so an offline device cannot resurrect this
+          // row merely by sending a newer wall-clock value.
+          bookAccepted = false;
+        } else if (change.deleted) {
+          // Deletion closes an identity even when the client clock is behind
+          // a newer live edit. Rejecting this would leave the local tombstone
+          // retrying forever and allow the live projection to survive.
+          await tx
+            .update(books)
+            .set({
+              isDeleted: true,
+              updatedAt: Math.max(existing.updatedAt ?? 0, pushedUpdatedAtMs),
+            } as Partial<typeof books.$inferInsert>)
+            .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+          bookAccepted = true;
+        } else if (
+          event.pendingReplay
+          && pushedUpdatedAtMs === (existing.updatedAt ?? 0)
+          && existing.isDeleted === change.deleted
+          && Object.entries(fields).every(([key, value]) =>
+            (existing as unknown as Record<string, unknown>)[key] === value,
+          )
+        ) {
+          // The projection may have committed before the process lost the
+          // response that would have settled the event. Treat an exact replay
+          // as applied instead of converting a successful mutation into a
+          // permanent rejection.
+          bookAccepted = true;
         } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
           await tx
             .update(books)
@@ -329,7 +508,12 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
               updatedAt: pushedUpdatedAtMs,
             } as Partial<typeof books.$inferInsert>)
             .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+        } else {
+          // The server kept a newer/equal row. This is a successful HTTP
+          // request, but not an accepted client mutation.
+          bookAccepted = false;
         }
+        await settle(bookAccepted ? "applied" : "rejected");
         continue;
       }
 
@@ -337,8 +521,16 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       if (change.kind === "position") {
         const p = change.payload as Record<string, unknown>;
         const bookId = p.book_id as string | undefined;
-        if (!bookId) continue;
+        if (!bookId) {
+          await settle("rejected");
+          continue;
+        }
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
+
+        if (await hasAppliedBookDelete(tx as ReturnType<typeof createDb>, bookId)) {
+          await settle("rejected");
+          continue;
+        }
 
         const patch: Record<string, unknown> = { updatedAt: pushedUpdatedAtMs };
         if (typeof p.locator === "string") patch.currentCfi = p.locator;
@@ -351,12 +543,23 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
           .where(and(eq(books.id, bookId), eq(books.userId, userId)))
           .get();
 
+        let positionAccepted = false;
         if (existing) {
-          if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          if (
+            event.pendingReplay
+            && !existing.isDeleted
+            && pushedUpdatedAtMs === (existing.updatedAt ?? 0)
+            && Object.entries(patch).every(([key, value]) =>
+              (existing as unknown as Record<string, unknown>)[key] === value,
+            )
+          ) {
+            positionAccepted = true;
+          } else if (!existing.isDeleted && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
             await tx
               .update(books)
               .set(patch as Partial<typeof books.$inferInsert>)
               .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+            positionAccepted = true;
           }
         } else {
           const ownedByAnotherUser = await tx
@@ -382,7 +585,9 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             createdAt: pushedUpdatedAtMs,
             updatedAt: pushedUpdatedAtMs,
           } as typeof books.$inferInsert);
+          positionAccepted = true;
         }
+        await settle(positionAccepted ? "applied" : "rejected");
         continue;
       }
 
@@ -390,7 +595,10 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       if (change.kind === "highlight") {
         const p = change.payload as Record<string, unknown>;
         const highlightId = (p.id as string) ?? change.id;
-        if (!highlightId) continue;
+        if (!highlightId) {
+          await settle("rejected");
+          continue;
+        }
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
         const existing = await tx
@@ -403,8 +611,12 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
 
         if (change.deleted) {
           // Tombstone: flip isDeleted on the matching row if it exists.
-          // No-op for unknown ids (the row may live on another device).
-          if (existing && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          // Unknown tombstones are still accepted into the event ledger so a
+          // later event-cursor client can converge even without a projection.
+          let deleteAccepted = !existing;
+          if (existing && event.pendingReplay && existing.isDeleted && pushedUpdatedAtMs === (existing.updatedAt ?? 0)) {
+            deleteAccepted = true;
+          } else if (existing && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
             await tx
               .update(highlights)
               .set({
@@ -417,11 +629,25 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
                   eq(highlights.userId, userId),
                 ),
               );
+            deleteAccepted = true;
           }
+          await settle(deleteAccepted ? "applied" : "rejected");
           continue;
         }
 
         const bookId = p.book_id as string | undefined;
+        if (bookId) {
+          const parentBook = await tx
+            .select({ isDeleted: books.isDeleted })
+            .from(books)
+            .where(and(eq(books.id, bookId), eq(books.userId, userId)))
+            .get();
+          if (parentBook?.isDeleted || (!parentBook && await hasAppliedBookDelete(tx as ReturnType<typeof createDb>, bookId))) {
+            // Child records cannot outlive their deleted parent identity.
+            await settle("rejected");
+            continue;
+          }
+        }
         // cfiRange is the canonical column — accept both locator_start (the
         // iOS wire DTO field) and an explicit cfi_range/cfiRange.
         const cfiRange =
@@ -433,7 +659,20 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         const color = (p.color as string) ?? "yellow";
         const note = (p.note as string | undefined) ?? null;
 
-        if (!existing) {
+        let highlightAccepted = false;
+        if (
+          existing
+          && event.pendingReplay
+          && !existing.isDeleted
+          && pushedUpdatedAtMs === (existing.updatedAt ?? 0)
+          && existing.bookId === (bookId ?? existing.bookId)
+          && existing.cfiRange === (cfiRange || existing.cfiRange)
+          && existing.text === text
+          && existing.color === color
+          && existing.note === note
+        ) {
+          highlightAccepted = true;
+        } else if (!existing) {
           await tx.insert(highlights).values({
             id: highlightId,
             bookId: bookId ?? "",
@@ -446,6 +685,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             updatedAt: pushedUpdatedAtMs,
             createdAt: pushedUpdatedAtMs,
           } as typeof highlights.$inferInsert);
+          highlightAccepted = true;
         } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
           const patch: Record<string, unknown> = {
             text,
@@ -465,7 +705,9 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
                 eq(highlights.userId, userId),
               ),
             );
+          highlightAccepted = true;
         }
+        await settle(highlightAccepted ? "applied" : "rejected");
         continue;
       }
 
@@ -476,7 +718,10 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       if (change.kind === "bookmark") {
         const p = change.payload as Record<string, unknown>;
         const bookmarkId = (p.id as string) ?? change.id;
-        if (!bookmarkId) continue;
+        if (!bookmarkId) {
+          await settle("rejected");
+          continue;
+        }
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
         const existing = await tx
@@ -489,18 +734,23 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
 
         if (change.deleted) {
           // Tombstone: flip isDeleted on the matching row if it exists.
-          // No-op for unknown ids (the row may live on another device).
-          if (existing && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          // Unknown tombstones are still accepted into the event ledger.
+          let deleteAccepted = !existing;
+          if (existing && event.pendingReplay && existing.isDeleted && pushedUpdatedAtMs === (existing.updatedAt ?? 0)) {
+            deleteAccepted = true;
+          } else if (existing && pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
             await tx
               .update(bookmarks)
               .set({
                 isDeleted: true,
                 updatedAt: pushedUpdatedAtMs,
               } as Partial<typeof bookmarks.$inferInsert>)
-              .where(
-                and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId)),
-              );
+            .where(
+              and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId)),
+            );
+            deleteAccepted = true;
           }
+          await settle(deleteAccepted ? "applied" : "rejected");
           continue;
         }
 
@@ -510,7 +760,31 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         const snippet = (p.snippet as string | undefined) ?? null;
         const bookId = (p.book_id as string | undefined) ?? "";
 
-        if (!existing) {
+        if (bookId) {
+          const parentBook = await tx
+            .select({ isDeleted: books.isDeleted })
+            .from(books)
+            .where(and(eq(books.id, bookId), eq(books.userId, userId)))
+            .get();
+          if (parentBook?.isDeleted || (!parentBook && await hasAppliedBookDelete(tx as ReturnType<typeof createDb>, bookId))) {
+            await settle("rejected");
+            continue;
+          }
+        }
+
+        let bookmarkAccepted = false;
+        if (
+          existing
+          && event.pendingReplay
+          && !existing.isDeleted
+          && pushedUpdatedAtMs === (existing.updatedAt ?? 0)
+          && existing.bookId === (bookId || existing.bookId)
+          && existing.location === location
+          && existing.label === label
+          && existing.snippet === snippet
+        ) {
+          bookmarkAccepted = true;
+        } else if (!existing) {
           await tx.insert(bookmarks).values({
             id: bookmarkId,
             bookId,
@@ -522,6 +796,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             updatedAt: pushedUpdatedAtMs,
             createdAt: pushedUpdatedAtMs,
           } as typeof bookmarks.$inferInsert);
+          bookmarkAccepted = true;
         } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
           await tx
             .update(bookmarks)
@@ -535,7 +810,9 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             .where(
               and(eq(bookmarks.id, bookmarkId), eq(bookmarks.userId, userId)),
             );
+          bookmarkAccepted = true;
         }
+        await settle(bookmarkAccepted ? "applied" : "rejected");
         continue;
       }
 
@@ -543,7 +820,10 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       if (change.kind === "conversation") {
         const p = change.payload as Record<string, unknown>;
         const convId = (p.id as string) ?? change.id;
-        if (!convId) continue;
+        if (!convId) {
+          await settle("rejected");
+          continue;
+        }
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
         const existing = await tx
@@ -557,7 +837,17 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
         const title = (p.title as string) ?? "New conversation";
         const bookId = (p.book_id as string) ?? "";
 
-        if (!existing) {
+        let conversationAccepted = false;
+        if (
+          existing
+          && event.pendingReplay
+          && existing.updatedAt === pushedUpdatedAtMs
+          && existing.title === title
+          && existing.bookId === (bookId || existing.bookId)
+          && existing.isDeleted === change.deleted
+        ) {
+          conversationAccepted = true;
+        } else if (!existing) {
           await tx.insert(conversations).values({
             id: convId,
             userId,
@@ -567,6 +857,7 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             updatedAt: pushedUpdatedAtMs,
             createdAt: pushedUpdatedAtMs,
           } as typeof conversations.$inferInsert);
+          conversationAccepted = true;
         } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
           const patch: Record<string, unknown> = {
             title,
@@ -583,7 +874,9 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
                 eq(conversations.userId, userId),
               ),
             );
+          conversationAccepted = true;
         }
+        await settle(conversationAccepted ? "applied" : "rejected");
         continue;
       }
 
@@ -591,7 +884,10 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
       if (change.kind === "message") {
         const p = change.payload as Record<string, unknown>;
         const msgId = (p.id as string) ?? change.id;
-        if (!msgId) continue;
+        if (!msgId) {
+          await settle("rejected");
+          continue;
+        }
         const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
         const existing = await tx
@@ -599,10 +895,27 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
           .from(messages)
           .where(eq(messages.id, msgId))
           .get();
-        if (existing) continue; // append-only
+        if (existing) {
+          if (
+            event.pendingReplay
+            && existing.updatedAt === pushedUpdatedAtMs
+            && existing.conversationId === (p.conversation_id as string | undefined)
+            && existing.role === ((p.role as string) ?? "user")
+            && existing.content === ((p.content as string) ?? "")
+            && existing.isDeleted === change.deleted
+          ) {
+            await settle("applied");
+          } else {
+            await settle("rejected");
+          }
+          continue;
+        }
 
         const convId = p.conversation_id as string | undefined;
-        if (!convId) continue;
+        if (!convId) {
+          await settle("rejected");
+          continue;
+        }
 
         // Enforce per-user scoping via parent conversation ownership.
         const parentConv = await tx
@@ -612,7 +925,10 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
             and(eq(conversations.id, convId), eq(conversations.userId, userId)),
           )
           .get();
-        if (!parentConv) continue;
+        if (!parentConv) {
+          await settle("rejected");
+          continue;
+        }
 
         await tx.insert(messages).values({
           id: msgId,
@@ -623,11 +939,22 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
           updatedAt: pushedUpdatedAtMs,
           createdAt: pushedUpdatedAtMs,
         } as typeof messages.$inferInsert);
+        await settle("applied");
         continue;
       }
     }
     })(db);
   } catch (error) {
+    // D1 statements are autocommitted. If validation/ownership/R2 handling
+    // throws after the ledger row is inserted, do not leave a pending event
+    // permanently blocking the append-only cursor.
+    const failedEvent = inFlightEvent as { operationId: string; sequence: number | null } | null;
+    if (failedEvent !== null) {
+      await settleEvent(db, failedEvent.operationId, "rejected", failedEvent.sequence);
+    }
+    if (error instanceof SyncOperationConflict) {
+      return c.json({ error: "operation_id_conflict" }, 409);
+    }
     if (error instanceof SyncOwnershipConflict) {
       return c.json({ error: "forbidden" }, 403);
     }
@@ -645,15 +972,79 @@ syncRoutes.post("/push", requireAuth, requireAiDataConsent, async (c) => {
     throw error;
   }
 
-  // High-water-mark cursor: the max wire updated_at across all accepted
-  // changes. Already in seconds-since-2001 — pass through unmodified so iOS
-  // round-trips it via .deferredToDate without any conversion drift.
+  // High-water-mark cursor: the max wire updated_at submitted in this request.
+  // It is intentionally separate from `accepted`, because a stale book can
+  // still contribute to the request's high-water mark. Already in
+  // seconds-since-2001 — pass through unmodified so iOS round-trips it via
+  // .deferredToDate without any conversion drift.
   let acceptedAt = 0;
   for (const change of body.changes) {
     if (change.updated_at > acceptedAt) acceptedAt = change.updated_at;
   }
 
-  return c.json({ accepted_at: acceptedAt });
+  return c.json({ accepted_at: acceptedAt, accepted: pushState.accepted, outcomes });
+});
+
+// ─── GET /events ─────────────────────────────────────────────────────────────
+// Append-only inbound stream. This is additive to /changes: older clients can
+// continue consuming the materialized projection while newer clients advance
+// an independent server-sequence cursor. Unknown deletes are present here
+// even when no projection row exists.
+syncRoutes.get("/events", requireAuth, requireAiDataConsent, async (c) => {
+  const rawAfter = c.req.query("after") ?? "0";
+  const after = Number(rawAfter);
+  const rawLimit = c.req.query("limit") ?? "500";
+  const limit = Number(rawLimit);
+  if (!Number.isSafeInteger(after) || after < 0) {
+    return c.json({ error: "after must be a non-negative integer" }, 400);
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5000) {
+    return c.json({ error: "limit must be between 1 and 5000" }, 400);
+  }
+
+  const userId = c.get("userId");
+  const db = createDb(c.env.DB);
+  const firstPending = await db
+    .select({ sequence: syncEvents.sequence })
+    .from(syncEvents)
+    .where(and(
+      eq(syncEvents.userId, userId),
+      eq(syncEvents.status, "pending"),
+      gt(syncEvents.sequence, after),
+    ))
+    .orderBy(asc(syncEvents.sequence))
+    .limit(1)
+    .get();
+  const rows = await db
+    .select()
+    .from(syncEvents)
+    .where(and(
+      eq(syncEvents.userId, userId),
+      eq(syncEvents.status, "applied"),
+      gt(syncEvents.sequence, after),
+      ...(firstPending?.sequence == null ? [] : [lt(syncEvents.sequence, firstPending.sequence)]),
+    ))
+    .orderBy(asc(syncEvents.sequence))
+    .limit(limit + 1)
+    .all();
+  const page = rows.slice(0, limit);
+  const changes = page.map((row) => ({
+    kind: row.kind,
+    id: row.entityId,
+    operation_id: row.operationId,
+    payload: JSON.parse(row.payload) as Record<string, unknown>,
+    updated_at: toSecondsSinceRefDate(row.updatedAt),
+    deleted: row.deleted,
+  }));
+  const nextSequence = page.at(-1)?.sequence ?? after;
+  return c.json({
+    changes,
+    next_cursor: String(nextSequence),
+    has_more: rows.length > limit,
+    cursor_scope: "events",
+    projection_complete: true,
+    is_truncated: rows.length > limit,
+  });
 });
 
 // ─── GET /pull ─────────────────────────────────────────────────────────────────

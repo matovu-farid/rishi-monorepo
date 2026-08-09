@@ -195,6 +195,7 @@ struct LibraryRuntime: @unchecked Sendable {
     let readerSettingsStore: any ReaderSettingsStore
     let bookSearch: any BookSearch
     let indexingHook: any BookIndexingHook
+    let sharePackageService: SharePackageService
 }
 
 struct SyncRuntime: @unchecked Sendable {

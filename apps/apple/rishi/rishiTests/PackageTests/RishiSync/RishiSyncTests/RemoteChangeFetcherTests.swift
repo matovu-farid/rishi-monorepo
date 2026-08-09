@@ -106,4 +106,33 @@ struct RemoteChangeFetcherTests {
         // 1_700_000_000 ≈ 2023-11-14T22:13:20Z; check year shows up.
         #expect(abs.contains("2023"))
     }
+
+    @Test("fetchPage uses the supplied cursor and does not persist it")
+    func fetchPageDoesNotMutateCursorState() async throws {
+        RemoteChangeFetcherMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata(cursor: Date(timeIntervalSince1970: 1_700_000_000))
+
+        RemoteChangeFetcherMockURLProtocol.handler = { request in
+            #expect(request.url?.query?.contains("cursor=opaque-page") == true)
+            let body = """
+            {
+              "changes": [],
+              "next_cursor": "next-page",
+              "has_more": true,
+              "cursor_scope": "incremental",
+              "projection_complete": false
+            }
+            """
+            return (200, Data(body.utf8), nil)
+        }
+
+        let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
+        let page = try await fetcher.fetchPage(scope: .incremental, cursor: "opaque-page")
+
+        #expect(page.nextCursor == "next-page")
+        #expect(page.hasMore)
+        #expect(await metadata.callsToGlobal() == 0)
+    }
 }

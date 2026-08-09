@@ -15,17 +15,32 @@ public struct LibraryView: View {
     public let coverURL: (Book) -> URL?
     public let onOpen: (Book) -> Void
     public let onDelete: (Book) -> Void
+    public let selectionMode: Bool
+    public let selectedBookIDs: Set<BookID>
+    public let onBeginSelection: (Book) -> Void
+    public let onToggleSelection: (Book) -> Void
+    public let onShareSingle: (Book) -> Void
 
     public init(books: [Book],
                 positionLookup: @escaping (BookID) -> Position?,
                 coverURL: @escaping (Book) -> URL?,
                 onOpen: @escaping (Book) -> Void,
-                onDelete: @escaping (Book) -> Void) {
+                onDelete: @escaping (Book) -> Void,
+                selectionMode: Bool = false,
+                selectedBookIDs: Set<BookID> = [],
+                onBeginSelection: @escaping (Book) -> Void = { _ in },
+                onToggleSelection: @escaping (Book) -> Void = { _ in },
+                onShareSingle: @escaping (Book) -> Void = { _ in }) {
         self.books = books
         self.positionLookup = positionLookup
         self.coverURL = coverURL
         self.onOpen = onOpen
         self.onDelete = onDelete
+        self.selectionMode = selectionMode
+        self.selectedBookIDs = selectedBookIDs
+        self.onBeginSelection = onBeginSelection
+        self.onToggleSelection = onToggleSelection
+        self.onShareSingle = onShareSingle
     }
 
     public var body: some View {
@@ -51,7 +66,12 @@ public struct LibraryView: View {
                             positionLookup: positionLookup,
                             coverURL: coverURL,
                             onOpen: onOpen,
-                            onDelete: onDelete
+                            onDelete: onDelete,
+                            selectionMode: selectionMode,
+                            selectedBookIDs: selectedBookIDs,
+                            onBeginSelection: onBeginSelection,
+                            onToggleSelection: onToggleSelection,
+                            onShareSingle: onShareSingle
                         )
                     }
                     .tint(RishiColor.accent)

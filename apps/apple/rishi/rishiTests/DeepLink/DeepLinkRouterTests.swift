@@ -23,6 +23,12 @@ struct DeepLinkRouterTests {
         #expect(router.route(url) == .shareRedeem(token: "abc"))
     }
 
+    @Test("Legacy custom-scheme share token key is accepted")
+    func legacyShareRedeemCustomScheme() {
+        let url = URL(string: "rishi://sharing/join?t=legacy")!
+        #expect(router.route(url) == .shareRedeem(token: "legacy"))
+    }
+
     @Test("Universal Link book open")
     func universalBookOpen() {
         let id = UUID()

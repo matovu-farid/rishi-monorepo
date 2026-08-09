@@ -39,6 +39,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// this once for the initial connection; reconnects always get a fresh
     /// peer because WebRTC connections cannot be reused after teardown.
     private var prewarmTask: Task<SDKConversation, Never>?
+    /// Invalidated whenever an external disconnect begins. A connect that has
+    /// consumed a prewarm task may still be awaiting peer construction, so it
+    /// must not install or report that peer after a newer disconnect.
+    private var lifecycleGeneration = 0
 
     // Persistent stream continuations across the adapter's lifetime. New
     // consumers re-call to get a new stream backed by the same continuation
@@ -104,6 +108,22 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         }
     }
 
+    public func cancelPrewarm() async {
+        let task: Task<SDKConversation, Never>? = lock.withLock {
+            let task = prewarmTask
+            prewarmTask = nil
+            return task
+        }
+        task?.cancel()
+        if let task {
+            let conversation = await task.value
+            await MainActor.run { conversation.disconnect() }
+        }
+        if task != nil {
+            Log.event("voice.adapter.prewarm.cancelled", level: .info)
+        }
+    }
+
     // MARK: - White-box test seams
 
     internal var errorPump: Task<Void, Never>? {
@@ -153,7 +173,9 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // A reconnect may carry a newer page snapshot than the ephemeral key
         // was minted with. The SDK update below applies the current
         // Apple-side tool and instructions in both cases.
-        let isReconnect = lock.withLock { conversation != nil }
+        let (connectGeneration, isReconnect) = lock.withLock {
+            (lifecycleGeneration, conversation != nil)
+        }
         await teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info, data: [
             "is_reconnect": String(isReconnect),
@@ -187,15 +209,24 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // `Conversation.connect()` returns, so subscribing afterward would
         // reintroduce a race and force us back to polling snapshots.
         let statusUpdates = await MainActor.run { convo.statusUpdates }
-        let conversationGeneration = lock.withLock { () -> Int in
+        let installed = lock.withLock { () -> Bool in
+            guard lifecycleGeneration == connectGeneration else { return false }
             self.conversation = convo
             self.toolCallGeneration += 1
             // Pending events belong to the conversation generation that
             // produced them. Never replay an old generation into this one.
             self.pendingToolCallEvents.removeAll(keepingCapacity: true)
             self.toolCallStreamClosed = false
-            return self.toolCallGeneration
+            return true
         }
+        guard installed else {
+            await MainActor.run { convo.disconnect() }
+            throw RealtimeClientError(
+                code: "connect_cancelled",
+                message: "Realtime connection was cancelled before startup completed"
+            )
+        }
+        let conversationGeneration = lock.withLock { self.toolCallGeneration }
         do {
             let capturedProviderCallId = try await convo.connect(
                 ephemeralKey: ephemeralKey
@@ -246,7 +277,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             self.conversation === convo && self.toolCallGeneration == conversationGeneration
         }) else {
             await MainActor.run { convo.disconnect() }
-            return
+            throw RealtimeClientError(
+                code: "connect_cancelled",
+                message: "Realtime connection ended during startup"
+            )
         }
         startPumps(for: convo, generation: conversationGeneration)
     }
@@ -384,15 +418,14 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     }
 
     public func disconnect() async {
+        lock.withLock { lifecycleGeneration += 1 }
+        // Clear a prewarm-only adapter before tearing down the active peer.
+        // This path must not depend on `conversation` being non-nil: a user
+        // can leave the guided reader while peer construction is still in
+        // flight.
+        await cancelPrewarm()
         // Pump + Conversation teardown is the shared single-peer path.
-        guard await teardownActiveConversation() else { return }
-
-        let pendingPrewarm: Task<SDKConversation, Never>? = lock.withLock {
-            let task = prewarmTask
-            prewarmTask = nil
-            return task
-        }
-        pendingPrewarm?.cancel()
+        _ = await teardownActiveConversation()
 
         let (errCont, txCont, tcCont): (
             AsyncStream<RealtimeClientError>.Continuation?,

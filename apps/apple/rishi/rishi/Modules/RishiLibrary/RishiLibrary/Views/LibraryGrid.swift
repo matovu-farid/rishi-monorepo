@@ -8,6 +8,11 @@ struct LibraryGrid: View {
     public let coverURL: (Book) -> URL?
     public let onOpen: (Book) -> Void
     public let onDelete: (Book) -> Void
+    public let selectionMode: Bool
+    public let selectedBookIDs: Set<BookID>
+    public let onBeginSelection: (Book) -> Void
+    public let onToggleSelection: (Book) -> Void
+    public let onShareSingle: (Book) -> Void
 
     @State private var pendingDelete: Book?
 
@@ -26,13 +31,23 @@ struct LibraryGrid: View {
         positionLookup: @escaping (BookID) -> Position?,
         coverURL: @escaping (Book) -> URL?,
         onOpen: @escaping (Book) -> Void,
-        onDelete: @escaping (Book) -> Void
+        onDelete: @escaping (Book) -> Void,
+        selectionMode: Bool = false,
+        selectedBookIDs: Set<BookID> = [],
+        onBeginSelection: @escaping (Book) -> Void = { _ in },
+        onToggleSelection: @escaping (Book) -> Void = { _ in },
+        onShareSingle: @escaping (Book) -> Void = { _ in }
     ) {
         self.books = books
         self.positionLookup = positionLookup
         self.coverURL = coverURL
         self.onOpen = onOpen
         self.onDelete = onDelete
+        self.selectionMode = selectionMode
+        self.selectedBookIDs = selectedBookIDs
+        self.onBeginSelection = onBeginSelection
+        self.onToggleSelection = onToggleSelection
+        self.onShareSingle = onShareSingle
     }
     
 
@@ -77,19 +92,42 @@ struct LibraryGrid: View {
     private func cell(for book: Book) -> some View {
         let hasPosition = positionLookup(book.id) != nil
         Button {
-            onOpen(book)
+            if selectionMode {
+                onToggleSelection(book)
+            } else {
+                onOpen(book)
+            }
         } label: {
-
-            BookCoverImageView(book: book, coverURL: coverURL(book))
-                .frame(width: Self.coverWidth)
+            ZStack(alignment: .topTrailing) {
+                BookCoverImageView(book: book, coverURL: coverURL(book))
+                    .frame(width: Self.coverWidth)
+                if selectionMode {
+                    Image(systemName: selectedBookIDs.contains(book.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.title2)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, RishiColor.accent)
+                        .padding(6)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
 
         .accessibilityIdentifier("library-book-cell")
         .accessibilityLabel(accessibilityText(for: book))
-        .accessibilityHint("Double-tap to open. Long-press for actions.")
+        .accessibilityHint(selectionMode ? "Double-tap to select." : "Double-tap to open. Long-press for actions.")
         .contextMenu {
+            Button {
+                onShareSingle(book)
+            } label: {
+                Label("Share Book", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                onBeginSelection(book)
+            } label: {
+                Label("Select to Share", systemImage: "checkmark.circle")
+            }
             if hasPosition {
                 Button {
                     onOpen(book)

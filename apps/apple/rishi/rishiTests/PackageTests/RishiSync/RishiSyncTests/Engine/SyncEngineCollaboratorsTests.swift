@@ -133,21 +133,37 @@ struct SyncEngineCollaboratorsTests {
         #expect(status.snapshot().pendingCount == 2)
     }
 
-    @Test("snapshotStatus publishes cursor + pending + first error, isRunning=false")
+    @Test("snapshotStatus preserves the last successful time when the wave fails")
     func reporterSnapshotStatus() async {
         let metadata = StubMetadata()
         let cursor = Date(timeIntervalSince1970: 1_900_000_000)
         await metadata.seedGlobalCursor(cursor)
         await metadata.seedDirty(SyncPendingItem(entityId: UUID(), kind: .book))
         let reporter = SyncStatusReporter(metadataStore: metadata)
-        let status = SyncStatus(isRunning: true)
+        let previousSuccess = Date(timeIntervalSince1970: 1_800_000_000)
+        let status = SyncStatus(lastSyncedAt: previousSuccess, isRunning: true)
 
-        await reporter.snapshotStatus(error: "fetch: down", on: status)
+        await reporter.snapshotStatus(error: "fetch: down", on: status, completedAt: nil)
         let snap = status.snapshot()
-        #expect(snap.lastSyncedAt == cursor)
+        #expect(snap.lastSyncedAt == previousSuccess)
         #expect(snap.pendingCount == 1)
         #expect(snap.isRunning == false)
         #expect(snap.lastError == "fetch: down")
+    }
+
+    @Test("snapshotStatus records the completion time of a successful wave")
+    func reporterSnapshotStatusRecordsSuccessfulWave() async {
+        let metadata = StubMetadata()
+        let previousSuccess = Date(timeIntervalSince1970: 1_700_000_000)
+        let completedAt = Date(timeIntervalSince1970: 1_900_000_000)
+        let reporter = SyncStatusReporter(metadataStore: metadata)
+        let status = SyncStatus(lastSyncedAt: previousSuccess, isRunning: true)
+
+        await reporter.snapshotStatus(error: nil, on: status, completedAt: completedAt)
+        let snap = status.snapshot()
+        #expect(snap.lastSyncedAt == completedAt)
+        #expect(snap.lastError == nil)
+        #expect(snap.isRunning == false)
     }
 
     // MARK: - ChatInboundMerger

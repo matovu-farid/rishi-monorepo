@@ -26,7 +26,21 @@ export interface ApnsSender {
     env: "production" | "sandbox" | string;
     payload: Record<string, unknown>;
   }): Promise<void>;
+  sendAlertPush(args: {
+    deviceToken: string;
+    topic: string;
+    env: "production" | "sandbox" | string;
+    title: string;
+    body: string;
+    payload?: Record<string, unknown>;
+  }): Promise<void>;
 }
+
+export type ApnsCredentialsEnv = {
+  APPLE_APNS_KEY_P8?: string;
+  APPLE_APNS_KEY_ID?: string;
+  APPLE_TEAM_ID?: string;
+};
 
 // ─── JWT signing (unit-testable) ─────────────────────────────────────────────
 
@@ -137,5 +151,39 @@ export function createApnsSender(cfg: {
         throw new Error(`APNs ${res.status}: ${text}`);
       }
     },
+    async sendAlertPush(args) {
+      const host = args.env === "sandbox" ? APNS_SANDBOX_HOST : APNS_PROD_HOST;
+      const body = {
+        aps: {
+          alert: { title: args.title, body: args.body },
+          sound: "default",
+        },
+        ...(args.payload ?? {}),
+      };
+      const res = await fetch(`${host}/3/device/${args.deviceToken}`, {
+        method: "POST",
+        headers: {
+          authorization: `bearer ${await token()}`,
+          "apns-push-type": "alert",
+          "apns-priority": "10",
+          "apns-topic": args.topic,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`APNs ${res.status}: ${text}`);
+      }
+    },
   };
+}
+
+export function createApnsSenderFromEnv(env: ApnsCredentialsEnv): ApnsSender | null {
+  if (!env.APPLE_APNS_KEY_P8 || !env.APPLE_APNS_KEY_ID || !env.APPLE_TEAM_ID) return null;
+  return createApnsSender({
+    keyP8: env.APPLE_APNS_KEY_P8,
+    keyId: env.APPLE_APNS_KEY_ID,
+    teamId: env.APPLE_TEAM_ID,
+  });
 }

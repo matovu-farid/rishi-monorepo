@@ -3,15 +3,26 @@
         "details": [
             {
                 "appIDs": [
-                    "rishi.org.fidexa.rishi"
+                    "9VL7VRY6QZ.org.fidexa.rishi"
                 ],
                 "components": [
                     {
-                        "/": "/open/*",
-                        "comment": "Matches any URL whose path starts with /open/"
+                        "/": "/auth/callback*",
+                        "comment": "Apple and Google auth callback"
+                    },
+                    {
+                        "/": "/sharing/join*",
+                        "comment": "Book sharing redemption link"
+                    },
+                    {
+                        "/": "/app/*",
+                        "comment": "Generic in-app routing"
                     }
                 ]
             }
         ]
+    },
+    "webcredentials": {
+        "apps": ["9VL7VRY6QZ.org.fidexa.rishi"]
     }
 }

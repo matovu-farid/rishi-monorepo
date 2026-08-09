@@ -12,6 +12,8 @@ struct ReaderDestinationView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.services) private var servicesEnv
     @Environment(CurrentUserBox.self) private var currentUser
+    @State private var startReaderTour = false
+    @State private var didResolveReaderTourRequest = false
     var user:User? {
         if case .signedIn(user: let user) = currentUser.state {
             return user
@@ -23,39 +25,58 @@ struct ReaderDestinationView: View {
 
         let services = servicesEnv!
         let userId = user!.id
-        switch route {
-        case .epub(let bookId),.pdf(let bookId):
-            NavigationLazyBook(
-                bookId: bookId,
-                hint: hint,
-                bookStore: services.library.bookStore
-            ) { book in
-                ReaderDestination(
-                    vm: ReaderViewModel.make(
-                        book: book,
+        Group {
+            switch route {
+            case .epub(let bookId),.pdf(let bookId):
+                NavigationLazyBook(
+                    bookId: bookId,
+                    hint: hint,
+                    ownerId: userId,
+                    bookStore: services.library.bookStore
+                ) { book in
+                    ReaderDestination(
+                        vm: ReaderViewModel.make(
+                            book: book,
+                            userId: userId,
+                            positionStore: services.library.positionStore
+                        ),
+                        dependencies: ReaderDestinationDependencies.make(services: services),
                         userId: userId,
-                        positionStore: services.library.positionStore
-                    ),
-                    dependencies: ReaderDestinationDependencies.make(services: services),
-                    userId: userId,
-                    onRequestPaywall: onRequestPaywall,
-                    pdfViewMode: pdfViewMode
-                )
-            }
-        case .unsupportedFormat(let bookId):
-            NavigationLazyBook(
-                bookId: bookId,
-                hint: hint,
-                bookStore: services.library.bookStore
-            ) { book in
-                EpubPlaceholderView(book: book) {
-                    #if targetEnvironment(macCatalyst)
-                        dismiss()
-                    #else
-                        if !router.path.isEmpty { router.path.removeLast() }
-                    #endif
+                        onRequestPaywall: onRequestPaywall,
+                        startReaderTour: startReaderTour,
+                        pdfViewMode: pdfViewMode
+                    )
+                    // The transient tour request is consumed when this
+                    // destination appears. Recreate the destination subtree
+                    // after that flag resolves so its @State coordinator,
+                    // voice callback, and reader chrome are initialized with
+                    // the guided configuration on iOS and Catalyst.
+                    .id(startReaderTour)
+                }
+            case .unsupportedFormat(let bookId):
+                NavigationLazyBook(
+                    bookId: bookId,
+                    hint: hint,
+                    ownerId: userId,
+                    bookStore: services.library.bookStore
+                ) { book in
+                    EpubPlaceholderView(book: book) {
+                        #if targetEnvironment(macCatalyst)
+                            dismiss()
+                        #else
+                            if !router.path.isEmpty { router.path.removeLast() }
+                        #endif
+                    }
                 }
             }
+        }
+        .onAppear {
+            guard !didResolveReaderTourRequest, let user else { return }
+            didResolveReaderTourRequest = true
+            startReaderTour = router.takeReaderTour(
+                for: route.bookId,
+                userID: user.id
+            )
         }
     }
 }

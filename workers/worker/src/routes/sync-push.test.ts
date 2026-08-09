@@ -14,7 +14,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *                 { kind: "book"|"position"|"highlight"|"conversation"|"message",
  *                   id: <uuid>, payload: {...}, updated_at: <number>,
  *                   deleted: <bool> }, ... ] }
- *   Response: { accepted_at: <number = high-water-mark seconds since 2001> }
+ *   Response: { accepted_at: <number = high-water-mark seconds since 2001>,
+ *                accepted: <boolean> }
  *
  * LOAD-BEARING: `accepted_at` is a JSON number = (msEpoch - 978_307_200_000) /
  * 1000 — matches `Date(timeIntervalSinceReferenceDate:)` so the bare
@@ -135,6 +136,7 @@ const {
   bookmarksStore,
   chapterIndexesStore,
   chapterSummariesStore,
+  syncEventsStore,
   BOOK_COLS,
   HIGHLIGHT_COLS,
   CONV_COLS,
@@ -142,6 +144,7 @@ const {
   BOOKMARK_COLS,
   CHAPTER_INDEX_COLS,
   CHAPTER_SUMMARY_COLS,
+  SYNC_EVENT_COLS,
 } = vi.hoisted(() => {
   function mkCols<T extends string>(table: T, names: string[]) {
     const out: Record<string, { __table: T; __col: string }> = {}
@@ -156,6 +159,7 @@ const {
     bookmarksStore: [] as FakeBookmarkRow[],
     chapterIndexesStore: [] as FakeChapterIndexRow[],
     chapterSummariesStore: [] as FakeChapterSummaryRow[],
+    syncEventsStore: [] as Array<Record<string, unknown>>,
     BOOK_COLS: mkCols("books", [
       "id",
       "userId",
@@ -171,6 +175,7 @@ const {
     BOOKMARK_COLS: mkCols("bookmarks", ["id", "userId", "updatedAt", "isDeleted"]),
     CHAPTER_INDEX_COLS: mkCols("chapter_indexes", ["id", "userId", "bookId", "contentVersion", "updatedAt"]),
     CHAPTER_SUMMARY_COLS: mkCols("chapter_index_chapters", ["id", "userId", "bookId", "contentVersion", "chapterId", "sourcePosition", "updatedAt"]),
+    SYNC_EVENT_COLS: mkCols("sync_events", ["sequence", "userId", "operationId", "status", "kind", "entityId", "payload", "updatedAt", "deleted"]),
   }
 })
 
@@ -182,6 +187,7 @@ function resetStores() {
   bookmarksStore.length = 0
   chapterIndexesStore.length = 0
   chapterSummariesStore.length = 0
+  syncEventsStore.length = 0
 }
 
 // ─── Mock schema so table imports resolve to column-id maps ──────────────────
@@ -194,6 +200,7 @@ vi.mock("@rishi/shared/schema", () => ({
   bookmarks: BOOKMARK_COLS,
   chapterIndexes: CHAPTER_INDEX_COLS,
   chapterIndexChapters: CHAPTER_SUMMARY_COLS,
+  syncEvents: SYNC_EVENT_COLS,
   user: {},
   session: {},
   account: {},
@@ -214,6 +221,7 @@ vi.mock("../db/schema", () => ({
   bookmarks: BOOKMARK_COLS,
   chapterIndexes: CHAPTER_INDEX_COLS,
   chapterIndexChapters: CHAPTER_SUMMARY_COLS,
+  syncEvents: SYNC_EVENT_COLS,
   user: {},
   session: {},
   account: {},
@@ -292,6 +300,7 @@ function storeFor(table: string): Array<Record<string, unknown>> {
     return chapterIndexesStore as unknown as Array<Record<string, unknown>>
   if (table === "chapter_index_chapters")
     return chapterSummariesStore as unknown as Array<Record<string, unknown>>
+  if (table === "sync_events") return syncEventsStore
   return []
 }
 
@@ -358,7 +367,12 @@ function makeTx() {
           if (!values && selected) values = selected.get()
           if (!values) return
           const rows = storeFor(tag)
-          const existing = rows.find((row) => tag === "chapter_index_chapters"
+          if (tag === "sync_events" && values.sequence === undefined) {
+            values.sequence = rows.length + 1
+          }
+          const existing = rows.find((row) => tag === "sync_events"
+            ? row.userId === values!.userId && row.operationId === values!.operationId
+            : tag === "chapter_index_chapters"
             ? row.userId === values!.userId && row.bookId === values!.bookId && row.contentVersion === values!.contentVersion && row.chapterId === values!.chapterId
             : tag === "chapter_indexes"
               ? row.userId === values!.userId && row.bookId === values!.bookId && row.contentVersion === values!.contentVersion
@@ -499,6 +513,7 @@ interface SyncChange {
   payload: Record<string, unknown>
   updated_at: number
   deleted: boolean
+  operation_id?: string
 }
 
 async function callPush(body: { changes: SyncChange[] } | unknown) {
@@ -509,6 +524,13 @@ async function callPush(body: { changes: SyncChange[] } | unknown) {
       "X-Rishi-Data-Use-Consent": "2026-07-29",
     },
     body: JSON.stringify(body),
+  })
+  return syncRoutes.fetch(req, env)
+}
+
+async function callEvents(after = "0", limit = "500") {
+  const req = new Request(`http://test.local/events?after=${after}&limit=${limit}`, {
+    headers: { "X-Rishi-Data-Use-Consent": "2026-07-29" },
   })
   return syncRoutes.fetch(req, env)
 }
@@ -616,8 +638,9 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
       ],
     })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { accepted_at: number }
+    const body = (await res.json()) as { accepted_at: number; accepted: boolean }
     expect(body.accepted_at).toBe(updatedAt)
+    expect(body.accepted).toBe(true)
     expect(booksStore.length).toBe(1)
     const row = booksStore[0]
     expect(row.id).toBe(UUID_BOOK)
@@ -626,6 +649,195 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     expect(row.filePath).toBe("")
     expect(row.coverPath).toBeNull()
     expect(row.fileR2Key).toBe(`books/user_alice/${UUID_BOOK}.epub`)
+  })
+
+  it("records a stable operation in the append-only sync event ledger", async () => {
+    const change = {
+      kind: "book" as const,
+      id: UUID_BOOK,
+      operation_id: "op-delete-thinking-in-bets",
+      payload: { id: UUID_BOOK },
+      updated_at: 3.5,
+      deleted: true,
+    }
+
+    const first = await callPush({ changes: [change] })
+    expect(first.status).toBe(200)
+    const firstBody = await first.json() as { outcomes: Array<{ status: string; sequence: number }> }
+    expect(firstBody.outcomes[0].status).toBe("applied")
+    const retry = await callPush({ changes: [change] })
+    expect(retry.status).toBe(200)
+    const retryBody = await retry.json() as { outcomes: Array<{ status: string; sequence: number }> }
+    expect(retryBody.outcomes[0].status).toBe("duplicate")
+    expect(retryBody.outcomes[0].sequence).toBe(firstBody.outcomes[0].sequence)
+
+    expect(syncEventsStore).toHaveLength(1)
+    expect(syncEventsStore[0]).toMatchObject({
+      userId: "user_alice",
+      operationId: "op-delete-thinking-in-bets",
+      status: "applied",
+      kind: "book",
+      entityId: UUID_BOOK,
+      deleted: true,
+    })
+  })
+
+  it("rejects reuse of an operation ID for a different envelope", async () => {
+    const first = await callPush({ changes: [{
+      kind: "book",
+      id: UUID_BOOK,
+      operation_id: "op-collision",
+      payload: { id: UUID_BOOK, title: "First" },
+      updated_at: 4,
+      deleted: false,
+    }] })
+    expect(first.status).toBe(200)
+
+    const conflict = await callPush({ changes: [{
+      kind: "book",
+      id: UUID_BOOK,
+      operation_id: "op-collision",
+      payload: { id: UUID_BOOK, title: "Different" },
+      updated_at: 5,
+      deleted: false,
+    }] })
+    expect(conflict.status).toBe(409)
+    expect(booksStore[0].title).toBe("First")
+    expect(syncEventsStore).toHaveLength(1)
+  })
+
+  it("serves applied deletes from the durable event cursor", async () => {
+    const pushed = await callPush({ changes: [{
+      kind: "book",
+      id: UUID_BOOK,
+      operation_id: "op-events-delete",
+      payload: { id: UUID_BOOK },
+      updated_at: 6,
+      deleted: true,
+    }] })
+    expect(pushed.status).toBe(200)
+
+    const response = await callEvents()
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      changes: Array<{ id: string; operation_id: string; deleted: boolean }>
+      cursor_scope: string
+      next_cursor: string
+    }
+    expect(body.cursor_scope).toBe("events")
+    expect(body.changes).toEqual([expect.objectContaining({
+      id: UUID_BOOK,
+      operation_id: "op-events-delete",
+      deleted: true,
+    })])
+    expect(body.next_cursor).toBe("1")
+  })
+
+  it("does not advance past an earlier pending event", async () => {
+    syncEventsStore.push(
+      {
+        sequence: 1,
+        userId: "user_alice",
+        operationId: "pending-first",
+        status: "pending",
+        kind: "book",
+        entityId: UUID_BOOK,
+        payload: JSON.stringify({ id: UUID_BOOK }),
+        updatedAt: REFERENCE_DATE_OFFSET_MS + 1,
+        deleted: true,
+      },
+      {
+        sequence: 2,
+        userId: "user_alice",
+        operationId: "applied-second",
+        status: "applied",
+        kind: "book",
+        entityId: UUID_HL,
+        payload: JSON.stringify({ id: UUID_HL }),
+        updatedAt: REFERENCE_DATE_OFFSET_MS + 2,
+        deleted: true,
+      },
+    )
+
+    const response = await callEvents()
+    expect(response.status).toBe(200)
+    const body = await response.json() as { changes: unknown[]; next_cursor: string }
+    expect(body.changes).toEqual([])
+    expect(body.next_cursor).toBe("0")
+  })
+
+  it("book kind: reports a stale write instead of falsely acknowledging it", async () => {
+    seedBook({ title: "Newer server copy", updatedAt: REFERENCE_DATE_OFFSET_MS + 10_000 })
+    const res = await callPush({
+      changes: [{
+        kind: "book",
+        id: UUID_BOOK,
+        payload: { id: UUID_BOOK, title: "Older client copy" },
+        updated_at: 5.0,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { accepted: boolean }
+    expect(body.accepted).toBe(false)
+    expect(booksStore[0].title).toBe("Newer server copy")
+  })
+
+  it("book kind: reports an equal-timestamp write as not accepted", async () => {
+    seedBook({ title: "Existing copy", updatedAt: REFERENCE_DATE_OFFSET_MS + 10_000 })
+    const res = await callPush({
+      changes: [{
+        kind: "book",
+        id: UUID_BOOK,
+        payload: { id: UUID_BOOK, title: "Equal timestamp copy" },
+        updated_at: 10.0,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { accepted: boolean }
+    expect(body.accepted).toBe(false)
+    expect(booksStore[0].title).toBe("Existing copy")
+  })
+
+  it("book kind: does not resurrect a deleted row with a newer client timestamp", async () => {
+    seedBook({ title: "Deleted copy", updatedAt: REFERENCE_DATE_OFFSET_MS + 10_000, isDeleted: true })
+    const res = await callPush({
+      changes: [{
+        kind: "book",
+        id: UUID_BOOK,
+        payload: { id: UUID_BOOK, title: "Resurrected copy" },
+        updated_at: 20.0,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { accepted: boolean }
+    expect(body.accepted).toBe(false)
+    expect(booksStore[0].title).toBe("Deleted copy")
+    expect(booksStore[0].isDeleted).toBe(true)
+  })
+
+  it("book kind: accepts a stale delete as the permanent identity barrier", async () => {
+    seedBook({ title: "Newer live copy", updatedAt: REFERENCE_DATE_OFFSET_MS + 20_000 })
+    const res = await callPush({
+      changes: [{
+        kind: "book",
+        id: UUID_BOOK,
+        operation_id: "op-stale-delete",
+        payload: { id: UUID_BOOK },
+        updated_at: 10.0,
+        deleted: true,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { accepted: boolean }
+    expect(body.accepted).toBe(true)
+    expect(booksStore[0].isDeleted).toBe(true)
   })
 
   it("position kind: updates existing books row currentCfi, no new table", async () => {
@@ -684,6 +896,23 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     })
   })
 
+  it("position kind: does not update a deleted book identity", async () => {
+    seedBook({ id: UUID_BOOK, isDeleted: true, updatedAt: 1 })
+    const res = await callPush({
+      changes: [{
+        kind: "position",
+        id: UUID_POS,
+        payload: { book_id: UUID_BOOK, locator: "stale-position", percent_complete: 0.9 },
+        updated_at: 20,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(booksStore[0].currentCfi).toBeNull()
+    expect(booksStore[0].lastProgressPercent).toBeNull()
+  })
+
   it("position kind: rejects another user's book id instead of crossing ownership", async () => {
     seedBook({ id: UUID_BOOK, userId: "user_bob", currentCfi: null })
     const res = await callPush({
@@ -733,6 +962,44 @@ describe("POST /api/sync/push (iOS SyncChange envelope)", () => {
     })
     expect(res.status).toBe(200)
     expect(highlightsStore[0].isDeleted).toBe(true)
+  })
+
+  it("does not create a highlight under a deleted book", async () => {
+    seedBook({ id: UUID_BOOK, isDeleted: true })
+    const res = await callPush({
+      changes: [{
+        kind: "highlight",
+        id: UUID_HL,
+        payload: { id: UUID_HL, book_id: UUID_BOOK, text: "stale" },
+        updated_at: 2,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(highlightsStore).toHaveLength(0)
+  })
+
+  it("keeps an unknown highlight delete in the event ledger", async () => {
+    const res = await callPush({
+      changes: [{
+        kind: "highlight",
+        id: UUID_HL_2,
+        operation_id: "op-unknown-highlight-delete",
+        payload: { id: UUID_HL_2, book_id: UUID_BOOK },
+        updated_at: 2,
+        deleted: true,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(highlightsStore).toHaveLength(0)
+    expect(syncEventsStore).toHaveLength(1)
+    expect(syncEventsStore[0]).toMatchObject({
+      operationId: "op-unknown-highlight-delete",
+      status: "applied",
+      deleted: true,
+    })
   })
 
   it("does not let a stale highlight tombstone erase a newer live row", async () => {
@@ -1057,6 +1324,22 @@ describe("POST /api/sync/push — bookmark kind", () => {
     expect(res.status).toBe(200)
     // Still only the one seeded bookmark.
     expect(bookmarksStore.length).toBe(1)
+  })
+
+  it("does not create a bookmark under a deleted book", async () => {
+    seedBook({ id: UUID_BOOK, isDeleted: true })
+    const res = await callPush({
+      changes: [{
+        kind: "bookmark",
+        id: UUID_BM,
+        payload: { id: UUID_BM, book_id: UUID_BOOK, locator: "stale" },
+        updated_at: 2,
+        deleted: false,
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(bookmarksStore).toHaveLength(0)
   })
 
   it("cross-user isolation: a bookmark for user A is not written/visible under user B", async () => {

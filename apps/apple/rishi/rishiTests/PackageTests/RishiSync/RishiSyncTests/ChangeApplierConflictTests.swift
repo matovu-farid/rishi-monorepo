@@ -11,8 +11,8 @@ import Foundation
 ///     strictly newer).
 ///   - Highlights: merge by ID. Same ID + diverged content → latest
 ///     `createdAt` wins. Different IDs are kept (no conflict).
-///   - Book metadata: deleted=true cascades through bookStore.delete +
-///     metadata.forget. Live rows upsert into BookStore.
+///   - Book metadata: deleted=true cascades through bookStore.delete and
+///     retains a clean metadata tombstone. Live rows upsert into BookStore.
 ///   - Conversation / Message kinds are accepted but skipped (Phase 9 will
 ///     wire) — metadata.markClean still called so we don't echo the cursor.
 @Suite("ChangeApplier — SYNC-04 conflict resolution", .serialized)
@@ -23,6 +23,9 @@ struct ChangeApplierConflictTests {
     private actor StubMetadata: SyncMetadataStore {
         var cleanCalls: [(UUID, SyncEntityKind, Date, String?)] = []
         var forgetCalls: [(UUID, SyncEntityKind)] = []
+        var tombstoneAcknowledgements: [(UUID, SyncEntityKind)] = []
+        var remoteSeenCalls: [(UUID, SyncEntityKind, Date)] = []
+        var dirtyRows: [String: Date] = [:]
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
@@ -36,8 +39,27 @@ struct ChangeApplierConflictTests {
         func forget(entityId: UUID, kind: SyncEntityKind) async throws {
             forgetCalls.append((entityId, kind))
         }
+        func markCleanIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+            cleanCalls.append((entityId, kind, lastSyncedAt, remoteEtag))
+            return true
+        }
+        func acknowledgeTombstoneIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+            tombstoneAcknowledgements.append((entityId, kind))
+            return true
+        }
+        func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date? {
+            dirtyRows["\(entityId.uuidString):\(kind.rawValue)"]
+        }
+        func seedDirty(_ entityId: UUID, kind: SyncEntityKind) {
+            dirtyRows["\(entityId.uuidString):\(kind.rawValue)"] = Date(timeIntervalSince1970: 1_700_000_000)
+        }
+        func recordRemoteSeen(entityId: UUID, kind: SyncEntityKind, updatedAt: Date) async throws {
+            remoteSeenCalls.append((entityId, kind, updatedAt))
+        }
         func cleaned() -> [(UUID, SyncEntityKind, Date, String?)] { cleanCalls }
         func forgotten() -> [(UUID, SyncEntityKind)] { forgetCalls }
+        func acknowledgedTombstones() -> [(UUID, SyncEntityKind)] { tombstoneAcknowledgements }
+        func remoteSeen() -> [(UUID, SyncEntityKind, Date)] { remoteSeenCalls }
     }
 
     private actor StubBookStore: BookStore {
@@ -83,6 +105,12 @@ struct ChangeApplierConflictTests {
         func delete(_ id: BookmarkID) async throws { rows[id] = nil }
     }
 
+    private actor CleanupProbe {
+        var ids: [BookID] = []
+        func record(_ id: BookID) { ids.append(id) }
+        func snapshot() -> [BookID] { ids }
+    }
+
     // MARK: - Helpers
 
     private func makeApplier(
@@ -90,7 +118,8 @@ struct ChangeApplierConflictTests {
         positionStore: any PositionStore,
         highlightStore: any HighlightStore,
         metadata: any SyncMetadataStore,
-        currentUserId: @escaping @Sendable () async -> UserID? = { nil }
+        currentUserId: @escaping @Sendable () async -> UserID? = { nil },
+        bookMaterialCleanup: (@Sendable (Book) async throws -> Void)? = nil
     ) -> ChangeApplier {
         ChangeApplier(
             bookStore: bookStore,
@@ -98,7 +127,8 @@ struct ChangeApplierConflictTests {
             highlightStore: highlightStore,
             bookmarkStore: StubBookmarkStore(),
             metadataStore: metadata,
-            currentUserId: currentUserId
+            currentUserId: currentUserId,
+            bookMaterialCleanup: bookMaterialCleanup
         )
     }
 
@@ -191,6 +221,63 @@ struct ChangeApplierConflictTests {
         let stored = await positionStore.snapshot()
         #expect(stored.first?.locator == "pdf-v1:page:10")
         #expect(stored.first?.percentComplete == 0.5)
+    }
+
+    @Test("Local-wins conflict records remote seen without clearing local work")
+    func localWinsRecordsRemoteSeen() async throws {
+        let positionStore = StubPositionStore()
+        let bookId = UUID()
+        let local = Position(
+            bookId: bookId,
+            locator: "pdf-v1:page:10",
+            percentComplete: 0.5,
+            updatedAt: Date(timeIntervalSince1970: 1_900_000_000)
+        )
+        await positionStore.seed(local)
+        let metadata = StubMetadata()
+        let applier = makeApplier(
+            bookStore: StubBookStore(),
+            positionStore: positionStore,
+            highlightStore: StubHighlightStore(),
+            metadata: metadata
+        )
+        let remote = Position(
+            bookId: bookId,
+            locator: "pdf-v1:page:2",
+            percentComplete: 0.1,
+            updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        _ = await applier.apply([try positionChange(remote, at: remote.updatedAt)])
+
+        let seen = await metadata.remoteSeen()
+        #expect(seen.count == 1)
+        #expect(seen.first?.0 == bookId)
+        #expect(seen.first?.1 == .position)
+    }
+
+    @Test("Duplicate remote replay records remote seen")
+    func duplicateRemoteReplayRecordsRemoteSeen() async throws {
+        let positionStore = StubPositionStore()
+        let metadata = StubMetadata()
+        let applier = makeApplier(
+            bookStore: StubBookStore(),
+            positionStore: positionStore,
+            highlightStore: StubHighlightStore(),
+            metadata: metadata
+        )
+        let position = Position(
+            bookId: UUID(),
+            locator: "pdf-v1:page:4",
+            percentComplete: 0.2,
+            updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let change = try positionChange(position, at: position.updatedAt)
+
+        _ = await applier.apply([change])
+        _ = await applier.apply([change])
+
+        #expect((await metadata.remoteSeen()).count == 1)
     }
 
     @Test("Position: remote newer than local → upsert remote + markClean")
@@ -420,7 +507,7 @@ struct ChangeApplierConflictTests {
         #expect(forgotten[0].1 == .highlight)
     }
 
-    @Test("Book: deleted=true tombstone → bookStore.delete + metadata.forget cascade")
+    @Test("Book: deleted=true tombstone → bookStore.delete + retained metadata barrier")
     func bookDeletedTombstone() async throws {
         let bookStore = StubBookStore()
         let book = Book(
@@ -431,11 +518,13 @@ struct ChangeApplierConflictTests {
         )
         await bookStore.seed(book)
         let metadata = StubMetadata()
+        let cleanup = CleanupProbe()
         let applier = makeApplier(
             bookStore: bookStore,
             positionStore: StubPositionStore(),
             highlightStore: StubHighlightStore(),
-            metadata: metadata
+            metadata: metadata,
+            bookMaterialCleanup: { book in await cleanup.record(book.id) }
         )
 
         // Tombstone — payload is irrelevant for delete path.
@@ -451,9 +540,44 @@ struct ChangeApplierConflictTests {
         #expect(result.applied == 1)
         let count = await bookStore.count()
         #expect(count == 0)
-        let forgotten = await metadata.forgotten()
-        #expect(forgotten.first?.0 == book.id)
-        #expect(forgotten.first?.1 == .book)
+        #expect(await cleanup.snapshot() == [book.id])
+        let acknowledged = await metadata.acknowledgedTombstones()
+        #expect(acknowledged.count == 1)
+        #expect(acknowledged.first?.0 == book.id)
+        #expect(acknowledged.first?.1 == .book)
+    }
+
+    @Test("Book: remote tombstone wins over a stale local live mutation")
+    func remoteBookDeleteClearsStaleDirtyLocalCopy() async throws {
+        let bookStore = StubBookStore()
+        let book = Book(
+            userId: UUID(),
+            title: "Imported before remote delete",
+            formatType: .epub,
+            fileURL: "Books/stale.epub"
+        )
+        await bookStore.seed(book)
+        let metadata = StubMetadata()
+        await metadata.seedDirty(book.id, kind: .book)
+        let applier = makeApplier(
+            bookStore: bookStore,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: metadata
+        )
+
+        let result = await applier.apply([SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )])
+
+        #expect(result.applied == 1)
+        #expect(result.conflicts == 0)
+        #expect(await bookStore.count() == 0)
+        #expect((await metadata.acknowledgedTombstones()).contains { $0.0 == book.id && $0.1 == .book })
     }
 
     /// Phase 16-05 regression guard: chat sync moved to dedicated

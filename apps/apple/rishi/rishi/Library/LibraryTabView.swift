@@ -20,6 +20,7 @@ struct LibraryTabDependencies {
     let messageStore: any MessageStore
     let readerDefaults: AppReaderDefaults
     let syncEngine: SyncEngine
+    let sharePackageService: SharePackageService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
     let groupID: GroupId?
@@ -52,13 +53,23 @@ struct LibraryTabView: View {
         @Environment(ReaderWindowCoordinator.self) private var readerWindows
     #endif
     @State private var vm: LibraryViewModel
-    @AppStorage("rishi.library.firstBookPrompt.seen") private var hasSeenFirstBookPrompt = false
+    @State private var hasSeenFirstBookPrompt = false
     @State private var showFirstBookPrompt = false
     @State private var showDocumentPicker = false
     @State private var presentDocumentPickerAfterPrompt = false
+    @State private var pendingFirstPromptImport = false
     @State private var trialReadyAfterDocumentPicker = false
     @State private var pendingSubscriptionConfirmation = false
     @State private var showSubscriptionConfirmation = false
+
+    private var firstBookPromptSeenKey: String {
+        "rishi.library.firstBookPrompt.seen.\(user.id.uuidString)"
+    }
+
+    private func markFirstBookPromptSeen() {
+        hasSeenFirstBookPrompt = true
+        UserDefaults.standard.set(true, forKey: firstBookPromptSeenKey)
+    }
 
     init(
         dependencies: LibraryTabDependencies,
@@ -79,7 +90,7 @@ struct LibraryTabView: View {
             positionStore: dependencies.positionStore,
             bookFileStorage: dependencies.bookFileStorage,
             onBookDeleted: { bookId in
-                await dependencies.syncEngine.markBookDeleted(bookId)
+                try await dependencies.syncEngine.markBookDeleted(bookId)
             }
         ))
     }
@@ -89,6 +100,37 @@ struct LibraryTabView: View {
         return { model.requestSettings() }
     }
 
+    @MainActor
+    private func openBook(_ book: Book) {
+        model.hint(book)
+        #if targetEnvironment(macCatalyst)
+            readerWindows.open(book: book, user: user)
+        #else
+            router.path.append(ReaderRoute.route(for: book))
+        #endif
+    }
+
+    @MainActor
+    private func handleImported(_ outcomes: [ImportCoordinator.ImportOutcome]) {
+        let cameFromFirstPrompt = pendingFirstPromptImport
+        pendingFirstPromptImport = false
+        let successes = outcomes.compactMap(\.book)
+        if !successes.isEmpty {
+            markFirstBookPromptSeen()
+        }
+        if cameFromFirstPrompt,
+           let book = successes.first(where: { book in
+               book.formatType == .epub || book.formatType == .pdf
+           }) {
+            router.requestReaderTour(for: book.id, userID: user.id)
+            openBook(book)
+            return
+        }
+        guard successes.count == 1, let book = successes.first
+        else { return }
+        openBook(book)
+    }
+
     var body: some View {
         let bindableRouter = Bindable(router)
         NavigationStack(path: bindableRouter.path) {
@@ -96,30 +138,11 @@ struct LibraryTabView: View {
           
                 path: bindableRouter.path,
                 importCoordinator: dependencies.importCoordinator,
-                onOpenBook: { book in
-                    model.hint(book)
-                    #if targetEnvironment(macCatalyst)
-                        readerWindows.open(book: book, user: user)
-                    #else
-                        router.path.append(ReaderRoute.route(for: book))
-                    #endif
-                },
+                onOpenBook: openBook,
                 onShowSettings: settingsHandler,
-                onImported: { outcomes in
-                    let successes = outcomes.compactMap(\.book)
-                    if !successes.isEmpty {
-                        hasSeenFirstBookPrompt = true
-                    }
-                    guard successes.count == 1, let book = successes.first
-                    else { return }
-                    model.hint(book)
-                    #if targetEnvironment(macCatalyst)
-                        readerWindows.open(book: book, user: user)
-                    #else
-                        router.path.append(ReaderRoute.route(for: book))
-                    #endif
-                },
-                documentPickerPresented: $showDocumentPicker
+                onImported: handleImported,
+                documentPickerPresented: $showDocumentPicker,
+                sharePackageService: dependencies.sharePackageService
             )
             .navigationDestination(for: ReaderRoute.self) { route in
                 ReaderDestinationView(
@@ -157,6 +180,7 @@ struct LibraryTabView: View {
             }
             
             .task(id: "\(user.id.uuidString)-\(dataUseConsentGranted)") {
+                hasSeenFirstBookPrompt = UserDefaults.standard.bool(forKey: firstBookPromptSeenKey)
                 await model.performInitialLibrarySyncIfConsented(
                     consentGranted: dataUseConsentGranted,
                     refresh: { await vm.refresh() },
@@ -174,7 +198,7 @@ struct LibraryTabView: View {
                 if !hasSeenFirstBookPrompt {
                     // A restored/synced library already has content, so this
                     // device no longer needs the first-book invitation.
-                    hasSeenFirstBookPrompt = true
+                    markFirstBookPromptSeen()
                 }
 
                 // No first-book sheet is competing with the trial notice.
@@ -202,7 +226,8 @@ struct LibraryTabView: View {
         }) {
             SampleOrImportScreen(
                 onUseSample: {
-                    hasSeenFirstBookPrompt = true
+                    pendingFirstPromptImport = false
+                    markFirstBookPromptSeen()
                     showFirstBookPrompt = false
                     Task {
                         _ = await dependencies.sampleBookInstaller.installIfNeeded(
@@ -213,11 +238,13 @@ struct LibraryTabView: View {
                     }
                 },
                 onImport: {
+                    pendingFirstPromptImport = true
                     presentDocumentPickerAfterPrompt = true
                     showFirstBookPrompt = false
                 },
                 onSkip: {
-                    hasSeenFirstBookPrompt = true
+                    pendingFirstPromptImport = false
+                    markFirstBookPromptSeen()
                     showFirstBookPrompt = false
                 }
             )

@@ -34,11 +34,21 @@ public struct LibraryRootView: View {
     public let onImported:
         (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)?
 
+    public let sharePackageService: SharePackageService?
+
     ///
 
     private let externalPath: Binding<NavigationPath>?
 
     @State private var internalDocumentPickerPresented = false
+    @State private var selectionMode = false
+    @State private var selectedBookIDs: Set<BookID> = []
+    @State private var showShareComposer = false
+    @State private var shareKind: ShareKind = .selection
+    @State private var shareBookIDs: [BookID] = []
+    @State private var showShareInbox = false
+    @State private var pendingShareCount: Int?
+    @State private var showNotificationPrimer = false
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -52,13 +62,15 @@ public struct LibraryRootView: View {
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil,
-        documentPickerPresented: Binding<Bool>? = nil
+        documentPickerPresented: Binding<Bool>? = nil,
+        sharePackageService: SharePackageService? = nil
     ) {
  
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
         self.onImported = onImported
+        self.sharePackageService = sharePackageService
         self.externalPath = nil
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -71,13 +83,15 @@ public struct LibraryRootView: View {
         onShowSettings: @escaping (() -> Void),
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil,
-        documentPickerPresented: Binding<Bool>? = nil
+        documentPickerPresented: Binding<Bool>? = nil,
+        sharePackageService: SharePackageService? = nil
     ) {
        
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
         self.onImported = onImported
+        self.sharePackageService = sharePackageService
         self.externalPath = path
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -134,6 +148,33 @@ public struct LibraryRootView: View {
                 librarySignposter.endInterval("library.first-paint", state)
             }
             await vm.refresh()
+            await refreshPendingShareCount()
+            let notificationWasTapped = await PendingShareStore.shared.consumeShareNotification()
+            if notificationWasTapped {
+                showShareInbox = true
+            } else if sharePackageService != nil,
+                      await NotificationPermissionCoordinator.shouldShowPrimer() {
+                showNotificationPrimer = true
+            }
+        }
+
+        .alert("Stay informed about shared books", isPresented: $showNotificationPrimer) {
+            Button("Not Now", role: .cancel) {
+                NotificationPermissionCoordinator.markPrimerShown()
+            }
+            Button("Enable Notifications") {
+                Task {
+                    await NotificationPermissionCoordinator.requestAuthorization()
+                }
+            }
+        } message: {
+            Text("Rishi can notify you when another user shares books with you. You can change this anytime in Settings.")
+        }
+
+        .onReceive(
+            NotificationCenter.default.publisher(for: ShareNotificationRouting.notificationTapped)
+        ) { _ in
+            showShareInbox = true
         }
 
         .onReceive(
@@ -165,8 +206,23 @@ public struct LibraryRootView: View {
             positionLookup: { bookID in vm.position(for: bookID) },
             coverURL: { book in vm.coverURLs[book.id] },
             onOpen: onOpenBook,
-
-            onDelete: { book in Task { await vm.delete(book) } }
+            onDelete: { book in Task { await vm.delete(book) } },
+            selectionMode: selectionMode,
+            selectedBookIDs: selectedBookIDs,
+            onBeginSelection: { book in
+                selectionMode = true
+                selectedBookIDs.insert(book.id)
+            },
+            onToggleSelection: { book in
+                if selectedBookIDs.contains(book.id) {
+                    selectedBookIDs.remove(book.id)
+                } else {
+                    selectedBookIDs.insert(book.id)
+                }
+            },
+            onShareSingle: { book in
+                beginShare(ids: [book.id], kind: .single)
+            }
         )
 
         .librarySearchable(
@@ -174,21 +230,20 @@ public struct LibraryRootView: View {
             filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty
         )
         .toolbar {
+            sharingToolbar(vm: vm)
 
-            ToolbarItem(placement: .primaryAction) {
 
+                ToolbarItem(placement: .primaryAction) {
                     Button {
                         documentPickerPresented.wrappedValue = true
                     } label: {
                         Label("Import", systemImage: "plus")
                     }
                     .popoverTip(importTip)
-                    
-        
 
-            }
-            
-            
+
+
+                }
 
             #if os(iOS) && !targetEnvironment(macCatalyst)
 
@@ -201,6 +256,97 @@ public struct LibraryRootView: View {
                 }
             #endif
 
+        }
+        .sheet(isPresented: $showShareComposer) {
+            shareComposerContent()
+        }
+        .sheet(isPresented: $showShareInbox) {
+            shareInboxContent(vm: vm)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func sharingToolbar(vm: LibraryViewModel) -> some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            if selectionMode {
+                Button("Share \(selectedBookIDs.count)") {
+                    beginShare(ids: Array(selectedBookIDs), kind: .selection)
+                }
+                .disabled(selectedBookIDs.isEmpty || sharePackageService == nil)
+            } else {
+                Button {
+                    beginShare(ids: vm.books.map(\.id), kind: .library)
+                } label: {
+                    Label("Share Library", systemImage: "books.vertical")
+                }
+                .disabled(vm.books.isEmpty || sharePackageService == nil)
+            }
+        }
+
+        if selectionMode {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Done") {
+                    selectionMode = false
+                    selectedBookIDs.removeAll()
+                }
+            }
+        } else if ShareInboxButtonVisibility.shouldShow(shareServiceAvailable: sharePackageService != nil) {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showShareInbox = true
+                } label: {
+                    Label("Shared with You", systemImage: "tray.and.arrow.down")
+                }
+                .badge(pendingShareCount ?? 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func shareComposerContent() -> some View {
+        if let sharePackageService {
+            ShareComposerView(
+                service: sharePackageService,
+                bookIDs: shareBookIDs,
+                kind: shareKind,
+                onCompleted: {
+                    selectionMode = false
+                    selectedBookIDs.removeAll()
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func shareInboxContent(vm: LibraryViewModel) -> some View {
+        if let sharePackageService {
+            ShareInboxView(
+                service: sharePackageService,
+                onAccepted: {
+                    await vm.refresh()
+                }
+            )
+        }
+    }
+
+    private func beginShare(ids: [BookID], kind: ShareKind) {
+        guard !ids.isEmpty, sharePackageService != nil else { return }
+        shareBookIDs = ids
+        shareKind = kind
+        showShareComposer = true
+    }
+
+    private func refreshPendingShareCount() async {
+        guard let sharePackageService else {
+            pendingShareCount = 0
+            return
+        }
+
+        do {
+            pendingShareCount = try await sharePackageService.inbox().count
+        } catch {
+            pendingShareCount = 0
+            Log.error("sharing.inbox.initial_poll.failed", error: error)
         }
     }
 }

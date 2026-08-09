@@ -49,6 +49,7 @@ import { findOrCreateUser } from "./findOrCreateUser";
 import { incrementApiUsage } from "./usage/api-usage";
 import { error } from "node:console";
 import { userRoutes } from "./routes/user";
+import { purgeExpiredShares, sharesRoutes } from "./routes/shares";
 import { retryPendingDeletions } from "./account-deletion";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
@@ -582,6 +583,7 @@ app.route("/api/sync/changes", changesRoutes);
 app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/api/user", userRoutes);
+app.route("/api/shares", sharesRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);
@@ -1423,6 +1425,7 @@ const sentryHandler = Sentry.withSentry((env: any) => {
 const scheduled = async (_controller: ScheduledController, env: Env): Promise<void> => {
   const db = createDb(env.DB);
   await retryPendingDeletions(db, env);
+  await purgeExpiredShares(db, env.BOOK_STORAGE);
   await purgeExpiredRetention(db);
   await redactOwnerlessAppleNotificationLogs(db);
 };

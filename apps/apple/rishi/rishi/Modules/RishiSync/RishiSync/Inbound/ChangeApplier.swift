@@ -13,9 +13,8 @@ import Foundation
 ///   - **Highlights** — merge by ID. Different IDs are kept on both sides
 ///     (no conflict). Same ID with diverged content → latest `createdAt` wins.
 ///   - **Book metadata** — last-write-wins. Tombstone (`deleted=true`)
-///     cascades through `BookStore.delete` + `SyncMetadataStore.forget`.
-///     File-bytes pull-side is deferred to 07-04 (engine sees the new row
-///     and schedules a `/api/sync/download-url` + GET into `BookFileStorage`).
+///     removes the row and local material, then retains a clean metadata
+///     tombstone so the identity cannot be reused by a later import.
 ///   - **Conversation / Message** — accepted but no-op for now. Phase 9
 ///     will materialize the rows; we still `markClean` so the next push
 ///     doesn't echo back the just-applied cursor.
@@ -27,6 +26,10 @@ public final class ChangeApplier: Sendable {
 
     private struct AccountSwitched: Error, CustomStringConvertible {
         var description: String { "account switched during inbound sync" }
+    }
+
+    private struct ConditionalAcknowledgementFailed: Error, CustomStringConvertible {
+        var description: String { "conditional sync acknowledgement failed" }
     }
 
     public struct ApplyResult: Sendable, Equatable {
@@ -46,6 +49,8 @@ public final class ChangeApplier: Sendable {
     private let currentUserId: @Sendable () async -> UserID?
     private let accountIsActive: @Sendable () async -> Bool
     private let bookMaterializer: (@Sendable (Book, String?) async throws -> Book)?
+    private let bookMaterialCleanup: (@Sendable (Book) async throws -> Void)?
+    private let bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)?
 
     public init(
         bookStore: any BookStore,
@@ -56,7 +61,9 @@ public final class ChangeApplier: Sendable {
         metadataStore: any SyncMetadataStore,
         currentUserId: @escaping @Sendable () async -> UserID? = { nil },
         accountIsActive: @escaping @Sendable () async -> Bool = { true },
-        bookMaterializer: (@Sendable (Book, String?) async throws -> Book)? = nil
+        bookMaterializer: (@Sendable (Book, String?) async throws -> Book)? = nil,
+        bookMaterialCleanup: (@Sendable (Book) async throws -> Void)? = nil,
+        bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)? = nil
     ) {
         self.bookStore = bookStore
         self.positionStore = positionStore
@@ -67,6 +74,8 @@ public final class ChangeApplier: Sendable {
         self.currentUserId = currentUserId
         self.accountIsActive = accountIsActive
         self.bookMaterializer = bookMaterializer
+        self.bookMaterialCleanup = bookMaterialCleanup
+        self.bookMaterialCleanupByID = bookMaterialCleanupByID
     }
 
     public func apply(_ changes: [SyncChange], expectedUserId: UserID? = nil) async -> ApplyResult {
@@ -98,12 +107,19 @@ public final class ChangeApplier: Sendable {
                     // Phase 9 will wire — record the cursor so we don't echo.
                     result.skipped += 1
                     try await ensureAccount(expectedUserId)
-                    try await metadataStore.markClean(
+                    let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: change.id, kind: kind)
+                    if expectedDirtyAt != nil {
+                        try await metadataStore.recordRemoteSeen(entityId: change.id, kind: kind, updatedAt: change.updatedAt)
+                        result.conflicts += 1
+                        continue
+                    }
+                    guard try await metadataStore.markCleanIfUnchanged(
                         entityId: change.id,
                         kind: kind,
+                        expectedDirtyAt: expectedDirtyAt,
                         lastSyncedAt: change.updatedAt,
                         remoteEtag: nil
-                    )
+                    ) else { throw ConditionalAcknowledgementFailed() }
                 }
             } catch {
                 result.errors.append(String(describing: error))
@@ -126,40 +142,64 @@ public final class ChangeApplier: Sendable {
 
     private func applyPosition(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
         let remote = try SyncPayloadCodec.decodePosition(change.payload, fallbackUpdatedAt: change.updatedAt)
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: remote.bookId, kind: .position)
+        if expectedDirtyAt != nil {
+            try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
+            result.conflicts += 1
+            return
+        }
         if let local = try await positionStore.position(for: remote.bookId),
            local.updatedAt >= remote.updatedAt {
             // Local is newer-or-equal → drop the remote change.
+            try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
             result.conflicts += 1
             return
         }
         try await ensureAccount(expectedUserId)
         try await positionStore.upsert(remote)
         try await ensureAccount(expectedUserId)
-        try await metadataStore.markClean(
+        guard try await metadataStore.markCleanIfUnchanged(
             entityId: remote.bookId,
             kind: .position,
+            expectedDirtyAt: expectedDirtyAt,
             lastSyncedAt: change.updatedAt,
             remoteEtag: nil
-        )
+        ) else {
+            try await metadataStore.recordRemoteSeen(entityId: remote.bookId, kind: .position, updatedAt: change.updatedAt)
+            throw ConditionalAcknowledgementFailed()
+        }
         result.applied += 1
     }
 
     private func applyHighlight(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
+        let entityId = change.id
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .highlight)
+        if expectedDirtyAt != nil {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .highlight, updatedAt: change.updatedAt)
+            result.conflicts += 1
+            return
+        }
         if change.deleted {
+            let expectedLocal = try await highlightStore.highlight(change.id)
             if try await metadataStore.pending(kind: .highlight, limit: 10_000)
                 .contains(where: { $0.entityId == change.id }) {
+                try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .highlight, updatedAt: change.updatedAt)
                 result.conflicts += 1
                 return
             }
             try await ensureAccount(expectedUserId)
-            try await highlightStore.delete(change.id)
+            guard try await highlightStore.deleteIfUnchanged(change.id, matching: expectedLocal) else {
+                try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .highlight, updatedAt: change.updatedAt)
+                throw ConditionalAcknowledgementFailed()
+            }
             try await ensureAccount(expectedUserId)
-            try await metadataStore.markClean(
+            guard try await metadataStore.acknowledgeTombstoneIfUnchanged(
                 entityId: change.id,
                 kind: .highlight,
+                expectedDirtyAt: expectedDirtyAt,
                 lastSyncedAt: change.updatedAt,
                 remoteEtag: nil
-            )
+            ) else { throw ConditionalAcknowledgementFailed() }
             result.applied += 1
             return
         }
@@ -167,37 +207,52 @@ public final class ChangeApplier: Sendable {
         if let local = try await highlightStore.highlight(remote.id),
            local.createdAt >= remote.createdAt {
             // Same id, local newer → keep local.
+            try await metadataStore.recordRemoteSeen(entityId: remote.id, kind: .highlight, updatedAt: change.updatedAt)
             result.conflicts += 1
             return
         }
         try await ensureAccount(expectedUserId)
         try await highlightStore.upsert(remote)
         try await ensureAccount(expectedUserId)
-        try await metadataStore.markClean(
+        guard try await metadataStore.markCleanIfUnchanged(
             entityId: remote.id,
             kind: .highlight,
+            expectedDirtyAt: expectedDirtyAt,
             lastSyncedAt: change.updatedAt,
             remoteEtag: nil
-        )
+        ) else { throw ConditionalAcknowledgementFailed() }
         result.applied += 1
     }
 
     private func applyBookmark(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
+        let entityId = change.id
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .bookmark)
+        if expectedDirtyAt != nil {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .bookmark, updatedAt: change.updatedAt)
+            result.conflicts += 1
+            return
+        }
         if change.deleted {
+            let expectedLocal = try await bookmarkStore.bookmark(change.id)
             if try await metadataStore.pending(kind: .bookmark, limit: 10_000)
                 .contains(where: { $0.entityId == change.id }) {
+                try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .bookmark, updatedAt: change.updatedAt)
                 result.conflicts += 1
                 return
             }
             try await ensureAccount(expectedUserId)
-            try await bookmarkStore.delete(change.id)
+            guard try await bookmarkStore.deleteIfUnchanged(change.id, matching: expectedLocal) else {
+                try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .bookmark, updatedAt: change.updatedAt)
+                throw ConditionalAcknowledgementFailed()
+            }
             try await ensureAccount(expectedUserId)
-            try await metadataStore.markClean(
+            guard try await metadataStore.acknowledgeTombstoneIfUnchanged(
                 entityId: change.id,
                 kind: .bookmark,
+                expectedDirtyAt: expectedDirtyAt,
                 lastSyncedAt: change.updatedAt,
                 remoteEtag: nil
-            )
+            ) else { throw ConditionalAcknowledgementFailed() }
             result.applied += 1
             return
         }
@@ -205,51 +260,93 @@ public final class ChangeApplier: Sendable {
         if let local = try await bookmarkStore.bookmark(remote.id),
            local.createdAt >= remote.createdAt {
             // Same id, local newer-or-equal -> keep local (Pitfall 5: no echo).
+            try await metadataStore.recordRemoteSeen(entityId: remote.id, kind: .bookmark, updatedAt: change.updatedAt)
             result.conflicts += 1
             return
         }
         try await ensureAccount(expectedUserId)
         try await bookmarkStore.upsert(remote)
         try await ensureAccount(expectedUserId)
-        try await metadataStore.markClean(
+        guard try await metadataStore.markCleanIfUnchanged(
             entityId: remote.id,
             kind: .bookmark,
+            expectedDirtyAt: expectedDirtyAt,
             lastSyncedAt: change.updatedAt,
             remoteEtag: nil
-        )
+        ) else { throw ConditionalAcknowledgementFailed() }
         result.applied += 1
     }
 
     private func applyChapterIndex(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
+        let entityId = change.id
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .chapterIndex)
+        if expectedDirtyAt != nil {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .chapterIndex, updatedAt: change.updatedAt)
+            result.conflicts += 1
+            return
+        }
         guard let chapterIndexPersistence else {
             result.skipped += 1
             try await ensureAccount(expectedUserId)
-            try await metadataStore.markClean(entityId: change.id, kind: .chapterIndex, lastSyncedAt: change.updatedAt, remoteEtag: nil)
+            guard try await metadataStore.markCleanIfUnchanged(entityId: change.id, kind: .chapterIndex, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: change.updatedAt, remoteEtag: nil) else { throw ConditionalAcknowledgementFailed() }
             return
         }
         let remote = try SyncPayloadCodec.decodeChapterIndex(change.payload, fallbackUpdatedAt: change.updatedAt)
         if let local = try await chapterIndexPersistence.chapterIndex(bookID: remote.bookID, contentVersion: remote.contentVersion), local.updatedAt >= remote.updatedAt {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .chapterIndex, updatedAt: change.updatedAt)
             result.conflicts += 1
             return
         }
         try await ensureAccount(expectedUserId)
         try await chapterIndexPersistence.upsertChapterIndex(remote)
         try await ensureAccount(expectedUserId)
-        try await metadataStore.markClean(entityId: change.id, kind: .chapterIndex, lastSyncedAt: change.updatedAt, remoteEtag: nil)
+        guard try await metadataStore.markCleanIfUnchanged(entityId: change.id, kind: .chapterIndex, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: change.updatedAt, remoteEtag: nil) else { throw ConditionalAcknowledgementFailed() }
         result.applied += 1
     }
 
     private func applyBook(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
-        if try await metadataStore.pending(kind: .book, limit: 10_000).contains(where: { $0.entityId == change.id }) {
+        let entityId = change.id
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .book)
+        if change.deleted {
+            // A server tombstone is authoritative for this closed identity.
+            // If this device imported the same deterministic ID before it
+            // learned about the remote delete, do not leave that stale live
+            // row dirty forever; remove it and retain the local barrier.
+            let expectedLocal = try await bookStore.book(change.id)
+            try await ensureAccount(expectedUserId)
+            guard try await bookStore.deleteIfUnchanged(change.id, matching: expectedLocal) else {
+                try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
+                throw ConditionalAcknowledgementFailed()
+            }
+            // Clean only after the conditional row delete succeeds. If this
+            // fails, the next retry still addresses material by ID even when
+            // the row is already gone, and acknowledgement remains blocked.
+            if let bookMaterialCleanupByID {
+                try await bookMaterialCleanupByID(change.id)
+            } else if let expectedLocal, let bookMaterialCleanup {
+                try await bookMaterialCleanup(expectedLocal)
+            }
+            try await ensureAccount(expectedUserId)
+            guard try await metadataStore.acknowledgeTombstoneIfUnchanged(
+                entityId: change.id,
+                kind: .book,
+                expectedDirtyAt: expectedDirtyAt,
+                lastSyncedAt: change.updatedAt,
+                remoteEtag: nil
+            ) else {
+                throw ConditionalAcknowledgementFailed()
+            }
+            result.applied += 1
+            return
+        }
+        if expectedDirtyAt != nil {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
             result.conflicts += 1
             return
         }
-        if change.deleted {
-            try await ensureAccount(expectedUserId)
-            try await bookStore.delete(change.id)
-            try await ensureAccount(expectedUserId)
-            try await metadataStore.forget(entityId: change.id, kind: .book)
-            result.applied += 1
+        if try await metadataStore.pending(kind: .book, limit: 10_000).contains(where: { $0.entityId == change.id }) {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
+            result.conflicts += 1
             return
         }
         let remote = try SyncPayloadCodec.decodeBook(
@@ -263,35 +360,63 @@ public final class ChangeApplier: Sendable {
         } else {
             remote
         }
-        try await ensureAccount(expectedUserId)
-        try await bookStore.upsert(materialized)
-        if let position = try SyncPayloadCodec.decodeBookPosition(
+        let embeddedPosition = try SyncPayloadCodec.decodeBookPosition(
             change.payload,
             bookId: remote.id,
             fallbackUpdatedAt: change.updatedAt
-        ) {
-            if let local = try await positionStore.position(for: position.bookId),
-               local.updatedAt >= position.updatedAt {
-                result.conflicts += 1
-            } else {
-                try await ensureAccount(expectedUserId)
-                try await positionStore.upsert(position)
-                try await ensureAccount(expectedUserId)
-                try await metadataStore.markClean(
-                    entityId: position.bookId,
+        )
+        var embeddedPositionExpectedDirtyAt: Date?
+        if let embeddedPosition {
+            embeddedPositionExpectedDirtyAt = try await metadataStore.dirtyAt(
+                entityId: embeddedPosition.bookId,
+                kind: .position
+            )
+            if embeddedPositionExpectedDirtyAt != nil {
+                try await metadataStore.recordRemoteSeen(
+                    entityId: embeddedPosition.bookId,
                     kind: .position,
-                    lastSyncedAt: change.updatedAt,
-                    remoteEtag: nil
+                    updatedAt: change.updatedAt
                 )
+                result.conflicts += 1
+                return
             }
         }
         try await ensureAccount(expectedUserId)
-        try await metadataStore.markClean(
+        guard try await metadataStore.dirtyAt(entityId: entityId, kind: .book) == expectedDirtyAt else {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
+            throw ConditionalAcknowledgementFailed()
+        }
+        try await bookStore.upsert(materialized)
+        if let position = embeddedPosition {
+            if let local = try await positionStore.position(for: position.bookId),
+               local.updatedAt >= position.updatedAt {
+                try await metadataStore.recordRemoteSeen(entityId: position.bookId, kind: .position, updatedAt: change.updatedAt)
+                result.conflicts += 1
+            } else {
+                try await ensureAccount(expectedUserId)
+                guard try await metadataStore.dirtyAt(entityId: position.bookId, kind: .position) == embeddedPositionExpectedDirtyAt else {
+                    try await metadataStore.recordRemoteSeen(entityId: position.bookId, kind: .position, updatedAt: change.updatedAt)
+                    throw ConditionalAcknowledgementFailed()
+                }
+                try await positionStore.upsert(position)
+                try await ensureAccount(expectedUserId)
+                guard try await metadataStore.markCleanIfUnchanged(
+                    entityId: position.bookId,
+                    kind: .position,
+                    expectedDirtyAt: embeddedPositionExpectedDirtyAt,
+                    lastSyncedAt: change.updatedAt,
+                    remoteEtag: nil
+                ) else { throw ConditionalAcknowledgementFailed() }
+            }
+        }
+        try await ensureAccount(expectedUserId)
+        guard try await metadataStore.markCleanIfUnchanged(
             entityId: remote.id,
             kind: .book,
+            expectedDirtyAt: expectedDirtyAt,
             lastSyncedAt: change.updatedAt,
             remoteEtag: nil
-        )
+        ) else { throw ConditionalAcknowledgementFailed() }
         result.applied += 1
         // NOTE: File bytes pull-side is deferred to 07-04. The engine sees
         // the new book row and schedules a /api/sync/download-url + GET into

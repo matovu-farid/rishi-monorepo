@@ -91,6 +91,10 @@ public protocol RealtimeClientAPI: Sendable {
     /// cannot send or consume audio until `connect` succeeds.
     func prewarm() async
 
+    /// Cancel and forget a disconnected transport that was prepared ahead of
+    /// time. This must be safe when no live conversation exists.
+    func cancelPrewarm() async
+
     /// Open a WebRTC voice session with the given ephemeral key. Throws on
     /// negotiation failure (network, key rejected, SDP failure).
     func connect(
@@ -153,6 +157,8 @@ public protocol RealtimeClientAPI: Sendable {
 public extension RealtimeClientAPI {
     /// Test/fallback clients do not need a transport to prewarm.
     func prewarm() async {}
+
+    func cancelPrewarm() async {}
 
     func connect(ephemeralKey: String) async throws {
         try await connect(ephemeralKey: ephemeralKey, bookContext: nil, language: nil, deferMicCapture: false)

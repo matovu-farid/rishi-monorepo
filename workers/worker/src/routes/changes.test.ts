@@ -103,7 +103,7 @@ interface FakeChapterSummaryRow {
   sourcePosition: number; name: string; summary: string; createdAt: number; updatedAt: number
 }
 
-const { booksStore, highlightsStore, bookmarksStore, chapterIndexesStore, chapterSummariesStore, BOOK_COLS, HIGHLIGHT_COLS, BOOKMARK_COLS, CHAPTER_INDEX_COLS, CHAPTER_SUMMARY_COLS } =
+const { booksStore, highlightsStore, bookmarksStore, chapterIndexesStore, chapterSummariesStore, queryLimitCalls, BOOK_COLS, HIGHLIGHT_COLS, BOOKMARK_COLS, CHAPTER_INDEX_COLS, CHAPTER_SUMMARY_COLS } =
   vi.hoisted(() => {
     const BOOK_COLS = {
       id: { __table: "books" as const, __col: "id" } as const,
@@ -132,12 +132,15 @@ const { booksStore, highlightsStore, bookmarksStore, chapterIndexesStore, chapte
       bookmarksStore: [] as FakeBookmarkRow[],
       chapterIndexesStore: [] as FakeChapterIndexRow[],
       chapterSummariesStore: [] as FakeChapterSummaryRow[],
+      queryLimitCalls: [] as Array<{ table: string | null; limit: number }>,
       BOOK_COLS,
       HIGHLIGHT_COLS,
       BOOKMARK_COLS,
       CHAPTER_INDEX_COLS: {
         id: { __table: "chapter_indexes" as const, __col: "id" },
         userId: { __table: "chapter_indexes" as const, __col: "userId" },
+        bookId: { __table: "chapter_indexes" as const, __col: "bookId" },
+        contentVersion: { __table: "chapter_indexes" as const, __col: "contentVersion" },
         updatedAt: { __table: "chapter_indexes" as const, __col: "updatedAt" },
       },
       CHAPTER_SUMMARY_COLS: {
@@ -156,6 +159,7 @@ function resetStores() {
   bookmarksStore.length = 0
   chapterIndexesStore.length = 0
   chapterSummariesStore.length = 0
+  queryLimitCalls.length = 0
 }
 
 const UUID_BOOK_A = "11111111-1111-4111-8111-111111111111"
@@ -300,8 +304,12 @@ type ColRef = { __table: "books" | "highlights" | "bookmarks" | "chapter_indexes
 type Pred =
   | { kind: "eq"; table: ColRef["__table"]; col: string; value: unknown }
   | { kind: "gt"; table: ColRef["__table"]; col: string; value: number }
+  | { kind: "gte"; table: ColRef["__table"]; col: string; value: number }
+  | { kind: "lte"; table: ColRef["__table"]; col: string; value: number }
+  | { kind: "notExists" }
   | { kind: "in"; table: ColRef["__table"]; col: string; value: unknown[] }
   | { kind: "and"; preds: Pred[] }
+  | { kind: "or"; preds: Pred[] }
 
 type OrderBy = { table: ColRef["__table"]; col: string; dir: "asc" | "desc" }
 
@@ -318,8 +326,23 @@ vi.mock("drizzle-orm", () => ({
     col: col.__col,
     value,
   }),
+  gte: (col: ColRef, value: number): Pred => ({
+    kind: "gte",
+    table: col.__table,
+    col: col.__col,
+    value,
+  }),
+  lte: (col: ColRef, value: number): Pred => ({
+    kind: "lte",
+    table: col.__table,
+    col: col.__col,
+    value,
+  }),
   inArray: (col: ColRef, value: unknown[]): Pred => ({ kind: "in", table: col.__table, col: col.__col, value }),
   and: (...preds: Pred[]): Pred => ({ kind: "and", preds }),
+  or: (...preds: Pred[]): Pred => ({ kind: "or", preds }),
+  aliasedTable: <T>(table: T): T => table,
+  notExists: (): Pred => ({ kind: "notExists" }),
   asc: (col: ColRef): OrderBy => ({
     table: col.__table,
     col: col.__col,
@@ -334,11 +357,21 @@ vi.mock("drizzle-orm", () => ({
 
 // ─── Mock createDb with a tiny select builder over our two stores ────────────
 function matches(row: Record<string, unknown>, p: Pred): boolean {
+  if (p.kind === "notExists") return true
   if (p.kind === "and") return p.preds.every((sub) => matches(row, sub))
+  if (p.kind === "or") return p.preds.some((sub) => matches(row, sub))
   if (p.kind === "eq") return row[p.col] === p.value
   if (p.kind === "gt") {
     const v = row[p.col]
     return typeof v === "number" && v > (p.value as number)
+  }
+  if (p.kind === "gte") {
+    const v = row[p.col]
+    return typeof v === "number" && v >= (p.value as number)
+  }
+  if (p.kind === "lte") {
+    const v = row[p.col]
+    return typeof v === "number" && v <= (p.value as number)
   }
   if (p.kind === "in") return p.value.includes(row[p.col])
   return false
@@ -369,19 +402,20 @@ vi.mock("../db/drizzle", () => {
             })()
 
             let predicate: Pred | null = null
-            let order: OrderBy | null = null
+            let orders: OrderBy[] = []
             let limit: number | null = null
             const chain = {
               where(p: Pred) {
                 predicate = p
                 return chain
               },
-              orderBy(o: OrderBy) {
-                order = o
+              orderBy(...nextOrders: OrderBy[]) {
+                orders = nextOrders
                 return chain
               },
               limit(n: number) {
                 limit = n
+                queryLimitCalls.push({ table: tableTag, limit: n })
                 return chain
               },
               all() {
@@ -399,11 +433,16 @@ vi.mock("../db/drizzle", () => {
                         : []
                 let rows = src.slice()
                 if (predicate) rows = rows.filter((r) => matches(r, predicate!))
-                if (order) {
+                if (orders.length > 0) {
                   rows.sort((a, b) => {
-                    const av = a[order!.col] as number
-                    const bv = b[order!.col] as number
-                    return order!.dir === "desc" ? bv - av : av - bv
+                    for (const order of orders) {
+                      const av = a[order.col] as string | number
+                      const bv = b[order.col] as string | number
+                      if (av === bv) continue
+                      const comparison = av < bv ? -1 : 1
+                      return order.dir === "desc" ? -comparison : comparison
+                    }
+                    return 0
                   })
                 }
                 if (limit !== null) rows = rows.slice(0, limit)
@@ -467,6 +506,7 @@ import {
   hashSyncProjectionWithTimestamps,
   stripSyncTimestamps,
 } from "./changes"
+import { decodeSyncCursor } from "../sync/change-cursor"
 
 const env = {
   BETTER_AUTH_SECRET: "test-secret",
@@ -504,6 +544,218 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("GET /api/sync/changes", () => {
+  it("returns a terminal incremental cursor page with versioned hash metadata", async () => {
+    seedBook({ id: UUID_BOOK_A, updatedAt: 1_700_000_000_000 })
+
+    const res = await callChanges()
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      changes: SyncChange[]
+      next_cursor: string | null
+      has_more: boolean
+      cursor_scope: string
+      projection_complete: boolean
+      snapshot_hash: string
+      snapshot_hash_without_timestamps: string
+      snapshot_hash_version: string
+    }
+
+    expect(body.next_cursor).toBeNull()
+    expect(body.has_more).toBe(false)
+    expect(body.cursor_scope).toBe("incremental")
+    expect(body.projection_complete).toBe(true)
+    expect(body.snapshot_hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(body.snapshot_hash_without_timestamps).toMatch(/^[0-9a-f]{64}$/)
+    expect(body.snapshot_hash_version).toBe("sync-json-v1")
+  })
+
+  it("starts and labels the full recovery cursor plane explicitly", async () => {
+    seedBook({ id: UUID_BOOK_A, updatedAt: 1_700_000_000_000 })
+
+    const res = await callChanges("?scope=full")
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      cursor_scope: string
+      next_cursor: string | null
+      has_more: boolean
+    }
+
+    expect(body.cursor_scope).toBe("full")
+    expect(body.next_cursor).toBeNull()
+    expect(body.has_more).toBe(false)
+  })
+
+  it("paginates equal-timestamp rows globally and excludes writes after the fixed high water", async () => {
+    const sameTimestamp = Date.now() - 1_000
+    for (let i = 0; i < 5000; i += 1) {
+      seedBook({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+        updatedAt: sameTimestamp,
+      })
+    }
+    seedHighlight({ id: UUID_HL_A, updatedAt: sameTimestamp })
+
+    const first = await callChanges()
+    const firstBody = (await first.json()) as {
+      changes: SyncChange[]
+      next_cursor: string | null
+      has_more: boolean
+      projection_complete: boolean
+    }
+    expect(firstBody.changes).toHaveLength(5000)
+    expect(firstBody.has_more).toBe(true)
+    expect(firstBody.projection_complete).toBe(false)
+    expect(firstBody.next_cursor).toEqual(expect.any(String))
+    expect(firstBody).not.toHaveProperty("snapshot_hash")
+    expect(firstBody).not.toHaveProperty("snapshot_hash_without_timestamps")
+
+    seedBook({ id: UUID_BOOK_C, updatedAt: Date.now() + 1_000 })
+
+    const second = await callChanges(`?cursor=${encodeURIComponent(firstBody.next_cursor!)}`)
+    const secondBody = (await second.json()) as {
+      changes: SyncChange[]
+      next_cursor: string | null
+      has_more: boolean
+      projection_complete: boolean
+      snapshot_hash_version?: string
+    }
+
+    expect(secondBody.changes).toHaveLength(1)
+    expect(secondBody.changes[0]).toMatchObject({ kind: "highlight", id: UUID_HL_A })
+    expect(secondBody.changes.some((change) => change.id === UUID_BOOK_C)).toBe(false)
+    expect(secondBody.next_cursor).toBeNull()
+    expect(secondBody.has_more).toBe(false)
+    expect(secondBody.projection_complete).toBe(true)
+    expect(secondBody.snapshot_hash_version).toBe("sync-json-v1")
+  })
+
+  it("bounds every cursor source query and fixes the initial high water at request time", async () => {
+    const requestNow = 1_800_000_000_000
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(requestNow)
+    try {
+      for (let i = 0; i < 5001; i += 1) {
+        seedBook({
+          id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          updatedAt: 1_700_000_000_000,
+        })
+      }
+
+      const res = await callChanges()
+      const body = await res.json() as { next_cursor: string | null }
+      expect(body.next_cursor).toEqual(expect.any(String))
+      expect(decodeSyncCursor(body.next_cursor!).highWaterMs).toBe(requestNow)
+
+      expect(queryLimitCalls.filter(({ table }) =>
+        table === "books" ||
+        table === "highlights" ||
+        table === "bookmarks" ||
+        table === "chapter_indexes",
+      )).toEqual(expect.arrayContaining([
+        { table: "books", limit: 5001 },
+        { table: "highlights", limit: 5001 },
+        { table: "bookmarks", limit: 5001 },
+        { table: "chapter_indexes", limit: 5001 },
+      ]))
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it("keeps an equal-timestamp row after the exact 5000-row page boundary", async () => {
+    const sameTimestamp = 1_700_000_000_000
+    for (let i = 0; i < 4999; i += 1) {
+      seedBook({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+        updatedAt: sameTimestamp,
+      })
+    }
+    seedBookmark({ id: UUID_BM_A, updatedAt: sameTimestamp })
+    seedHighlight({ id: UUID_HL_A, updatedAt: sameTimestamp })
+
+    const first = await callChanges()
+    const firstBody = (await first.json()) as {
+      changes: SyncChange[]
+      next_cursor: string | null
+      has_more: boolean
+    }
+    expect(firstBody.changes).toHaveLength(5000)
+    expect(firstBody.changes.at(-1)).toMatchObject({ kind: "bookmark", id: UUID_BM_A })
+    expect(firstBody.has_more).toBe(true)
+
+    const second = await callChanges(`?cursor=${encodeURIComponent(firstBody.next_cursor!)}`)
+    const secondBody = (await second.json()) as { changes: SyncChange[]; has_more: boolean }
+    expect(secondBody.changes).toEqual([
+      expect.objectContaining({ kind: "highlight", id: UUID_HL_A }),
+    ])
+    expect(secondBody.has_more).toBe(false)
+  })
+
+  it("selects the same chapter version for equal timestamps regardless of insertion order", async () => {
+    const sameTimestamp = 1_700_000_300_000
+    seedChapterIndex({ contentVersion: "content-v1", updatedAt: sameTimestamp })
+    seedChapterIndex({ contentVersion: "content-v2", updatedAt: sameTimestamp })
+
+    const first = await callChanges()
+    const firstBody = await first.json() as { changes: SyncChange[] }
+    expect(firstBody.changes.find((change) => change.kind === "chapter_index")?.payload.content_version)
+      .toBe("content-v2")
+
+    resetStores()
+    seedChapterIndex({ contentVersion: "content-v2", updatedAt: sameTimestamp })
+    seedChapterIndex({ contentVersion: "content-v1", updatedAt: sameTimestamp })
+
+    const second = await callChanges()
+    const secondBody = await second.json() as { changes: SyncChange[] }
+    expect(secondBody.changes.find((change) => change.kind === "chapter_index")?.payload.content_version)
+      .toBe("content-v2")
+  })
+
+  it("omits terminal hashes when chapter children are truncated", async () => {
+    seedChapterIndex({ contentVersion: "large" })
+    chapterSummariesStore.length = 0
+    for (let i = 0; i < 5001; i += 1) {
+      chapterSummariesStore.push({
+        id: `summary-${i}`, userId: "user_alice", bookId: UUID_BOOK_A, contentVersion: "large",
+        chapterId: `chapter-${i}`, sourcePosition: i, name: `Chapter ${i}`, summary: "Summary",
+        createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000,
+      })
+    }
+
+    const res = await callChanges()
+    const body = (await res.json()) as {
+      changes: SyncChange[]
+      has_more: boolean
+      projection_complete: boolean
+      snapshot_hash?: string
+      snapshot_hash_without_timestamps?: string
+      snapshot_hash_version?: string
+    }
+
+    expect(body.has_more).toBe(false)
+    expect(body.projection_complete).toBe(false)
+    expect(body.snapshot_hash).toBeUndefined()
+    expect(body.snapshot_hash_without_timestamps).toBeUndefined()
+    expect(body.snapshot_hash_version).toBeUndefined()
+    expect(body.changes.find((change) => change.kind === "chapter_index")?.payload.chapters_truncated)
+      .toBe(true)
+  })
+
+  it("rejects malformed cursor requests without changing legacy since behavior", async () => {
+    const invalid = await callChanges("?cursor=not-base64!!")
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toEqual({ error: "cursor must be a valid sync cursor" })
+
+    seedBook({ id: UUID_BOOK_A, updatedAt: 1_700_000_000_000 })
+    const legacy = await callChanges("?since=2020-01-01T00:00:00Z")
+    const legacyBody = (await legacy.json()) as Record<string, unknown>
+    expect(legacy.status).toBe(200)
+    expect(legacyBody.changes).toHaveLength(1)
+    expect(legacyBody.next_cursor).toBeUndefined()
+    expect(legacyBody.has_more).toBeUndefined()
+    expect(legacyBody.cursor_scope).toBeUndefined()
+    expect(legacyBody.projection_complete).toBeUndefined()
+  })
+
   it("pulls one ordered chapter_index envelope with version and source positions", async () => {
     seedChapterIndex()
     const res = await callChanges()
@@ -774,7 +1026,7 @@ describe("GET /api/sync/changes", () => {
     }
 
     resetStores()
-    seedBook({ updatedAt: 1_800_000_000_000, createdAt: 1_600_000_000_000 })
+    seedBook({ updatedAt: 1_750_000_000_000, createdAt: 1_600_000_000_000 })
     const second = (await callChanges().then((response) => response.json())) as {
       snapshot_hash: string
       snapshot_hash_without_timestamps: string

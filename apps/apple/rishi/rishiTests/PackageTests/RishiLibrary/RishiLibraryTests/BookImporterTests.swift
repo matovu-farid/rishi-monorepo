@@ -24,7 +24,8 @@ struct BookImporterTests {
     private func makeImporter(
         rootURL: URL,
         bookStore: any BookStore,
-        bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook()
+        bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook(),
+        isTombstoned: (@Sendable (BookID) async -> Bool)? = nil
     ) -> BookImporter {
         BookImporter(
             rootURL: rootURL,
@@ -38,7 +39,8 @@ struct BookImporterTests {
                 "pdf": PDFKitMetadataExtractor(),
                 "epub": EpubMetadataExtractor()
             ],
-            bookIndexingHook: bookIndexingHook
+            bookIndexingHook: bookIndexingHook,
+            isTombstoned: isTombstoned
         )
     }
 
@@ -105,5 +107,27 @@ struct BookImporterTests {
         let bookB = try await importer.importBook(from: srcB, ownerId: userId)
 
         #expect(bookA.id == bookB.id, "Identical metadata must collapse to one deterministic id")
+    }
+
+    @Test("importBook rotates identity when the deterministic candidate is tombstoned")
+    func tombstonedDeterministicIdReceivesFreshIdentity() async throws {
+        let root = makeTempRoot("import-tombstone")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("import-tombstone-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let source = srcDir.appendingPathComponent("thinking-in-bets.epub")
+        try await FixtureBuilders.writeTinyEPUB(to: source, withCover: true)
+
+        let store = InMemoryBookStore()
+        let original = try await makeImporter(rootURL: root, bookStore: store)
+            .importBook(from: source, ownerId: UUID())
+        let reimported = try await makeImporter(
+            rootURL: root,
+            bookStore: store,
+            isTombstoned: { candidate in candidate == original.id }
+        ).importBook(from: source, ownerId: original.userId)
+
+        #expect(reimported.id != original.id)
+        #expect(try await store.book(reimported.id)?.id == reimported.id)
     }
 }

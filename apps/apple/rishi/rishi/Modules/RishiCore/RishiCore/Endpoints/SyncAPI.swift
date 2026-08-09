@@ -83,6 +83,7 @@ struct SyncDownloadURLEndpoint: WorkerEndpointWithBody {
 /// {
 ///   "kind": "position",
 ///   "id": "<uuid>",
+///   "operation_id": "<uuid>",
 ///   "payload": { ... entity-specific fields ... },
 ///   "updated_at": "<ISO8601>",
 ///   "deleted": false
@@ -91,21 +92,37 @@ struct SyncDownloadURLEndpoint: WorkerEndpointWithBody {
 public struct SyncChange: Codable, Sendable, Equatable {
     public let kind: String         // "book" | "position" | "highlight" | "conversation" | "message"
     public let id: UUID
+    /// Stable across transport retries for one local mutation. Optional for
+    /// compatibility with older callers and Workers.
+    public let operationId: String?
     public let payload: SyncOpaqueJSON
     public let updatedAt: Date
     public let deleted: Bool
 
     enum CodingKeys: String, CodingKey {
         case kind, id, payload, deleted
+        case operationId = "operation_id"
         case updatedAt = "updated_at"
     }
 
-    public init(kind: String, id: UUID, payload: SyncOpaqueJSON, updatedAt: Date, deleted: Bool) {
+    public init(kind: String, id: UUID, operationId: String? = nil, payload: SyncOpaqueJSON, updatedAt: Date, deleted: Bool) {
         self.kind = kind
         self.id = id
+        self.operationId = operationId
         self.payload = payload
         self.updatedAt = updatedAt
         self.deleted = deleted
+    }
+
+    public init(kind: String, id: UUID, operationId: UUID, payload: SyncOpaqueJSON, updatedAt: Date, deleted: Bool) {
+        self.init(
+            kind: kind,
+            id: id,
+            operationId: operationId.uuidString,
+            payload: payload,
+            updatedAt: updatedAt,
+            deleted: deleted
+        )
     }
 }
 
@@ -197,6 +214,17 @@ struct AnyCodable: Codable {
 
 // MARK: - GET /api/sync/changes
 
+/// Scope of the opaque cursor returned by the sync changes endpoint.
+public enum SyncCursorScope: String, Codable, Sendable, Equatable {
+    case incremental
+    /// Wire value is `full`; Apple calls this plane recovery because it is
+    /// used for resumable full reconciliation.
+    case recovery = "full"
+    /// Durable server event sequence. This plane is additive to the
+    /// projection cursor and carries unknown deletes plus operation IDs.
+    case events
+}
+
 /// `GET /api/sync/changes?since=<ISO8601>` — pull all server-side changes
 /// since the cursor. First launch (SYNC-02) passes `since=nil` for a full pull.
 public struct SyncChangesEndpoint: WorkerEndpoint {
@@ -220,6 +248,34 @@ public struct SyncChangesEndpoint: WorkerEndpoint {
             self.path = "/api/sync/changes"
         }
     }
+
+    /// `GET /api/sync/changes?cursor=<opaque>` — pull one cursor page.
+    /// Worker cursors are URL-safe base64 values. Keep them opaque and place
+    /// them directly in the query string so the WorkerClient does not encode
+    /// an already-encoded `%` a second time.
+    public init(cursor: String?) {
+        self.init(scope: .incremental, cursor: cursor)
+    }
+
+    /// Starts either the incremental or full/recovery cursor plane. The
+    /// Worker encodes the scope in the opaque cursor after the first page;
+    /// the explicit query is needed only when a plane has no saved cursor yet.
+    public init(scope: SyncCursorScope, cursor: String?) {
+        self.since = nil
+        if scope == .events {
+            if let cursor {
+                self.path = "/api/sync/events?after=\(cursor)"
+            } else {
+                self.path = "/api/sync/events"
+            }
+        } else if let cursor {
+            self.path = "/api/sync/changes?cursor=\(cursor)"
+        } else if scope == .recovery {
+            self.path = "/api/sync/changes?scope=full"
+        } else {
+            self.path = "/api/sync/changes"
+        }
+    }
 }
 
 public struct SyncChangesResponse: Decodable, Sendable, Equatable {
@@ -231,24 +287,44 @@ public struct SyncChangesResponse: Decodable, Sendable, Equatable {
     /// removed. New clients use this for convergence verification.
     public let snapshotHashWithoutTimestamps: String?
     public let isTruncated: Bool
+    public let nextCursor: String?
+    public let hasMore: Bool
+    public let cursorScope: SyncCursorScope?
+    public let projectionComplete: Bool
+    public let snapshotHashVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case changes
         case snapshotHash = "snapshot_hash"
         case snapshotHashWithoutTimestamps = "snapshot_hash_without_timestamps"
         case isTruncated = "is_truncated"
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+        case cursorScope = "cursor_scope"
+        case projectionComplete = "projection_complete"
+        case snapshotHashVersion = "snapshot_hash_version"
     }
 
     public init(
         changes: [SyncChange],
         snapshotHash: String? = nil,
         snapshotHashWithoutTimestamps: String? = nil,
-        isTruncated: Bool = false
+        isTruncated: Bool = false,
+        nextCursor: String? = nil,
+        hasMore: Bool = false,
+        cursorScope: SyncCursorScope? = nil,
+        projectionComplete: Bool = true,
+        snapshotHashVersion: String? = nil
     ) {
         self.changes = changes
         self.snapshotHash = snapshotHash
         self.snapshotHashWithoutTimestamps = snapshotHashWithoutTimestamps
         self.isTruncated = isTruncated
+        self.nextCursor = nextCursor
+        self.hasMore = hasMore
+        self.cursorScope = cursorScope
+        self.projectionComplete = projectionComplete
+        self.snapshotHashVersion = snapshotHashVersion
     }
 
     public init(from decoder: Decoder) throws {
@@ -257,8 +333,17 @@ public struct SyncChangesResponse: Decodable, Sendable, Equatable {
         self.snapshotHash = try container.decodeIfPresent(String.self, forKey: .snapshotHash)
         self.snapshotHashWithoutTimestamps = try container.decodeIfPresent(String.self, forKey: .snapshotHashWithoutTimestamps)
         self.isTruncated = try container.decodeIfPresent(Bool.self, forKey: .isTruncated) ?? false
+        self.nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
+        self.hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        self.cursorScope = try container.decodeIfPresent(SyncCursorScope.self, forKey: .cursorScope)
+        self.projectionComplete = try container.decodeIfPresent(Bool.self, forKey: .projectionComplete) ?? !self.isTruncated
+        self.snapshotHashVersion = try container.decodeIfPresent(String.self, forKey: .snapshotHashVersion)
     }
 }
+
+/// A page-shaped name for the additive response used by the page fetcher.
+/// The typealias keeps the legacy response surface source-compatible.
+public typealias SyncChangesPage = SyncChangesResponse
 
 // MARK: - POST /api/sync/push
 
@@ -285,10 +370,47 @@ public struct SyncPushResponse: Decodable, Sendable, Equatable {
     /// Server's high-water-mark cursor after applying the push. RishiSync stores
     /// this in sync_metadata.last_synced_at for the matching entity kind.
     public let acceptedAt: Date
+    /// For the single-book push, whether the Worker accepted the book under
+    /// its LWW rules. This is optional so clients can still talk to older
+    /// Workers that only returned `accepted_at`; a missing value is treated as
+    /// legacy success.
+    public let accepted: Bool?
+    public let outcomes: [SyncPushOutcome]
 
     enum CodingKeys: String, CodingKey {
         case acceptedAt = "accepted_at"
+        case accepted
+        case outcomes
     }
 
-    public init(acceptedAt: Date) { self.acceptedAt = acceptedAt }
+    public init(acceptedAt: Date, accepted: Bool? = nil, outcomes: [SyncPushOutcome] = []) {
+        self.acceptedAt = acceptedAt
+        self.accepted = accepted
+        self.outcomes = outcomes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.acceptedAt = try container.decode(Date.self, forKey: .acceptedAt)
+        self.accepted = try container.decodeIfPresent(Bool.self, forKey: .accepted)
+        self.outcomes = try container.decodeIfPresent([SyncPushOutcome].self, forKey: .outcomes) ?? []
+    }
+}
+
+public struct SyncPushOutcome: Codable, Sendable, Equatable {
+    public let operationId: String
+    public let status: String
+    public let sequence: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case operationId = "operation_id"
+        case status
+        case sequence
+    }
+
+    public init(operationId: String, status: String, sequence: Int64? = nil) {
+        self.operationId = operationId
+        self.status = status
+        self.sequence = sequence
+    }
 }

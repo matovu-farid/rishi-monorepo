@@ -12,19 +12,20 @@ vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
  * (no 403) so the route never leaks the existence of someone else's
  * conversation id.
  *
- * Coverage (7 cases — RED before messages.ts exists):
+ * Coverage (8 cases — RED before messages.ts exists):
  *
  *  1. Unauth POST -> 401, zero rows written.
  *  2. Happy POST -> 200 { applied_count: 2 } for messages whose parent
  *     conversation belongs to the caller.
  *  3. Idempotent POST -> SAME id twice yields exactly 1 row; LWW updates
  *     content + updated_at.
- *  4. Validation -> missing `messages` key returns 400 bad_request.
- *  5. Parent-ownership: messages targeting another user's conversation are
+ *  4. Stale/equal POST retries cannot overwrite a newer row.
+ *  5. Validation -> missing `messages` key returns 400 bad_request.
+ *  6. Parent-ownership: messages targeting another user's conversation are
  *     SILENTLY dropped — applied_count == 1, no 403, no leak.
- *  6. GET since cursor -> only messages from caller's conversations with
+ *  7. GET since cursor -> only messages from caller's conversations with
  *     updated_at > since; bob's row excluded.
- *  7. GET cross-user isolation -> rows.every(r => r.conversation_id is
+ *  8. GET cross-user isolation -> rows.every(r => r.conversation_id is
  *     caller-owned).
  */
 
@@ -121,6 +122,7 @@ type AnyCol = { __col: string; __table: string }
 type Pred =
   | { kind: "eq"; col: AnyCol; value: unknown }
   | { kind: "gt"; col: AnyCol; value: number }
+  | { kind: "lt"; col: AnyCol; value: number }
   | { kind: "inArray"; col: AnyCol; values: unknown[] }
   | { kind: "and"; preds: Pred[] }
 
@@ -129,6 +131,7 @@ type OrderBy = { col: AnyCol; dir: "asc" | "desc" }
 vi.mock("drizzle-orm", () => ({
   eq: (col: AnyCol, value: unknown): Pred => ({ kind: "eq", col, value }),
   gt: (col: AnyCol, value: number): Pred => ({ kind: "gt", col, value }),
+  lt: (col: AnyCol, value: number): Pred => ({ kind: "lt", col, value }),
   inArray: (col: AnyCol, values: unknown[]): Pred => ({
     kind: "inArray",
     col,
@@ -147,6 +150,10 @@ function rowMatches(
   if (p.kind === "gt") {
     const v = row[p.col.__col]
     return typeof v === "number" && v > (p.value as number)
+  }
+  if (p.kind === "lt") {
+    const v = row[p.col.__col]
+    return typeof v === "number" && v < (p.value as number)
   }
   if (p.kind === "inArray") return p.values.includes(row[p.col.__col])
   return false
@@ -172,6 +179,7 @@ vi.mock("../db/drizzle", () => {
         let pendingValues: Record<string, unknown> = {}
         let conflictTarget: string | null = null
         let conflictSet: Record<string, unknown> = {}
+        let conflictWhere: Pred | null = null
         const builder = {
           values(v: Record<string, unknown>) {
             pendingValues = v
@@ -180,10 +188,12 @@ vi.mock("../db/drizzle", () => {
           onConflictDoUpdate(opts: {
             target: AnyCol | AnyCol[]
             set: Record<string, unknown>
+            where?: Pred
           }) {
             const t = Array.isArray(opts.target) ? opts.target[0] : opts.target
             conflictTarget = t.__col
             conflictSet = opts.set
+            conflictWhere = opts.where ?? null
             return {
               then(resolve: (v: unknown) => void) {
                 // Only handle inserts targeting the messages table.
@@ -195,9 +205,9 @@ vi.mock("../db/drizzle", () => {
                         (pendingValues as Record<string, unknown>)[conflictTarget!],
                     )
                   : undefined
-                if (existing) {
+                if (existing && (!conflictWhere || rowMatches(existing as unknown as Record<string, unknown>, conflictWhere))) {
                   Object.assign(existing, conflictSet)
-                } else {
+                } else if (!existing) {
                   messageStore.push(pendingValues as unknown as FakeMsgRow)
                 }
                 resolve(undefined)
@@ -262,7 +272,7 @@ vi.mock("../db/drizzle", () => {
   return { createDb }
 })
 
-// ─── Auth state + ../auth + ../index mocks ───────────────────────────────────
+// ─── Auth state + middleware mocks ────────────────────────────────────────────
 const { authState } = vi.hoisted(() => ({
   authState: { userId: "user_alice" as string | null },
 }))
@@ -285,7 +295,7 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-vi.mock("../index.ts", async () => {
+vi.mock("../middleware", async () => {
   return {
     requireAuth: async (
       c: { set: (k: string, v: unknown) => void; json: (b: unknown, s: number) => Response },
@@ -392,6 +402,29 @@ describe("POST /api/sync/messages", () => {
     expect(second.status).toBe(200)
     expect(messageStore.length).toBe(1)
     expect(messageStore[0].content).toBe("v2")
+    expect(messageStore[0].updatedAt).toBe(200)
+  })
+
+  it("stale and equal retries do not overwrite a newer row", async () => {
+    seedConversation({ id: "conv-alice", userId: "user_alice" })
+    seedMessage({
+      id: MSG_A,
+      conversationId: "conv-alice",
+      updatedAt: 200,
+      content: "newest",
+    })
+
+    const stale = await callPost({
+      messages: [validRow({ id: MSG_A, content: "stale", updated_at: 100 })],
+    })
+    const equal = await callPost({
+      messages: [validRow({ id: MSG_A, content: "equal", updated_at: 200 })],
+    })
+
+    expect(stale.status).toBe(200)
+    expect(equal.status).toBe(200)
+    expect(messageStore).toHaveLength(1)
+    expect(messageStore[0].content).toBe("newest")
     expect(messageStore[0].updatedAt).toBe(200)
   })
 

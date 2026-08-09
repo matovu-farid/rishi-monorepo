@@ -53,12 +53,14 @@ struct CustomTTSEngineTests {
     func rejectsUnsupportedLanguage() async {
         let state = TTSPlaybackState()
         let player = RecordingTTSPlayer(state: state)
+        let failure = SpeakCompletionFlag()
         let engine = CustomTTSEngine(
             player: player,
             state: state,
             settingsStore: InMemoryTTSSettingsStore(),
             userId: UserID(),
-            voices: [englishVoice]
+            voices: [englishVoice],
+            onUtteranceFailed: { await failure.markDone() }
         )
         let result = await engine.speak(
             text: "Bonjour.",
@@ -71,6 +73,7 @@ struct CustomTTSEngineTests {
             return
         }
         #expect(language == Language("fr"))
+        #expect(await failure.isDone())
     }
 
     @Test("does not treat residual .stopped as completion before playback starts (cache-hit race)")

@@ -21,6 +21,28 @@ struct SyncAPIEndpointsTests {
         #expect(endpoint.path.contains("2023"))
     }
 
+    @Test("SyncChangesEndpoint adds an opaque cursor without double encoding")
+    func syncChangesEncodesCursorOnce() {
+        let cursor = "eyJ2IjoxLCJzY29wZSI6ImluY3JlbWVudGFsIn0"
+        let endpoint = SyncChangesEndpoint(cursor: cursor)
+
+        #expect(endpoint.path == "/api/sync/changes?cursor=\(cursor)")
+        #expect(!endpoint.path.contains("%25"))
+    }
+
+    @Test("SyncChangesEndpoint identifies an initial full recovery page")
+    func syncChangesEncodesRecoveryScope() {
+        let endpoint = SyncChangesEndpoint(scope: .recovery, cursor: nil)
+
+        #expect(endpoint.path == "/api/sync/changes?scope=full")
+    }
+
+    @Test("SyncChangesEndpoint routes the event cursor to the event stream")
+    func syncChangesEncodesEventScope() {
+        #expect(SyncChangesEndpoint(scope: .events, cursor: nil).path == "/api/sync/events")
+        #expect(SyncChangesEndpoint(scope: .events, cursor: "42").path == "/api/sync/events?after=42")
+    }
+
     @Test("SyncChangesResponse decodes a representative fixture")
     func syncChangesResponseDecodes() throws {
         let json = """
@@ -47,15 +69,43 @@ struct SyncAPIEndpointsTests {
         #expect(response.changes[0].payload.data.isEmpty == false)
         #expect(response.snapshotHash == "legacy-hash")
         #expect(response.snapshotHashWithoutTimestamps == "timestamp-free-hash")
+        #expect(response.nextCursor == nil)
+        #expect(response.hasMore == false)
+        #expect(response.cursorScope == nil)
+        #expect(response.projectionComplete == true)
+        #expect(response.snapshotHashVersion == nil)
+    }
+
+    @Test("SyncChangesResponse decodes additive cursor-page metadata")
+    func syncChangesResponseDecodesPageMetadata() throws {
+        let json = """
+        {
+          "changes": [],
+          "next_cursor": "next-page",
+          "has_more": true,
+          "cursor_scope": "full",
+          "projection_complete": false,
+          "snapshot_hash_version": "sync-json-v1"
+        }
+        """
+        let response = try JSONDecoder().decode(SyncChangesResponse.self, from: Data(json.utf8))
+
+        #expect(response.nextCursor == "next-page")
+        #expect(response.hasMore)
+        #expect(response.cursorScope == .recovery)
+        #expect(response.projectionComplete == false)
+        #expect(response.snapshotHashVersion == "sync-json-v1")
     }
 
     @Test("SyncPushEndpoint body encodes snake_case updated_at")
     func syncPushBodyEncodesSnakeCase() throws {
         let payload = SyncOpaqueJSON(data: Data("{\"foo\":\"bar\"}".utf8))
+        let operationId = UUID()
         let body = SyncPushEndpoint.Body(changes: [
             SyncChange(
                 kind: "highlight",
                 id: UUID(),
+                operationId: operationId,
                 payload: payload,
                 updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
                 deleted: false
@@ -67,6 +117,7 @@ struct SyncAPIEndpointsTests {
         let str = String(decoding: data, as: UTF8.self)
         #expect(str.contains("\"updated_at\""))
         #expect(str.contains("\"deleted\":false"))
+        #expect(str.contains("\"operation_id\":\"(operationId.uuidString)\""))
     }
 
     @Test("SyncPushEndpoint path + method are pinned")
@@ -74,6 +125,43 @@ struct SyncAPIEndpointsTests {
         let endpoint = SyncPushEndpoint(body: .init(changes: []))
         #expect(endpoint.path == "/api/sync/push")
         #expect(endpoint.method == .POST)
+    }
+
+    @Test("SyncPushResponse decodes additive acceptance state")
+    func syncPushResponseDecodesAcceptanceState() throws {
+        let json = """
+        {
+          "accepted_at": 5.0,
+          "accepted": false
+        }
+        """
+        let response = try JSONDecoder().decode(SyncPushResponse.self, from: Data(json.utf8))
+
+        #expect(response.accepted == false)
+    }
+
+    @Test("SyncPushResponse decodes per-operation outcomes")
+    func syncPushResponseDecodesOutcomes() throws {
+        let json = """
+        {
+          "accepted_at": 5.0,
+          "accepted": true,
+          "outcomes": [{"operation_id":"op-1","status":"applied","sequence":42}]
+        }
+        """
+        let response = try JSONDecoder().decode(SyncPushResponse.self, from: Data(json.utf8))
+
+        #expect(response.outcomes == [SyncPushOutcome(operationId: "op-1", status: "applied", sequence: 42)])
+    }
+
+    @Test("SyncPushResponse accepts legacy responses without acceptance state")
+    func syncPushResponseDecodesLegacyAcceptance() throws {
+        let response = try JSONDecoder().decode(
+            SyncPushResponse.self,
+            from: Data("{\"accepted_at\":5.0}".utf8)
+        )
+
+        #expect(response.accepted == nil)
     }
 
     @Test("DevicesRegisterEndpoint body uses worker contract snake_case")

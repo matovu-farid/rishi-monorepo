@@ -14,6 +14,7 @@ public struct BookFileStorage:Sendable {
     private let bookStore: any BookStore
     private let coverExtractors: [String: any CoverExtractor]
     private let metadataExtractors: [String: any MetadataExtractor]
+    private let isTombstoned: (@Sendable (BookID) async -> Bool)?
    
     private var fileManager: FileManager { .default }
     private let coverCache: CoverCache?
@@ -25,7 +26,8 @@ public struct BookFileStorage:Sendable {
         bookStore: any BookStore,
         coverExtractors: [String: any CoverExtractor],
         metadataExtractors: [String: any MetadataExtractor] = [:],
-        bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook()
+        bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook(),
+        isTombstoned: (@Sendable (BookID) async -> Bool)? = nil
     ) {
         self.rootURL = rootURL
         self.booksDirURL = rootURL.appendingPathComponent(
@@ -36,6 +38,7 @@ public struct BookFileStorage:Sendable {
         self.coverExtractors = coverExtractors
         self.metadataExtractors = metadataExtractors
         self.bookIndexingHook = bookIndexingHook
+        self.isTombstoned = isTombstoned
 
         if coverExtractors.isEmpty {
             self.coverCache = nil
@@ -59,22 +62,37 @@ public struct BookFileStorage:Sendable {
             bookStore: bookStore,
             coverExtractors: coverExtractors,
             metadataExtractors: metadataExtractors,
-            bookIndexingHook: bookIndexingHook
+            bookIndexingHook: bookIndexingHook,
+            isTombstoned: isTombstoned
         )
         return try await importer.importBook(from: sourceURL, ownerId: ownerId)
     }
    
 
     public func delete(_ book: Book) async throws {
+        try await deleteMaterial(for: book)
+        try await bookStore.delete(book.id)
+    }
+
+    /// Removes the local file and cover cache while leaving the metadata row
+    /// untouched. Inbound sync uses this before conditionally deleting the
+    /// row so a failed acknowledgement can retry safely.
+    public func deleteMaterial(for book: Book) async throws {
+        try await deleteMaterial(forBookID: book.id)
+    }
+
+    /// Removes material by identity even when the local Book row is already
+    /// gone. Inbound tombstones use this form so a partial delete remains
+    /// repairable on a later retry.
+    public func deleteMaterial(forBookID bookID: BookID) async throws {
         let bookDir = booksDirURL.appendingPathComponent(
-            book.id.uuidString,
+            bookID.uuidString,
             isDirectory: true
         )
         if fileManager.fileExists(atPath: bookDir.path) {
             try fileManager.removeItem(at: bookDir)
         }
-        await coverCache?.clear(book.id)
-        try await bookStore.delete(book.id)
+        await coverCache?.clear(bookID)
     }
 
     /// Removes all local book material, including extracted covers and search

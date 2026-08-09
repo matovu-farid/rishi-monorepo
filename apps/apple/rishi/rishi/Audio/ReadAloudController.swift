@@ -12,7 +12,9 @@ private func makeReadiumEngineFactory(
     state: TTSPlaybackState,
     settingsStore: any TTSSettingsStore,
     userId: UserID,
-    sessionToken: UUID
+    sessionToken: UUID,
+    onUtteranceFinished: (@Sendable () async -> Void)? = nil,
+    onUtteranceFailed: (@Sendable () async -> Void)? = nil
 ) -> PublicationSpeechSynthesizer.EngineFactory {
     {
         CustomTTSEngine(
@@ -20,7 +22,9 @@ private func makeReadiumEngineFactory(
             state: state,
             settingsStore: settingsStore,
             userId: userId,
-            sessionToken: sessionToken
+            sessionToken: sessionToken,
+            onUtteranceFinished: onUtteranceFinished,
+            onUtteranceFailed: onUtteranceFailed
         )
     }
 }
@@ -104,6 +108,10 @@ final class ReadAloudController {
     /// or starting a synthesizer after one of its prerequisite awaits returns.
     private var playbackGeneration: UInt64 = 0
     private var playbackSessionToken: UUID?
+    private var didNotifyFirstUtterance = false
+    private var firstUtteranceGeneration: UInt64?
+    var onFirstUtteranceFinished: (@MainActor () -> Void)?
+    var onFirstUtteranceFailed: (@MainActor () -> Void)?
     private var keyboardParagraphNavigationTask: Task<Void, Never>?
     private var keyboardParagraphNavigationGeneration: UInt64 = 0
     private var keyboardParagraphNavigationTaskID: UInt64 = 0
@@ -132,7 +140,9 @@ final class ReadAloudController {
         userId: UserID,
         nowPlayingController: NowPlayingController? = nil,
         bookFileStorage: BookFileStorage? = nil,
-        onAllowanceFailure: (@MainActor (WorkerAllowanceError) -> Void)? = nil
+        onAllowanceFailure: (@MainActor (WorkerAllowanceError) -> Void)? = nil,
+        onFirstUtteranceFinished: (@MainActor () -> Void)? = nil,
+        onFirstUtteranceFailed: (@MainActor () -> Void)? = nil
     ) {
         self.ttsEngine = ttsEngine
         self.ttsState = ttsState
@@ -144,6 +154,8 @@ final class ReadAloudController {
         self.nowPlayingController = nowPlayingController
         self.bookFileStorage = bookFileStorage
         self.onAllowanceFailure = onAllowanceFailure
+        self.onFirstUtteranceFinished = onFirstUtteranceFinished
+        self.onFirstUtteranceFailed = onFirstUtteranceFailed
         installTypedFailureObserver()
     }
 
@@ -161,7 +173,10 @@ final class ReadAloudController {
     ) async {
         isDisposed = false
         installTypedFailureObserver()
-        guard let publication = vm.publication else { return }
+        guard let publication = vm.publication else {
+            onFirstUtteranceFailed?()
+            return
+        }
         let generation = beginPlaybackGeneration()
 
         // Invalidate page-entry prefetch immediately while the new playback
@@ -185,7 +200,13 @@ final class ReadAloudController {
             state: ttsState,
             settingsStore: ttsSettingsStore,
             userId: userId,
-            sessionToken: sessionToken
+            sessionToken: sessionToken,
+            onUtteranceFinished: { [weak self] in
+                await self?.handleUtteranceFinished(generation: generation)
+            },
+            onUtteranceFailed: { [weak self] in
+                await self?.handleUtteranceFailed(generation: generation)
+            }
         )
         let tokenizerFactory = makeReadiumTokenizerFactory(
             granularity: tokenizerGranularity,
@@ -202,11 +223,14 @@ final class ReadAloudController {
             tokenizerFactory: tokenizerFactory,
             delegate: self
         ) else {
+            onFirstUtteranceFailed?()
             return
         }
 
         readiumSynthesizer = synthesizer
         readiumSynthesizerGeneration = generation
+        didNotifyFirstUtterance = false
+        firstUtteranceGeneration = generation
         hasStartedReadAloudSession = true
         readiumPublication = publication
         readiumPrefetcher = ReadiumTTSPrefetchCoordinator(
@@ -636,6 +660,20 @@ final class ReadAloudController {
         })
     }
 
+    private func handleUtteranceFinished(generation: UInt64) {
+        guard firstUtteranceGeneration == generation,
+              !didNotifyFirstUtterance else { return }
+        didNotifyFirstUtterance = true
+        onFirstUtteranceFinished?()
+    }
+
+    private func handleUtteranceFailed(generation: UInt64) {
+        guard firstUtteranceGeneration == generation,
+              !didNotifyFirstUtterance else { return }
+        didNotifyFirstUtterance = true
+        onFirstUtteranceFailed?()
+    }
+
     func updateCurrentParagraph(for index: Int?) {
         guard let index, paragraphs.indices.contains(index) else {
             currentParagraph = nil
@@ -675,6 +713,7 @@ final class ReadAloudController {
         readiumSynthesizer = nil
         readiumState = .stopped
         playbackSessionToken = nil
+        firstUtteranceGeneration = nil
         followCreditRemaining = 0
         #if DEBUG
         testSpeakingOverride = false

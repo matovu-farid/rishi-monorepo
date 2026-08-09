@@ -25,6 +25,8 @@ import {
   messages,
   passkey,
   session,
+  sharePackageItems,
+  sharePackages,
   subscription,
   trialGrant,
   usageAuditLog,
@@ -110,6 +112,85 @@ function createD1(
 }
 
 describe("DELETE /api/user black-box/white-box account deletion", () => {
+  it("removes sender-owned share packages without touching an imported recipient copy", async () => {
+    const d1 = createD1();
+    const db = createDb(d1);
+    const now = new Date();
+    await db.insert(user).values([
+      {
+        id: "share-sender",
+        name: "Share Sender",
+        email: "share-sender@example.com",
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "share-recipient",
+        name: "Share Recipient",
+        email: "share-recipient@example.com",
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    await db.insert(sharePackages).values({
+      id: "share-package-1",
+      senderUserId: "share-sender",
+      recipientUserId: "share-recipient",
+      tokenHash: null,
+      kind: "selection",
+      status: "pending",
+      idempotencyKey: "share-request-1",
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: now,
+      claimedAt: null,
+      claimedBy: null,
+    });
+    await db.insert(sharePackageItems).values({
+      id: "share-item-1",
+      packageId: "share-package-1",
+      title: "Shared book",
+      author: "Author",
+      format: "epub",
+      fileR2Key: "books/share-sender/shared-book.epub",
+      coverR2Key: null,
+      fileHash: null,
+      fileSize: 12,
+      createdAt: now,
+    });
+
+    const objects = new Set([
+      "books/share-sender/shared-book.epub",
+      "books/share-recipient/recipient-book.epub",
+      "shares/legacy-package/legacy-item/book.epub",
+    ]);
+    const bucket = {
+      delete: vi.fn(async (keys: string | string[]) => {
+        for (const key of Array.isArray(keys) ? keys : [keys]) objects.delete(key);
+      }),
+      head: vi.fn(async (key: string) => objects.has(key) ? ({ key } as R2Object) : null),
+      list: vi.fn(async ({ prefix }: { prefix?: string }) => ({
+        objects: [...objects]
+          .filter((key) => !prefix || key.startsWith(prefix))
+          .map((key) => ({ key })),
+        truncated: false,
+      })),
+    } as unknown as R2Bucket;
+
+    await deleteAccount(db, {
+      DB: d1,
+      USER_USAGE_LEDGER: testLedgerBinding(),
+      BOOK_STORAGE: bucket,
+    } as unknown as Env, "share-sender");
+
+    expect(objects.has("books/share-sender/shared-book.epub")).toBe(false);
+    expect(objects.has("shares/legacy-package/legacy-item/book.epub")).toBe(false);
+    expect(objects.has("books/share-recipient/recipient-book.epub")).toBe(true);
+    expect(await db.select().from(sharePackages).where(eq(sharePackages.id, "share-package-1")).all()).toHaveLength(0);
+    d1.close();
+  });
+
   it("creates an Apple user through auth, deletes it through the endpoint, and removes all user data", async () => {
     const d1 = createD1();
     const r2Keys = new Set(["books/shared-book"]);

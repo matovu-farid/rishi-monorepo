@@ -47,8 +47,11 @@ public final class PositionUploader: Sendable {
         var changes: [SyncChange] = []
         var resolvedIds: [UUID] = []
         var droppedIds: [UUID] = []
+        var expectedDirtyAt: [UUID: Date] = [:]
 
         for item in items where item.kind == .position {
+            let capturedDirtyAt = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .position)
+            expectedDirtyAt[item.entityId] = capturedDirtyAt
             guard let position = try await positionStore.position(for: item.entityId) else {
                 droppedIds.append(item.entityId)
                 continue
@@ -59,7 +62,7 @@ public final class PositionUploader: Sendable {
                     kind: SyncEntityKind.position.rawValue,
                     id: position.id,
                     payload: payload,
-                    updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .position) ?? position.updatedAt,
+                    updatedAt: capturedDirtyAt ?? position.updatedAt,
                     deleted: false
                 ))
                 resolvedIds.append(item.entityId)
@@ -71,7 +74,13 @@ public final class PositionUploader: Sendable {
         // Drain stale (deleted-locally) items so the queue stops surfacing them.
         let now = Date()
         for id in droppedIds {
-            try await metadataStore.markClean(entityId: id, kind: .position, lastSyncedAt: now, remoteEtag: nil)
+            _ = try await metadataStore.markCleanIfUnchanged(
+                entityId: id,
+                kind: .position,
+                expectedDirtyAt: expectedDirtyAt[id],
+                lastSyncedAt: now,
+                remoteEtag: nil
+            )
         }
 
         guard !changes.isEmpty else { return 0 }
@@ -80,14 +89,17 @@ public final class PositionUploader: Sendable {
         Log.event("sync.position.push.completed", level: .info, data: [
             "count": String(resolvedIds.count),
         ])
+        var pushedCount = 0
         for id in resolvedIds {
-            try await metadataStore.markClean(
+            let acknowledged = try await metadataStore.markCleanIfUnchanged(
                 entityId: id,
                 kind: .position,
+                expectedDirtyAt: expectedDirtyAt[id],
                 lastSyncedAt: response.acceptedAt,
                 remoteEtag: nil
             )
+            if acknowledged { pushedCount += 1 }
         }
-        return resolvedIds.count
+        return pushedCount
     }
 }

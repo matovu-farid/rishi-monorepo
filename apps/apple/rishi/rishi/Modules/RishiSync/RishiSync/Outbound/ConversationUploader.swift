@@ -50,8 +50,10 @@ public final class ConversationUploader: Sendable {
         var rows: [ConversationRowWire] = []
         var resolvedIds: [UUID] = []
         var droppedIds: [UUID] = []
+        var expectedDirtyAt: [UUID: Date] = [:]
 
         for item in items where item.kind == .conversation {
+            expectedDirtyAt[item.entityId] = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .conversation)
             guard let convo = try await conversationStore.conversation(item.entityId) else {
                 droppedIds.append(item.entityId)
                 continue
@@ -71,9 +73,10 @@ public final class ConversationUploader: Sendable {
         // Drain stale (locally-deleted) items so the queue stops surfacing them.
         let now = Date()
         for id in droppedIds {
-            try await metadataStore.markClean(
+            _ = try await metadataStore.markCleanIfUnchanged(
                 entityId: id,
                 kind: .conversation,
+                expectedDirtyAt: expectedDirtyAt[id],
                 lastSyncedAt: now,
                 remoteEtag: nil
             )
@@ -88,14 +91,16 @@ public final class ConversationUploader: Sendable {
             "count": String(resolvedIds.count),
             "applied": String(response.appliedCount),
         ])
+        var acknowledgedCount = 0
         for id in resolvedIds {
-            try await metadataStore.markClean(
+            if try await metadataStore.markCleanIfUnchanged(
                 entityId: id,
                 kind: .conversation,
+                expectedDirtyAt: expectedDirtyAt[id],
                 lastSyncedAt: now,
                 remoteEtag: nil
-            )
+            ) { acknowledgedCount += 1 }
         }
-        return resolvedIds.count
+        return acknowledgedCount
     }
 }

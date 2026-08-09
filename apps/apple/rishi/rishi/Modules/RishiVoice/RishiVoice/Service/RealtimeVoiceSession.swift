@@ -97,6 +97,7 @@ public actor RealtimeVoiceSession {
     /// Responder consume() loop spawned at start when bookId is non-nil.
     private var responderTask: Task<Void, Never>?
     private var isEnding: Bool = false
+    private let lifecycleToken = UUID()
     /// UI hidden but session kept alive (reader navigation). Suppresses
     /// reconnect status churn while the chrome is not visible.
     private var isParked: Bool = false
@@ -184,9 +185,12 @@ public actor RealtimeVoiceSession {
         pageText: String? = nil,
         outline: BookOutlineDTO? = nil,
         activeParagraphText: String? = nil,
-        preflighted: Bool = false
+        preflighted: Bool = false,
+        prewarmed: Bool = false
     ) async {
+        await MainActor.run { state.beginLifecycle(lifecycleToken) }
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
+            guard !isEnding else { return }
             await fail(reason: .unknown("Data use consent required"))
             return
         }
@@ -227,12 +231,20 @@ public actor RealtimeVoiceSession {
         // secret. The adapter keeps this transport disconnected until
         // `connect()` consumes it; embedder warmup shares the same task so
         // both independent costs overlap the server request.
-        let prewarmTask: Task<Void, Never>? = Task {
-            async let transport: Void = client.prewarm()
+        let prewarmTask: Task<Void, Never>? = if prewarmed {
             if bookId != nil, let warm = embedderPrewarm {
-                await warm()
+                Task { await warm() }
+            } else {
+                nil
             }
-            await transport
+        } else {
+            Task {
+                async let transport: Void = client.prewarm()
+                if bookId != nil, let warm = embedderPrewarm {
+                    await warm()
+                }
+                await transport
+            }
         }
 
         if let sessionCoordinator {
@@ -271,6 +283,7 @@ public actor RealtimeVoiceSession {
         } catch {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
+            guard !isEnding else { return }
             let failure = KeyFetchFailure.classify(error)
             await fail(reason: .keyFetch(failure), message: Self.keyFetchMessage(failure))
             return
@@ -293,11 +306,18 @@ public actor RealtimeVoiceSession {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
+            guard !isEnding else { return }
             await fail(reason: .connect)
             return
         }
 
-        await update(.live)
+        guard !isEnding else {
+            prewarmTask?.cancel()
+            await client.disconnect()
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
+        guard await publishLiveIfActive() else { return }
         Log.event("voice.session.live", level: .info, data: ["bookId": bookId?.uuidString ?? "<none>"])
         spawnResponderIfNeeded(bookId: bookId)
         await reconnectController().startStatusObservation()
@@ -325,6 +345,7 @@ public actor RealtimeVoiceSession {
         } catch {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
+            guard !isEnding else { return }
             let failure = VoiceSessionStartFailure.classify(error)
             await fail(reason: .sessionStart(failure), message: Self.sessionStartMessage(failure))
             return
@@ -351,6 +372,7 @@ public actor RealtimeVoiceSession {
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
+            guard !isEnding else { return }
             await fail(reason: .connect)
             return
         }
@@ -367,6 +389,7 @@ public actor RealtimeVoiceSession {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
             activeVoiceSession = nil
+            guard !isEnding else { return }
             await fail(
                 reason: .callRegistration(.missingCallId),
                 message: Self.registrationMessage(.missingCallId)
@@ -374,7 +397,14 @@ public actor RealtimeVoiceSession {
             return
         }
 
-        await update(.live)
+        guard !isEnding else {
+            await client.disconnect()
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            activeVoiceSession = nil
+            return
+        }
+        guard await publishLiveIfActive() else { return }
         spawnResponderIfNeeded(bookId: bookId)
         openControlSocket(rishiSessionId: started.rishiSessionId)
 
@@ -422,6 +452,7 @@ public actor RealtimeVoiceSession {
             guard !isEnding else { return }
 
             isEnding = true
+            await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
             await reconnect?.cancel()
             controlMessageTask?.cancel(); controlMessageTask = nil
             responderTask?.cancel(); responderTask = nil
@@ -450,6 +481,7 @@ public actor RealtimeVoiceSession {
     public func end() async -> String? {
         guard !isEnding else { return nil }
         isEnding = true
+        await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
         let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId
 
         await update(.ending)
@@ -491,7 +523,7 @@ public actor RealtimeVoiceSession {
         await client.setMicCaptureEnabled(true)
         let connection = await client.currentStatus()
         if connection == .connected {
-            await update(.live)
+            guard await publishLiveIfActive() else { return }
             await reconnectController().startStatusObservation()
         }
     }
@@ -611,6 +643,7 @@ public actor RealtimeVoiceSession {
     private func terminateFromControlSocket(reason: ControlTerminalReason) async {
         guard !isEnding else { return }
         isEnding = true
+        await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
         Log.event("voice.session.control.terminal", level: .info, data: ["reason": String(describing: reason)])
         await reconnect?.cancel()
         registrationTask?.cancel(); registrationTask = nil
@@ -647,8 +680,8 @@ public actor RealtimeVoiceSession {
             },
             onReconnected: { [weak self] _ in
                 guard let self else { return }
-                if await self.readIsParked() { return }
-                await self.update(.live)
+                if await self.readIsEndingOrParked() { return }
+                guard await self.publishLiveIfActive() else { return }
                 await self.reconnectController().startStatusObservation()
             },
             onExhausted: { [weak self] in
@@ -696,6 +729,7 @@ public actor RealtimeVoiceSession {
     private func handleReconnectExhausted() async {
         guard !isEnding else { return }
         isEnding = true
+        await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
         await reconnect?.cancel()
         registrationTask?.cancel(); registrationTask = nil
         controlMessageTask?.cancel()
@@ -892,13 +926,16 @@ public actor RealtimeVoiceSession {
         await push(status: status)
     }
 
+    private func publishLiveIfActive() async -> Bool {
+        await MainActor.run { state.applyLiveIfActive(lifecycleToken) }
+    }
+
     private func fail(reason: VoiceSessionFailureReason, message: String? = nil) async {
         var data = ["reason": String(describing: reason)]
         if let message { data["message"] = message }
         Log.event("voice.session.failed", level: .error, data: data)
         await MainActor.run {
-            state.apply(status: .failed(reason: reason))
-            if let message { state.recordError(message) }
+            state.applyFailureIfActive(lifecycleToken, reason: reason, message: message)
         }
     }
 

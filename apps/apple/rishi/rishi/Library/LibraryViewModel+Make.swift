@@ -9,7 +9,7 @@ extension LibraryViewModel {
         importCoordinator: ImportCoordinator,
         positionStore: any PositionStore,
         bookFileStorage: BookFileStorage,
-        onBookDeleted: (@Sendable (BookID) async -> Void)? = nil
+        onBookDeleted: (@Sendable (BookID) async throws -> Void)? = nil
     ) -> LibraryViewModel {
         return LibraryViewModel(
             bookStore: bookStore,

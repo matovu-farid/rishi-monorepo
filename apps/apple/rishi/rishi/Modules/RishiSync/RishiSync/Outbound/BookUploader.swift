@@ -23,6 +23,7 @@ public final class BookUploader: Sendable {
         case bytesUnreadable(URL)
         case presignedRequestFailed(String)
         case uploadFailed(status: Int)
+        case serverRejected
     }
 
     private let workerClient: WorkerClient
@@ -51,6 +52,8 @@ public final class BookUploader: Sendable {
         guard let ownerId = await userIdProvider() else {
             throw UploadError.presignedRequestFailed("missing session user id")
         }
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: book.id, kind: .book)
+        let operationId = try await metadataStore.ensureOperationId(entityId: book.id, kind: .book)
         let key = Self.r2Key(for: book, userId: ownerId)
         let contentType = Self.contentType(for: book.formatType)
 
@@ -87,9 +90,9 @@ public final class BookUploader: Sendable {
             "book_id": book.id.uuidString,
             "bytes": String(data.count),
         ])
-        let (responseBody, response) = try await urlSession.upload(for: request, from: data)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        let (responseBody, putResponse) = try await urlSession.upload(for: request, from: data)
+        guard let http = putResponse as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (putResponse as? HTTPURLResponse)?.statusCode ?? -1
             // R2 returns an S3-style XML body (<Error><Code>...</Code>...) on
             // rejection — surface it so PUT failures are diagnosable.
             let r2Error = String(decoding: responseBody, as: UTF8.self)
@@ -103,30 +106,44 @@ public final class BookUploader: Sendable {
 
         // Persist metadata only after the bytes are safely in R2. This makes a
         // pulled book downloadable as soon as its D1 row becomes visible.
+        let response: SyncPushResponse
         do {
             let payload = try SyncPayloadCodec.encodeBook(book, r2Key: key)
-            _ = try await workerClient.send(
+            response = try await workerClient.send(
                 SyncPushEndpoint(body: .init(changes: [SyncChange(
                     kind: SyncEntityKind.book.rawValue,
                     id: book.id,
+                    operationId: operationId,
                     payload: payload,
-                    updatedAt: try await metadataStore.dirtyAt(entityId: book.id, kind: .book) ?? Date(),
+                    updatedAt: expectedDirtyAt ?? Date(),
                     deleted: false
                 )]))
             )
+            guard response.accepted != false else {
+                Log.event("sync.book.metadata.push.rejected", level: .error, data: [
+                    "book_id": book.id.uuidString,
+                    "reason": "stale",
+                ])
+                throw UploadError.serverRejected
+            }
         } catch {
+            if case UploadError.serverRejected = error { throw error }
             Log.error("sync.book.metadata.push.failed", error: error)
             throw UploadError.presignedRequestFailed("metadata push failed: \(error)")
         }
 
         // 4. markClean with the server's ETag for future change-detection.
         let etag = http.value(forHTTPHeaderField: "ETag")
-        try await metadataStore.markClean(
+        guard try await metadataStore.markCleanIfCurrent(
             entityId: book.id,
             kind: .book,
-            lastSyncedAt: Date(),
+            expectedDirtyAt: expectedDirtyAt,
+            expectedOperationId: operationId,
+            lastSyncedAt: response.acceptedAt,
             remoteEtag: etag
-        )
+        ) else {
+            throw UploadError.presignedRequestFailed("local book changed during upload")
+        }
         Log.event("sync.book.upload.completed", level: .info, data: [
             "book_id": book.id.uuidString,
         ])
@@ -136,21 +153,29 @@ public final class BookUploader: Sendable {
     /// already been removed. The worker keeps the remote tombstone so other
     /// devices converge on the deletion.
     public func uploadTombstone(_ id: BookID) async throws {
+        let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: id, kind: .book)
+        let operationId = try await metadataStore.ensureOperationId(entityId: id, kind: .book)
         let response = try await workerClient.send(
             SyncPushEndpoint(body: .init(changes: [SyncChange(
                 kind: SyncEntityKind.book.rawValue,
                 id: id,
+                operationId: operationId,
                 payload: SyncOpaqueJSON(data: Data("{}".utf8)),
-                updatedAt: try await metadataStore.dirtyAt(entityId: id, kind: .book) ?? Date(),
+                updatedAt: expectedDirtyAt ?? Date(),
                 deleted: true
             )]))
         )
-        try await metadataStore.markClean(
+        guard response.accepted != false else { throw UploadError.serverRejected }
+        guard try await metadataStore.acknowledgeTombstoneIfCurrent(
             entityId: id,
             kind: .book,
+            expectedDirtyAt: expectedDirtyAt,
+            expectedOperationId: operationId,
             lastSyncedAt: response.acceptedAt,
             remoteEtag: nil
-        )
+        ) else {
+            throw UploadError.presignedRequestFailed("local book deletion changed during upload")
+        }
     }
 
     // MARK: - Helpers

@@ -13,21 +13,23 @@ vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
  * server-side userId override on the upsert path so a client cannot
  * impersonate another user by setting `user_id` in the body.
  *
- * Coverage (7 cases — RED before conversations.ts exists):
+ * Coverage (9 cases — RED before conversations.ts exists):
  *
  *  1. Unauth POST -> 401, zero rows written.
  *  2. Happy POST -> 200 { applied_count: 2 } and both rows belong to the
  *     caller (server overrides any client-sent user_id).
  *  3. Idempotent POST -> SAME id twice yields exactly 1 row; LWW updates
  *     title + updated_at on the second push.
- *  4. Validation -> missing `conversations` key returns 400 bad_request.
- *  5. GET happy -> caller-scoped rows only (bob's row excluded).
- *  6. GET since cursor -> only rows with updated_at > since.
- *  7. GET cross-user isolation -> alice's GET never returns bob's rows
+ *  4. Stale/equal POST retries cannot overwrite a newer row.
+ *  5. Cross-user POST cannot overwrite a conversation owned by another user.
+ *  6. Validation -> missing `conversations` key returns 400 bad_request.
+ *  7. GET happy -> caller-scoped rows only (bob's row excluded).
+ *  8. GET since cursor -> only rows with updated_at > since.
+ *  9. GET cross-user isolation -> alice's GET never returns bob's rows
  *     even when both share a since cursor.
  *
  * Mocking strategy mirrors devices.test.ts: column-id stubs for the
- * `conversations` table, a tiny predicate parser for eq/and/gt, an
+ * `conversations` table, a tiny predicate parser for eq/and/gt/lt, an
  * in-memory `conversationStore`, and `requireAuth` faked via the same
  * `authState.userId` boolean gate.
  */
@@ -107,6 +109,7 @@ vi.mock("../db/schema", () => ({
 type Pred =
   | { kind: "eq"; col: keyof typeof COLS; value: unknown }
   | { kind: "gt"; col: keyof typeof COLS; value: number }
+  | { kind: "lt"; col: keyof typeof COLS; value: number }
   | { kind: "and"; preds: Pred[] }
 
 type OrderBy = { col: keyof typeof COLS; dir: "asc" | "desc" }
@@ -119,6 +122,11 @@ vi.mock("drizzle-orm", () => ({
   }),
   gt: (col: { __col: keyof typeof COLS }, value: number): Pred => ({
     kind: "gt",
+    col: col.__col,
+    value,
+  }),
+  lt: (col: { __col: keyof typeof COLS }, value: number): Pred => ({
+    kind: "lt",
     col: col.__col,
     value,
   }),
@@ -138,6 +146,10 @@ function matches(row: FakeConvRow, p: Pred): boolean {
     const v = (row as unknown as Record<string, unknown>)[p.col]
     return typeof v === "number" && v > (p.value as number)
   }
+  if (p.kind === "lt") {
+    const v = (row as unknown as Record<string, unknown>)[p.col]
+    return typeof v === "number" && v < (p.value as number)
+  }
   return false
 }
 
@@ -148,6 +160,7 @@ vi.mock("../db/drizzle", () => {
         let pendingValues: Record<string, unknown> = {}
         let conflictTarget: keyof typeof COLS | null = null
         let conflictSet: Record<string, unknown> = {}
+        let conflictWhere: Pred | null = null
         const builder = {
           values(v: Record<string, unknown>) {
             pendingValues = v
@@ -156,10 +169,12 @@ vi.mock("../db/drizzle", () => {
           onConflictDoUpdate(opts: {
             target: { __col: keyof typeof COLS } | Array<{ __col: keyof typeof COLS }>
             set: Record<string, unknown>
+            where?: Pred
           }) {
             const t = Array.isArray(opts.target) ? opts.target[0] : opts.target
             conflictTarget = t.__col
             conflictSet = opts.set
+            conflictWhere = opts.where ?? null
             // Drizzle returns a thenable — auto-execute on await.
             return {
               then(resolve: (v: unknown) => void) {
@@ -170,9 +185,9 @@ vi.mock("../db/drizzle", () => {
                         (pendingValues as Record<string, unknown>)[conflictTarget!],
                     )
                   : undefined
-                if (existing) {
+                if (existing && (!conflictWhere || matches(existing, conflictWhere))) {
                   Object.assign(existing, conflictSet)
-                } else {
+                } else if (!existing) {
                   conversationStore.push(pendingValues as unknown as FakeConvRow)
                 }
                 resolve(undefined)
@@ -218,7 +233,7 @@ vi.mock("../db/drizzle", () => {
   return { createDb }
 })
 
-// ─── Auth state + ../auth + ../index mocks ───────────────────────────────────
+// ─── Auth state + middleware mocks ────────────────────────────────────────────
 const { authState } = vi.hoisted(() => ({
   authState: { userId: "user_alice" as string | null },
 }))
@@ -241,7 +256,7 @@ vi.mock("../auth", () => ({
   }),
 }))
 
-vi.mock("../index.ts", async () => {
+vi.mock("../middleware", async () => {
   return {
     requireAuth: async (
       c: { set: (k: string, v: unknown) => void; json: (b: unknown, s: number) => Response },
@@ -350,6 +365,47 @@ describe("POST /api/sync/conversations", () => {
     expect(conversationStore.length).toBe(1)
     expect(conversationStore[0].title).toBe("Second")
     expect(conversationStore[0].updatedAt).toBe(200)
+  })
+
+  it("stale and equal retries do not overwrite a newer row", async () => {
+    seedConversation({
+      id: UUID_A,
+      userId: "user_alice",
+      updatedAt: 200,
+      title: "newest",
+    })
+
+    const stale = await callPost({
+      conversations: [validRow({ id: UUID_A, title: "stale", updated_at: 100 })],
+    })
+    const equal = await callPost({
+      conversations: [validRow({ id: UUID_A, title: "equal", updated_at: 200 })],
+    })
+
+    expect(stale.status).toBe(200)
+    expect(equal.status).toBe(200)
+    expect(conversationStore).toHaveLength(1)
+    expect(conversationStore[0].title).toBe("newest")
+    expect(conversationStore[0].updatedAt).toBe(200)
+  })
+
+  it("cross-user POST cannot overwrite another user's conversation", async () => {
+    seedConversation({
+      id: UUID_A,
+      userId: "user_bob",
+      updatedAt: 100,
+      title: "bob-owned",
+    })
+
+    const res = await callPost({
+      conversations: [validRow({ id: UUID_A, title: "attacker", updated_at: 200 })],
+    })
+
+    expect(res.status).toBe(200)
+    expect(conversationStore).toHaveLength(1)
+    expect(conversationStore[0].userId).toBe("user_bob")
+    expect(conversationStore[0].title).toBe("bob-owned")
+    expect(conversationStore[0].updatedAt).toBe(100)
   })
 
   it("validation: missing `conversations` key -> 400 bad_request", async () => {

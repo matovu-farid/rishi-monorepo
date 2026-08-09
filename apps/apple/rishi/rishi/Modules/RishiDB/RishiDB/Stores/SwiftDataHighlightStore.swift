@@ -96,6 +96,17 @@ public final class SwiftDataHighlightStore: HighlightStore, Sendable {
         }
     }
 
+    public func deleteIfUnchanged(_ id: HighlightID, matching expected: Highlight?) async throws -> Bool {
+        try await dbStore.write { context in
+            var descriptor = FetchDescriptor<HighlightEntity>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 1
+            guard let entity = try context.fetch(descriptor).first else { return expected == nil }
+            guard entity.highlightValue == expected else { return false }
+            context.delete(entity)
+            return true
+        }
+    }
+
     private static func deleteAll(_ context: ModelContext, matching predicate: Predicate<HighlightEntity>) throws {
         let descriptor = FetchDescriptor<HighlightEntity>(predicate: predicate)
         for item in try context.fetch(descriptor) {

@@ -39,10 +39,14 @@ struct SyncEngineTests {
         var globalCursor: Date?
         var resetCalls = 0
         var markDirtyFailures = 0
+        var cursors: [String: SyncCursorState] = [:]
+        var cursorSaveCount = 0
+        var recovery: SyncRecoveryState?
 
         private struct InjectedFailure: Error {}
 
         func seedGlobalCursor(_ date: Date?) { globalCursor = date }
+        func seedRecovery(_ state: SyncRecoveryState?) { recovery = state }
         func failNextMarkDirty() { markDirtyFailures += 1 }
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {
@@ -75,11 +79,30 @@ struct SyncEngineTests {
             cleaned.removeAll()
             globalCursor = nil
             resetCalls += 1
+            cursors.removeAll()
+            recovery = nil
         }
+
+        func cursorState(for scope: SyncCursorScope) async throws -> SyncCursorState? {
+            cursors[scope.rawValue]
+        }
+        func saveCursorState(_ state: SyncCursorState) async throws {
+            cursors[state.scope.rawValue] = state
+            cursorSaveCount += 1
+        }
+        func clearCursorState(for scope: SyncCursorScope) async throws {
+            cursors[scope.rawValue] = nil
+        }
+        func recoveryState() async throws -> SyncRecoveryState? { recovery }
+        func saveRecoveryState(_ state: SyncRecoveryState) async throws { recovery = state }
+        func clearRecoveryState() async throws { recovery = nil }
 
         func currentDirty() -> [SyncPendingItem] { dirty }
         func cleanedSnapshot() -> [(UUID, SyncEntityKind)] { cleaned }
         func resetCallCount() -> Int { resetCalls }
+        func incrementalCursor() -> SyncCursorState? { cursors[SyncCursorScope.incremental.rawValue] }
+        func savedCursorCount() -> Int { cursorSaveCount }
+        func recoverySnapshot() -> SyncRecoveryState? { recovery }
     }
 
     private actor StubBookStore: BookStore {
@@ -494,6 +517,43 @@ struct SyncEngineTests {
         })
     }
 
+    @Test("markBookDeleted requests a sync wave after queueing the tombstone")
+    func markBookDeletedRequestsSync() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let bookId = UUID()
+        try await engine.markBookDeleted(bookId)
+
+        try await waitForRequest(path: "/api/sync/changes")
+        #expect(EngineMockURLProtocol.capturedSnapshot().contains {
+            $0.url?.path == "/api/sync/changes"
+        })
+    }
+
     @Test("account reset waits for an active primary inbound wave before clearing account state")
     func resetForAccountSwitchWaitsForActiveWave() async throws {
         EngineMockURLProtocol.reset()
@@ -645,6 +705,185 @@ struct SyncEngineTests {
         #expect(wave.booksUploaded == 0)
         #expect(wave.positionsPushed == 0)
         #expect(wave.errors.isEmpty)
+    }
+
+    @Test("cursor pages are applied and committed only after each successful page")
+    func runOnceConsumesCursorPages() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let firstBody = Data("""
+        { "changes": [], "next_cursor": "page-2", "has_more": true, "cursor_scope": "incremental", "projection_complete": true }
+        """.utf8)
+        let secondBody = Data("""
+        { "changes": [], "has_more": false, "cursor_scope": "incremental", "projection_complete": true }
+        """.utf8)
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                if request.url?.query?.contains("cursor=page-2") == true {
+                    return (200, secondBody, nil)
+                }
+                return (200, firstBody, nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let wave = await engine.runOnce()
+
+        #expect(wave.errors.isEmpty)
+        #expect(EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/api/sync/changes" }.count == 2)
+        #expect(await metadata.incrementalCursor() == nil)
+        #expect(await metadata.savedCursorCount() == 1)
+    }
+
+    @Test("recovery resumes from its cursor and promotes only after a complete terminal page")
+    func runOnceResumesRecoveryBeforePromotion() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        await metadata.seedRecovery(SyncRecoveryState(reason: .incompleteProjection, accountGeneration: 0))
+        try await metadata.saveCursorState(.init(
+            scope: .recovery,
+            cursor: "recovery-page-2",
+            accountGeneration: 0
+        ))
+        let (storage, _) = try await makeFileStorage()
+        let terminalBody = Data("""
+        { "changes": [], "has_more": false, "cursor_scope": "full", "projection_complete": true }
+        """.utf8)
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                #expect(request.url?.query?.contains("scope=full") == true || request.url?.query?.contains("scope=incremental") == true)
+                if request.url?.query?.contains("scope=full") == true {
+                    #expect(request.url?.query?.contains("cursor=recovery-page-2") == true)
+                }
+                return (200, terminalBody, nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let wave = await engine.runOnce()
+
+        #expect(wave.errors.isEmpty)
+        #expect(await metadata.recoverySnapshot() == nil)
+        #expect(await metadata.cursorState(for: .recovery) == nil)
+        #expect(await metadata.incrementalCursor() == nil)
+    }
+
+    @Test("incomplete terminal projection schedules durable recovery")
+    func runOnceSchedulesRecoveryForIncompleteProjection() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let incompleteBody = Data("""
+        { "changes": [], "has_more": false, "cursor_scope": "incremental", "projection_complete": false, "is_truncated": true }
+        """.utf8)
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, incompleteBody, nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        _ = await engine.runOnce()
+
+        #expect(await metadata.recoverySnapshot() == .init(
+            reason: .incompleteProjection,
+            accountGeneration: 0
+        ))
+    }
+
+    @Test("an apply error leaves the page cursor uncommitted")
+    func runOnceDoesNotCommitFailedPage() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let body = Data("""
+        { "changes": [{ "kind": "unknown", "id": "11111111-1111-4111-8111-111111111111", "payload": {}, "updated_at": "2026-08-07T00:00:00Z", "deleted": false }], "next_cursor": "must-not-save", "has_more": true, "cursor_scope": "incremental", "projection_complete": true }
+        """.utf8)
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, body, nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+
+        let wave = await engine.runOnce()
+
+        #expect(wave.errors.contains { $0.contains("unknown kind") })
+        #expect(await metadata.incrementalCursor() == nil)
+        #expect(await metadata.savedCursorCount() == 0)
     }
 
     @Test("runOnce with 3 remote position changes → applier upserts 3")

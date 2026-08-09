@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { signApnsJwt } from "./apns";
+import { describe, it, expect, vi } from "vitest";
+import { createApnsSender, signApnsJwt } from "./apns";
 
 // Generate a P-256 key and export it to PKCS8 PEM so we can exercise the
 // real ES256 signing path without a real Apple .p8 credential.
@@ -53,5 +53,56 @@ describe("signApnsJwt", () => {
     const nowSec = Math.floor(Date.now() / 1000);
     expect(payload.iat).toBeGreaterThanOrEqual(nowSec - 60);
     expect(payload.iat).toBeLessThanOrEqual(nowSec + 60);
+  });
+});
+
+describe("createApnsSender", () => {
+  it("sends a visible alert push with the share notification contract", async () => {
+    const keyP8 = await generateP8Pem();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const sender = createApnsSender({
+        keyP8,
+        keyId: "ABC1234567",
+        teamId: "TEAM123456",
+      });
+      await sender.sendAlertPush({
+        deviceToken: "device-token",
+        topic: "org.fidexa.rishi",
+        env: "production",
+        title: "New books shared with you",
+        body: "2 books were shared with you.",
+        payload: { rishi: { kind: "share.created", package_id: "package-1" } },
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.push.apple.com/3/device/device-token",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+            "apns-topic": "org.fidexa.rishi",
+          }),
+          body: expect.stringContaining('"share.created"'),
+        }),
+      );
+      const request = (fetchMock as unknown as {
+        mock: { calls: Array<[string, RequestInit]> };
+      }).mock.calls[0]?.[1];
+      expect(JSON.parse(String(request.body))).toMatchObject({
+        aps: {
+          alert: {
+            title: "New books shared with you",
+            body: "2 books were shared with you.",
+          },
+          sound: "default",
+        },
+        rishi: { kind: "share.created", package_id: "package-1" },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -10,7 +10,10 @@ final class AppRouter {
 
     var path: NavigationPath = NavigationPath()
 
+    private var pendingReaderTour: (userID: UserID, bookID: BookID)?
+
     private let deepLinks = DeepLinkRouter()
+    private let pendingShareStore = PendingShareStore.shared
 
     var onBookResolved: ((Book) -> Void)?
 
@@ -34,8 +37,7 @@ final class AppRouter {
             break
 
         case .shareRedeem(let token):
-
-            _ = token
+            Task { await pendingShareStore.enqueue(token: token) }
 
         case .openBook(let bookId):
             guard let bookStore else { return }
@@ -80,6 +82,25 @@ final class AppRouter {
         var p = NavigationPath()
         p.append(ConversationsRoute())
         path = p
+    }
+
+    /// Transient, account-scoped request from the first-library import flow.
+    /// It is intentionally not part of the persisted NavigationPath.
+    func requestReaderTour(for bookID: BookID, userID: UserID) {
+        pendingReaderTour = (userID: userID, bookID: bookID)
+    }
+
+    func takeReaderTour(for bookID: BookID, userID: UserID) -> Bool {
+        guard let pendingReaderTour,
+              pendingReaderTour.userID == userID,
+              pendingReaderTour.bookID == bookID
+        else { return false }
+        self.pendingReaderTour = nil
+        return true
+    }
+
+    func clearReaderTourRequest() {
+        pendingReaderTour = nil
     }
 
     func applyRestored(

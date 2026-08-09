@@ -19,6 +19,8 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
     private let settingsStore: any TTSSettingsStore
     private let userId: UserID
     private let sessionToken: UUID
+    private let onUtteranceFinished: (@Sendable () async -> Void)?
+    private let onUtteranceFailed: (@Sendable () async -> Void)?
 
     init(
         player: any TTSPlaying,
@@ -26,13 +28,17 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
         settingsStore: any TTSSettingsStore,
         userId: UserID,
         sessionToken: UUID = UUID(),
-        voices: [TTSVoice] = CustomTTSEngine.defaultVoices
+        voices: [TTSVoice] = CustomTTSEngine.defaultVoices,
+        onUtteranceFinished: (@Sendable () async -> Void)? = nil,
+        onUtteranceFailed: (@Sendable () async -> Void)? = nil
     ) {
         self.player = player
         self.state = state
         self.settingsStore = settingsStore
         self.userId = userId
         self.sessionToken = sessionToken
+        self.onUtteranceFinished = onUtteranceFinished
+        self.onUtteranceFailed = onUtteranceFailed
         self.availableVoices = voices
     }
 
@@ -72,6 +78,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                     .sorted()
                     .first
                 else {
+                    await onUtteranceFailed?()
                     return .failure(.languageNotSupported(language: language, cause: nil))
                 }
                 voice = matchingVoice
@@ -136,6 +143,8 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                 Task { await player.stop() }
             }
 
+            await onUtteranceFinished?()
+
             let elapsedMs = Int(startedAt.duration(to: .now) / .milliseconds(1))
             let statusAtEnd = await MainActor.run { state.status.rawValue }
             Log.event("tts.readaloud.speak.end", data: [
@@ -149,6 +158,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
 
             return .success(())
         } catch {
+            if !(error is CancellationError) {
+                await onUtteranceFailed?()
+            }
             if let allowance = error as? WorkerAllowanceError,
                let activeTokens {
                 await MainActor.run {

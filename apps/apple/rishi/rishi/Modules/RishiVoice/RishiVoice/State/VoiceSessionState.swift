@@ -28,11 +28,54 @@ public final class VoiceSessionState {
     /// (e.g. `VoiceSessionView`) reads this to show a warning banner.
     public var isFinalInterval: Bool = false
 
+    /// Main-actor lifecycle gate used to serialize terminal teardown against
+    /// a pending `.live` publication from an async transport callback.
+    private var lifecycleToken: UUID?
+    private var lifecycleIsEnding = false
+
     /// Chrome waveform / status hint. Updated by ``apply(status:)`` and
     /// ``VoiceTranscriptBridge`` transcript events.
     public var activityPhase: VoiceActivityPhase = .connecting
 
     public init() {}
+
+    /// Begins a new session lifecycle. This is intentionally separate from
+    /// `reset()` so a reset cannot accidentally reopen a session that is
+    /// already being torn down.
+    public func beginLifecycle(_ token: UUID) {
+        guard lifecycleToken != token else { return }
+        lifecycleToken = token
+        lifecycleIsEnding = false
+    }
+
+    /// Marks teardown before any async transport cleanup begins.
+    public func beginEndingLifecycle(_ token: UUID) {
+        guard lifecycleToken == token else { return }
+        lifecycleIsEnding = true
+    }
+
+    /// Publishes `.live` only if teardown has not already won the lifecycle
+    /// race. The check and mutation share MainActor isolation.
+    @discardableResult
+    public func applyLiveIfActive(_ token: UUID) -> Bool {
+        guard lifecycleToken == token, !lifecycleIsEnding else { return false }
+        apply(status: .live)
+        return true
+    }
+
+    /// Publishes a failure only while the originating session still owns the
+    /// shared state object.
+    @discardableResult
+    public func applyFailureIfActive(
+        _ token: UUID,
+        reason: VoiceSessionFailureReason,
+        message: String?
+    ) -> Bool {
+        guard lifecycleToken == token else { return false }
+        apply(status: .failed(reason: reason))
+        if let message { recordError(message) }
+        return true
+    }
 
     public func apply(status: VoiceSessionStatus) {
         self.status = status

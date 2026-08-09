@@ -4,7 +4,7 @@ import { conversations, messages } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { requireAuth } from "../middleware";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
-import { and, desc, eq, gt, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
 
 /**
  * Chat sync — Phase 16-03 Task 2.
@@ -23,8 +23,9 @@ import { and, desc, eq, gt, inArray } from "drizzle-orm";
  *    inArray(messages.conversationId, ids) — Drizzle's native join is
  *    avoided so the in-memory test mock stays trivial.
  *
- * Conflict resolution: Last-Writer-Wins on (id, updated_at). On conflict
- * we overwrite content + updated_at; conversationId stays immutable in v1.
+ * Conflict resolution: Last-Writer-Wins on (id, updated_at). On conflict we
+ * overwrite content + updated_at only when the incoming timestamp is strictly
+ * newer; conversationId stays immutable in v1.
  */
 
 const RowSchema = z.object({
@@ -85,6 +86,9 @@ messagesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
           content: row.content,
           updatedAt: row.updated_at,
         },
+        // Only a strictly newer client version may replace the existing row.
+        // Stale and equal retries remain idempotent and cannot overwrite it.
+        where: lt(messages.updatedAt, row.updated_at),
       });
     applied += 1;
   }

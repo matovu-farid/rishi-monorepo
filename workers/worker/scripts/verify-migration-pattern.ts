@@ -8,15 +8,17 @@ const workerDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationsDirectory = resolve(workerDirectory, "drizzle/migrations");
 const config = readFileSync(resolve(workerDirectory, "wrangler.jsonc"), "utf8");
 
-const configuredNested = config.match(/migrations_pattern"\s*:\s*"[^"]*?,([^/]+\/migration\.sql)/)?.[1];
-if (!configuredNested) {
+const configuredNested = [...config.matchAll(/,([^,}]+\/migration\.sql)/g)].map((match) => match[1]);
+if (configuredNested.length === 0) {
   throw new Error("wrangler.jsonc must explicitly allowlist the active nested Drizzle migration");
 }
 
-try {
-  readFileSync(resolve(migrationsDirectory, configuredNested), "utf8");
-} catch {
-  throw new Error(`Configured nested migration does not exist: ${configuredNested}`);
+for (const migration of configuredNested) {
+  try {
+    readFileSync(resolve(migrationsDirectory, migration), "utf8");
+  } catch {
+    throw new Error(`Configured nested migration does not exist: ${migration}`);
+  }
 }
 
 const knownExcludedReplacementMigrations = new Set([
@@ -37,7 +39,7 @@ const nestedMigrations = readdirSync(migrationsDirectory, { withFileTypes: true 
   });
 
 const unknownNestedMigrations = nestedMigrations.filter((name) =>
-  name !== configuredNested && !knownExcludedReplacementMigrations.has(name),
+  !configuredNested.includes(name) && !knownExcludedReplacementMigrations.has(name),
 );
 
 if (unknownNestedMigrations.length > 0) {
@@ -48,4 +50,4 @@ if (unknownNestedMigrations.length > 0) {
   ].join("\n"));
 }
 
-console.log(`Migration pattern verified: ${configuredNested}`);
+console.log(`Migration pattern verified: ${configuredNested.join(", ")}`);

@@ -67,7 +67,7 @@ public final class LibraryViewModel {
     private let positionLoader: PositionLoader
     private let coverResolver: BookCoverResolver
     private let deleteBook: @Sendable (Book) async throws -> Void
-    private let onBookDeleted: (@Sendable (BookID) async -> Void)?
+    private let onBookDeleted: (@Sendable (BookID) async throws -> Void)?
 
     private var searchTask: Task<Void, Never>? = nil
 
@@ -81,7 +81,7 @@ public final class LibraryViewModel {
         positionLoader: PositionLoader,
         coverResolver: BookCoverResolver,
         deleteBook: @escaping @Sendable (Book) async throws -> Void,
-        onBookDeleted: (@Sendable (BookID) async -> Void)? = nil
+        onBookDeleted: (@Sendable (BookID) async throws -> Void)? = nil
     ) {
         self.bookStore = bookStore
         self.currentUserId = currentUserId
@@ -201,8 +201,10 @@ public final class LibraryViewModel {
     public func delete(_ book: Book) async {
         cancelSearchDebounce()
         do {
+            // Persist the tombstone first. If this fails, keep the local book
+            // intact so a later retry cannot lose the deletion remotely.
+            try await onBookDeleted?(book.id)
             try await deleteBook(book)
-            await onBookDeleted?(book.id)
             books.removeAll { existing in existing.id == book.id }
             positionsByBookId[book.id] = nil
             coverURLs[book.id] = nil

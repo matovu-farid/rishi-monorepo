@@ -47,6 +47,7 @@ struct SignedInContentDependencies {
                 messageStore: services.chat.messageStore,
                 readerDefaults: services.settings.readerDefaults,
                 syncEngine: services.sync.engine,
+                sharePackageService: services.library.sharePackageService,
                 entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
                 entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
                 groupID: services.billing.groupID,

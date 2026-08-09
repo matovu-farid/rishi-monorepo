@@ -13,6 +13,17 @@ import Foundation
 /// store writes with conflict resolution.
 public final class RemoteChangeFetcher: Sendable {
 
+    private enum ScopeMismatch: Error, CustomStringConvertible {
+        case expected(SyncCursorScope, actual: SyncCursorScope)
+
+        var description: String {
+            switch self {
+            case let .expected(expected, actual):
+                return "sync cursor scope mismatch: expected \(expected.rawValue), got \(actual.rawValue)"
+            }
+        }
+    }
+
     private let workerClient: WorkerClient
     private let metadataStore: any SyncMetadataStore
 
@@ -23,6 +34,28 @@ public final class RemoteChangeFetcher: Sendable {
 
     public func fetch() async throws -> [SyncChange] {
         return try await fetchSnapshot().changes
+    }
+
+    /// Fetches one cursor page. The fetcher is intentionally read-only: the
+    /// caller commits `page.nextCursor` only after applying the page safely.
+    /// A nil cursor requests the Worker's initial cursor page; old Workers
+    /// return their legacy one-page envelope, which decodes through the same
+    /// additive response defaults.
+    public func fetchPage(
+        scope: SyncCursorScope,
+        cursor: String?
+    ) async throws -> SyncChangesPage {
+        let response = try await workerClient.send(SyncChangesEndpoint(scope: scope, cursor: cursor))
+        if let responseScope = response.cursorScope, responseScope != scope {
+            throw ScopeMismatch.expected(scope, actual: responseScope)
+        }
+        Log.event("sync.fetch.page.completed", level: .info, data: [
+            "scope": scope.rawValue,
+            "count": String(response.changes.count),
+            "has_more": String(response.hasMore),
+            "projection_complete": String(response.projectionComplete),
+        ])
+        return response
     }
 
     public func fetchSnapshot() async throws -> SyncObject {

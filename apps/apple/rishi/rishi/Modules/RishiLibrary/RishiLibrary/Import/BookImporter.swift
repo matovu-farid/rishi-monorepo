@@ -9,6 +9,7 @@ struct BookImporter: Sendable {
     private let coverExtractors: [String: any CoverExtractor]
     private let metadataExtractors: [String: any MetadataExtractor]
     private let bookIndexingHook: any BookIndexingHook
+    private let isTombstoned: (@Sendable (BookID) async -> Bool)?
 
     private var fileManager: FileManager { .default }
 
@@ -18,7 +19,8 @@ struct BookImporter: Sendable {
         bookStore: any BookStore,
         coverExtractors: [String: any CoverExtractor],
         metadataExtractors: [String: any MetadataExtractor],
-        bookIndexingHook: any BookIndexingHook
+        bookIndexingHook: any BookIndexingHook,
+        isTombstoned: (@Sendable (BookID) async -> Bool)? = nil
     ) {
         self.rootURL = rootURL
         self.booksDirURL = booksDirURL
@@ -26,6 +28,7 @@ struct BookImporter: Sendable {
         self.coverExtractors = coverExtractors
         self.metadataExtractors = metadataExtractors
         self.bookIndexingHook = bookIndexingHook
+        self.isTombstoned = isTombstoned
     }
 
     func importBook(from sourceURL: URL, ownerId: UserID) async throws -> Book {
@@ -41,12 +44,26 @@ struct BookImporter: Sendable {
             metadata = await extractor.extractMetadata(from: sourceURL)
         }
 
-        let bookId =
-            DeterministicBookID.make(
-                title: metadata.title,
-                author: metadata.author,
-                format: format
-            ) ?? UUID()
+        let deterministicID = DeterministicBookID.make(
+            title: metadata.title,
+            author: metadata.author,
+            format: format
+        )
+        let bookId: BookID
+        if let deterministicID,
+           let isTombstoned,
+           await isTombstoned(deterministicID) {
+            // A deleted logical book ID is never reused. Re-importing the
+            // same source creates a new entity instead of resurrecting a
+            // tombstone that may still be pending locally or remotely.
+            bookId = UUID()
+            Log.event("library.import.identity.rotated", level: .info, data: [
+                "deleted_book_id": deterministicID.uuidString,
+                "new_book_id": bookId.uuidString,
+            ])
+        } else {
+            bookId = deterministicID ?? UUID()
+        }
         let bookDir = booksDirURL.appendingPathComponent(
             bookId.uuidString,
             isDirectory: true

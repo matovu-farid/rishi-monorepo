@@ -138,6 +138,66 @@ export const books = sqliteTable("books", {
   extractionError: text("extraction_error"),
 });
 
+export const sharePackages = sqliteTable(
+  "share_packages",
+  {
+    id: text("id").primaryKey(),
+    senderUserId: text("sender_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    recipientUserId: text("recipient_user_id").references(() => user.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash"),
+    kind: text("kind", { enum: ["single", "selection", "library"] }).notNull(),
+    status: text("status", { enum: ["building", "pending", "claimed", "expired"] })
+      .notNull()
+      .default("pending"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    claimedAt: integer("claimed_at", { mode: "timestamp" }),
+    claimedBy: text("claimed_by").references(() => user.id, { onDelete: "set null" }),
+  },
+  (t) => ({
+    recipientStatus: index("share_packages_recipient_status_idx").on(
+      t.recipientUserId,
+      t.status,
+    ),
+    senderIdempotency: uniqueIndex("share_packages_sender_idempotency_uniq").on(
+      t.senderUserId,
+      t.idempotencyKey,
+    ),
+    tokenHash: uniqueIndex("share_packages_token_hash_uniq").on(t.tokenHash),
+  }),
+);
+
+export const sharePackageItems = sqliteTable(
+  "share_package_items",
+  {
+    id: text("id").primaryKey(),
+    packageId: text("package_id")
+      .notNull()
+      .references(() => sharePackages.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    author: text("author"),
+    format: text("format").notNull(),
+    // Reference to the immutable source object in BOOK_STORAGE. This is not
+    // a package-owned copy; each row contributes one storage reference.
+    fileR2Key: text("file_r2_key").notNull(),
+    coverR2Key: text("cover_r2_key"),
+    fileHash: text("file_hash"),
+    fileSize: integer("file_size").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => ({
+    byPackage: index("share_package_items_package_id_idx").on(t.packageId),
+  }),
+);
+
+export type SharePackage = typeof sharePackages.$inferSelect;
+export type NewSharePackage = typeof sharePackages.$inferInsert;
+export type SharePackageItem = typeof sharePackageItems.$inferSelect;
+export type NewSharePackageItem = typeof sharePackageItems.$inferInsert;
+
 // ─── Chapter index sync ─────────────────────────────────────────────────────
 // One parent row is the LWW envelope; child rows retain the normalized,
 // ordered chapter summaries for a single content version.
@@ -200,6 +260,36 @@ export const syncMeta = sqliteTable("sync_meta", {
   lastSyncVersion: integer("last_sync_version").default(0),
   lastSyncAt: integer("last_sync_at"), // Unix timestamp ms
 });
+
+// Append-only sync command ledger. The projection tables above remain the
+// read model for now, while this ledger gives retries and future rebuilds a
+// durable record of every accepted, user-scoped sync operation. operationId
+// is supplied by clients when available; legacy clients use a deterministic
+// server fallback so retrying the same envelope is idempotent.
+export const syncEvents = sqliteTable(
+  "sync_events",
+  {
+    sequence: integer("sequence").primaryKey({ autoIncrement: true }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    operationId: text("operation_id").notNull(),
+    status: text("status", { enum: ["pending", "applied", "rejected"] }).notNull().default("pending"),
+    kind: text("kind").notNull(),
+    entityId: text("entity_id").notNull(),
+    payload: text("payload").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    deleted: integer("deleted", { mode: "boolean" }).notNull(),
+    recordedAt: integer("recorded_at").notNull(),
+  },
+  (t) => ({
+    userSequence: index("sync_events_user_sequence_idx").on(t.userId, t.sequence),
+    userOperation: uniqueIndex("sync_events_user_operation_idx").on(t.userId, t.operationId),
+  }),
+);
+
+export type SyncEvent = typeof syncEvents.$inferSelect;
+export type NewSyncEvent = typeof syncEvents.$inferInsert;
 
 // ─── Highlights table ─────────────────────────────────────────────────────────
 // Stores text highlights/annotations for books with sync support.

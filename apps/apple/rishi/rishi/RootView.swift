@@ -14,6 +14,7 @@ struct RootView: View {
     @State private var bootstrapped = false
 
     @State private var showOnboarding = false
+    @State private var pendingShareMessage: String?
     @State private var showNoCardTrialIntro = false
     #if targetEnvironment(macCatalyst)
         @State private var showSubscriptions = false
@@ -53,12 +54,15 @@ struct RootView: View {
                 \.signOut,
                 {
                     Task {
+                        router.clearReaderTourRequest()
+                        deps.services?.voice.presenter.cancelPrewarm()
                         #if targetEnvironment(macCatalyst)
                             showSubscriptions = false
                             if case .signedIn(let user) = currentUserBox.state {
                                 readerWindows.invalidate(userID: user.id)
                             }
                         #endif
+                        await deps.services?.voice.presenter.requestEnd()
                         await deps.performSignOut(currentUserBox: currentUserBox)
                         showOnboarding = false
                         showNoCardTrialIntro = false
@@ -160,6 +164,24 @@ struct RootView: View {
             bootstrapped = true
             await updateOnboardingPresentation(deps: deps)
         }
+        .task(id: currentUserBox.isSigned) {
+            await redeemPendingSharesIfEligible(deps: deps)
+        }
+        .onChange(of: showOnboarding) { _, isPresented in
+            guard !isPresented else { return }
+            Task { await redeemPendingSharesIfEligible(deps: deps) }
+        }
+        .alert(
+            "Shared books",
+            isPresented: Binding(
+                get: { pendingShareMessage != nil },
+                set: { if !$0 { pendingShareMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(pendingShareMessage ?? "")
+        }
         #if canImport(UIKit)
             .fullScreenCover(isPresented: $showOnboarding) {
                 OnboardingHost(
@@ -193,6 +215,18 @@ struct RootView: View {
     private func updateOnboardingPresentation(deps: AppDependencies) async {
         let completed = await deps.services!.onboarding.state.hasCompletedOnboarding()
         showOnboarding = !completed
+    }
+
+    private func redeemPendingSharesIfEligible(deps: AppDependencies) async {
+        guard currentUserBox.isSigned else { return }
+        guard await deps.services!.onboarding.state.hasCompletedOnboarding() else { return }
+        let result = await deps.services!.library.sharePackageService.redeemPendingIfEligible()
+        guard result.discardedCount > 0 else { return }
+        await MainActor.run {
+            pendingShareMessage = result.discardedCount == 1
+                ? "One shared link is expired or no longer available."
+                : "\(result.discardedCount) shared links are expired or no longer available."
+        }
     }
 
     /// Shows the no-card trial explainer exactly once per account when the

@@ -39,8 +39,11 @@ public final class BookmarkUploader: Sendable {
         var changes: [SyncChange] = []
         var liveIds: [UUID] = []
         var tombstoneIds: [UUID] = []
+        var expectedDirtyAt: [UUID: Date] = [:]
 
         for item in items where item.kind == .bookmark {
+            let capturedDirtyAt = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .bookmark)
+            expectedDirtyAt[item.entityId] = capturedDirtyAt
             if let bookmark = try await bookmarkStore.bookmark(item.entityId) {
                 do {
                     let payload = try SyncPayloadCodec.encodeBookmark(bookmark)
@@ -50,7 +53,7 @@ public final class BookmarkUploader: Sendable {
                         payload: payload,
                         // Bookmarks don't carry updatedAt; createdAt is the
                         // monotone LWW key (ChangeApplier.applyBookmark compares it).
-                        updatedAt: try await metadataStore.dirtyAt(entityId: bookmark.id, kind: .bookmark) ?? bookmark.createdAt,
+                        updatedAt: capturedDirtyAt ?? bookmark.createdAt,
                         deleted: false
                     ))
                     liveIds.append(item.entityId)
@@ -63,7 +66,7 @@ public final class BookmarkUploader: Sendable {
                     kind: SyncEntityKind.bookmark.rawValue,
                     id: item.entityId,
                     payload: SyncOpaqueJSON(data: Data("{}".utf8)),
-                    updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .bookmark) ?? Date(),
+                    updatedAt: capturedDirtyAt ?? Date(),
                     deleted: true
                 ))
                 tombstoneIds.append(item.entityId)
@@ -78,17 +81,27 @@ public final class BookmarkUploader: Sendable {
             "tombstones": String(tombstoneIds.count),
         ])
 
+        var acknowledgedCount = 0
         for id in liveIds {
-            try await metadataStore.markClean(
+            if try await metadataStore.markCleanIfUnchanged(
                 entityId: id,
                 kind: .bookmark,
+                expectedDirtyAt: expectedDirtyAt[id],
                 lastSyncedAt: response.acceptedAt,
                 remoteEtag: nil
-            )
+            ) { acknowledgedCount += 1 }
         }
         for id in tombstoneIds {
-            try await metadataStore.forget(entityId: id, kind: .bookmark)
+            if try await metadataStore.acknowledgeTombstoneIfUnchanged(
+                entityId: id,
+                kind: .bookmark,
+                expectedDirtyAt: expectedDirtyAt[id],
+                lastSyncedAt: response.acceptedAt,
+                remoteEtag: nil
+            ) {
+                acknowledgedCount += 1
+            }
         }
-        return liveIds.count + tombstoneIds.count
+        return acknowledgedCount
     }
 }

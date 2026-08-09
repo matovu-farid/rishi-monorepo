@@ -144,6 +144,12 @@ enum ServiceGraphFactory {
                 await chapterIndexGenerationDispatcher.refresh(bookID)
             }
         )
+        let syncMetadataStore: SwiftDataSyncMetadataStore
+        do {
+            syncMetadataStore = try SyncMetadataStoreBootstrap.makeStore()
+        } catch {
+            fatalError("Failed to initialize sync metadata store: \(error)")
+        }
         let bookFileStorage = BookFileStorage(
             rootURL: documentsURL,
             bookStore: bookStore,
@@ -155,15 +161,11 @@ enum ServiceGraphFactory {
                 "pdf": PDFKitMetadataExtractor(),
                 "epub": EpubMetadataExtractor(),
             ],
-            bookIndexingHook: indexingHook
+            bookIndexingHook: indexingHook,
+            isTombstoned: { bookId in
+                (try? await syncMetadataStore.isTombstone(entityId: bookId, kind: .book)) ?? false
+            }
         )
-
-        let syncMetadataStore: SwiftDataSyncMetadataStore
-        do {
-            syncMetadataStore = try SyncMetadataStoreBootstrap.makeStore()
-        } catch {
-            fatalError("Failed to initialize sync metadata store: \(error)")
-        }
         let syncQueue = SyncQueue(metadataStore: syncMetadataStore)
         let syncStatus = SyncStatus()
 
@@ -243,6 +245,9 @@ enum ServiceGraphFactory {
             accountIsActive: { await userIdBox.value != nil },
             bookMaterializer: { book, r2Key in
                 try await bookDownloadCoordinator.downloadAndMaterialize(book, r2Key: r2Key)
+            },
+            bookMaterialCleanupByID: { bookID in
+                try await bookFileStorage.deleteMaterial(forBookID: bookID)
             }
         )
         let conversationsFetcher = ConversationsFetcher(
@@ -327,6 +332,14 @@ enum ServiceGraphFactory {
                 await userIdBox.value
             },
             onBookImported: syncAfterBookImported
+        )
+
+        let sharePackageService = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: bookFileStorage,
+            syncEngine: syncEngine,
+            currentUserId: { await userIdBox.value }
         )
 
         let sampleBookInstaller = SampleBookInstaller(
@@ -509,7 +522,8 @@ enum ServiceGraphFactory {
                 sampleReaderInstaller: sampleReaderInstaller,
                 readerSettingsStore: readerSettingsStore,
                 bookSearch: bookSearch,
-                indexingHook: indexingHook
+                indexingHook: indexingHook,
+                sharePackageService: sharePackageService
             ),
             audio: AudioRuntime(
                 coordinator: audioStack.coordinator,

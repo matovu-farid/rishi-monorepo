@@ -25,7 +25,10 @@ public final class ChapterIndexUploader: Sendable {
     public func pushPending(items: [SyncQueueItem]) async throws -> Int {
         var changes: [SyncChange] = []
         var resolved: [UUID] = []
+        var expectedDirtyAt: [UUID: Date] = [:]
         for item in items where item.kind == .chapterIndex {
+            let capturedDirtyAt = try await metadataStore.dirtyAt(entityId: item.entityId, kind: .chapterIndex)
+            expectedDirtyAt[item.entityId] = capturedDirtyAt
             guard let book = try await bookStore.book(item.entityId) else { continue }
             guard let contentVersion = book.chapterIndexContentVersion,
                   let index = try await persistence.chapterIndex(bookID: book.id, contentVersion: contentVersion) else {
@@ -38,16 +41,19 @@ public final class ChapterIndexUploader: Sendable {
                 kind: SyncEntityKind.chapterIndex.rawValue,
                 id: book.id,
                 payload: try SyncPayloadCodec.encodeChapterIndex(index),
-                updatedAt: try await metadataStore.dirtyAt(entityId: item.entityId, kind: .chapterIndex) ?? index.updatedAt,
+                updatedAt: capturedDirtyAt ?? index.updatedAt,
                 deleted: false
             ))
             resolved.append(item.entityId)
         }
         guard !changes.isEmpty else { return 0 }
         let response = try await workerClient.send(SyncPushEndpoint(body: .init(changes: changes)))
+        var acknowledgedCount = 0
         for id in resolved {
-            try await metadataStore.markClean(entityId: id, kind: .chapterIndex, lastSyncedAt: response.acceptedAt, remoteEtag: nil)
+            if try await metadataStore.markCleanIfUnchanged(entityId: id, kind: .chapterIndex, expectedDirtyAt: expectedDirtyAt[id], lastSyncedAt: response.acceptedAt, remoteEtag: nil) {
+                acknowledgedCount += 1
+            }
         }
-        return resolved.count
+        return acknowledgedCount
     }
 }

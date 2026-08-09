@@ -94,6 +94,17 @@ public final class SwiftDataBookmarkStore: BookmarkStore, Sendable {
         }
     }
 
+    public func deleteIfUnchanged(_ id: BookmarkID, matching expected: Bookmark?) async throws -> Bool {
+        try await dbStore.write { context in
+            var descriptor = FetchDescriptor<BookmarkEntity>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 1
+            guard let entity = try context.fetch(descriptor).first else { return expected == nil }
+            guard entity.bookmarkValue == expected else { return false }
+            context.delete(entity)
+            return true
+        }
+    }
+
     private static func deleteAll(_ context: ModelContext, matching predicate: Predicate<BookmarkEntity>) throws {
         let descriptor = FetchDescriptor<BookmarkEntity>(predicate: predicate)
         for item in try context.fetch(descriptor) {
