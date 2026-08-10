@@ -31,6 +31,16 @@ import MediaPlayer
 import UIKit
 #endif
 
+// MPMediaItemArtwork may request its image from MediaPlayer's private access
+// queue. Keep construction of the request handler outside the @MainActor
+// adapter so the callback is not implicitly isolated to the main actor.
+#if canImport(UIKit)
+private func makeNowPlayingArtwork(from data: Data) -> MPMediaItemArtwork? {
+    guard let image = UIImage(data: data) else { return nil }
+    return MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+}
+#endif
+
 /// Wraps `MPNowPlayingInfoCenter.default()`. `@MainActor` because the
 /// underlying API is UIKit-style and re-entrant updates to
 /// `nowPlayingInfo` must serialise on the main run-loop.
@@ -59,8 +69,9 @@ public final class MPNowPlayingInfoCenterAdapter: NowPlayingInfoSurface {
         }
         info[MPNowPlayingInfoPropertyMediaType] = MPMediaType.audioBook.rawValue
         #if canImport(UIKit)
-        if let data = metadata.coverData, let image = UIImage(data: data) {
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        if let data = metadata.coverData,
+           let artwork = makeNowPlayingArtwork(from: data) {
+            info[MPMediaItemPropertyArtwork] = artwork
         }
         #endif
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info

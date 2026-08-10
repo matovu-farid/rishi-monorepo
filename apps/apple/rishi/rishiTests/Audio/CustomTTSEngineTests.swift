@@ -158,6 +158,40 @@ struct CustomTTSEngineTests {
         #expect(state.typedFailureTokens?.sessionToken == sessionToken)
         #expect(await player.request?.sessionToken == sessionToken)
     }
+
+    @Test("cancellation waits for the player stop before speak returns")
+    func cancellationWaitsForPlayerStop() async {
+        let state = TTSPlaybackState()
+        let player = CancellationOrderingTTSPlayer()
+        let engine = CustomTTSEngine(
+            player: player,
+            state: state,
+            settingsStore: InMemoryTTSSettingsStore(),
+            userId: UserID(),
+            voices: [englishVoice]
+        )
+        let completed = SpeakCompletionFlag()
+        let speakTask = Task {
+            let result = await engine.speak(
+                text: "Cancellation ordering.",
+                delay: 0,
+                voiceOrLanguage: .left(englishVoice)
+            ) { _ in }
+            await completed.markDone()
+            return result
+        }
+
+        await player.waitForStart()
+        speakTask.cancel()
+        await player.waitForStopStart()
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await completed.isDone() == false)
+
+        await player.releaseStop()
+        _ = await speakTask.value
+        #expect(await completed.isDone())
+    }
 }
 
 private actor SpeakCompletionFlag {
@@ -320,6 +354,67 @@ private actor AllowanceFailingTTSPlayer: TTSPlaying {
     func pause() async {}
     func resume() async {}
     func stop() async {}
+}
+
+private actor CancellationOrderingTTSPlayer: TTSPlaying {
+    private var started = false
+    private var stopStarted = false
+    private var finishContinuation: CheckedContinuation<Void, Error>?
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var stopStartContinuation: CheckedContinuation<Void, Never>?
+    private var stopReleaseContinuation: CheckedContinuation<Void, Never>?
+
+    func start(request: TTSStreamRequest) async {
+        started = true
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
+    func waitUntilFinished() async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                finishContinuation = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelFinish() }
+        }
+    }
+
+    func stop() async {
+        stopStarted = true
+        stopStartContinuation?.resume()
+        stopStartContinuation = nil
+        await withCheckedContinuation { continuation in
+            stopReleaseContinuation = continuation
+        }
+    }
+
+    func pause() async {}
+    func resume() async {}
+
+    func waitForStart() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startContinuation = continuation
+        }
+    }
+
+    func waitForStopStart() async {
+        guard !stopStarted else { return }
+        await withCheckedContinuation { continuation in
+            stopStartContinuation = continuation
+        }
+    }
+
+    func releaseStop() {
+        stopReleaseContinuation?.resume()
+        stopReleaseContinuation = nil
+    }
+
+    private func cancelFinish() {
+        finishContinuation?.resume(throwing: CancellationError())
+        finishContinuation = nil
+    }
 }
 
 private extension Result where Failure == TTSError {

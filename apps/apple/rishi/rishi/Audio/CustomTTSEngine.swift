@@ -65,6 +65,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
         onSpeakRange: @escaping (Range<String.Index>) -> Void
     ) async -> Result<Void, TTSError> {
         var activeTokens: TTSPlaybackTokenSnapshot?
+        let cancellationStop = CancellationStopGate()
         do {
             try Task.checkCancellation()
 
@@ -129,6 +130,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                         requestToken: UUID()
                     )
                     activeTokens = request.tokenSnapshot
+                    await cancellationStop.setCurrent(request.tokenSnapshot)
                     let piecePrefix = String(piece.prefix(60))
                         .replacingOccurrences(of: "\n", with: " ")
                     Log.event("tts.readaloud.speak.piece", data: [
@@ -139,8 +141,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                     await player.start(request: request)
                     try await player.waitUntilFinished()
                 }
+                try Task.checkCancellation()
             } onCancel: {
-                Task { await player.stop() }
+                Task { await cancellationStop.startIfNeeded(using: player) }
             }
 
             await onUtteranceFinished?()
@@ -158,7 +161,15 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
 
             return .success(())
         } catch {
-            if !(error is CancellationError) {
+            let wasCancelled = error is CancellationError || Task.isCancelled
+            if wasCancelled {
+                // The cancellation handler starts the stop asynchronously. Do
+                // not let Readium observe this utterance as finished until the
+                // underlying player has completed stopping; otherwise the next
+                // utterance can race the old player's teardown.
+                await cancellationStop.wait(using: player)
+            }
+            if !wasCancelled {
                 await onUtteranceFailed?()
             }
             if let allowance = error as? WorkerAllowanceError,
@@ -191,5 +202,24 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             gender: .unspecified,
             quality: .high
         )
+    }
+}
+
+private actor CancellationStopGate {
+    private var stopTask: Task<Void, Never>?
+    private var currentTokens: TTSPlaybackTokenSnapshot?
+
+    func setCurrent(_ tokens: TTSPlaybackTokenSnapshot) {
+        currentTokens = tokens
+    }
+
+    func startIfNeeded(using player: any TTSPlaying) {
+        guard stopTask == nil, let currentTokens else { return }
+        stopTask = Task { await player.stop(ifCurrent: currentTokens) }
+    }
+
+    func wait(using player: any TTSPlaying) async {
+        startIfNeeded(using: player)
+        await stopTask?.value
     }
 }

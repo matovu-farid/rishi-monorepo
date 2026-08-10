@@ -16,9 +16,19 @@ public protocol TTSPlaying: Sendable {
     func pause() async
     func resume() async
     func stop() async
+    /// Stops the request only when it is still the active request. Engines
+    /// that multiplex requests override this to fence late cancellation.
+    func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot) async
     /// Waits until the latest `start` completes successfully or fails.
     /// - Success only if playback actually started (`didStart`) then finished.
     /// - Throws on failure, stop, or finish-without-start.
     /// - Safe if finish happens before this call (pending result).
     func waitUntilFinished() async throws
+}
+
+public extension TTSPlaying {
+    func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot) async {
+        _ = tokens
+        await stop()
+    }
 }
