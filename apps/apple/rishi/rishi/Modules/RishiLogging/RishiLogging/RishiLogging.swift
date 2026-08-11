@@ -13,8 +13,18 @@ public enum RishiLogging {
     ///   - dsn: Sentry DSN, or `nil` to skip Sentry entirely (useful in tests).
     ///   - environment: "debug" / "testflight" / "production".
     ///   - release: Semantic version of the running app, e.g. "1.0.0 (42)".
-    public static func start(dsn: String?, environment: String, release: String) {
-        SentryBridge.start(dsn: dsn, environment: environment, release: release)
+    public static func start(
+        dsn: String?,
+        environment: String,
+        release: String,
+        enabled: Bool = true
+    ) {
+        SentryBridge.start(
+            dsn: dsn,
+            environment: environment,
+            release: release,
+            enabled: enabled
+        )
     }
 
     /// Marker for the public RishiLogging API version. Bump when the surface breaks.

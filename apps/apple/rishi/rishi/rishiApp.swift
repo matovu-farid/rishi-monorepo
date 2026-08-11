@@ -31,6 +31,7 @@ struct rishiApp: App {
     #endif
 
     init() {
+        SentryLaunchConfiguration.start()
 
         #if canImport(UIKit)
             RishiAppDelegate.shared.dependencies = deps

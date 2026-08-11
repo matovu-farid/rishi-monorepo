@@ -6,6 +6,12 @@
 	<string>public.app-category.education</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Audio is sent to OpenAI during active voice conversations.</string>
+	<key>SentryDSN</key>
+	<string>$(SENTRY_DSN)</string>
+	<key>SentryEnvironment</key>
+	<string>$(SENTRY_ENVIRONMENT)</string>
+	<key>SentryRelease</key>
+	<string>$(SENTRY_RELEASE)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>org.fidexa.rishi.sync.refresh</string>

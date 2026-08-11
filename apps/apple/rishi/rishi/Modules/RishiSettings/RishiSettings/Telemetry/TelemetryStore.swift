@@ -5,8 +5,7 @@ import Foundation
 /// `optedIn` defaults to TRUE on first run (matches Sentry-on-by-default in
 /// Phase-1 wiring per STATE.md). Toggling OFF persists FALSE and invokes
 /// `TelemetrySink.setEnabled(_:)` so the app layer can mute Sentry
-/// breadcrumbs / events immediately (typically by calling
-/// `SentrySDK.options.enabled = false` per the Sentry SDK contract).
+/// breadcrumbs / events immediately through the application-owned lifecycle.
 ///
 /// RishiSettings deliberately does NOT import Sentry — the sink seam lets
 /// AppDependencies (11-06) wire the SDK without dragging it into a Feature
