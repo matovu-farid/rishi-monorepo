@@ -16,6 +16,7 @@ struct RootView: View {
     @State private var showOnboarding = false
     @State private var pendingShareMessage: String?
     @State private var showNoCardTrialIntro = false
+    @State private var noCardTrialIntroCheckInFlight = false
     #if targetEnvironment(macCatalyst)
         @State private var showSubscriptions = false
         @State private var pendingSubscriptionConfirmation = false
@@ -231,12 +232,34 @@ struct RootView: View {
 
     /// Shows the no-card trial explainer exactly once per account when the
     /// signed-in library reports that its first-book flow has settled.
+    @MainActor
     private func presentNoCardTrialIntroIfNeeded(deps: AppDependencies) async {
+        guard !noCardTrialIntroCheckInFlight else { return }
+        noCardTrialIntroCheckInFlight = true
+        defer { noCardTrialIntroCheckInFlight = false }
+
         guard case .signedIn(let user) = currentUserBox.state else { return }
         let alreadySeen = await deps.services!.onboarding.trialState.hasSeenNoCardIntro(userId: user.id)
         guard !alreadySeen else { return }
+
+        let refreshResult = await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
+            reason: .signIn
+        )
+        guard case .signedIn(let currentUser) = currentUserBox.state,
+              currentUser.id == user.id
+        else { return }
+        guard NoCardTrialIntroEligibility.shouldPresent(for: refreshResult) else { return }
+
+        // Re-check after the await so another path that records the intro wins.
+        guard !(await deps.services!.onboarding.trialState.hasSeenNoCardIntro(userId: user.id))
+        else { return }
         await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(true, userId: user.id)
-        await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn)
+        guard case .signedIn(let presentedUser) = currentUserBox.state,
+              presentedUser.id == user.id
+        else {
+            await deps.services!.onboarding.trialState.setHasSeenNoCardIntro(false, userId: user.id)
+            return
+        }
         showNoCardTrialIntro = true
     }
 }
