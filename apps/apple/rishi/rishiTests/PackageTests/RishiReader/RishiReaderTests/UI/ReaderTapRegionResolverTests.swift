@@ -61,6 +61,34 @@ struct ReaderTapRegionResolverTests {
         #expect(decision == .nextPage)
     }
 
+    @Test("Disabled page navigation ignores the left and right regions")
+    func disabledPageNavigationIgnoresEdgeRegions() {
+        #expect(
+            resolver.decide(
+                at: CGPoint(x: size.width * 0.10, y: 400),
+                in: size,
+                allowsPageNavigation: false
+            ) == .ignored
+        )
+        #expect(
+            resolver.decide(
+                at: CGPoint(x: size.width * 0.90, y: 400),
+                in: size,
+                allowsPageNavigation: false
+            ) == .ignored
+        )
+    }
+
+    @Test("Disabled page navigation keeps the center tap as chrome toggle")
+    func disabledPageNavigationPreservesCenterToggle() {
+        let decision = resolver.decide(
+            at: CGPoint(x: size.width * 0.50, y: 400),
+            in: size,
+            allowsPageNavigation: false
+        )
+        #expect(decision == .toggleChrome)
+    }
+
     @Test("Degenerate zero-width size returns toggleChrome")
     func degenerateZeroWidthReturnsToggleChrome() {
         let decision = resolver.decide(

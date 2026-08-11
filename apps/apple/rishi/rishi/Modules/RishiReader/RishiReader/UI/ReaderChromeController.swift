@@ -61,10 +61,11 @@ public func _readerChromeDefaultSleep(_ duration: Duration) async throws {
 /// the Apple Books pattern.
 ///
 /// Lifecycle:
-/// - `isVisible` starts `false`. Opening a book lands the user on the
-///   bare content area.
+/// - `isVisible` starts `false` by default. Callers can opt into an initially
+///   visible state. The initial state only arms an idle timer when an
+///   `initialAutoHideDelay` is provided.
 /// - A central tap calls `toggle()` — flips visibility and (when showing)
-///   starts a 4s idle timer that hides chrome again.
+///   starts the configured idle timer that hides chrome again.
 /// - Tapping a toolbar button calls `userActivity()` to reset the timer.
 /// - Calling `hide()` cancels any in-flight auto-hide so the controller
 ///   never re-fires a stale dismissal.
@@ -82,6 +83,7 @@ public final class ReaderChromeController {
 
     private let accessibility: any AccessibilityProviding
     private let autoHideDelay: Duration
+    private let initialAutoHideDelay: Duration?
     private let sleep: @Sendable (Duration) async throws -> Void
     private var hideTask: Task<Void, Never>?
 
@@ -94,15 +96,20 @@ public final class ReaderChromeController {
     public init(
         accessibility: any AccessibilityProviding,
         autoHideDelay: Duration = .seconds(4),
+        initialAutoHideDelay: Duration? = nil,
         sleep: @escaping @Sendable (Duration) async throws -> Void = _readerChromeDefaultSleep,
         initiallyVisible: Bool = false,
         alwaysVisible: Bool = false
     ) {
         self.accessibility = accessibility
         self.autoHideDelay = autoHideDelay
+        self.initialAutoHideDelay = initialAutoHideDelay
         self.sleep = sleep
         self.alwaysVisible = alwaysVisible
         self.isVisible = alwaysVisible || initiallyVisible
+        if isVisible, let initialAutoHideDelay {
+            scheduleAutoHide(using: initialAutoHideDelay)
+        }
     }
 
     // No explicit `deinit` cancellation: the auto-hide Task captures
@@ -133,7 +140,7 @@ public final class ReaderChromeController {
     /// running the timer is skipped so chrome stays reachable.
     public func show() {
         isVisible = true
-        scheduleAutoHide()
+        scheduleAutoHide(using: autoHideDelay)
     }
 
     /// Hide the chrome immediately and cancel any pending auto-hide.
@@ -148,18 +155,17 @@ public final class ReaderChromeController {
     /// chrome (e.g. tapping a toolbar button).
     public func userActivity() {
         guard isVisible else { return }
-        scheduleAutoHide()
+        scheduleAutoHide(using: autoHideDelay)
     }
 
     // MARK: - Internal
 
-    private func scheduleAutoHide() {
+    private func scheduleAutoHide(using delay: Duration) {
         cancelAutoHide()
         // Pinned chrome (Mac Catalyst) never auto-hides.
         guard !alwaysVisible else { return }
         guard !accessibility.isVoiceOverRunning else { return }
 
-        let delay = autoHideDelay
         let sleep = self.sleep
         // KEEP: ReaderChromeController is @MainActor (writes @Observable
         // isVisible). Task inherits MainActor so the sleep + write happen on

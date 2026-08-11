@@ -39,6 +39,8 @@ public struct ReaderView: UIViewControllerRepresentable {
     /// the navigator. The screen uses this to anchor the floating
     /// ``EPUBHighlightContextMenu``.
     public let onSelectionChange: (Selection?) -> Void
+    /// Called after Readium reports a committed page/location change.
+    public let onPageLocationChange: () -> Void
     public let onPageForward: () -> Void
     public let onPageBackward: () -> Void
     public let onEscape: () -> Bool
@@ -68,6 +70,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         pdfViewMode: PDFViewModeSetting = .continuous,
         pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
+        onPageLocationChange: @escaping () -> Void = {},
         onPageForward: @escaping () -> Void = {},
         onPageBackward: @escaping () -> Void = {},
         onEscape: @escaping () -> Bool = { false },
@@ -79,6 +82,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
         self.onSelectionChange = onSelectionChange
+        self.onPageLocationChange = onPageLocationChange
         self.onPageForward = onPageForward
         self.onPageBackward = onPageBackward
         self.onEscape = onEscape
@@ -89,6 +93,7 @@ public struct ReaderView: UIViewControllerRepresentable {
     public func makeCoordinator() -> ReaderNavigatorCoordinator {
         let c = ReaderNavigatorCoordinator(viewModel: viewModel)
         c.onSelectionChange = onSelectionChange
+        c.onPageLocationChange = onPageLocationChange
         c.onPageForward = onPageForward
         c.onPageBackward = onPageBackward
         c.onEscape = onEscape
@@ -101,6 +106,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         let container = UIViewController()
         container.view.backgroundColor = backgroundUIColor(pageTheme)
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onPageLocationChange = onPageLocationChange
         context.coordinator.onPageForward = onPageForward
         context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onEscape = onEscape
@@ -117,6 +123,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         // Refresh closure to track SwiftUI re-renders (the screen owns
         // state that the closure captures — pendingSelection bindings, etc).
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onPageLocationChange = onPageLocationChange
         context.coordinator.onPageForward = onPageForward
         context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onEscape = onEscape

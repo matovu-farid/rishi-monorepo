@@ -45,15 +45,12 @@ struct ReaderTapToToggleWiringTests {
         var isVoiceOverRunning: Bool { voiceOver }
     }
 
-    /// Sleep stub that never resolves — keeps the auto-hide Task parked so
-    /// `isVisible` doesn't flip back behind the test's back. The wiring
-    /// suite cares about the synchronous toggle path; the auto-hide
-    /// dynamics are covered by ``ReaderChromeControllerTests``.
+    /// Sleep stub that stays parked for the synchronous wiring assertions.
+    /// `Task.sleep` is cancellation-aware so cleanup can unwind the
+    /// initially-visible controller's auto-hide Task.
     @Sendable
-    private static func parkedSleep(_ duration: Duration) async throws {
-        try await withCheckedThrowingContinuation { (_: CheckedContinuation<Void, Error>) in
-            // Intentionally never resumed.
-        }
+    private static func parkedSleep(_: Duration) async throws {
+        try await Task.sleep(for: .seconds(86_400))
     }
 
     /// Re-implements the exact `switch` body both `ReaderScreen` and
@@ -74,6 +71,8 @@ struct ReaderTapToToggleWiringTests {
             onNext()
         case .previousPage:
             onPrevious()
+        case .ignored:
+            break
         }
     }
 
@@ -93,6 +92,7 @@ struct ReaderTapToToggleWiringTests {
     @Test("Center tap toggles chrome via the resolver+controller seam")
     func centerTapTogglesChromeWhenStartingHidden() {
         let chrome = makeController(initiallyVisible: false)
+        defer { chrome.hide() }
         let resolver = ReaderTapRegionResolver()
         var nextCount = 0
         var prevCount = 0
@@ -195,6 +195,32 @@ struct ReaderTapToToggleWiringTests {
         #expect(prevCount == 0)
     }
 
+    @Test("iOS edge taps are ignored while the center tap remains separate")
+    func iosEdgeTapIsIgnored() {
+        let chrome = makeController(initiallyVisible: false)
+        defer { chrome.hide() }
+        let resolver = ReaderTapRegionResolver()
+        var nextCount = 0
+        var prevCount = 0
+
+        let decision = resolver.decide(
+            at: CGPoint(x: size.width * 0.90, y: size.height * 0.5),
+            in: size,
+            allowsPageNavigation: false
+        )
+        dispatch(
+            decision: decision,
+            chrome: chrome,
+            onNext: { nextCount += 1 },
+            onPrevious: { prevCount += 1 }
+        )
+
+        #expect(decision == .ignored)
+        #expect(chrome.isVisible == false)
+        #expect(nextCount == 0)
+        #expect(prevCount == 0)
+    }
+
     // MARK: - Trap-the-user regression
 
     /// On a freshly-opened book, the chrome must be reachable. The bug
@@ -205,6 +231,7 @@ struct ReaderTapToToggleWiringTests {
     @Test("Chrome is visible on first frame so the close button is reachable")
     func chromeIsVisibleOnFirstFrame() {
         let chrome = makeController(initiallyVisible: true)
+        defer { chrome.hide() }
         #expect(chrome.isVisible == true)
     }
 
@@ -216,6 +243,7 @@ struct ReaderTapToToggleWiringTests {
     @Test("Edge tap followed by center tap still toggles chrome")
     func edgeThenCenterStillToggles() {
         let chrome = makeController(initiallyVisible: false)
+        defer { chrome.hide() }
         let resolver = ReaderTapRegionResolver()
         var nextCount = 0
 

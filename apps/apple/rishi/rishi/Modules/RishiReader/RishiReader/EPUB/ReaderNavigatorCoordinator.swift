@@ -39,6 +39,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public var isFollowingReadAloud = false
     private var readAloudFollowTask: Task<Void, Never>?
     private var programmaticNavigationCallbacks = 0
+    private var hasReceivedInitialLocation = false
 
     /// Forwarded to the screen so it can present the highlight context
     /// menu. The closure is also called with `nil` when the user clears
@@ -51,6 +52,11 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// suppresses Readium's default `UIMenuController` so the floating
     /// menu owns the surface.
     public var onSelectionChange: (Selection?) -> Void = { _ in }
+
+    /// Fired after Readium reports a committed page/location change. The
+    /// screen uses this to reveal the reader chrome independently of TTS
+    /// navigation classification.
+    public var onPageLocationChange: () -> Void = {}
 
     /// Phase 21 — fired by the container-level `UITapGestureRecognizer`
     /// installed in ``ReaderView``. The screen uses it to drive the
@@ -382,6 +388,31 @@ public final class ReaderNavigatorCoordinator: NSObject {
         }
     }
 
+    #if !targetEnvironment(macCatalyst)
+    /// Readium's default reflowable EPUB inset includes a 34pt top margin on
+    /// compact screens, then takes the window's safe-area top as a minimum.
+    /// The iOS reader already places the navigator below the persistent native
+    /// toolbar, so applying that top inset again creates the visible gap
+    /// between the toolbar and the first line of text. Keep the default
+    /// bottom breathing room while removing only the duplicated top inset.
+    public func navigatorContentInset(
+        _ navigator: VisualNavigator
+    ) -> UIEdgeInsets? {
+        guard let navigator = navigator as? EPUBNavigatorViewController else {
+            return nil
+        }
+        let defaultBottom: CGFloat =
+            navigator.traitCollection.verticalSizeClass == .regular ? 62 : 34
+        let safeAreaBottom = navigator.view.window?.safeAreaInsets.bottom ?? 0
+        return UIEdgeInsets(
+            top: 0,
+            left: 0,
+            bottom: max(defaultBottom, safeAreaBottom),
+            right: 0
+        )
+    }
+    #endif
+
     /// Navigates to the destination encoded by the supplied TOC `Link`.
     /// Used by ``ReaderTOCView``'s onSelect callback. No-ops if the
     /// navigator hasn't been built yet.
@@ -612,6 +643,8 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
     /// matching a registered auto-follow locator are marked programmatic; an
     /// unmatched callback is a user page turn and reaches `onUserNavigation`.
     public func handleLocationChange(_ locator: Locator) {
+        let isInitialLocation = !hasReceivedInitialLocation
+        hasReceivedInitialLocation = true
         let tokenBefore = programmaticNavigationCallbacks
         let isProgrammatic = programmaticNavigationCallbacks > 0
         if isProgrammatic {
@@ -624,6 +657,9 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
             "prog": locator.locations.progression.map { String(format: "%.4f", $0) } ?? "",
         ])
         if !isProgrammatic {
+            if !isInitialLocation {
+                onPageLocationChange()
+            }
             // Native swipes and scrolls do not pass through the screen's
             // explicit page-turn actions, so clear any stale text selection
             // before the menu can remain anchored to the old location.

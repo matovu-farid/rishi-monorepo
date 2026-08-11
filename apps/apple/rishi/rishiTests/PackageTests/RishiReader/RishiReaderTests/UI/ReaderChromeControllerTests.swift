@@ -34,9 +34,11 @@ struct ReaderChromeControllerTests {
         private var continuation: CheckedContinuation<Void, Error>?
         private var pendingWaiters: [CheckedContinuation<Void, Never>] = []
         var sleepCallCount = 0
+        var lastDuration: Duration?
 
-        func sleep(for: Duration) async throws {
+        func sleep(for duration: Duration) async throws {
             sleepCallCount += 1
+            lastDuration = duration
             try await withCheckedThrowingContinuation { cont in
                 self.continuation = cont
                 // Wake anyone waiting for "the controller is now suspended".
@@ -69,6 +71,15 @@ struct ReaderChromeControllerTests {
         }
     }
 
+    private func waitUntilHidden(_ controller: ReaderChromeController) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while controller.isVisible && clock.now < deadline {
+            try? await clock.sleep(for: .milliseconds(1))
+        }
+        #expect(controller.isVisible == false)
+    }
+
     @Test("Chrome starts hidden on entry")
     func chromeStartsHiddenOnEntry() {
         let controller = ReaderChromeController(
@@ -77,6 +88,36 @@ struct ReaderChromeControllerTests {
             sleep: { _ in }
         )
         #expect(controller.isVisible == false)
+    }
+
+    @Test("Active reader uses a long initial and short recurring discovery timeout")
+    func activeReaderUsesDiscoverabilityConfiguration() {
+        #expect(ReaderScreen.readerChromeInitialAutoHideDelay == .seconds(15))
+        #expect(ReaderScreen.readerChromeAutoHideDelay == .seconds(4))
+        #expect(ReaderScreen.readerChromeInitiallyVisible)
+    }
+
+    @Test("Initially visible chrome arms the configured auto-hide timer")
+    func initiallyVisibleChromeSchedulesAutoHide() async {
+        let sleeper = FakeSleeper()
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: ReaderScreen.readerChromeAutoHideDelay,
+            initialAutoHideDelay: ReaderScreen.readerChromeInitialAutoHideDelay,
+            sleep: { duration in try await sleeper.sleep(for: duration) },
+            initiallyVisible: true
+        )
+
+        await sleeper.waitForSleep()
+        #expect(controller.isVisible)
+        #expect(sleeper.lastDuration == ReaderScreen.readerChromeInitialAutoHideDelay)
+        sleeper.fire()
+        await waitUntilHidden(controller)
+
+        controller.show()
+        await sleeper.waitForSleep()
+        #expect(sleeper.lastDuration == ReaderScreen.readerChromeAutoHideDelay)
+        controller.hide()
     }
 
     @Test("Tap toggles chrome visibility")

@@ -86,5 +86,26 @@ struct ReaderNavigatorCoordinatorFollowTests {
 
         #expect(recorder.locators.count == 1)
     }
+
+    @Test("Committed location changes notify the reader chrome")
+    func committedLocationChangesNotifyReaderChrome() throws {
+        let viewModel = makeViewModel()
+        let coordinator = ReaderNavigatorCoordinator(viewModel: viewModel)
+        var events: [String] = []
+        coordinator.onPageLocationChange = { events.append("chrome") }
+        viewModel.onUserNavigation = { _ in events.append("tts") }
+
+        // Readium's first location establishes the initial reader position;
+        // it must not replace the toolbar's longer initial timer.
+        coordinator.handleLocationChange(try makeLocator(progression: 0.50))
+        #expect(events == ["tts"])
+
+        coordinator.handleLocationChange(try makeLocator(progression: 0.66))
+        #expect(events == ["tts", "chrome", "tts"])
+
+        coordinator.registerProgrammaticNavigation()
+        coordinator.handleLocationChange(try makeLocator(progression: 0.75))
+        #expect(events == ["tts", "chrome", "tts"])
+    }
 }
 #endif

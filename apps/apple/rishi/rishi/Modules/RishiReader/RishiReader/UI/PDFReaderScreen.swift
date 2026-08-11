@@ -158,11 +158,17 @@ public struct PDFReaderScreen: View {
                 pdfViewRef = view
                 applyReadAloudHighlight()
             },
+            onPageLocationChange: {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    chrome.show()
+                }
+            },
             onTap: { location in
                 let resolver = ReaderTapRegionResolver()
                 let decision = resolver.decide(
                     at: location,
-                    in: readerAreaSize
+                    in: readerAreaSize,
+                    allowsPageNavigation: allowsTapPageNavigation
                 )
                 switch decision {
                 case .toggleChrome:
@@ -173,6 +179,8 @@ public struct PDFReaderScreen: View {
                     navigator.goNext()
                 case .previousPage:
                     navigator.goPrev()
+                case .ignored:
+                    break
                 }
             }
         )
@@ -186,6 +194,15 @@ public struct PDFReaderScreen: View {
             readerAreaSize = newSize
         }
     }}
+
+    private var allowsTapPageNavigation: Bool {
+        #if targetEnvironment(macCatalyst)
+        true
+        #else
+        false
+        #endif
+    }
+
     private var reader: some View {
         ZStack {
             background

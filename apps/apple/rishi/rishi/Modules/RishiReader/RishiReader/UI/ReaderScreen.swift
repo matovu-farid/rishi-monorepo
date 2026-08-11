@@ -75,7 +75,15 @@ public struct ReaderScreen: View {
 
     @State private var chrome: ReaderChromeController
 
-    private static func makeChrome(keepVisible: Bool) -> ReaderChromeController {
+    static let readerChromeInitialAutoHideDelay: Duration = .seconds(15)
+    static let readerChromeAutoHideDelay: Duration = .seconds(4)
+    static let readerChromeInitiallyVisible = true
+    static let readerToolbarContentBuffer: CGFloat = 0
+
+    private static func makeChrome(
+        keepVisible: Bool,
+        isEPUB: Bool
+    ) -> ReaderChromeController {
         #if DEBUG
             let uitestVisible =
                 ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
@@ -83,25 +91,30 @@ public struct ReaderScreen: View {
             let uitestVisible = false
         #endif
 
-        let autoHide: Duration = uitestVisible ? .seconds(86_400) : .seconds(4)
+        let autoHide: Duration = uitestVisible ? .seconds(86_400) : Self.readerChromeAutoHideDelay
+        let initialAutoHide: Duration = uitestVisible
+            ? .seconds(86_400)
+            : Self.readerChromeInitialAutoHideDelay
 
         #if targetEnvironment(macCatalyst)
             let alwaysVisible = true
         #else
-            let alwaysVisible = keepVisible
+            let alwaysVisible = keepVisible || isEPUB
         #endif
         #if canImport(UIKit)
             return ReaderChromeController(
                 accessibility: UIKitAccessibilityProvider(),
                 autoHideDelay: autoHide,
-                initiallyVisible: uitestVisible || keepVisible,
+                initialAutoHideDelay: initialAutoHide,
+                initiallyVisible: Self.readerChromeInitiallyVisible || uitestVisible || keepVisible,
                 alwaysVisible: alwaysVisible
             )
         #else
             return ReaderChromeController(
                 accessibility: PreviewAccessibility(),
                 autoHideDelay: autoHide,
-                initiallyVisible: uitestVisible || keepVisible,
+                initialAutoHideDelay: initialAutoHide,
+                initiallyVisible: Self.readerChromeInitiallyVisible || uitestVisible || keepVisible,
                 alwaysVisible: alwaysVisible
             )
         #endif
@@ -154,7 +167,12 @@ public struct ReaderScreen: View {
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
         self.keepChromeVisible = keepChromeVisible
-        self._chrome = State(initialValue: Self.makeChrome(keepVisible: keepChromeVisible))
+        self._chrome = State(
+            initialValue: Self.makeChrome(
+                keepVisible: keepChromeVisible,
+                isEPUB: viewModel.book.formatType == .epub
+            )
+        )
     }
 
     private var activePDFViewMode: PDFViewModeSetting {
@@ -174,6 +192,7 @@ public struct ReaderScreen: View {
             onSelectionChange: { selection in
                 highlightInteractor.handleSelectionChange(selection)
             },
+            onPageLocationChange: showChromeAfterPageLocationChange,
             onPageForward: goForward,
             onPageBackward: goBackward,
             onEscape: dismissPendingSelection,
@@ -181,7 +200,8 @@ public struct ReaderScreen: View {
                 let resolver = ReaderTapRegionResolver()
                 let decision = resolver.decide(
                     at: location,
-                    in: readerAreaSize
+                    in: readerAreaSize,
+                    allowsPageNavigation: allowsTapPageNavigation
                 )
                 switch decision {
                 case .toggleChrome:
@@ -192,6 +212,8 @@ public struct ReaderScreen: View {
                     goForward()
                 case .previousPage:
                     goBackward()
+                case .ignored:
+                    break
                 }
             },
 
@@ -211,6 +233,18 @@ public struct ReaderScreen: View {
 
             progressIndicatorLayer
         }
+
+        #if !os(macOS) && !targetEnvironment(macCatalyst)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                Color.clear
+                    .frame(
+                        height: isEPUBReader && chrome.isVisible
+                            ? Self.readerToolbarContentBuffer
+                            : 0
+                    )
+                    .allowsHitTesting(false)
+            }
+        #endif
 
         .overlay {
             switch viewModel.loadingState {
@@ -404,6 +438,10 @@ public struct ReaderScreen: View {
         #else
             return false
         #endif
+    }
+
+    private var isEPUBReader: Bool {
+        viewModel.book.formatType == .epub
     }
 
     private func handleFontStepNotification(_ note: Notification) {
@@ -607,7 +645,7 @@ public struct ReaderScreen: View {
         #if targetEnvironment(macCatalyst)
             return [.bottom, .horizontal]
         #else
-            return .all
+            return isEPUBReader && chrome.isVisible ? [.bottom, .horizontal] : .all
         #endif
     }
 
@@ -834,9 +872,21 @@ public struct ReaderScreen: View {
         }
 
         private var shouldShowEdgeArrows: Bool {
+            #if targetEnvironment(macCatalyst)
             ReaderEdgeArrowPolicy.shouldShow(
                 idiom: UIDevice.current.userInterfaceIdiom
             ) && !(isCatalystPDF && activePDFViewMode == .continuous)
+            #else
+            false
+            #endif
+        }
+
+        private var allowsTapPageNavigation: Bool {
+            #if targetEnvironment(macCatalyst)
+            true
+            #else
+            false
+            #endif
         }
 
         private func readerGeometryContent(in proxy: GeometryProxy) -> some View {
@@ -889,6 +939,12 @@ public struct ReaderScreen: View {
         private func goBackward() {
             dismissPendingSelection()
             pageNavigator.goPrev()
+        }
+
+        private func showChromeAfterPageLocationChange() {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                chrome.show()
+            }
         }
 
         @discardableResult

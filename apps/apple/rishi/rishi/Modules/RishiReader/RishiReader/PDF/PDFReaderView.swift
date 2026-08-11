@@ -107,6 +107,7 @@ public struct PDFReaderView: UIViewRepresentable {
     public var layoutMode: PDFReaderLayoutMode
     public var onSelectionChange: (PDFSelection?) -> Void
     public var onPDFViewReady: (PDFView) -> Void
+    public var onPageLocationChange: () -> Void
     /// Phase 21 — single-tap callback driven by a UIKit
     /// `UITapGestureRecognizer` attached directly to the `PDFView` with
     /// `cancelsTouchesInView = false`. Replaces the SwiftUI
@@ -126,12 +127,14 @@ public struct PDFReaderView: UIViewRepresentable {
         layoutMode: PDFReaderLayoutMode = .singleFitWidth,
         onSelectionChange: @escaping (PDFSelection?) -> Void = { _ in },
         onPDFViewReady: @escaping (PDFView) -> Void = { _ in },
+        onPageLocationChange: @escaping () -> Void = {},
         onTap: @escaping (CGPoint) -> Void = { _ in }
     ) {
         self.viewModel = viewModel
         self.layoutMode = layoutMode
         self.onSelectionChange = onSelectionChange
         self.onPDFViewReady = onPDFViewReady
+        self.onPageLocationChange = onPageLocationChange
         self.onTap = onTap
     }
 
@@ -139,6 +142,7 @@ public struct PDFReaderView: UIViewRepresentable {
         Coordinator(
             viewModel: viewModel,
             onSelectionChange: onSelectionChange,
+            onPageLocationChange: onPageLocationChange,
             onTap: onTap
         )
     }
@@ -388,6 +392,7 @@ public struct PDFReaderView: UIViewRepresentable {
     public final class Coordinator: NSObject, PDFViewDelegate, UIGestureRecognizerDelegate {
         let viewModel: PDFReaderViewModel
         var onSelectionChange: (PDFSelection?) -> Void
+        var onPageLocationChange: () -> Void
         var onTap: (CGPoint) -> Void
         /// Phase 30 — last Mac layout mode applied to the live `PDFView`.
         /// Starts nil so the first `updateUIView` asserts the resolved mode
@@ -415,10 +420,12 @@ public struct PDFReaderView: UIViewRepresentable {
         init(
             viewModel: PDFReaderViewModel,
             onSelectionChange: @escaping (PDFSelection?) -> Void,
+            onPageLocationChange: @escaping () -> Void,
             onTap: @escaping (CGPoint) -> Void
         ) {
             self.viewModel = viewModel
             self.onSelectionChange = onSelectionChange
+            self.onPageLocationChange = onPageLocationChange
             self.onTap = onTap
         }
 
@@ -428,6 +435,7 @@ public struct PDFReaderView: UIViewRepresentable {
                   let current = pdfView.currentPage else { return }
             let idx = doc.index(for: current)
             viewModel.didChangePage(toIndex: idx)
+            onPageLocationChange()
         }
 
         @objc func pdfViewSelectionChanged(_ note: Notification) {
