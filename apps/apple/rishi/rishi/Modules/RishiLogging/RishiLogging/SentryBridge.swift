@@ -64,9 +64,10 @@ enum SentryBridge {
     /// `isLive` is the breadcrumb / capture gate consulted by every Sentry
     /// forwarding call in this file and by the SDK's `beforeSend` filter. The
     /// SDK is not initialized for a launch-time opt-out; after a runtime
-    /// opt-out it remains initialized, but its client is disabled before the
-    /// cached-envelope purge so queued data cannot be sent after consent is
-    /// withdrawn. No shutdown flush is triggered.
+    /// opt-out it remains initialized, but in-flight requests are cancelled
+    /// before cached envelopes are purged. The `beforeSend` gate also rejects
+    /// newly captured events while consent is withdrawn. No shutdown flush is
+    /// triggered.
     ///
     /// No-op when the SDK was never started — keeps tests + dev hosts well-
     /// defined (calling `setEnabled(true)` before `start(...)` does NOT
@@ -91,9 +92,6 @@ enum SentryBridge {
                 return
             }
             state.isLive = true
-            if state.sdkStarted {
-                SentrySDK.options?.enabled = true
-            }
             if !state.sdkStarted {
                 state.sdkStarted = true
                 configurationToStart = configuration
@@ -109,7 +107,6 @@ enum SentryBridge {
             state.isLive = false
             shouldPurgeCachedEnvelopes = state.sdkStarted
             if shouldPurgeCachedEnvelopes {
-                SentrySDK.options?.enabled = false
                 state.transitionGeneration += 1
                 state.cancellationInProgress = true
             }
@@ -135,7 +132,6 @@ enum SentryBridge {
                 state.cancellationInProgress = false
                 if shouldEnable {
                     state.isLive = true
-                    SentrySDK.options?.enabled = true
                 }
                 state.lock.unlock()
             }
