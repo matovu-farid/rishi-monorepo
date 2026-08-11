@@ -162,7 +162,10 @@ struct EntitlementServiceTests {
         let userId = "user-456"
         let service = EntitlementService(workerClient: makeWorkerClient(), defaults: defaults)
         await service.bindToUser(userId: userId)
-        _ = await service.refreshSnapshot() // will fail network — stay unresolved
+        _ = await service.refreshSnapshot(
+            expectedUserId: userId,
+            isCurrentUser: { true }
+        ) // will fail network — stay unresolved
 
         // Manually seed resolved state through bind with fake cache
         let snapshot = EntitlementSnapshot.trialActive(remainingCredits: 10)
@@ -177,11 +180,225 @@ struct EntitlementServiceTests {
         #expect(await service.resolutionNow() == .unresolved)
         #expect(defaults.data(forKey: "billing.entitlement.snapshot.v1.\(userId)") == nil)
     }
+
+    @Test("refreshSnapshot account switch preserves hydrated B and both disk payloads")
+    func refreshSnapshotAccountSwitchPreservesHydratedB() async {
+        let serverSnapshot = EntitlementSnapshot.readerActive(
+            EntitlementSnapshot.PaidPeriod(
+                periodEndMs: 1_900_000_000_000,
+                remainingNarrationSeconds: 1_200,
+                remainingVoiceChatSeconds: 800
+            )
+        )
+        let harness = EntitlementServiceSnapshotURLProtocolHarness(
+            snapshot: serverSnapshot
+        )
+        defer { harness.reset() }
+
+        let defaults = makeDefaults()
+        let snapshotA = EntitlementSnapshot.trialActive(remainingCredits: 11)
+        let snapshotB = EntitlementSnapshot.trialActive(remainingCredits: 22)
+        let dataA = try! JSONEncoder().encode(
+            CachedEntitlementSnapshotPayloadForTests(
+                cachedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                snapshot: snapshotA
+            )
+        )
+        let dataB = try! JSONEncoder().encode(
+            CachedEntitlementSnapshotPayloadForTests(
+                cachedAt: Date(timeIntervalSince1970: 1_700_000_100),
+                snapshot: snapshotB
+            )
+        )
+        defaults.set(dataA, forKey: cacheKey(for: "user-a"))
+        defaults.set(dataB, forKey: cacheKey(for: "user-b"))
+
+        let currentUser = LockedServiceUser("user-a")
+        let service = EntitlementService(
+            workerClient: makeWorkerClient(harness: harness),
+            defaults: defaults
+        )
+        await service.bindToUser(userId: "user-a")
+
+        let refresh = Task {
+            await service.refreshSnapshot(
+                expectedUserId: "user-a",
+                isCurrentUser: { currentUser.current == "user-a" }
+            )
+        }
+        defer {
+            refresh.cancel()
+            harness.releaseResponse()
+        }
+
+        guard harness.waitForRequest() else {
+            Issue.record("Account A request did not start within 5 seconds")
+            return
+        }
+        currentUser.set("user-b")
+        await service.bindToUser(userId: "user-b")
+        harness.releaseResponse()
+
+        let result = await refresh.value
+        guard case .failure(let error) = result else {
+            Issue.record("Expected accountChanged failure for stale account A response")
+            return
+        }
+        guard case EntitlementRefreshError.accountChanged = error else {
+            Issue.record("Expected accountChanged, got \(error)")
+            return
+        }
+
+        guard case .resolved(let hydratedB, _) = await service.resolutionNow() else {
+            Issue.record("Expected user B to remain hydrated in memory")
+            return
+        }
+        #expect(hydratedB == snapshotB)
+        #expect(defaults.data(forKey: cacheKey(for: "user-a")) == dataA)
+        #expect(defaults.data(forKey: cacheKey(for: "user-b")) == dataB)
+    }
+
+    private func makeWorkerClient(
+        harness: EntitlementServiceSnapshotURLProtocolHarness
+    ) -> WorkerClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [harness.protocolClass]
+        return WorkerClient(
+            baseURL: URL(string: "https://example.invalid")!,
+            session: URLSession(configuration: configuration),
+            tokenProvider: StaticTokenProvider(nil),
+            devBypassEnabled: false
+        )
+    }
+
+    private func cacheKey(for userId: String) -> String {
+        "billing.entitlement.snapshot.v1.\(userId)"
+    }
 }
 
 private struct CachedEntitlementSnapshotPayloadForTests: Codable {
     let cachedAt: Date
     let snapshot: EntitlementSnapshot
+}
+
+private final class LockedServiceUser: @unchecked Sendable {
+    private let lock = NSLock()
+    private var userId: String?
+
+    init(_ userId: String?) {
+        self.userId = userId
+    }
+
+    var current: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return userId
+    }
+
+    func set(_ userId: String?) {
+        lock.lock()
+        self.userId = userId
+        lock.unlock()
+    }
+}
+
+private final class EntitlementServiceSnapshotURLProtocolHarness: @unchecked Sendable {
+    private let lock = NSLock()
+    private let requestStarted = DispatchSemaphore(value: 0)
+    private let responseGate = DispatchSemaphore(value: 0)
+    private let response: Data
+    private var requestCount = 0
+
+    var protocolClass: URLProtocol.Type {
+        EntitlementServiceSnapshotURLProtocol.self
+    }
+
+    init(snapshot: EntitlementSnapshot) {
+        response = try! JSONEncoder().encode(snapshot)
+        EntitlementServiceSnapshotURLProtocol.activate(self)
+    }
+
+    var requests: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestCount
+    }
+
+    func waitForRequest(timeout: TimeInterval = 5) -> Bool {
+        requestStarted.wait(timeout: .now() + timeout) == .success
+    }
+
+    func releaseResponse() {
+        responseGate.signal()
+    }
+
+    func reset() {
+        EntitlementServiceSnapshotURLProtocol.deactivate(self)
+    }
+
+    fileprivate func handle(_ protocolObject: URLProtocol) {
+        lock.lock()
+        requestCount += 1
+        lock.unlock()
+        requestStarted.signal()
+
+        guard responseGate.wait(timeout: .now() + 5) == .success else {
+            protocolObject.client?.urlProtocol(
+                protocolObject,
+                didFailWithError: URLError(.timedOut)
+            )
+            return
+        }
+
+        let httpResponse = HTTPURLResponse(
+            url: protocolObject.request.url!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        protocolObject.client?.urlProtocol(
+            protocolObject,
+            didReceive: httpResponse,
+            cacheStoragePolicy: .notAllowed
+        )
+        protocolObject.client?.urlProtocol(protocolObject, didLoad: response)
+        protocolObject.client?.urlProtocolDidFinishLoading(protocolObject)
+    }
+}
+
+private final class EntitlementServiceSnapshotURLProtocol: URLProtocol, @unchecked Sendable {
+    private nonisolated(unsafe) static var activeHarness:
+        EntitlementServiceSnapshotURLProtocolHarness?
+
+    fileprivate static func activate(
+        _ harness: EntitlementServiceSnapshotURLProtocolHarness
+    ) {
+        activeHarness = harness
+    }
+
+    fileprivate static func deactivate(
+        _ harness: EntitlementServiceSnapshotURLProtocolHarness
+    ) {
+        if activeHarness === harness {
+            activeHarness = nil
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let harness = Self.activeHarness else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        harness.handle(self)
+    }
+
+    override func stopLoading() {}
 }
 
 @MainActor

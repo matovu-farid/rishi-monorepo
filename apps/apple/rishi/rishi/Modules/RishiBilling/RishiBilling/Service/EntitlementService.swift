@@ -1,5 +1,8 @@
 import Foundation
 
+public enum EntitlementRefreshError: Error, Sendable {
+    case accountChanged
+}
 
 
 /// Caches the user's current entitlement and exposes it as an `AsyncStream`.
@@ -104,10 +107,23 @@ public actor EntitlementService {
     public func snapshot() -> EntitlementLevel { latest }
 
     @discardableResult
-    public func refreshSnapshot() async -> Result<EntitlementSnapshot, Error> {
+    public func refreshSnapshot(
+        expectedUserId: String,
+        isCurrentUser: @Sendable @escaping () -> Bool
+    ) async -> Result<EntitlementSnapshot, Error> {
         do {
             let snapshot = try await workerClient.send(BillingMeEndpoint())
-            setCachedResolution(.resolved(snapshot, fetchedAt: Date()), fetchedAt: Date())
+
+            guard boundUserId == expectedUserId, isCurrentUser() else {
+                if boundUserId == expectedUserId {
+                    latestResolution = .unresolved
+                    resolutionContinuation.yield(.unresolved)
+                }
+                return .failure(EntitlementRefreshError.accountChanged)
+            }
+
+            let fetchedAt = Date()
+            setCachedResolution(.resolved(snapshot, fetchedAt: fetchedAt), fetchedAt: fetchedAt)
             return .success(snapshot)
         } catch {
             Log.event(
