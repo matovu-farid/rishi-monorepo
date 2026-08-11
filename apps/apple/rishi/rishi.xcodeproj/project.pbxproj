@@ -521,7 +521,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "rishi/rishi-mac.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 63;
 				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -547,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.1.3;
+				MARKETING_VERSION = 2.1.4;
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SENTRY_DSN = "";
@@ -578,7 +578,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "rishi/rishi-mac.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 63;
 				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -604,7 +604,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.1.3;
+				MARKETING_VERSION = 2.1.4;
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SENTRY_DSN = "";
