@@ -10,6 +10,25 @@ interface UseVoiceInputReturn {
   stopRecording: () => Promise<string>
 }
 
+export function buildVoiceTranscriptionHeaders(
+  token: string | null,
+  devBypass: string | null
+): Record<string, string> {
+  if (token) {
+    return {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'audio/webm'
+    }
+  }
+  if (devBypass) {
+    return {
+      'X-Dev-Bypass': devBypass,
+      'Content-Type': 'audio/webm'
+    }
+  }
+  throw new Error('Not authenticated')
+}
+
 export function useVoiceInput(): UseVoiceInputReturn {
   const [isRecording, setIsRecording] = useState(false)
   const [duration, setDuration] = useState(0)
@@ -97,16 +116,15 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
         try {
           const token = await getAuthToken()
+          const devBypass = token ? null : await window.electron.getDevBypassSecret()
+          const headers = buildVoiceTranscriptionHeaders(token, devBypass)
           const controller = new AbortController()
           const timeout = setTimeout(() => controller.abort(), 30_000)
           let response: Response
           try {
             response = await fetch(`${WORKER_URL}/api/audio/transcribe`, {
               method: 'POST',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': mimeTypeRef.current
-              },
+              headers: { ...headers, 'Content-Type': mimeTypeRef.current },
               body: blob,
               signal: controller.signal
             })

@@ -1,6 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import { Effect } from "effect";
 import { verifyAccessToken } from "./jwt";
+import { createAuth } from "./auth";
 import { eq } from "drizzle-orm";
 import { deletionState, user } from "./db/schema";
 import { createDb } from "./db/drizzle";
@@ -31,8 +32,18 @@ export function makeRequireAuth(options: AuthMiddlewareOptions = {}) {
   const token = auth.slice(7);
 
   const result = await Effect.runPromiseExit(verifyAccessToken(c.env, token));
+  let userId: string | undefined;
+  if (result._tag === "Success") {
+    userId = result.value.userId;
+  } else {
+    const betterAuth = await createAuth(c.env);
+    const bearerHeaders = new Headers(c.req.raw.headers);
+    bearerHeaders.delete("cookie");
+    const session = await betterAuth.api.getSession({ headers: bearerHeaders });
+    userId = session?.user.id;
+  }
 
-  if (result._tag === "Failure") {
+  if (!userId) {
     return c.json(
       {
         error: "Unauthorized",
@@ -41,12 +52,12 @@ export function makeRequireAuth(options: AuthMiddlewareOptions = {}) {
     );
   }
 
-  c.set("userId", result.value.userId);
+  c.set("userId", userId);
 
   const db = createDb(c.env.DB);
   const existingUser = await db.select({ id: user.id, name: user.name })
     .from(user)
-    .where(eq(user.id, result.value.userId))
+    .where(eq(user.id, userId))
     .get();
   if (!existingUser && !options.allowMissingUser) {
     return c.json({ error: "Account deleted" }, 410);
@@ -54,7 +65,7 @@ export function makeRequireAuth(options: AuthMiddlewareOptions = {}) {
   if (existingUser && !options.allowMissingUser) {
     const pendingDeletion = await db.select({ status: deletionState.status })
       .from(deletionState)
-      .where(eq(deletionState.userId, result.value.userId))
+      .where(eq(deletionState.userId, userId))
       .get();
     if (pendingDeletion?.status === "pending" || pendingDeletion?.status === "purging") {
       return c.json({ error: "Account deletion in progress" }, 423);

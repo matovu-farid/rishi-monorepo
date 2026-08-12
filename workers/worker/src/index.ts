@@ -49,11 +49,14 @@ import { findOrCreateUser } from "./findOrCreateUser";
 import { incrementApiUsage } from "./usage/api-usage";
 import { error } from "node:console";
 import { userRoutes } from "./routes/user";
+import { authCompatRoutes } from "./routes/auth-compat";
+import { registerBetterAuthRoutes } from "./routes/better-auth";
 import { purgeExpiredShares, sharesRoutes } from "./routes/shares";
 import { retryPendingDeletions } from "./account-deletion";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
+import { resolveCorsOrigin } from "./cors-origin";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -498,15 +501,7 @@ export const app = new Hono<{
 app.use(
   "*",
   cors({
-    origin: [
-      "https://rishi.fidexa.org",
-      "https://app.fidexa.org",
-      "tauri://localhost",
-      "http://tauri.localhost",
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://localhost:5174",
-    ],
+    origin: resolveCorsOrigin,
     allowHeaders: [
       "Content-Type",
       "Authorization",
@@ -535,11 +530,11 @@ app.use(
 //     accessToken,
 //   });
 // });
-// Better Auth handles all /api/auth/* internally
-// app.on(["GET", "POST"], "/api/auth/*", async (c) => {
-//   const auth = await createAuth(c.env);
-//   return auth.handler(c.req.raw);
-// });
+// Better Auth handles /api/auth/* internally. The exact delete-user
+// compatibility route is registered first so it can reuse the Worker's full
+// account-deletion workflow instead of Better Auth's generic deletion hook.
+app.route("/api/auth", authCompatRoutes);
+registerBetterAuthRoutes(app);
 
 app.get("/", (c) => {
   return c.text("Hello Hono!");
