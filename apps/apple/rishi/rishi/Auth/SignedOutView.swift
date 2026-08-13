@@ -259,9 +259,12 @@ struct SignedOutView: View {
             }(),
             appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
         )
+        // Install the account context before the signed-in view can trigger
+        // pending share redemption. Share redemption is explicit library
+        // transfer and must not race the consent/account setup below.
+        await deps.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
         isSignedIn = true
         currentUserBox.signIn(user: auth.user)
-        await deps.services?.dataUseConsentStore.setCurrentUser(auth.user.id.uuidString)
         await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
             reason: .signIn
         )

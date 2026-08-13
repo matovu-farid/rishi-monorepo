@@ -602,6 +602,18 @@ public actor SyncEngine {
         scheduledSyncTask = task
     }
 
+    /// Queue a sync and wait until the requested wave (including a follow-up
+    /// wave if another sync was already active) has drained. Share imports use
+    /// this before reporting success so a relaunch cannot restore the
+    /// pre-import server projection over a newly downloaded book.
+    public func requestSyncAndWait() async {
+        requestSync()
+        while let task = scheduledSyncTask {
+            await task.value
+            if scheduledSyncTask == nil, !syncRequestPending { return }
+        }
+    }
+
     private func drainSyncRequests() async {
         while syncRequestPending {
             guard !Task.isCancelled else {
