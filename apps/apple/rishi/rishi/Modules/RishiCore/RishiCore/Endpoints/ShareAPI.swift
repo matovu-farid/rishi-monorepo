@@ -70,6 +70,79 @@ public struct SharePackageResponse: Codable, Sendable, Equatable {
     }
 }
 
+public struct SharePreparedPackage: Codable, Sendable, Equatable {
+    public let id: String
+    public let generation: Int?
+    public let expiresAt: Date?
+    public let link: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case generation
+        case expiresAt = "expires_at"
+        case link
+    }
+
+    public init(
+        id: String,
+        generation: Int? = nil,
+        expiresAt: Date? = nil,
+        link: String
+    ) {
+        self.id = id
+        self.generation = generation
+        self.expiresAt = expiresAt
+        self.link = link
+    }
+
+    public var packageResponse: SharePackageResponse {
+        SharePackageResponse(
+            id: id,
+            expiresAt: expiresAt,
+            link: link,
+            preview: nil,
+            items: nil
+        )
+    }
+}
+
+public struct SharePreparedBook: Codable, Sendable, Equatable {
+    public let bookID: String
+    public let `public`: SharePreparedPackage
+    public let oneTime: SharePreparedPackage
+
+    enum CodingKeys: String, CodingKey {
+        case bookID = "book_id"
+        case `public`
+        case oneTime = "one_time"
+    }
+}
+
+public struct SharePrepareSkippedBook: Codable, Sendable, Equatable {
+    public let bookID: String
+    public let code: String
+
+    enum CodingKeys: String, CodingKey {
+        case bookID = "book_id"
+        case code
+    }
+
+    public init(bookID: String, code: String) {
+        self.bookID = bookID
+        self.code = code
+    }
+}
+
+public struct SharePrepareResponse: Codable, Sendable, Equatable {
+    public let links: [SharePreparedBook]
+    public let skipped: [SharePrepareSkippedBook]
+
+    public init(links: [SharePreparedBook], skipped: [SharePrepareSkippedBook]) {
+        self.links = links
+        self.skipped = skipped
+    }
+}
+
 public struct ShareCreateEndpoint: WorkerEndpointWithBody {
     public typealias Response = SharePackageResponse
 
@@ -105,6 +178,29 @@ public struct ShareCreateEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/shares"
+    public let requiresDataUseConsent = true
+    public let body: Body
+
+    public init(body: Body) { self.body = body }
+}
+
+public struct SharePrepareEndpoint: WorkerEndpointWithBody {
+    public typealias Response = SharePrepareResponse
+
+    public struct Body: Encodable, Sendable, Equatable {
+        public let bookIDs: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case bookIDs = "book_ids"
+        }
+
+        public init(bookIDs: [String]) {
+            self.bookIDs = bookIDs
+        }
+    }
+
+    public let method: HTTPMethod = .POST
+    public let path: String = "/api/shares/prepare"
     public let requiresDataUseConsent = true
     public let body: Body
 

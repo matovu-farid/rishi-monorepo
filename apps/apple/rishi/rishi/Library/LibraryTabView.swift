@@ -101,6 +101,12 @@ struct LibraryTabView: View {
     }
 
     @MainActor
+    private func refreshAfterSyncCompletion() async {
+        await vm.refresh()
+        await dependencies.sharePackageService.prewarm(bookIDs: vm.books.map(\.id))
+    }
+
+    @MainActor
     private func openBook(_ book: Book) {
         model.hint(book)
         #if targetEnvironment(macCatalyst)
@@ -207,7 +213,7 @@ struct LibraryTabView: View {
             }
             .onChange(of: dependencies.settings.syncStatus.isRunning) { wasRunning, isRunning in
                 guard wasRunning, !isRunning else { return }
-                Task { await vm.refresh() }
+                Task { await refreshAfterSyncCompletion() }
             }
         }
         .environment(vm)

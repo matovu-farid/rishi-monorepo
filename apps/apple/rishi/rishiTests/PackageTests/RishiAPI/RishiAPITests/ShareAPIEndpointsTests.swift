@@ -5,6 +5,30 @@ import Testing
 
 @Suite("Share API endpoints")
 struct ShareAPIEndpointsTests {
+    @Test("prepare endpoint uses the bounded worker contract")
+    func prepareEndpoint() throws {
+        let endpoint = SharePrepareEndpoint(body: .init(bookIDs: ["book-1", "book-2"]))
+        #expect(endpoint.path == "/api/shares/prepare")
+        #expect(endpoint.requiresDataUseConsent)
+
+        let data = try JSONEncoder().encode(endpoint.body)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["book_ids"] as? [String] == ["book-1", "book-2"])
+    }
+
+    @Test("decodes prepared links and per-book skips")
+    func prepareResponseDecoding() throws {
+        let data = Data(#"{"links":[{"book_id":"book-1","public":{"id":"package-public","generation":3,"expires_at":800000000,"link":"https://rishi.test/public"},"one_time":{"id":"package-one-time","generation":4,"expires_at":800000000,"link":"https://rishi.test/one-time"}}],"skipped":[{"book_id":"book-2","code":"SHARE_BOOK_NOT_READY"}]}"#.utf8)
+        let response = try JSONDecoder().decode(SharePrepareResponse.self, from: data)
+        let prepared = try #require(response.links.first)
+        #expect(prepared.bookID == "book-1")
+        #expect(prepared.public.id == "package-public")
+        #expect(prepared.public.generation == 3)
+        #expect(prepared.public.link == "https://rishi.test/public")
+        #expect(prepared.oneTime.id == "package-one-time")
+        #expect(response.skipped.first?.code == "SHARE_BOOK_NOT_READY")
+    }
+
     @Test("create endpoint uses the worker share contract")
     func createEndpoint() throws {
         let endpoint = ShareCreateEndpoint(body: .init(

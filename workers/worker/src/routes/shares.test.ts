@@ -9,6 +9,7 @@ import {
   books,
   sharePackageItems,
   sharePackageRedemptions,
+  shareLinkSlots,
   sharePackages,
   user,
   usernames,
@@ -109,6 +110,33 @@ function closeD1(d1: TestD1) {
 }
 
 describe("book sharing schema", () => {
+  it("defines durable prepared share slots", () => {
+    expect(Object.keys(shareLinkSlots)).toEqual(expect.arrayContaining([
+      "id", "ownerUserId", "bookId", "access", "activePackageId", "generation", "createdAt", "updatedAt",
+    ]));
+  });
+
+  it("prepares reusable public and one-time links for an owned book", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    await db.insert(user).values(testUser("alice", "Alice")).run();
+    await db.insert(books).values(testBook("alice")).run();
+    const authorization = await authHeader(baseEnv, "alice");
+    const response = await sharesRoutes.fetch(new Request("https://api.example.test/prepare", {
+      method: "POST",
+      headers: consentHeaders(authorization),
+      body: JSON.stringify({ book_ids: ["book-1"] }),
+    }), { ...baseEnv, DB: d1, BOOK_STORAGE: fakeBucket() } as Env);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { links: Array<{ book_id: string; public: unknown; one_time: unknown }>; skipped: unknown[] };
+    expect(body.skipped).toEqual([]);
+    expect(body.links).toHaveLength(1);
+    expect(body.links[0]).toEqual(expect.objectContaining({ book_id: "book-1" }));
+    expect(body.links[0]?.public).toBeDefined();
+    expect(body.links[0]?.one_time).toBeDefined();
+    expect(await db.select().from(shareLinkSlots)).toHaveLength(2);
+    closeD1(d1);
+  });
   it("defines the package and item tables with the claim fields", () => {
     expect(sharePackages).toBeDefined();
     expect(sharePackageItems).toBeDefined();

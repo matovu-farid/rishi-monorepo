@@ -12,6 +12,7 @@ public struct ShareComposerView: View {
     @State private var errorMessage: String?
     @State private var isWorking = false
     @State private var idempotencyKeys: [String: String] = [:]
+    @State private var loadGeneration = UUID()
 
     public init(
         service: SharePackageService,
@@ -79,6 +80,15 @@ public struct ShareComposerView: View {
                 }
             }
             .navigationTitle("Share Books")
+            .onAppear {
+                if kind == .single { loadPreparedLink(for: access, generation: loadGeneration) }
+            }
+            .onChange(of: access) { _, newAccess in
+                response = nil
+                errorMessage = nil
+                loadGeneration = UUID()
+                if kind == .single { loadPreparedLink(for: newAccess, generation: loadGeneration) }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -117,6 +127,30 @@ public struct ShareComposerView: View {
                     } else {
                         errorMessage = "Could not create the share. Please sync and try again."
                     }
+                    isWorking = false
+                }
+            }
+        }
+    }
+
+    private func loadPreparedLink(for requestedAccess: ShareAccess, generation: UUID) {
+        isWorking = true
+        Task {
+            do {
+                let result = try await service.createShare(
+                    bookIDs: bookIDs,
+                    kind: .single,
+                    access: requestedAccess
+                )
+                await MainActor.run {
+                    guard generation == loadGeneration, requestedAccess == access else { return }
+                    response = result
+                    isWorking = false
+                }
+            } catch {
+                await MainActor.run {
+                    guard generation == loadGeneration, requestedAccess == access else { return }
+                    errorMessage = "Could not prepare the share link. Try again."
                     isWorking = false
                 }
             }

@@ -227,6 +227,36 @@ export const sharePackageRedemptions = sqliteTable(
 export type SharePackageRedemption = typeof sharePackageRedemptions.$inferSelect;
 export type NewSharePackageRedemption = typeof sharePackageRedemptions.$inferInsert;
 
+export const shareLinkSlots = sqliteTable(
+  "share_link_slots",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    bookId: text("book_id")
+      .notNull()
+      .references(() => books.id, { onDelete: "cascade" }),
+    access: text("access", { enum: ["one_time", "public"] }).notNull(),
+    activePackageId: text("active_package_id").references(() => sharePackages.id, { onDelete: "set null" }),
+    generation: integer("generation").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => ({
+    ownerBookAccess: uniqueIndex("share_link_slots_owner_book_access_uniq").on(
+      t.ownerUserId,
+      t.bookId,
+      t.access,
+    ),
+    ownerBook: index("share_link_slots_owner_book_idx").on(t.ownerUserId, t.bookId),
+    activePackage: index("share_link_slots_active_package_idx").on(t.activePackageId),
+  }),
+);
+
+export type ShareLinkSlot = typeof shareLinkSlots.$inferSelect;
+export type NewShareLinkSlot = typeof shareLinkSlots.$inferInsert;
+
 // ─── Chapter index sync ─────────────────────────────────────────────────────
 // One parent row is the LWW envelope; child rows retain the normalized,
 // ordered chapter summaries for a single content version.

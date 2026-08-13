@@ -1,0 +1,24 @@
+{
+  "id": "pregenerated-share-links",
+  "dialect": "sqlite",
+  "tables": {
+    "share_link_slots": {
+      "name": "share_link_slots",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": false },
+        "owner_user_id": { "name": "owner_user_id", "type": "text", "primaryKey": false, "notNull": true },
+        "book_id": { "name": "book_id", "type": "text", "primaryKey": false, "notNull": true },
+        "access": { "name": "access", "type": "text", "primaryKey": false, "notNull": true },
+        "active_package_id": { "name": "active_package_id", "type": "text", "primaryKey": false, "notNull": false },
+        "generation": { "name": "generation", "type": "integer", "primaryKey": false, "notNull": true, "default": 0 },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true },
+        "updated_at": { "name": "updated_at", "type": "integer", "primaryKey": false, "notNull": true }
+      },
+      "indexes": {
+        "share_link_slots_owner_book_access_uniq": { "name": "share_link_slots_owner_book_access_uniq", "columns": ["owner_user_id", "book_id", "access"], "isUnique": true },
+        "share_link_slots_owner_book_idx": { "name": "share_link_slots_owner_book_idx", "columns": ["owner_user_id", "book_id"], "isUnique": false },
+        "share_link_slots_active_package_idx": { "name": "share_link_slots_active_package_idx", "columns": ["active_package_id"], "isUnique": false }
+      }
+    }
+  }
+}

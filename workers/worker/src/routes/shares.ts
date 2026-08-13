@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { and, eq, gt, inArray, lt } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 
 import { createDb } from "../db/drizzle";
 import {
@@ -8,6 +8,7 @@ import {
   deletionState,
   sharePackageItems,
   sharePackageRedemptions,
+  shareLinkSlots,
   sharePackages,
   user,
 } from "../db/schema";
@@ -27,6 +28,8 @@ const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
 const DOWNLOAD_URL_EXPIRES_SEC = 600;
 const MAX_SHARE_ITEMS = 500;
 const SUPPORTED_FORMATS = new Set(["epub", "pdf", "mobi", "azw3"]);
+const PREPARED_BUILD_LEASE_MS = 5 * 60 * 1000;
+const MAX_PREPARE_BOOKS = 50;
 
 type ShareKind = "single" | "selection" | "library";
 type ShareAccess = "one_time" | "public";
@@ -60,6 +63,33 @@ function errorResponse(c: ShareContext, code: string, status: 400 | 403 | 404 | 
 
 function packageLink(token: string): string {
   return `https://rishi.fidexa.org/sharing/join?token=${encodeURIComponent(token)}`;
+}
+
+function shareTokenSecrets(c: ShareContext): string[] {
+  const env = c.env as unknown as {
+    SHARE_TOKEN_SECRET?: string;
+    SHARE_TOKEN_SECRET_PREVIOUS?: string;
+    BETTER_AUTH_SECRET_PREVIOUS?: string;
+  };
+  return [...new Set([
+    env.SHARE_TOKEN_SECRET,
+    c.env.BETTER_AUTH_SECRET,
+    env.SHARE_TOKEN_SECRET_PREVIOUS,
+    env.BETTER_AUTH_SECRET_PREVIOUS,
+  ].filter((secret): secret is string => Boolean(secret)))];
+}
+
+async function packageToken(
+  c: ShareContext,
+  pkg: typeof sharePackages.$inferSelect,
+  senderUserId: string,
+): Promise<string> {
+  const secrets = shareTokenSecrets(c);
+  for (const secret of secrets) {
+    const token = await createShareTokenFromSecret(secret, senderUserId, pkg.idempotencyKey);
+    if (!pkg.tokenHash || await hashShareToken(token) === pkg.tokenHash) return token;
+  }
+  return createShareTokenFromSecret(secrets[0] ?? c.env.BETTER_AUTH_SECRET, senderUserId, pkg.idempotencyKey);
 }
 
 async function signedItem(
@@ -305,7 +335,7 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
       .get();
     if (!sender) return errorResponse(c, "SHARE_NOT_FOUND", 404);
     const preview = await previewFor(c, db, existing.pkg, sender.name);
-    const linkToken = await createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, userId, body.idempotency_key);
+    const linkToken = await packageToken(c, existing.pkg, userId);
     return c.json({
       id: preview.id,
       expires_at: preview.expires_at,
@@ -324,7 +354,8 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   }
 
   const packageId = crypto.randomUUID();
-  const token = await createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, userId, body.idempotency_key);
+  const tokenSecret = shareTokenSecrets(c)[0] ?? c.env.BETTER_AUTH_SECRET;
+  const token = await createShareTokenFromSecret(tokenSecret, userId, body.idempotency_key);
   const packageItems = sourceBooks.map((book) => {
     const itemId = crypto.randomUUID();
     const extension = book.format.toLowerCase();
@@ -396,6 +427,209 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   }, 201);
 });
 
+async function preparedLinkFor(
+  c: ShareContext,
+  db: ReturnType<typeof createDb>,
+  userId: string,
+  book: typeof books.$inferSelect,
+  access: ShareAccess,
+) {
+  const now = new Date();
+  let slot = await db.select().from(shareLinkSlots).where(and(
+    eq(shareLinkSlots.ownerUserId, userId),
+    eq(shareLinkSlots.bookId, book.id),
+    eq(shareLinkSlots.access, access),
+  )).get();
+
+  if (!slot) {
+    const slotID = crypto.randomUUID();
+    await db.insert(shareLinkSlots).values({
+      id: slotID,
+      ownerUserId: userId,
+      bookId: book.id,
+      access,
+      generation: 0,
+      activePackageId: null,
+      createdAt: now,
+      updatedAt: now,
+    }).onConflictDoNothing().run();
+    slot = await db.select().from(shareLinkSlots).where(and(
+      eq(shareLinkSlots.ownerUserId, userId),
+      eq(shareLinkSlots.bookId, book.id),
+      eq(shareLinkSlots.access, access),
+    )).get();
+  }
+  if (!slot) throw new Error("prepared share slot unavailable");
+
+  if (slot.activePackageId) {
+    const active = await db.select().from(sharePackages).where(eq(sharePackages.id, slot.activePackageId)).get();
+    if (active && !isShareExpired(active.expiresAt) && active.status === "pending") {
+      const token = await packageToken(c, active, userId);
+      return { bookID: book.id, access, packageID: active.id, generation: slot.generation, expiresAt: active.expiresAt, link: packageLink(token) };
+    }
+    if (active?.status === "building" && now.getTime() - active.createdAt.getTime() < PREPARED_BUILD_LEASE_MS) {
+      throw new Error("prepared share is still building");
+    }
+    if (active?.status === "building") {
+      await db.update(sharePackages).set({ status: "expired" }).where(and(
+        eq(sharePackages.id, active.id),
+        eq(sharePackages.status, "building"),
+        lt(sharePackages.createdAt, new Date(now.getTime() - PREPARED_BUILD_LEASE_MS)),
+      )).run();
+    }
+  }
+
+  let nextGeneration = slot.activePackageId ? slot.generation + 1 : slot.generation;
+  let idempotencyKey = `prepared:${slot.id}:${nextGeneration}`;
+  let pkg = await db.select().from(sharePackages).where(and(
+    eq(sharePackages.senderUserId, userId),
+    eq(sharePackages.idempotencyKey, idempotencyKey),
+  )).get();
+  let createdPackage = false;
+  if (pkg && (pkg.status === "expired" || (pkg.status === "building" && now.getTime() - pkg.createdAt.getTime() >= PREPARED_BUILD_LEASE_MS))) {
+    await db.update(sharePackages).set({ status: "expired" }).where(and(eq(sharePackages.id, pkg.id), inArray(sharePackages.status, ["building", "expired"]))).run();
+    nextGeneration += 1;
+    idempotencyKey = `prepared:${slot.id}:${nextGeneration}`;
+    pkg = undefined;
+  }
+  if (!pkg) {
+    const packageID = crypto.randomUUID();
+    const tokenSecret = shareTokenSecrets(c)[0] ?? c.env.BETTER_AUTH_SECRET;
+    const token = await createShareTokenFromSecret(tokenSecret, userId, idempotencyKey);
+    try {
+      await db.insert(sharePackages).values({
+        id: packageID,
+        senderUserId: userId,
+        recipientUserId: null,
+        tokenHash: await hashShareToken(token),
+        kind: "single",
+        access,
+        status: "building",
+        idempotencyKey,
+        expiresAt: shareExpiry(),
+        createdAt: now,
+      }).run();
+      createdPackage = true;
+      await db.insert(sharePackageItems).values({
+        id: crypto.randomUUID(),
+        packageId: packageID,
+        title: book.title,
+        author: book.author,
+        format: book.format.toLowerCase(),
+        fileR2Key: book.fileR2Key!,
+        coverR2Key: book.coverR2Key ?? null,
+        fileHash: book.fileHash,
+        fileSize: Number(book.fileSize ?? 0),
+        createdAt: now,
+      }).run();
+      await db.update(sharePackages).set({ status: "pending" }).where(and(
+        eq(sharePackages.id, packageID),
+        eq(sharePackages.status, "building"),
+        eq(sharePackages.createdAt, now),
+      )).run();
+    } catch (error) {
+      pkg = await db.select().from(sharePackages).where(and(
+        eq(sharePackages.senderUserId, userId),
+        eq(sharePackages.idempotencyKey, idempotencyKey),
+      )).get();
+      if (!pkg) throw error;
+    }
+    pkg ??= await db.select().from(sharePackages).where(eq(sharePackages.id, packageID)).get();
+  }
+  if (!pkg || pkg.status !== "pending") {
+    if (createdPackage && pkg?.status === "building") {
+      await db.update(sharePackages).set({ status: "expired" }).where(and(eq(sharePackages.id, pkg.id), eq(sharePackages.status, "building"))).run();
+    }
+    throw new Error("prepared share incomplete");
+  }
+
+  const pointer = await db.update(shareLinkSlots).set({
+    activePackageId: pkg.id,
+    generation: nextGeneration,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(shareLinkSlots.id, slot.id),
+    eq(shareLinkSlots.generation, slot.generation),
+    slot.activePackageId
+      ? eq(shareLinkSlots.activePackageId, slot.activePackageId)
+      : isNull(shareLinkSlots.activePackageId),
+  )).run();
+  if (pointer.meta?.changes !== 1) {
+    const winner = await db.select({ slot: shareLinkSlots, pkg: sharePackages })
+      .from(shareLinkSlots)
+      .innerJoin(sharePackages, eq(sharePackages.id, shareLinkSlots.activePackageId))
+      .where(eq(shareLinkSlots.id, slot.id)).get();
+    if (!winner || winner.pkg.status !== "pending") throw new Error("prepared share race lost");
+    if (winner.pkg.id !== pkg.id) {
+      const referenced = await db.select({ id: shareLinkSlots.id })
+        .from(shareLinkSlots)
+        .where(eq(shareLinkSlots.activePackageId, pkg.id))
+        .get();
+      if (!referenced) {
+        await db.update(sharePackages).set({ status: "expired" }).where(and(
+          eq(sharePackages.id, pkg.id),
+          eq(sharePackages.status, "pending"),
+        )).run();
+      }
+    }
+    const winnerToken = await packageToken(c, winner.pkg, userId);
+    return { bookID: book.id, access, packageID: winner.pkg.id, generation: winner.slot.generation, expiresAt: winner.pkg.expiresAt, link: packageLink(winnerToken) };
+  }
+  const token = await packageToken(c, pkg, userId);
+  return { bookID: book.id, access, packageID: pkg.id, generation: nextGeneration, expiresAt: pkg.expiresAt, link: packageLink(token) };
+}
+
+sharesRoutes.post("/prepare", requireAuth, requireAiDataConsent, async (c) => {
+  const body = await c.req.json().catch(() => null) as { book_ids?: unknown } | null;
+  if (!body || !Array.isArray(body.book_ids) || body.book_ids.length < 1 || body.book_ids.length > MAX_PREPARE_BOOKS) {
+    return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
+  }
+  const ids = [...new Set(body.book_ids)];
+  if (ids.some((id) => typeof id !== "string") || ids.length !== body.book_ids.length) {
+    return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
+  }
+  const userId = c.get("userId");
+  const db = createDb(c.env.DB);
+  const sourceBooks = await db.select().from(books).where(and(
+    eq(books.userId, userId),
+    inArray(books.id, ids as string[]),
+    eq(books.isDeleted, false),
+  )).all();
+  const byID = new Map(sourceBooks.map((book) => [book.id, book]));
+  const links: Array<Record<string, unknown>> = [];
+  const skipped: Array<{ book_id: string; code: string }> = [];
+  for (const id of ids as string[]) {
+    const book = byID.get(id);
+    if (!book || !book.fileR2Key || !SUPPORTED_FORMATS.has(book.format)) {
+      skipped.push({ book_id: id, code: "SHARE_BOOK_NOT_READY" });
+      continue;
+    }
+    try {
+      const preparedForBook = await Promise.all([
+        preparedLinkFor(c, db, userId, book, "public"),
+        preparedLinkFor(c, db, userId, book, "one_time"),
+      ]);
+      const [publicLink, oneTimeLink] = preparedForBook;
+      const packagePayload = (link: typeof publicLink) => ({
+        id: link.packageID,
+        generation: link.generation,
+        expires_at: referenceSeconds(link.expiresAt),
+        link: link.link,
+      });
+      links.push({ book_id: book.id, public: packagePayload(publicLink), one_time: packagePayload(oneTimeLink) });
+    } catch (error) {
+      console.error("prepared share failed", { userId, bookId: id, error });
+      const message = error instanceof Error ? error.message : "";
+      if (["prepared share is still building", "prepared share incomplete", "prepared share race lost"].includes(message)) {
+        skipped.push({ book_id: id, code: "SHARE_IN_PROGRESS" });
+        continue;
+      }
+      throw error;
+    }
+  }
+  return c.json({ links, skipped });
+});
+
 async function claimPackage(
   c: ShareContext,
   packageId: string,
@@ -410,6 +644,7 @@ async function claimPackage(
     await db.update(sharePackages).set({ status: "expired" }).where(eq(sharePackages.id, pkg.id)).run();
     return errorResponse(c, "SHARE_EXPIRED", 410);
   }
+  if (pkg.status === "building") return errorResponse(c, "SHARE_IN_PROGRESS", 409);
 
   // The sender already has the source books. Opening their own pending link
   // is a successful no-op and must not consume a one-time link intended for
@@ -425,6 +660,7 @@ async function claimPackage(
   }
 
   if (pkg.access === "public") {
+    if (pkg.status !== "pending") return errorResponse(c, "SHARE_EXPIRED", 410);
     await db.insert(sharePackageRedemptions).values({
       id: crypto.randomUUID(),
       packageId: pkg.id,

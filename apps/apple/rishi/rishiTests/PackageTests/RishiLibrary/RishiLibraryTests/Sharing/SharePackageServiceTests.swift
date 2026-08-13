@@ -32,8 +32,204 @@ private final class ShareServiceMockURLProtocol: URLProtocol, @unchecked Sendabl
     override func stopLoading() {}
 }
 
+private final class LockIsolatedInt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func increment() {
+        lock.lock()
+        storage += 1
+        lock.unlock()
+    }
+}
+
+private final class LockIsolatedOptionalUUID: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: UUID?
+
+    init(_ value: UUID?) { storage = value }
+
+    var value: UUID? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        set {
+            lock.lock()
+            storage = newValue
+            lock.unlock()
+        }
+    }
+
+    var uuidString: String {
+        value?.uuidString ?? "missing"
+    }
+
+}
+
 @Suite("Share package service", .serialized)
 struct SharePackageServiceTests {
+    @Test("single-book shares reuse a prepared response instead of creating duplicate packages")
+    func singleBookShareReusesPreparedResponse() async throws {
+        let userID = UUID()
+        let bookID = UUID()
+        let root = URL.temporaryDirectory.appendingPathComponent("SharePrepare-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bookStore = InMemoryBookStore()
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+        )
+        let prepareCount = LockIsolatedInt()
+        defer { ShareServiceMockURLProtocol.handler = nil }
+        ShareServiceMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/shares/prepare" {
+                prepareCount.increment()
+                return (200, Data("{\"links\":[{\"book_id\":\"\(bookID.uuidString)\",\"public\":{\"id\":\"package-prepared\",\"expires_at\":900000000,\"link\":\"https://rishi.test/prepared\"},\"one_time\":{\"id\":\"package-one-time\",\"expires_at\":900000000,\"link\":\"https://rishi.test/one-time\"}}],\"skipped\":[]}".utf8))
+            }
+            if request.url?.path == "/api/shares" {
+                return (500, Data("create endpoint must not be used for a single book".utf8))
+            }
+            return (404, Data())
+        }
+
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            currentUserId: { userID },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in }
+        )
+
+        let first = try await service.createShare(bookIDs: [bookID], kind: .single, access: .public)
+        let second = try await service.createShare(bookIDs: [bookID], kind: .single, access: .public)
+        let oneTimeFirst = try await service.createShare(bookIDs: [bookID], kind: .single, access: .oneTime)
+        let oneTimeSecond = try await service.createShare(bookIDs: [bookID], kind: .single, access: .oneTime)
+        #expect(first.link == "https://rishi.test/prepared")
+        #expect(second.id == "package-prepared")
+        #expect(oneTimeFirst.link == "https://rishi.test/one-time")
+        #expect(oneTimeSecond.id == "package-one-time")
+        #expect(prepareCount.value == 3)
+    }
+
+    @Test("prepared links are partitioned when the authenticated account changes")
+    func preparedLinksDoNotCrossAccounts() async throws {
+        let firstUser = UUID()
+        let secondUser = UUID()
+        let bookID = UUID()
+        let currentUser = LockIsolatedOptionalUUID(firstUser)
+        let root = URL.temporaryDirectory.appendingPathComponent("SharePrepareAccount-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bookStore = InMemoryBookStore()
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+        )
+        let prepareCount = LockIsolatedInt()
+        defer { ShareServiceMockURLProtocol.handler = nil }
+        ShareServiceMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/shares/prepare" {
+                let userSuffix = currentUser.uuidString
+                prepareCount.increment()
+                return (200, Data("{\"links\":[{\"book_id\":\"\(bookID.uuidString)\",\"public\":{\"id\":\"package-\(userSuffix)\",\"expires_at\":900000000,\"link\":\"https://rishi.test/\(userSuffix)\"},\"one_time\":{\"id\":\"one-time-\(userSuffix)\",\"expires_at\":900000000,\"link\":\"https://rishi.test/one-time-\(userSuffix)\"}}],\"skipped\":[]}".utf8))
+            }
+            return (404, Data())
+        }
+
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            currentUserId: { currentUser.value },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in }
+        )
+        let first = try await service.createShare(bookIDs: [bookID], kind: .single, access: .public)
+        currentUser.value = secondUser
+        let second = try await service.createShare(bookIDs: [bookID], kind: .single, access: .public)
+        #expect(first.link != second.link)
+        #expect(prepareCount.value == 2)
+    }
+
+    @Test("prewarm batches at fifty and skips already-fresh access entries")
+    func prewarmBatchesAndReusesFreshEntries() async throws {
+        let userID = UUID()
+        let bookIDs = (0..<51).map { _ in UUID() }
+        let root = URL.temporaryDirectory.appendingPathComponent("SharePrewarm-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bookStore = InMemoryBookStore()
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+        )
+        let prepareCount = LockIsolatedInt()
+        defer { ShareServiceMockURLProtocol.handler = nil }
+        ShareServiceMockURLProtocol.handler = { request in
+            guard request.url?.path == "/api/shares/prepare" else { return (404, Data()) }
+            prepareCount.increment()
+            let json = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any]
+            let ids = json?["book_ids"] as? [String] ?? []
+            let prepared = ids.flatMap { bookID in
+                [[
+                    "book_id": bookID,
+                    "public": [
+                        "id": "package-\(bookID)-public",
+                        "expires_at": 900000000,
+                        "link": "https://rishi.test/\(bookID)/public",
+                    ],
+                    "one_time": [
+                        "id": "package-\(bookID)-one-time",
+                        "expires_at": 900000000,
+                        "link": "https://rishi.test/\(bookID)/one-time",
+                    ],
+                ] as [String: Any]]
+            }
+            let payload: [String: Any] = ["links": prepared, "skipped": []]
+            return (200, (try? JSONSerialization.data(withJSONObject: payload)) ?? Data())
+        }
+
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            currentUserId: { userID },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in }
+        )
+        await service.prewarm(bookIDs: bookIDs + bookIDs)
+        await service.prewarm(bookIDs: bookIDs)
+        #expect(prepareCount.value == 2)
+    }
+
     @Test("redeeming a book already in the library is a no-op")
     func existingBookIsNotDuplicated() async throws {
         let userID = UUID()

@@ -52,6 +52,13 @@ public struct LibraryRootView: View {
         externalDocumentPickerPresented ?? $internalDocumentPickerPresented
     }
 
+    private func refreshLibraryAndPrewarm(_ vm: LibraryViewModel) async {
+        await vm.refresh()
+        guard let sharePackageService else { return }
+        let bookIDs = vm.books.map(\.id)
+        Task { await sharePackageService.prewarm(bookIDs: bookIDs) }
+    }
+
     public init(
       
         importCoordinator: ImportCoordinator,
@@ -100,7 +107,7 @@ public struct LibraryRootView: View {
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
 
             Task {
-                await vm.refresh()
+                await refreshLibraryAndPrewarm(vm)
                 onImported?(outcomes)
             }
         }
@@ -126,6 +133,7 @@ public struct LibraryRootView: View {
                             "failures": String(outcomes.filter { $0.error != nil }.count)
                         ]
                     )
+                    await refreshLibraryAndPrewarm(vm)
                     onImported?(outcomes)
                 }
             }
@@ -144,10 +152,10 @@ public struct LibraryRootView: View {
             defer {
                 librarySignposter.endInterval("library.first-paint", state)
             }
-            await vm.refresh()
+            await refreshLibraryAndPrewarm(vm)
         }
         .onReceive(NotificationCenter.default.publisher(for: SharePackageService.libraryDidChange)) { _ in
-            Task { await vm.refresh() }
+            Task { await refreshLibraryAndPrewarm(vm) }
         }
 
         .onReceive(
