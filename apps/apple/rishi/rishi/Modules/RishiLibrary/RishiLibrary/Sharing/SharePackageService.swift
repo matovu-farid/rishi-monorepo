@@ -124,6 +124,7 @@ public actor SharePackageService {
         access: ShareAccess,
         idempotencyKey: String = UUID().uuidString
     ) async throws -> SharePackageResponse {
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         if kind == .single, bookIDs.count == 1, let bookID = bookIDs.first {
             do {
                 // A freshly prewarmed link is already server-backed. Return it
@@ -131,6 +132,7 @@ public actor SharePackageService {
                 // critical path.
                 return try await preparedShare(bookID: bookID, access: access)
             } catch {
+                guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
                 // A newly imported book may not have reached D1 yet. Sync once
                 // only when preparation could not produce a link, then retry
                 // the durable slot lookup.
@@ -140,8 +142,9 @@ public actor SharePackageService {
         }
 
         await syncBeforeCreate()
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
 
-        return try await workerClient.send(
+        let response = try await workerClient.send(
             ShareCreateEndpoint(body: .init(
                 idempotencyKey: idempotencyKey,
                 kind: kind,
@@ -149,12 +152,15 @@ public actor SharePackageService {
                 access: access
             ))
         )
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
+        return response
     }
 
     /// Ensures durable public and one-time slots for individual books. This is
     /// intentionally best-effort and does not run a sync first; callers use it
     /// after a library refresh so it cannot delay first paint.
     public func prewarm(bookIDs: [BookID]) async {
+        guard !accountSwitchInProgress else { return }
         guard let userID = try? await currentAccount() else { return }
         let normalized = normalizedBookIDs(bookIDs)
         guard !normalized.isEmpty else { return }
@@ -162,6 +168,7 @@ public actor SharePackageService {
         guard !booksToPrepare.isEmpty else { return }
 
         for chunk in booksToPrepare.chunked(maxCount: Self.prepareBatchLimit) {
+            guard !accountSwitchInProgress else { return }
             guard await currentUserId() == userID else { return }
             let pendingChunk = chunk.filter { needsPrewarm(for: $0, userID: userID) }
             guard !pendingChunk.isEmpty else { continue }
@@ -183,6 +190,7 @@ public actor SharePackageService {
             }
             prewarmTasks[key] = task
             await task.value
+            guard !accountSwitchInProgress else { return }
             if prewarmTasks[key] != nil {
                 prewarmTasks[key] = nil
             }
@@ -201,6 +209,11 @@ public actor SharePackageService {
     public func beginAccountSwitchAndWait() async {
         accountSwitchInProgress = true
         pendingRedemptionRerunRequested = false
+        let activePrewarmTasks = Array(prewarmTasks.values)
+        invalidatePreparedCache()
+        for task in activePrewarmTasks {
+            _ = await task.value
+        }
         while let redemptionTask {
             _ = await redemptionTask.value
         }
@@ -217,11 +230,14 @@ public actor SharePackageService {
         access: ShareAccess,
         forceRefresh: Bool = false
     ) async throws -> SharePackageResponse {
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         let userID = try await currentAccount()
         let key = PreparedCacheKey(userID: userID, bookID: bookID, access: access)
         if !forceRefresh,
            let cached = preparedCache[key], isFresh(cached, access: access) {
+            guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
             try await ensureAccount(userID)
+            guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
             if access == .oneTime {
                 // A bearer may be claimed by another device between prewarm
                 // and the share tap. Do not replay this cached generation on
@@ -233,6 +249,7 @@ public actor SharePackageService {
         }
 
         let response = try await prepareForAccount(bookIDs: [bookID], userID: userID)
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         guard let preparedBook = response.links.first(where: {
             $0.bookID.caseInsensitiveCompare(bookID.uuidString) == .orderedSame
         }) else {
@@ -243,6 +260,7 @@ public actor SharePackageService {
             throw RishiError.network(code: "SHARE_BOOK_NOT_READY", message: reason)
         }
         try await ensureAccount(userID)
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         if access == .oneTime {
             // The freshly returned one-time URL is now handed to the share
             // sheet. Do not leave the same bearer in the actor cache after
@@ -256,14 +274,19 @@ public actor SharePackageService {
     /// Sends prepare directly for callers that need to inspect per-book skips.
     /// Successful links are cached; skipped books are deliberately not cached.
     public func prepare(bookIDs: [BookID]) async throws -> SharePrepareResponse {
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         let userID = try await currentAccount()
         let response = try await prepareForAccount(bookIDs: normalizedBookIDs(bookIDs), userID: userID)
         try await ensureAccount(userID)
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         return response
     }
 
     public func preview(token: String) async throws -> SharePreview {
-        try await workerClient.send(SharePreviewEndpoint(token: token))
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
+        let response = try await workerClient.send(SharePreviewEndpoint(token: token))
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
+        return response
     }
 
     /// Called after authentication and onboarding are complete. Network and
@@ -330,7 +353,12 @@ public actor SharePackageService {
                     "items": String(response.items?.count ?? -1),
                 ])
                 guard response.items != nil else { throw ServiceError.missingResponseItems }
-                importedCount += try await importItems(response: response, packageID: response.id, userID: userID)
+                importedCount += try await importItems(
+                    response: response,
+                    token: token,
+                    packageID: response.id,
+                    userID: userID
+                )
                 await pendingStore.remove(token: token)
                 if importedCount > 0 {
                     NotificationCenter.default.post(name: Self.libraryDidChange, object: nil)
@@ -363,6 +391,7 @@ public actor SharePackageService {
 
     private func importItems(
         response: SharePackageResponse,
+        token: String,
         packageID: String,
         userID: UserID
     ) async throws -> Int {
@@ -379,16 +408,16 @@ public actor SharePackageService {
             }
             if await alreadyOwns(item, among: existingBooks) {
                 Log.event("sharing.pending_redeem.item_skipped", data: ["reason": "already_owned"])
-                if let existingImportedID = await pendingStore.bookID(packageID: packageID, itemID: item.id),
+                if let existingImportedID = await pendingStore.bookID(token: token, userID: userID, packageID: packageID, itemID: item.id),
                    !(await markBookDirty(existingImportedID)) {
                     throw ServiceError.syncQueueUnavailable
                 }
-                if await pendingStore.bookID(packageID: packageID, itemID: item.id) != nil {
+                if await pendingStore.bookID(token: token, userID: userID, packageID: packageID, itemID: item.id) != nil {
                     requiresSync = true
                 }
                 continue
             }
-            let recordedLocalID = await pendingStore.bookID(packageID: packageID, itemID: item.id)
+            let recordedLocalID = await pendingStore.bookID(token: token, userID: userID, packageID: packageID, itemID: item.id)
             var localID = recordedLocalID
                 ?? DeterministicBookID.make(title: item.title, author: item.author, format: format)
                 ?? UUID()
@@ -399,7 +428,7 @@ public actor SharePackageService {
                 // on the device. Never treat that record as this package's
                 // imported book.
                 localID = UUID()
-                await pendingStore.recordBookID(localID, packageID: packageID, itemID: item.id)
+                await pendingStore.recordBookID(localID, token: token, userID: userID, packageID: packageID, itemID: item.id)
                 Log.event("sharing.pending_redeem.id_collision", data: ["action": "rotate_local_id"])
             }
             let book = Book(
@@ -410,8 +439,8 @@ public actor SharePackageService {
                 formatType: format,
                 fileURL: "Books/\(localID.uuidString)/\(localID.uuidString).\(format.rawValue)"
             )
-            if await pendingStore.bookID(packageID: packageID, itemID: item.id) == nil {
-                await pendingStore.recordBookID(localID, packageID: packageID, itemID: item.id)
+            if await pendingStore.bookID(token: token, userID: userID, packageID: packageID, itemID: item.id) == nil {
+                await pendingStore.recordBookID(localID, token: token, userID: userID, packageID: packageID, itemID: item.id)
             }
 
             let existingLocal = try await bookStore.book(localID)
@@ -540,6 +569,7 @@ public actor SharePackageService {
         bookIDs: [BookID],
         userID: UserID
     ) async throws -> SharePrepareResponse {
+        guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         let normalized = normalizedBookIDs(bookIDs)
         guard !normalized.isEmpty else {
             return SharePrepareResponse(links: [], skipped: [])
@@ -555,6 +585,7 @@ public actor SharePackageService {
             guard await currentUserId() == userID else {
                 throw ServiceError.accountChanged
             }
+            guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
             guard activeUserID == userID else {
                 throw ServiceError.accountChanged
             }

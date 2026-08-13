@@ -522,7 +522,7 @@ struct SharePackageServiceTests {
         )
 
         let first = await failingService.redeemPendingIfEligible()
-        let recordedID = try #require(await pendingStore.bookID(packageID: "package-materialize", itemID: "item-1"))
+        let recordedID = try #require(await pendingStore.bookID(token: "materialize-token", userID: userID, packageID: "package-materialize", itemID: "item-1"))
         #expect(first.importedCount == 0)
         #expect(await bookStore.snapshot().isEmpty)
         #expect(await pendingStore.tokens() == ["materialize-token"])

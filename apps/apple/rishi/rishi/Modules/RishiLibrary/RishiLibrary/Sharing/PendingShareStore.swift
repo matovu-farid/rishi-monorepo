@@ -2,6 +2,7 @@ import Foundation
 
 public actor PendingShareStore {
     public static let shared = PendingShareStore()
+    private static let progressSeparator: Character = "\u{1F}"
     private struct State: Codable, Sendable {
         var tokens: [String] = []
         var tokenOwners: [String: String] = [:]
@@ -33,7 +34,15 @@ public actor PendingShareStore {
         self.key = key
         if let data = defaults.data(forKey: key),
            let decoded = try? JSONDecoder().decode(State.self, from: data) {
-            self.state = decoded
+            var migrated = decoded
+            migrated.tokenOwners = migrated.tokenOwners.filter { migrated.tokens.contains($0.key) }
+            // Older builds used unscoped `package:item` keys. They cannot be
+            // safely attributed to an account, so discard them during the
+            // one-time in-memory migration rather than risk cross-account IDs.
+            migrated.packageBookIDs = migrated.packageBookIDs.filter {
+                $0.key.split(separator: Self.progressSeparator).count == 4
+            }
+            self.state = migrated
         } else {
             self.state = State()
         }
@@ -44,7 +53,13 @@ public actor PendingShareStore {
         state.tokens.removeAll { $0 == token }
         state.tokens.append(token)
         if state.tokens.count > 20 {
-            state.tokens.removeFirst(state.tokens.count - 20)
+            let evictionCount = state.tokens.count - 20
+            let evicted = Array(state.tokens.prefix(evictionCount))
+            state.tokens.removeFirst(evictionCount)
+            for token in evicted {
+                state.tokenOwners[token] = nil
+                removeProgress(for: token)
+            }
         }
         persist()
     }
@@ -77,17 +92,40 @@ public actor PendingShareStore {
     public func remove(token: String) {
         state.tokens.removeAll { $0 == token }
         state.tokenOwners[token] = nil
+        removeProgress(for: token)
         persist()
     }
 
-    public func bookID(packageID: String, itemID: String) -> UUID? {
-        guard let raw = state.packageBookIDs["\(packageID):\(itemID)"] else { return nil }
+    public func bookID(
+        token: String,
+        userID: UUID,
+        packageID: String,
+        itemID: String
+    ) -> UUID? {
+        guard let raw = state.packageBookIDs[progressKey(token: token, userID: userID, packageID: packageID, itemID: itemID)] else {
+            return nil
+        }
         return UUID(uuidString: raw)
     }
 
-    public func recordBookID(_ bookID: UUID, packageID: String, itemID: String) {
-        state.packageBookIDs["\(packageID):\(itemID)"] = bookID.uuidString
+    public func recordBookID(
+        _ bookID: UUID,
+        token: String,
+        userID: UUID,
+        packageID: String,
+        itemID: String
+    ) {
+        state.packageBookIDs[progressKey(token: token, userID: userID, packageID: packageID, itemID: itemID)] = bookID.uuidString
         persist()
+    }
+
+    private func progressKey(token: String, userID: UUID, packageID: String, itemID: String) -> String {
+        [token, userID.uuidString, packageID, itemID].joined(separator: String(Self.progressSeparator))
+    }
+
+    private func removeProgress(for token: String) {
+        let prefix = "\(token)\(Self.progressSeparator)"
+        state.packageBookIDs = state.packageBookIDs.filter { !$0.key.hasPrefix(prefix) }
     }
 
     private func persist() {

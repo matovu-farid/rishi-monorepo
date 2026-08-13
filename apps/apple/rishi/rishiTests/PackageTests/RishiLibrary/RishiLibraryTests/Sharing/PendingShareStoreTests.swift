@@ -30,9 +30,14 @@ struct PendingShareStoreTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = PendingShareStore(defaults: defaults, key: "shares")
         let bookID = UUID()
+        let userID = UUID()
 
-        await store.recordBookID(bookID, packageID: "package-1", itemID: "item-1")
-        #expect(await store.bookID(packageID: "package-1", itemID: "item-1") == bookID)
+        await store.recordBookID(bookID, token: "token-1", userID: userID, packageID: "package-1", itemID: "item-1")
+        #expect(await store.bookID(token: "token-1", userID: userID, packageID: "package-1", itemID: "item-1") == bookID)
+        #expect(await store.bookID(token: "token-1", userID: UUID(), packageID: "package-1", itemID: "item-1") == nil)
+        await store.enqueue(token: "token-1")
+        await store.remove(token: "token-1")
+        #expect(await store.bookID(token: "token-1", userID: userID, packageID: "package-1", itemID: "item-1") == nil)
     }
 
     @Test("keeps retries scoped to the account that started them")
