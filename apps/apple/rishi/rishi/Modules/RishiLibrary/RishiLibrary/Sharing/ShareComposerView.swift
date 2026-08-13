@@ -14,6 +14,11 @@ public struct ShareComposerView: View {
     @State private var idempotencyKeys: [String: String] = [:]
     @State private var loadGeneration = UUID()
 
+    private var preparedLinkTaskID: String {
+        [kind.rawValue, access.rawValue, bookIDs.map(\.uuidString).sorted().joined(separator: ",")]
+            .joined(separator: "|")
+    }
+
     public init(
         service: SharePackageService,
         bookIDs: [BookID],
@@ -53,8 +58,12 @@ public struct ShareComposerView: View {
                             Label("Share Link", systemImage: "square.and.arrow.up")
                         }
                         .accessibilityIdentifier("share-link-button")
+                    } else if kind == .single && isWorking {
+                        Label("Loading prepared link…", systemImage: "link")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("share-link-loading")
                     } else {
-                        Button("Create Share Link") { create() }
+                        Button(kind == .single ? "Try Again" : "Create Share Link") { create() }
                         .disabled(isWorking)
                     }
                 } footer: {
@@ -80,14 +89,16 @@ public struct ShareComposerView: View {
                 }
             }
             .navigationTitle("Share Books")
-            .onAppear {
-                if kind == .single { loadPreparedLink(for: access, generation: loadGeneration) }
+            .task(id: preparedLinkTaskID) {
+                guard kind == .single else { return }
+                let generation = UUID()
+                await MainActor.run { loadGeneration = generation }
+                loadPreparedLink(for: access, generation: generation)
             }
             .onChange(of: access) { _, newAccess in
                 response = nil
                 errorMessage = nil
                 loadGeneration = UUID()
-                if kind == .single { loadPreparedLink(for: newAccess, generation: loadGeneration) }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
