@@ -148,6 +148,11 @@ export const sharePackages = sqliteTable(
     recipientUserId: text("recipient_user_id").references(() => user.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash"),
     kind: text("kind", { enum: ["single", "selection", "library"] }).notNull(),
+    // Active shares are link-only. Legacy username rows remain readable for
+    // deletion/retention compatibility, but new requests cannot create them.
+    access: text("access", { enum: ["one_time", "public"] })
+      .notNull()
+      .default("one_time"),
     status: text("status", { enum: ["building", "pending", "claimed", "expired"] })
       .notNull()
       .default("pending"),
@@ -197,6 +202,30 @@ export type SharePackage = typeof sharePackages.$inferSelect;
 export type NewSharePackage = typeof sharePackages.$inferInsert;
 export type SharePackageItem = typeof sharePackageItems.$inferSelect;
 export type NewSharePackageItem = typeof sharePackageItems.$inferInsert;
+
+export const sharePackageRedemptions = sqliteTable(
+  "share_package_redemptions",
+  {
+    id: text("id").primaryKey(),
+    packageId: text("package_id")
+      .notNull()
+      .references(() => sharePackages.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => ({
+    packageUser: uniqueIndex("share_package_redemptions_package_user_uniq").on(
+      t.packageId,
+      t.userId,
+    ),
+    byPackage: index("share_package_redemptions_package_id_idx").on(t.packageId),
+  }),
+);
+
+export type SharePackageRedemption = typeof sharePackageRedemptions.$inferSelect;
+export type NewSharePackageRedemption = typeof sharePackageRedemptions.$inferInsert;
 
 // ─── Chapter index sync ─────────────────────────────────────────────────────
 // One parent row is the LWW envelope; child rows retain the normalized,

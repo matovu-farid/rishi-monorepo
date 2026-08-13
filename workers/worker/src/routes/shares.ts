@@ -7,15 +7,14 @@ import {
   books,
   deletionState,
   sharePackageItems,
+  sharePackageRedemptions,
   sharePackages,
   user,
-  usernames,
 } from "../db/schema";
 import { requireAuth } from "../middleware";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
 import { signR2Url } from "../r2-presign";
 import type { R2SigningEnv } from "../r2-presign";
-import { normalizeUsername, validateUsername } from "../usernames";
 import {
   createShareTokenFromSecret,
   hashShareToken,
@@ -23,9 +22,6 @@ import {
   shareExpiry,
 } from "../shares/shareTokens";
 import { deleteUnreferencedR2Objects } from "../shares/shareReferences";
-import { devices } from "../db/schema";
-import { createApnsSenderFromEnv, type ApnsCredentialsEnv } from "../billing/apns";
-import { emitShareCreatedPush } from "../shares/shareNotifications";
 
 const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
 const DOWNLOAD_URL_EXPIRES_SEC = 600;
@@ -33,7 +29,7 @@ const MAX_SHARE_ITEMS = 500;
 const SUPPORTED_FORMATS = new Set(["epub", "pdf", "mobi", "azw3"]);
 
 type ShareKind = "single" | "selection" | "library";
-type Delivery = "link" | "username";
+type ShareAccess = "one_time" | "public";
 type ShareContext = Context<{ Bindings: Env; Variables: { userId: string } }>;
 
 function signingEnv(c: ShareContext): R2SigningEnv {
@@ -50,6 +46,7 @@ type SharePreviewItem = {
 
 type ShareDownloadItem = SharePreviewItem & {
   file_size: number;
+  file_hash?: string | null;
   file_url: string;
 };
 
@@ -87,6 +84,7 @@ async function signedItem(
     author: item.author,
     format: item.format,
     file_size: item.fileSize,
+    ...(item.fileHash ? { file_hash: item.fileHash } : {}),
     file_url: fileUrl,
     ...(coverUrl ? { cover_url: coverUrl } : {}),
   };
@@ -120,18 +118,49 @@ async function itemsFor(db: ReturnType<typeof createDb>, packageId: string) {
     .all();
 }
 
+function shareIdentity(title: string, author: string | null, format: string): string {
+  return [title, author ?? "", format]
+    .map((value) => value.toLowerCase().split(/\s+/).filter(Boolean).join(" "))
+    .join("\u001f");
+}
+
+async function ownedItemIDs(
+  db: ReturnType<typeof createDb>,
+  packageId: string,
+  userId: string,
+): Promise<Set<string>> {
+  const [packageItems, ownedBooks] = await Promise.all([
+    itemsFor(db, packageId),
+    db.select({
+      title: books.title,
+      author: books.author,
+      format: books.format,
+      fileHash: books.fileHash,
+    }).from(books).where(and(eq(books.userId, userId), eq(books.isDeleted, false))).all(),
+  ]);
+  const owned = new Set<string>();
+  for (const item of packageItems) {
+    if (ownedBooks.some((book) => {
+      if (item.fileHash && book.fileHash) return item.fileHash === book.fileHash;
+      return shareIdentity(item.title, item.author, item.format)
+        === shareIdentity(book.title, book.author, book.format);
+    })) {
+      owned.add(item.id);
+    }
+  }
+  return owned;
+}
+
 async function previewFor(
   c: ShareContext,
   db: ReturnType<typeof createDb>,
   pkg: typeof sharePackages.$inferSelect,
   senderName: string,
-  senderUsername: string | null,
 ) {
   const items = await itemsFor(db, pkg.id);
   return {
     id: pkg.id,
     sender_name: senderName,
-    sender_username: senderUsername,
     count: items.length,
     items: await Promise.all(items.map((item) => previewItem(c, item))),
     expires_at: referenceSeconds(pkg.expiresAt),
@@ -142,8 +171,9 @@ async function downloadResponse(
   c: Parameters<typeof requireAuth>[0],
   db: ReturnType<typeof createDb>,
   packageId: string,
+  excludedItemIDs: Set<string> = new Set(),
 ) {
-  const items = await itemsFor(db, packageId);
+  const items = (await itemsFor(db, packageId)).filter((item) => !excludedItemIDs.has(item.id));
   return {
     id: packageId,
     items: await Promise.all(items.map((item) => signedItem(c, item))),
@@ -168,7 +198,7 @@ export async function purgeExpiredShares(
     .from(sharePackages)
     .where(and(
       lt(sharePackages.expiresAt, new Date()),
-      inArray(sharePackages.status, ["building", "pending", "expired"]),
+      inArray(sharePackages.status, ["building", "pending", "claimed", "expired"]),
     ))
     .limit(limit)
     .all();
@@ -179,7 +209,7 @@ export async function purgeExpiredShares(
       .where(and(
         eq(sharePackages.id, pkg.id),
         lt(sharePackages.expiresAt, new Date()),
-        inArray(sharePackages.status, ["building", "pending", "expired"]),
+        inArray(sharePackages.status, ["building", "pending", "claimed", "expired"]),
       ))
       .run();
     if (fenced.meta?.changes !== 1) continue;
@@ -213,11 +243,9 @@ sharesRoutes.get("/preview", async (c) => {
     .select({
       pkg: sharePackages,
       senderName: user.name,
-      senderUsername: usernames.username,
     })
     .from(sharePackages)
     .innerJoin(user, eq(user.id, sharePackages.senderUserId))
-    .leftJoin(usernames, eq(usernames.userId, sharePackages.senderUserId))
     .where(eq(sharePackages.tokenHash, tokenHash))
     .get();
 
@@ -226,7 +254,7 @@ sharesRoutes.get("/preview", async (c) => {
     await db.update(sharePackages).set({ status: "expired" }).where(eq(sharePackages.id, row.pkg.id)).run();
     return errorResponse(c, "SHARE_EXPIRED", 410);
   }
-  return c.json(await previewFor(c, db, row.pkg, row.senderName, row.senderUsername));
+  return c.json(await previewFor(c, db, row.pkg, row.senderName));
 });
 
 sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
@@ -235,24 +263,22 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
     kind?: unknown;
     book_ids?: unknown;
     delivery?: unknown;
-    recipient_username?: unknown;
+    access?: unknown;
   } | null;
   if (
     !body || typeof body.idempotency_key !== "string" ||
     !["single", "selection", "library"].includes(String(body.kind)) ||
     !Array.isArray(body.book_ids) || body.book_ids.length < 1 || body.book_ids.length > MAX_SHARE_ITEMS ||
-    !["link", "username"].includes(String(body.delivery))
+    body.delivery !== "link" ||
+    !["one_time", "public"].includes(String(body.access))
   ) return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
 
   const userId = c.get("userId");
   const kind = body.kind as ShareKind;
-  const delivery = body.delivery as Delivery;
+  const access = body.access as ShareAccess;
   const ids = [...new Set(body.book_ids.filter((id): id is string => typeof id === "string"))];
   if (ids.length !== body.book_ids.length) return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
   if (kind === "single" && ids.length !== 1) return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
-  if (delivery === "username" && typeof body.recipient_username !== "string") {
-    return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
-  }
 
   const db = createDb(c.env.DB);
   const deletionFence = await db
@@ -269,21 +295,17 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   if (existing) {
     if (isShareExpired(existing.pkg.expiresAt)) return errorResponse(c, "SHARE_EXPIRED", 410);
     if (existing.pkg.status === "building") return errorResponse(c, "SHARE_IN_PROGRESS", 409);
-    const existingDelivery: Delivery = existing.pkg.recipientUserId ? "username" : "link";
-    if (delivery !== existingDelivery) {
+    if (existing.pkg.recipientUserId || existing.pkg.access !== access) {
       return errorResponse(c, "SHARE_IDEMPOTENCY_CONFLICT", 409);
     }
     const sender = await db
-      .select({ name: user.name, username: usernames.username })
+      .select({ name: user.name })
       .from(user)
-      .leftJoin(usernames, eq(usernames.userId, user.id))
       .where(eq(user.id, userId))
       .get();
     if (!sender) return errorResponse(c, "SHARE_NOT_FOUND", 404);
-    const preview = await previewFor(c, db, existing.pkg, sender.name, sender.username);
-    const linkToken = existingDelivery === "link"
-      ? await createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, userId, body.idempotency_key)
-      : undefined;
+    const preview = await previewFor(c, db, existing.pkg, sender.name);
+    const linkToken = await createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, userId, body.idempotency_key);
     return c.json({
       id: preview.id,
       expires_at: preview.expires_at,
@@ -291,23 +313,6 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
       preview,
     });
   }
-
-  let recipientUsername: string | null = null;
-  if (delivery === "username") {
-    const validation = validateUsername(String(body.recipient_username));
-    if (!validation.ok) return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
-    recipientUsername = validation.value;
-  }
-  const recipient = recipientUsername
-    ? await db
-        .select({ id: user.id })
-        .from(usernames)
-        .innerJoin(user, eq(user.id, usernames.userId))
-        .where(eq(usernames.username, normalizeUsername(recipientUsername)))
-        .get()
-    : null;
-  if (delivery === "username" && !recipient) return errorResponse(c, "SHARE_RECIPIENT_NOT_FOUND", 404);
-  if (recipient?.id === userId) return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
 
   const sourceBooks = await db
     .select()
@@ -319,9 +324,7 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   }
 
   const packageId = crypto.randomUUID();
-  const token = delivery === "link"
-    ? await createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, userId, body.idempotency_key)
-    : null;
+  const token = await createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, userId, body.idempotency_key);
   const packageItems = sourceBooks.map((book) => {
     const itemId = crypto.randomUUID();
     const extension = book.format.toLowerCase();
@@ -347,9 +350,10 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
     await db.insert(sharePackages).values({
       id: packageId,
       senderUserId: userId,
-      recipientUserId: recipient?.id ?? null,
+      recipientUserId: null,
       tokenHash: token ? await hashShareToken(token) : null,
       kind,
+      access,
       status: "building",
       idempotencyKey: body.idempotency_key,
       expiresAt: shareExpiry(),
@@ -376,44 +380,14 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   }
 
   const sender = await db
-    .select({ name: user.name, username: usernames.username })
+    .select({ name: user.name })
     .from(user)
-    .leftJoin(usernames, eq(usernames.userId, user.id))
     .where(eq(user.id, userId))
     .get();
   const pkg = await db.select().from(sharePackages).where(eq(sharePackages.id, packageId)).get();
   if (!sender || !pkg) return errorResponse(c, "SHARE_NOT_FOUND", 500);
 
-  if (delivery === "username" && recipient?.id) {
-    const apns = createApnsSenderFromEnv(c.env as unknown as ApnsCredentialsEnv);
-    const notificationPromise = emitShareCreatedPush(
-      {
-        apns,
-        findDevicesByUserId: async (recipientUserId) => db
-          .select({
-            deviceToken: devices.deviceToken,
-            topic: devices.topic,
-            env: devices.env,
-          })
-          .from(devices)
-          .where(eq(devices.userId, recipientUserId))
-          .all(),
-      },
-      {
-        recipientUserId: recipient.id,
-        packageId,
-        bookCount: packageItems.length,
-      },
-    );
-    try {
-      c.executionCtx.waitUntil(notificationPromise);
-    } catch {
-      // Hono's bare Request test context has no ExecutionContext. Awaiting
-      // here keeps that context deterministic; Workers use waitUntil above.
-      await notificationPromise;
-    }
-  }
-  const preview = await previewFor(c, db, pkg, sender.name, sender.username);
+  const preview = await previewFor(c, db, pkg, sender.name);
   return c.json({
     id: preview.id,
     expires_at: preview.expires_at,
@@ -432,28 +406,55 @@ async function claimPackage(
   const pkg = await db.select().from(sharePackages).where(eq(sharePackages.id, packageId)).get();
   if (!pkg) return errorResponse(c, "SHARE_NOT_FOUND", 404);
   if (tokenHash && pkg.tokenHash !== tokenHash) return errorResponse(c, "SHARE_NOT_FOUND", 404);
-  if (!tokenHash && !pkg.recipientUserId) {
-    return errorResponse(c, "SHARE_TOKEN_REQUIRED", 403);
-  }
-  if (pkg.recipientUserId && pkg.recipientUserId !== userId) return errorResponse(c, "SHARE_ALREADY_CLAIMED", 409);
-  if (isShareExpired(pkg.expiresAt) && pkg.status !== "claimed") {
+  if (isShareExpired(pkg.expiresAt)) {
     await db.update(sharePackages).set({ status: "expired" }).where(eq(sharePackages.id, pkg.id)).run();
     return errorResponse(c, "SHARE_EXPIRED", 410);
   }
+
+  // The sender already has the source books. Opening their own pending link
+  // is a successful no-op and must not consume a one-time link intended for
+  // somebody else.
+  if (pkg.senderUserId === userId) {
+    return c.json({ id: pkg.id, items: [] });
+  }
+
+  const packageItems = await itemsFor(db, pkg.id);
+  const owned = await ownedItemIDs(db, pkg.id, userId);
+  if (owned.size === packageItems.length) {
+    return c.json({ id: pkg.id, items: [] });
+  }
+
+  if (pkg.access === "public") {
+    await db.insert(sharePackageRedemptions).values({
+      id: crypto.randomUUID(),
+      packageId: pkg.id,
+      userId,
+      createdAt: new Date(),
+    }).onConflictDoNothing({
+      target: [sharePackageRedemptions.packageId, sharePackageRedemptions.userId],
+    }).run();
+    return c.json(await downloadResponse(c, db, pkg.id, owned));
+  }
+
   if (pkg.status === "claimed") {
     if (pkg.claimedBy !== userId) return errorResponse(c, "SHARE_ALREADY_CLAIMED", 409);
-    return c.json(await downloadResponse(c, db, pkg.id));
+    return c.json(await downloadResponse(c, db, pkg.id, owned));
   }
   const result = await db.update(sharePackages)
     .set({ status: "claimed", claimedAt: new Date(), claimedBy: userId })
-    .where(and(eq(sharePackages.id, pkg.id), eq(sharePackages.status, "pending"), gt(sharePackages.expiresAt, new Date())))
+    .where(and(
+      eq(sharePackages.id, pkg.id),
+      eq(sharePackages.status, "pending"),
+      eq(sharePackages.access, "one_time"),
+      gt(sharePackages.expiresAt, new Date()),
+    ))
     .run();
   if (result.meta?.changes !== 1) {
     const current = await db.select().from(sharePackages).where(eq(sharePackages.id, pkg.id)).get();
     if (current?.status === "claimed" && current.claimedBy === userId) return c.json(await downloadResponse(c, db, pkg.id));
     return errorResponse(c, current?.status === "expired" ? "SHARE_EXPIRED" : "SHARE_ALREADY_CLAIMED", current?.status === "expired" ? 410 : 409);
   }
-  return c.json(await downloadResponse(c, db, pkg.id));
+  return c.json(await downloadResponse(c, db, pkg.id, owned));
 }
 
 sharesRoutes.post("/redeem", requireAuth, requireAiDataConsent, async (c) => {
@@ -464,28 +465,4 @@ sharesRoutes.post("/redeem", requireAuth, requireAiDataConsent, async (c) => {
   const pkg = await db.select({ id: sharePackages.id }).from(sharePackages).where(eq(sharePackages.tokenHash, tokenHash)).get();
   if (!pkg) return errorResponse(c, "SHARE_NOT_FOUND", 404);
   return claimPackage(c, pkg.id, tokenHash);
-});
-
-sharesRoutes.get("/inbox", requireAuth, requireAiDataConsent, async (c) => {
-  const db = createDb(c.env.DB);
-  const rows = await db
-    .select({ pkg: sharePackages, senderName: user.name, senderUsername: usernames.username })
-    .from(sharePackages)
-    .innerJoin(user, eq(user.id, sharePackages.senderUserId))
-    .leftJoin(usernames, eq(usernames.userId, sharePackages.senderUserId))
-    .where(and(eq(sharePackages.recipientUserId, c.get("userId")), eq(sharePackages.status, "pending")))
-    .all();
-  const shares = [];
-  for (const row of rows) {
-    if (isShareExpired(row.pkg.expiresAt)) {
-      await db.update(sharePackages).set({ status: "expired" }).where(eq(sharePackages.id, row.pkg.id)).run();
-      continue;
-    }
-    shares.push(await previewFor(c, db, row.pkg, row.senderName, row.senderUsername));
-  }
-  return c.json({ shares });
-});
-
-sharesRoutes.post("/:id/accept", requireAuth, requireAiDataConsent, async (c) => {
-  return claimPackage(c, c.req.param("id"));
 });

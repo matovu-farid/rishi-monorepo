@@ -63,6 +63,9 @@ struct RootView: View {
                                 readerWindows.invalidate(userID: user.id)
                             }
                         #endif
+                        if case .signedIn(let user) = currentUserBox.state {
+                            await PendingShareStore.shared.clearTransientState(for: user.id)
+                        }
                         await deps.services?.voice.presenter.requestEnd()
                         await deps.performSignOut(currentUserBox: currentUserBox)
                         showOnboarding = false
@@ -172,6 +175,9 @@ struct RootView: View {
             guard !isPresented else { return }
             Task { await redeemPendingSharesIfEligible(deps: deps) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
+            Task { await redeemPendingSharesIfEligible(deps: deps) }
+        }
         .alert(
             "Shared books",
             isPresented: Binding(
@@ -224,9 +230,15 @@ struct RootView: View {
         let result = await deps.services!.library.sharePackageService.redeemPendingIfEligible()
         guard result.discardedCount > 0 else { return }
         await MainActor.run {
-            pendingShareMessage = result.discardedCount == 1
-                ? "One shared link is expired or no longer available."
-                : "\(result.discardedCount) shared links are expired or no longer available."
+            if result.alreadyUsedCount > 0 {
+                pendingShareMessage = result.alreadyUsedCount == 1
+                    ? "This one-time shared link has already been used."
+                    : "These one-time shared links have already been used."
+            } else {
+                pendingShareMessage = result.discardedCount == 1
+                    ? "One shared link is expired or no longer available."
+                    : "\(result.discardedCount) shared links are expired or no longer available."
+            }
         }
     }
 

@@ -209,26 +209,7 @@ struct rishiApp: App {
             didReceive response: UNNotificationResponse,
             withCompletionHandler completionHandler: @escaping () -> Void
         ) {
-            let userInfo = response.notification.request.content.userInfo
-            guard ShareNotificationRouting.isShareCreated(userInfo: userInfo) else {
-                completionHandler()
-                return
-            }
-
-            let sendableCompletionHandler = unsafeBitCast(
-                completionHandler,
-                to: (@Sendable () -> Void).self
-            )
-            Task {
-                await PendingShareStore.shared.enqueueShareNotification()
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: ShareNotificationRouting.notificationTapped,
-                        object: nil
-                    )
-                }
-                sendableCompletionHandler()
-            }
+            completionHandler()
         }
 
         func application(
@@ -237,7 +218,12 @@ struct rishiApp: App {
             options: [UIApplication.OpenURLOptionsKey: Any] = [:]
         ) -> Bool {
             if case .shareRedeem(let token) = DeepLinkRouter().route(url) {
-                Task { await PendingShareStore.shared.enqueue(token: token) }
+                Task {
+                    await PendingShareStore.shared.enqueue(token: token)
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: AppRouter.shareTokenQueued, object: nil)
+                    }
+                }
             }
             return GoogleSignInCoordinator.handle(url)
         }

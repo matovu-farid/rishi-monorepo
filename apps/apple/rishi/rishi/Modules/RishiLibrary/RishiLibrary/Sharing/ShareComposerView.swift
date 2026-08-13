@@ -7,7 +7,7 @@ public struct ShareComposerView: View {
     private let onCompleted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var username = ""
+    @State private var access: ShareAccess = .oneTime
     @State private var response: SharePackageResponse?
     @State private var errorMessage: String?
     @State private var isWorking = false
@@ -33,15 +33,17 @@ public struct ShareComposerView: View {
                         .accessibilityIdentifier("share-book-count")
                 }
 
-                Section("Share with a Rishi username") {
-                    TextField("Username", text: $username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityLabel("Recipient username")
-                    Button("Share with Username") {
-                        create(delivery: .username)
+                Section("Link access") {
+                    Picker("Link type", selection: $access) {
+                        Text("One-time").tag(ShareAccess.oneTime)
+                        Text("Public").tag(ShareAccess.public)
                     }
-                    .disabled(username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking)
+                    .pickerStyle(.segmented)
+                    Text(access == .oneTime
+                        ? "The first person who opens this link can add the book. Later attempts will be told that the link has already been used."
+                        : "Anyone with this link can add the book to their library.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -51,13 +53,11 @@ public struct ShareComposerView: View {
                         }
                         .accessibilityIdentifier("share-link-button")
                     } else {
-                        Button("Create Share Link") {
-                            create(delivery: .link)
-                        }
+                        Button("Create Share Link") { create() }
                         .disabled(isWorking)
                     }
                 } footer: {
-                    Text("The link can be claimed once and expires in seven days.")
+                    Text("The link expires in seven days.")
                 }
 
                 if let preview = response?.preview {
@@ -91,13 +91,10 @@ public struct ShareComposerView: View {
         }
     }
 
-    private func create(delivery: ShareDelivery) {
+    private func create() {
         isWorking = true
         errorMessage = nil
-        let recipient = delivery == .username
-            ? username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            : ""
-        let requestScope = [delivery.rawValue, recipient, kind.rawValue, bookIDs.map(\.uuidString).sorted().joined(separator: ",")].joined(separator: "|")
+        let requestScope = [access.rawValue, kind.rawValue, bookIDs.map(\.uuidString).sorted().joined(separator: ",")].joined(separator: "|")
         let idempotencyKey = idempotencyKeys[requestScope] ?? UUID().uuidString
         idempotencyKeys[requestScope] = idempotencyKey
         Task {
@@ -105,8 +102,7 @@ public struct ShareComposerView: View {
                 let result = try await service.createShare(
                     bookIDs: bookIDs,
                     kind: kind,
-                    delivery: delivery,
-                    recipientUsername: delivery == .username ? username : nil,
+                    access: access,
                     idempotencyKey: idempotencyKey
                 )
                 await MainActor.run {

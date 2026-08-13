@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -33,6 +34,66 @@ private final class ShareServiceMockURLProtocol: URLProtocol, @unchecked Sendabl
 
 @Suite("Share package service", .serialized)
 struct SharePackageServiceTests {
+    @Test("redeeming a book already in the library is a no-op")
+    func existingBookIsNotDuplicated() async throws {
+        let userID = UUID()
+        let root = URL.temporaryDirectory
+            .appendingPathComponent("SharePackageExisting-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let suiteName = "rishi.share-service.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let pendingStore = PendingShareStore(defaults: defaults, key: "pending")
+        let existing = Book(
+            userId: userID,
+            title: "Existing Local Title",
+            author: "Author",
+            formatType: .epub,
+            fileURL: "Books/already-owned.epub"
+        )
+        let existingData = Data("already-owned-book".utf8)
+        let existingDirectory = root.appendingPathComponent("Books", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingDirectory, withIntermediateDirectories: true)
+        try existingData.write(to: root.appendingPathComponent(existing.fileURL))
+        let existingHash = SHA256.hash(data: existingData).map { String(format: "%02x", $0) }.joined()
+        let bookStore = InMemoryBookStore(initial: [existing])
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+        )
+        defer { ShareServiceMockURLProtocol.handler = nil }
+        ShareServiceMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/shares/redeem" {
+                return (200, Data("{\"id\":\"package-existing\",\"items\":[{\"id\":\"item-1\",\"title\":\"Already Owned\",\"author\":\"Author\",\"format\":\"epub\",\"file_size\":5,\"file_hash\":\"\(existingHash)\",\"file_url\":\"https://files.test/item-1\"}]}".utf8))
+            }
+            return (500, Data("duplicate download should not happen".utf8))
+        }
+
+        await pendingStore.enqueue(token: "existing-book-token")
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            urlSession: session,
+            pendingStore: pendingStore,
+            currentUserId: { userID },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in }
+        )
+
+        let result = await service.redeemPendingIfEligible()
+        #expect(result.importedCount == 0)
+        #expect(await bookStore.snapshot().count == 1)
+        #expect(await pendingStore.tokens().isEmpty)
+    }
+
     @Test("partial bundle failures retain the token and reuse completed item IDs")
     func partialBundleRetry() async throws {
         let userID = UUID()

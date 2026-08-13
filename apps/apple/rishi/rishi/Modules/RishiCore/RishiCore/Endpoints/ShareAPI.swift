@@ -6,9 +6,9 @@ public enum ShareKind: String, Codable, Sendable, Equatable, Hashable {
     case library
 }
 
-public enum ShareDelivery: String, Codable, Sendable, Equatable, Hashable {
-    case link
-    case username
+public enum ShareAccess: String, Codable, Sendable, Equatable, Hashable {
+    case oneTime = "one_time"
+    case `public`
 }
 
 public struct SharePreviewItem: Codable, Sendable, Equatable, Identifiable {
@@ -27,7 +27,6 @@ public struct SharePreviewItem: Codable, Sendable, Equatable, Identifiable {
 public struct SharePreview: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let senderName: String
-    public let senderUsername: String?
     public let count: Int
     public let items: [SharePreviewItem]
     public let expiresAt: Date
@@ -35,7 +34,6 @@ public struct SharePreview: Codable, Sendable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, count, items
         case senderName = "sender_name"
-        case senderUsername = "sender_username"
         case expiresAt = "expires_at"
     }
 }
@@ -46,12 +44,14 @@ public struct ShareDownloadItem: Codable, Sendable, Equatable, Identifiable {
     public let author: String?
     public let format: String
     public let fileSize: Int
+    public let fileHash: String?
     public let fileURL: String
     public let coverURL: String?
 
     enum CodingKeys: String, CodingKey {
         case id, title, author, format
         case fileSize = "file_size"
+        case fileHash = "file_hash"
         case fileURL = "file_url"
         case coverURL = "cover_url"
     }
@@ -70,10 +70,6 @@ public struct SharePackageResponse: Codable, Sendable, Equatable {
     }
 }
 
-public struct ShareInboxResponse: Codable, Sendable, Equatable {
-    public let shares: [SharePreview]
-}
-
 public struct ShareCreateEndpoint: WorkerEndpointWithBody {
     public typealias Response = SharePackageResponse
 
@@ -81,29 +77,29 @@ public struct ShareCreateEndpoint: WorkerEndpointWithBody {
         public let idempotencyKey: String
         public let kind: ShareKind
         public let bookIDs: [String]
-        public let delivery: ShareDelivery
-        public let recipientUsername: String?
+        public let delivery: String
+        public let access: ShareAccess
 
         enum CodingKeys: String, CodingKey {
             case idempotencyKey = "idempotency_key"
             case kind
             case bookIDs = "book_ids"
             case delivery
-            case recipientUsername = "recipient_username"
+            case access
         }
 
         public init(
             idempotencyKey: String = UUID().uuidString,
             kind: ShareKind,
             bookIDs: [String],
-            delivery: ShareDelivery,
-            recipientUsername: String? = nil
+            delivery: String = "link",
+            access: ShareAccess = .oneTime
         ) {
             self.idempotencyKey = idempotencyKey
             self.kind = kind
             self.bookIDs = bookIDs
             self.delivery = delivery
-            self.recipientUsername = recipientUsername
+            self.access = access
         }
     }
 
@@ -142,29 +138,4 @@ public struct ShareRedeemEndpoint: WorkerEndpointWithBody {
     public let body: Body
 
     public init(token: String) { self.body = Body(token: token) }
-}
-
-public struct ShareInboxEndpoint: WorkerEndpoint {
-    public typealias Response = ShareInboxResponse
-    public let method: HTTPMethod = .GET
-    public let path: String = "/api/shares/inbox"
-    public let requiresDataUseConsent = true
-    public init() {}
-}
-
-public struct ShareAcceptEndpoint: WorkerEndpointWithBody {
-    public typealias Response = SharePackageResponse
-
-    public struct Body: Encodable, Sendable, Equatable {
-        public init() {}
-    }
-
-    public let method: HTTPMethod = .POST
-    public let path: String
-    public let requiresDataUseConsent = true
-    public let body = Body()
-
-    public init(packageID: String) {
-        self.path = "/api/shares/\(packageID)/accept"
-    }
 }

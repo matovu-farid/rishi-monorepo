@@ -46,9 +46,6 @@ public struct LibraryRootView: View {
     @State private var showShareComposer = false
     @State private var shareKind: ShareKind = .selection
     @State private var shareBookIDs: [BookID] = []
-    @State private var showShareInbox = false
-    @State private var pendingShareCount: Int?
-    @State private var showNotificationPrimer = false
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -148,33 +145,9 @@ public struct LibraryRootView: View {
                 librarySignposter.endInterval("library.first-paint", state)
             }
             await vm.refresh()
-            await refreshPendingShareCount()
-            let notificationWasTapped = await PendingShareStore.shared.consumeShareNotification()
-            if notificationWasTapped {
-                showShareInbox = true
-            } else if sharePackageService != nil,
-                      await NotificationPermissionCoordinator.shouldShowPrimer() {
-                showNotificationPrimer = true
-            }
         }
-
-        .alert("Stay informed about shared books", isPresented: $showNotificationPrimer) {
-            Button("Not Now", role: .cancel) {
-                NotificationPermissionCoordinator.markPrimerShown()
-            }
-            Button("Enable Notifications") {
-                Task {
-                    await NotificationPermissionCoordinator.requestAuthorization()
-                }
-            }
-        } message: {
-            Text("Rishi can notify you when another user shares books with you. You can change this anytime in Settings.")
-        }
-
-        .onReceive(
-            NotificationCenter.default.publisher(for: ShareNotificationRouting.notificationTapped)
-        ) { _ in
-            showShareInbox = true
+        .onReceive(NotificationCenter.default.publisher(for: SharePackageService.libraryDidChange)) { _ in
+            Task { await vm.refresh() }
         }
 
         .onReceive(
@@ -260,9 +233,6 @@ public struct LibraryRootView: View {
         .sheet(isPresented: $showShareComposer) {
             shareComposerContent()
         }
-        .sheet(isPresented: $showShareInbox) {
-            shareInboxContent(vm: vm)
-        }
     }
 
     @ToolbarContentBuilder
@@ -290,15 +260,6 @@ public struct LibraryRootView: View {
                     selectedBookIDs.removeAll()
                 }
             }
-        } else if ShareInboxButtonVisibility.shouldShow(shareServiceAvailable: sharePackageService != nil) {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showShareInbox = true
-                } label: {
-                    Label("Shared with You", systemImage: "tray.and.arrow.down")
-                }
-                .badge(pendingShareCount ?? 0)
-            }
         }
     }
 
@@ -317,18 +278,6 @@ public struct LibraryRootView: View {
         }
     }
 
-    @ViewBuilder
-    private func shareInboxContent(vm: LibraryViewModel) -> some View {
-        if let sharePackageService {
-            ShareInboxView(
-                service: sharePackageService,
-                onAccepted: {
-                    await vm.refresh()
-                }
-            )
-        }
-    }
-
     private func beginShare(ids: [BookID], kind: ShareKind) {
         guard !ids.isEmpty, sharePackageService != nil else { return }
         shareBookIDs = ids
@@ -336,19 +285,6 @@ public struct LibraryRootView: View {
         showShareComposer = true
     }
 
-    private func refreshPendingShareCount() async {
-        guard let sharePackageService else {
-            pendingShareCount = 0
-            return
-        }
-
-        do {
-            pendingShareCount = try await sharePackageService.inbox().count
-        } catch {
-            pendingShareCount = 0
-            Log.error("sharing.inbox.initial_poll.failed", error: error)
-        }
-    }
 }
 
 private actor LibraryRootPreviewBookStore: BookStore {

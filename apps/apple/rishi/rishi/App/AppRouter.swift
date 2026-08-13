@@ -8,6 +8,8 @@ struct ConversationsRoute: Hashable {}
 @Observable
 final class AppRouter {
 
+    static let shareTokenQueued = Notification.Name("Rishi.shareTokenQueued")
+
     var path: NavigationPath = NavigationPath()
 
     private var pendingReaderTour: (userID: UserID, bookID: BookID)?
@@ -37,7 +39,13 @@ final class AppRouter {
             break
 
         case .shareRedeem(let token):
-            Task { await pendingShareStore.enqueue(token: token) }
+            guard !token.isEmpty else { return }
+            Task {
+                await pendingShareStore.enqueue(token: token)
+                await MainActor.run {
+                    NotificationCenter.default.post(name: Self.shareTokenQueued, object: nil)
+                }
+            }
 
         case .openBook(let bookId):
             guard let bookStore else { return }

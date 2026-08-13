@@ -8,6 +8,7 @@ import { signAccessToken } from "../jwt";
 import {
   books,
   sharePackageItems,
+  sharePackageRedemptions,
   sharePackages,
   user,
   usernames,
@@ -119,6 +120,7 @@ describe("book sharing schema", () => {
         "recipientUserId",
         "tokenHash",
         "kind",
+        "access",
         "status",
         "idempotencyKey",
         "expiresAt",
@@ -142,6 +144,7 @@ describe("book sharing schema", () => {
 
     expect(sharePackages.recipientUserId.notNull).toBe(false);
     expect(sharePackages.tokenHash.notNull).toBe(false);
+    expect(sharePackages.access.notNull).toBe(true);
     expect(sharePackageItems.author.notNull).toBe(false);
     expect(sharePackageItems.fileHash.notNull).toBe(false);
   });
@@ -193,6 +196,7 @@ describe("book sharing schema", () => {
         kind: "single",
         book_ids: ["book-1"],
         delivery: "link",
+        access: "one_time",
       };
 
       const first = await sharesRoutes.fetch(new Request("https://api.example.test/", {
@@ -234,29 +238,14 @@ describe("book sharing schema", () => {
     }
   });
 
-  it("keeps username inboxes isolated and rejects acceptance by another recipient", async () => {
+  it("rejects the removed username and inbox contracts", async () => {
     const d1 = createTestD1();
     const db = createDb(d1);
-    const bucket = fakeBucket(["books/alice/book-1.epub"]);
+    const bucket = fakeBucket();
     const env = { ...baseEnv, DB: d1, BOOK_STORAGE: bucket } as unknown as Env;
 
     try {
-      await db.insert(user).values([
-        testUser("alice", "Alice Reader"),
-        testUser("bob", "Bob Reader"),
-        testUser("carol", "Carol Reader"),
-      ]);
-      await db.insert(usernames).values([
-        "alice",
-        "bob",
-        "carol",
-      ].map((username) => ({
-        userId: username,
-        username,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })));
-      await db.insert(books).values(testBook("alice"));
+      await db.insert(user).values(testUser("alice", "Alice Reader"));
       const senderAuth = await authHeader(env, "alice");
       const createResponse = await sharesRoutes.fetch(new Request("https://api.example.test/", {
         method: "POST",
@@ -269,32 +258,11 @@ describe("book sharing schema", () => {
           recipient_username: "bob",
         }),
       }), env);
-      const created = await createResponse.json() as { id: string };
-      expect(createResponse.status).toBe(201);
-
-      const bobAuth = await authHeader(env, "bob");
-      const bobInbox = await sharesRoutes.fetch(new Request("https://api.example.test/inbox", {
-        headers: consentHeaders(bobAuth),
+      expect(createResponse.status).toBe(400);
+      const inbox = await sharesRoutes.fetch(new Request("https://api.example.test/inbox", {
+        headers: consentHeaders(senderAuth),
       }), env);
-      expect(bobInbox.status).toBe(200);
-      expect(await bobInbox.json()).toMatchObject({ shares: [{ id: created.id, count: 1 }] });
-
-      const carolAuth = await authHeader(env, "carol");
-      const carolInbox = await sharesRoutes.fetch(new Request("https://api.example.test/inbox", {
-        headers: consentHeaders(carolAuth),
-      }), env);
-      expect(carolInbox.status).toBe(200);
-      expect(await carolInbox.json()).toEqual({ shares: [] });
-
-      const crossUserAccept = await sharesRoutes.fetch(new Request(`https://api.example.test/${created.id}/accept`, {
-        method: "POST",
-        headers: consentHeaders(carolAuth),
-      }), env);
-      expect(crossUserAccept.status).toBe(409);
-      expect(await crossUserAccept.json()).toEqual({
-        error: "SHARE_ALREADY_CLAIMED",
-        code: "SHARE_ALREADY_CLAIMED",
-      });
+      expect(inbox.status).toBe(404);
     } finally {
       closeD1(d1);
     }
@@ -311,6 +279,7 @@ describe("book sharing schema", () => {
         testUser("alice", "Alice Reader"),
         testUser("bob", "Bob Reader"),
         testUser("carol", "Carol Reader"),
+        testUser("dave", "Dave Reader"),
       ]);
       await db.insert(usernames).values([
         "alice",
@@ -322,7 +291,10 @@ describe("book sharing schema", () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       })));
-      await db.insert(books).values(testBook("alice"));
+      await db.insert(books).values([
+        testBook("alice"),
+        testBook("bob", "bob-book"),
+      ]);
       const senderAuth = await authHeader(env, "alice");
       const createResponse = await sharesRoutes.fetch(new Request("https://api.example.test/", {
         method: "POST",
@@ -332,22 +304,29 @@ describe("book sharing schema", () => {
           kind: "single",
           book_ids: ["book-1"],
           delivery: "link",
+          access: "one_time",
         }),
       }), env);
       const created = await createResponse.json() as { link: string; id: string };
       const token = new URL(created.link).searchParams.get("token");
       expect(token).toBeTruthy();
 
+      const creatorAuth = await authHeader(env, "alice");
+      const creatorRedeem = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(creatorAuth),
+        body: JSON.stringify({ token }),
+      }), env);
+      expect(creatorRedeem.status).toBe(200);
+      expect(await creatorRedeem.json()).toEqual({ id: created.id, items: [] });
+      expect((await db.select().from(sharePackages))[0]?.status).toBe("pending");
+
       const bobAuth = await authHeader(env, "bob");
       const packageAccept = await sharesRoutes.fetch(new Request(`https://api.example.test/${created.id}/accept`, {
         method: "POST",
         headers: consentHeaders(bobAuth),
       }), env);
-      expect(packageAccept.status).toBe(403);
-      expect(await packageAccept.json()).toEqual({
-        error: "SHARE_TOKEN_REQUIRED",
-        code: "SHARE_TOKEN_REQUIRED",
-      });
+      expect(packageAccept.status).toBe(404);
 
       const redeem = () => sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
         method: "POST",
@@ -356,17 +335,31 @@ describe("book sharing schema", () => {
       }), env);
       const first = await redeem();
       expect(first.status).toBe(200);
-      const firstBody = await first.json();
-      expect(firstBody).toMatchObject({ id: created.id, items: [{ title: "The Shared Book" }] });
-
-      const repeated = await redeem();
-      expect(repeated.status).toBe(200);
-      expect(await repeated.json()).toEqual(firstBody);
+      expect(await first.json()).toEqual({ id: created.id, items: [] });
+      expect((await db.select().from(sharePackages))[0]?.status).toBe("pending");
 
       const carolAuth = await authHeader(env, "carol");
-      const crossUser = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+      const carolRedeem = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
         method: "POST",
         headers: consentHeaders(carolAuth),
+        body: JSON.stringify({ token }),
+      }), env);
+      expect(carolRedeem.status).toBe(200);
+      const carolBody = await carolRedeem.json();
+      expect(carolBody).toMatchObject({ id: created.id, items: [{ title: "The Shared Book" }] });
+
+      const repeated = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(carolAuth),
+        body: JSON.stringify({ token }),
+      }), env);
+      expect(repeated.status).toBe(200);
+      expect(await repeated.json()).toEqual(carolBody);
+
+      const daveAuth = await authHeader(env, "dave");
+      const crossUser = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(daveAuth),
         body: JSON.stringify({ token }),
       }), env);
       expect(crossUser.status).toBe(409);
@@ -379,7 +372,7 @@ describe("book sharing schema", () => {
     }
   });
 
-  it("allows exactly one winner when two users redeem the same bearer link concurrently", async () => {
+  it("allows exactly one winner when two users redeem the same one-time link concurrently", async () => {
     const d1 = createTestD1();
     const db = createDb(d1);
     const bucket = fakeBucket(["books/alice/book-1.epub"]);
@@ -401,9 +394,10 @@ describe("book sharing schema", () => {
           kind: "single",
           book_ids: ["book-1"],
           delivery: "link",
+          access: "one_time",
         }),
       }), env);
-      const created = await createdResponse.json() as { link: string };
+      const created = await createdResponse.json() as { id: string; link: string };
       const token = new URL(created.link).searchParams.get("token");
       const bobAuth = await authHeader(env, "bob");
       const carolAuth = await authHeader(env, "carol");
@@ -416,6 +410,65 @@ describe("book sharing schema", () => {
       const responses = await Promise.all([redeem(bobAuth), redeem(carolAuth)]);
       expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
       expect((await db.select().from(sharePackages))[0]?.claimedBy).toMatch(/^(bob|carol)$/);
+    } finally {
+      closeD1(d1);
+    }
+  });
+
+  it("allows different users to redeem a public link and is idempotent per user", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    const bucket = fakeBucket(["books/alice/book-1.epub"]);
+    const env = { ...baseEnv, DB: d1, BOOK_STORAGE: bucket } as unknown as Env;
+
+    try {
+      await db.insert(user).values([
+        testUser("alice", "Alice Reader"),
+        testUser("bob", "Bob Reader"),
+        testUser("carol", "Carol Reader"),
+      ]);
+      await db.insert(books).values([
+        testBook("alice"),
+        testBook("bob", "bob-book"),
+      ]);
+      const senderAuth = await authHeader(env, "alice");
+      const createdResponse = await sharesRoutes.fetch(new Request("https://api.example.test/", {
+        method: "POST",
+        headers: consentHeaders(senderAuth),
+        body: JSON.stringify({
+          idempotency_key: "public-request",
+          kind: "single",
+          book_ids: ["book-1"],
+          delivery: "link",
+          access: "public",
+        }),
+      }), env);
+      expect(createdResponse.status).toBe(201);
+      const created = await createdResponse.json() as { id: string; link: string };
+      const token = new URL(created.link).searchParams.get("token");
+      const redeem = (authorization: string) => sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(authorization),
+        body: JSON.stringify({ token }),
+      }), env);
+
+      const senderSelfRedeem = await redeem(senderAuth);
+      expect(senderSelfRedeem.status).toBe(200);
+      expect(await senderSelfRedeem.json()).toEqual({ id: created.id, items: [] });
+      expect(await db.select().from(sharePackageRedemptions)).toHaveLength(0);
+
+      const bobAuth = await authHeader(env, "bob");
+      const carolAuth = await authHeader(env, "carol");
+      const [bobFirst, carolFirst] = await Promise.all([redeem(bobAuth), redeem(carolAuth)]);
+      expect(bobFirst.status).toBe(200);
+      expect(await bobFirst.json()).toMatchObject({ id: created.id, items: [] });
+      expect(carolFirst.status).toBe(200);
+      const carolBody = await carolFirst.json() as { id: string; items: unknown[] };
+      expect(carolBody.items).toHaveLength(1);
+      const carolRetry = await redeem(carolAuth);
+      expect(carolRetry.status).toBe(200);
+      expect(await carolRetry.json()).toEqual(carolBody);
+      expect(await db.select().from(sharePackageRedemptions)).toHaveLength(1);
     } finally {
       closeD1(d1);
     }
@@ -442,9 +495,10 @@ describe("book sharing schema", () => {
           headers: consentHeaders(authorization),
           body: JSON.stringify({
             idempotency_key: `not-ready-${bookID}`,
-            kind: "single",
-            book_ids: [bookID],
-            delivery: "link",
+          kind: "single",
+          book_ids: [bookID],
+          delivery: "link",
+          access: "one_time",
           }),
         }), env);
         expect(response.status).toBe(422);
@@ -481,6 +535,7 @@ describe("book sharing schema", () => {
           kind: "selection",
           book_ids: ["book-1", "book-2"],
           delivery: "link",
+          access: "one_time",
         }),
       }), env);
       const body = await response.json() as { id: string; link: string; preview: { count: number } };
@@ -524,6 +579,7 @@ describe("book sharing schema", () => {
         recipientUserId: null,
         tokenHash: await hashShareToken(token),
         kind: "single",
+        access: "one_time",
         status: "pending",
         idempotencyKey: "expired-request",
         expiresAt: new Date(Date.now() - 10_000),
@@ -604,20 +660,16 @@ describe("book sharing schema", () => {
           headers,
           body: JSON.stringify({
             idempotency_key: "new-consent-request",
-            kind: "single",
-            book_ids: ["book-1"],
-            delivery: "link",
+          kind: "single",
+          book_ids: ["book-1"],
+          delivery: "link",
+          access: "one_time",
           }),
         }),
         new Request("https://api.example.test/redeem", {
           method: "POST",
           headers,
           body: JSON.stringify({ token: "consent-share-token-1234567890" }),
-        }),
-        new Request("https://api.example.test/inbox", { headers }),
-        new Request("https://api.example.test/consent-package/accept", {
-          method: "POST",
-          headers,
         }),
       ];
 
