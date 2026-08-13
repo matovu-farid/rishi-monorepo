@@ -32,11 +32,6 @@ interface __BaseEnv_Env {
 	VOICE_SESSION_NONCE_SECRET: string;
 	ENABLE_OPS_ADMIN: string;
 	OPS_ADMIN_SECRET: string;
-	APPLE_SIWA_CLIENT_ID: string;
-	APPLE_SIWA_KEY_ID: string;
-	APPLE_SIWA_PRIVATE_KEY: string;
-	APPLE_TEAM_ID: string;
-	SIWA_TOKEN_ENCRYPTION_SECRET: string;
 	USER_USAGE_LEDGER: DurableObjectNamespace<import("./src/index").UserUsageLedger>;
 }
 declare namespace Cloudflare {
