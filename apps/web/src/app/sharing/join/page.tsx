@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import ShareJoinFallback from "./share-join-fallback";
 
 const DEFAULT_RISHI_APP_STORE_URL =
   "https://apps.apple.com/app/apple-store/id6763041630";
@@ -7,22 +7,18 @@ type ShareJoinPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export function buildShareStoreURL(token?: string): string {
+export function buildShareStoreURL(): string {
   const target = new URL(
     process.env.NEXT_PUBLIC_RISHI_APP_STORE_URL || DEFAULT_RISHI_APP_STORE_URL,
   );
-  if (token) {
-    target.searchParams.set("ct", "share");
-    target.searchParams.set("share_token", token);
-  }
   return target.toString();
 }
 
 export default async function ShareJoinPage({ searchParams }: ShareJoinPageProps = {}) {
-  const params = searchParams ? await searchParams : {};
-  // `token` is the canonical share-link parameter. Accept `share_token` too
-  // so a store/campaign handoff can return to this route without losing it.
-  const rawToken = params.token ?? params.share_token;
-  const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
-  redirect(buildShareStoreURL(token));
+  // The client reads the token from the current URL so the bearer value is
+  // never rendered into the HTML. Universal links normally skip this page;
+  // when association misses, the custom-scheme attempt still reaches an
+  // installed app before the App Store fallback runs.
+  void searchParams;
+  return <ShareJoinFallback />;
 }

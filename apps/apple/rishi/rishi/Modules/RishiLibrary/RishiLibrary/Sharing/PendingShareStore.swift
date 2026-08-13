@@ -64,15 +64,13 @@ public actor PendingShareStore {
         persist()
     }
 
-    /// Drops account-bound redemption state before sign-out. Tokens remain
-    /// queued but are anonymous again; local package IDs are cleared so a
-    /// later account cannot reuse a book identity from the previous account.
+    /// Retains account-bound redemption state across sign-out. A one-time
+    /// token is claimed for the account that started redeeming it; unbinding
+    /// it here would let the next account on the device consume that token.
+    /// Progress IDs are also retained so a retry resumes the same local book.
     public func clearTransientState(for userID: UUID) {
-        let ownedTokens = state.tokenOwners.compactMap { token, owner in
-            owner == userID.uuidString ? token : nil
-        }
-        for token in ownedTokens { state.tokenOwners[token] = nil }
-        state.packageBookIDs.removeAll()
+        _ = userID
+        state.tokenOwners = state.tokenOwners.filter { state.tokens.contains($0.key) }
         persist()
     }
 

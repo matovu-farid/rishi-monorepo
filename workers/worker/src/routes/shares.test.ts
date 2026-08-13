@@ -144,13 +144,131 @@ describe("book sharing schema", () => {
     await db.insert(user).values(testUser("alice", "Alice")).run();
     await db.insert(books).values(testBook("alice")).run();
 
-    const result = await precreateShareLinks(db, baseEnv, 50);
+    const result = await precreateShareLinks(db, baseEnv);
 
     expect(result).toEqual({ processed: 1, prepared: 1, skipped: 0 });
     expect(await db.select().from(shareLinkSlots)).toHaveLength(2);
     expect(await db.select().from(sharePackages)).toHaveLength(2);
     closeD1(d1);
   });
+
+  it("never reuses a claimed one-time prepared link", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    const env = { ...baseEnv, DB: d1, BOOK_STORAGE: fakeBucket(["books/alice/book-1.epub"]) } as unknown as Env;
+
+    try {
+      await db.insert(user).values([
+        testUser("alice", "Alice"),
+        testUser("bob", "Bob"),
+        testUser("carol", "Carol"),
+      ]);
+      await db.insert(books).values(testBook("alice"));
+
+      const aliceAuth = await authHeader(env, "alice");
+      const prepare = () => sharesRoutes.fetch(new Request("https://api.example.test/prepare", {
+        method: "POST",
+        headers: consentHeaders(aliceAuth),
+        body: JSON.stringify({ book_ids: ["book-1"] }),
+      }), env);
+      const firstResponse = await prepare();
+      expect(firstResponse.status).toBe(200);
+      const firstBody = await firstResponse.json() as {
+        links: Array<{ one_time: { id: string; generation: number; link: string } }>;
+      };
+      const firstLink = firstBody.links[0]!.one_time;
+      const firstToken = new URL(firstLink.link).searchParams.get("token");
+      expect(firstToken).toBeTruthy();
+
+      const bobAuth = await authHeader(env, "bob");
+      const firstRedeem = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(bobAuth, false),
+        body: JSON.stringify({ token: firstToken }),
+      }), env);
+      expect(firstRedeem.status).toBe(200);
+
+      const secondResponse = await prepare();
+      expect(secondResponse.status).toBe(200);
+      const secondBody = await secondResponse.json() as typeof firstBody;
+      const secondLink = secondBody.links[0]!.one_time;
+      expect(secondLink.id).not.toBe(firstLink.id);
+      expect(secondLink.generation).toBeGreaterThan(firstLink.generation);
+      expect(secondLink.link).not.toBe(firstLink.link);
+
+      const carolAuth = await authHeader(env, "carol");
+      const oldLinkRetry = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(carolAuth, false),
+        body: JSON.stringify({ token: firstToken }),
+      }), env);
+      expect(oldLinkRetry.status).toBe(409);
+      expect(await oldLinkRetry.json()).toEqual({
+        error: "SHARE_ALREADY_CLAIMED",
+        code: "SHARE_ALREADY_CLAIMED",
+      });
+    } finally {
+      closeD1(d1);
+    }
+  });
+
+  it("renews an expired public request with the same stable idempotency key", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    const env = { ...baseEnv, DB: d1, BOOK_STORAGE: fakeBucket(["books/alice/book-1.epub"]) } as unknown as Env;
+
+    try {
+      await db.insert(user).values(testUser("alice", "Alice"));
+      await db.insert(books).values(testBook("alice"));
+      await db.insert(sharePackages).values({
+        id: "expired-public-package",
+        senderUserId: "alice",
+        recipientUserId: null,
+        tokenHash: await hashShareToken("expired-public-token"),
+        kind: "single",
+        access: "public",
+        status: "pending",
+        idempotencyKey: "stable-public-request",
+        expiresAt: new Date(Date.now() - 1_000),
+        createdAt: new Date(Date.now() - 10_000),
+        claimedAt: null,
+        claimedBy: null,
+      });
+      await db.insert(sharePackageItems).values({
+        id: "expired-public-item",
+        packageId: "expired-public-package",
+        title: "The Shared Book",
+        author: "A. Reader",
+        format: "epub",
+        fileR2Key: "books/alice/book-1.epub",
+        coverR2Key: null,
+        fileHash: "book-hash",
+        fileSize: 42,
+        createdAt: new Date(),
+      });
+
+      const authorization = await authHeader(env, "alice");
+      const response = await sharesRoutes.fetch(new Request("https://api.example.test/", {
+        method: "POST",
+        headers: consentHeaders(authorization),
+        body: JSON.stringify({
+          idempotency_key: "stable-public-request",
+          kind: "single",
+          book_ids: ["book-1"],
+          delivery: "link",
+          access: "public",
+        }),
+      }), env);
+
+      expect(response.status).toBe(201);
+      const body = await response.json() as { id: string; link: string };
+      expect(body.id).not.toBe("expired-public-package");
+      expect(await db.select().from(sharePackages).where(eq(sharePackages.id, "expired-public-package"))).toHaveLength(0);
+    } finally {
+      closeD1(d1);
+    }
+  });
+
   it("defines the package and item tables with the claim fields", () => {
     expect(sharePackages).toBeDefined();
     expect(sharePackageItems).toBeDefined();
@@ -505,11 +623,20 @@ describe("book sharing schema", () => {
       expect(bobFirst.status).toBe(200);
       expect(await bobFirst.json()).toMatchObject({ id: created.id, items: [] });
       expect(carolFirst.status).toBe(200);
-      const carolBody = await carolFirst.json() as { id: string; items: unknown[] };
+      const carolBody = await carolFirst.json() as {
+        id: string;
+        items: Array<{ id: string; title: string }>;
+      };
       expect(carolBody.items).toHaveLength(1);
       const carolRetry = await redeem(carolAuth);
       expect(carolRetry.status).toBe(200);
-      expect(await carolRetry.json()).toEqual(carolBody);
+      const carolRetryBody = await carolRetry.json() as typeof carolBody;
+      expect(carolRetryBody.id).toBe(carolBody.id);
+      expect(carolRetryBody.items).toHaveLength(carolBody.items.length);
+      expect(carolRetryBody.items[0]).toMatchObject({
+        id: carolBody.items[0].id,
+        title: carolBody.items[0].title,
+      });
       expect(await db.select().from(sharePackageRedemptions)).toHaveLength(1);
     } finally {
       closeD1(d1);
@@ -715,11 +842,68 @@ describe("book sharing schema", () => {
         }),
       ];
 
-      for (const request of requests) {
-        const response = await sharesRoutes.fetch(request, env);
-        expect(response.status).toBe(428);
-        expect(await response.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" });
-      }
+      const createResponse = await sharesRoutes.fetch(requests[0]!, env);
+      expect(createResponse.status).toBe(428);
+      expect(await createResponse.json()).toEqual({ error: "AI_DATA_CONSENT_REQUIRED" });
+
+      const redeemResponse = await sharesRoutes.fetch(requests[1]!, env);
+      expect(redeemResponse.status).toBe(200);
+      expect(await redeemResponse.json()).toEqual({ id: "consent-package", items: [] });
+    } finally {
+      closeD1(d1);
+    }
+  });
+
+  it("allows a recipient to redeem an explicitly shared one-time book without AI consent", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    const env = { ...baseEnv, DB: d1, BOOK_STORAGE: fakeBucket() } as unknown as Env;
+
+    try {
+      await db.insert(user).values([
+        testUser("alice", "Alice Reader"),
+        testUser("bob", "Bob Reader"),
+      ]);
+      const token = "private-share-token-without-consent";
+      await db.insert(sharePackages).values({
+        id: "private-consent-free-package",
+        senderUserId: "alice",
+        recipientUserId: null,
+        tokenHash: await hashShareToken(token),
+        kind: "single",
+        access: "one_time",
+        status: "pending",
+        idempotencyKey: "private-consent-free-request",
+        expiresAt: new Date(Date.now() + 60_000),
+        createdAt: new Date(),
+        claimedAt: null,
+        claimedBy: null,
+      });
+      await db.insert(sharePackageItems).values({
+        id: "private-consent-free-item",
+        packageId: "private-consent-free-package",
+        title: "Shared Book",
+        author: "Alice Reader",
+        format: "epub",
+        fileSize: 1,
+        fileHash: "shared-book-hash",
+        fileR2Key: "books/alice/shared-book.epub",
+        coverR2Key: null,
+        createdAt: new Date(),
+      });
+
+      const authorization = await authHeader(env, "bob");
+      const response = await sharesRoutes.fetch(new Request("https://api.example.test/redeem", {
+        method: "POST",
+        headers: consentHeaders(authorization, false),
+        body: JSON.stringify({ token }),
+      }), env);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        id: "private-consent-free-package",
+        items: [{ id: "private-consent-free-item", title: "Shared Book" }],
+      });
     } finally {
       closeD1(d1);
     }

@@ -8,15 +8,14 @@ struct ConversationsRoute: Hashable {}
 @Observable
 final class AppRouter {
 
-    static let shareTokenQueued = Notification.Name("Rishi.shareTokenQueued")
+    nonisolated static let shareTokenQueued = Notification.Name("Rishi.shareTokenQueued")
+    nonisolated static let shareRedemptionReady = Notification.Name("Rishi.shareRedemptionReady")
 
     var path: NavigationPath = NavigationPath()
 
     private var pendingReaderTour: (userID: UserID, bookID: BookID)?
 
     private let deepLinks = DeepLinkRouter()
-    private let pendingShareStore = PendingShareStore.shared
-
     var onBookResolved: ((Book) -> Void)?
 
     #if targetEnvironment(macCatalyst)
@@ -39,13 +38,7 @@ final class AppRouter {
             break
 
         case .shareRedeem(let token):
-            guard !token.isEmpty else { return }
-            Task {
-                await pendingShareStore.enqueue(token: token)
-                await MainActor.run {
-                    NotificationCenter.default.post(name: Self.shareTokenQueued, object: nil)
-                }
-            }
+            Self.enqueueShareToken(token)
 
         case .openBook(let bookId):
             guard let bookStore else { return }
@@ -80,6 +73,33 @@ final class AppRouter {
                 onFileURL?(url)
             }
         }
+    }
+
+    /// Queues a share token at the app boundary. Universal links can arrive
+    /// through SwiftUI, UIApplicationDelegate, or scene restoration, so all
+    /// ingress paths share the same durable, de-duplicating queue.
+    nonisolated static func enqueueShareToken(_ token: String) {
+        guard !token.isEmpty else { return }
+        Task {
+            await PendingShareStore.shared.enqueue(token: token)
+            Log.event("sharing.pending_token.queued")
+            await MainActor.run {
+                NotificationCenter.default.post(name: Self.shareTokenQueued, object: nil)
+            }
+        }
+    }
+
+    @discardableResult
+    nonisolated static func enqueueShareToken(from url: URL) -> Bool {
+        guard case .shareRedeem(let token) = DeepLinkRouter().route(url) else { return false }
+        guard !token.isEmpty else { return false }
+        Log.event("sharing.deep_link.received", data: [
+            "scheme": url.scheme?.lowercased() ?? "",
+            "host": url.host?.lowercased() ?? "",
+            "path": url.path,
+        ])
+        enqueueShareToken(token)
+        return true
     }
 
     func showLibraryRoot() {

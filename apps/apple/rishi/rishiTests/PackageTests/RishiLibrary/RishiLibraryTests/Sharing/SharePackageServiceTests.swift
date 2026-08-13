@@ -71,7 +71,36 @@ private final class LockIsolatedOptionalUUID: @unchecked Sendable {
     var uuidString: String {
         value?.uuidString ?? "missing"
     }
+}
 
+private final class AsyncSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var signaled = false
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if signaled {
+                signaled = false
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    func signal() {
+        lock.lock()
+        let continuation = waiters.isEmpty ? nil : waiters.removeFirst()
+        if continuation == nil {
+            signaled = true
+        }
+        lock.unlock()
+        continuation?.resume()
+    }
 }
 
 @Suite("Share package service", .serialized)
@@ -287,6 +316,82 @@ struct SharePackageServiceTests {
         let result = await service.redeemPendingIfEligible()
         #expect(result.importedCount == 0)
         #expect(await bookStore.snapshot().count == 1)
+        #expect(await pendingStore.tokens().isEmpty)
+    }
+
+    @Test("redemption reruns when another share arrives during an active redemption")
+    func redemptionRerunsForRequestsDuringActiveRedemption() async throws {
+        let userID = UUID()
+        let root = URL.temporaryDirectory.appendingPathComponent("ShareCoalescing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let defaultsSuiteName = "rishi.share-service.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsSuiteName)!
+        let pendingStore = PendingShareStore(defaults: defaults, key: "pending")
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+
+        let bookStore = InMemoryBookStore()
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+        )
+        let firstRedeemStarted = AsyncSignal()
+        let releaseFirstRedeem = AsyncSignal()
+        let redeemCount = LockIsolatedInt()
+        defer { ShareServiceMockURLProtocol.handler = nil }
+        ShareServiceMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/shares/redeem" {
+                let requestNumber = redeemCount.value + 1
+                redeemCount.increment()
+                if requestNumber == 1 {
+                    firstRedeemStarted.signal()
+                    releaseFirstRedeem.wait()
+                }
+                let packageID = requestNumber == 1 ? "package-one" : "package-two"
+                let itemID = requestNumber == 1 ? "item-one" : "item-two"
+                return (200, Data("{\"id\":\"\(packageID)\",\"items\":[{\"id\":\"\(itemID)\",\"title\":\"Book \(requestNumber)\",\"author\":null,\"format\":\"epub\",\"file_size\":4,\"file_url\":\"https://files.test/\(itemID)\"}]}".utf8))
+            }
+            if request.url?.host == "files.test" {
+                return (200, Data("book-data".utf8))
+            }
+            return (404, Data())
+        }
+
+        await pendingStore.enqueue(token: "first-share-token")
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            urlSession: session,
+            pendingStore: pendingStore,
+            currentUserId: { userID },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in }
+        )
+
+        let firstTask = Task { await service.redeemPendingIfEligible() }
+        await firstRedeemStarted.wait()
+        await pendingStore.enqueue(token: "second-share-token")
+
+        // This request overlaps the first pass and must cause a follow-up pass.
+        let overlappingTask = Task { await service.redeemPendingIfEligible() }
+        await Task.yield()
+
+        // The view that initiated the first call may be torn down while the
+        // app transitions accounts. The service-owned task must keep going.
+        firstTask.cancel()
+        releaseFirstRedeem.signal()
+        let firstResult = await firstTask.value
+        let overlappingResult = await overlappingTask.value
+        #expect(overlappingResult.importedCount == 2)
+        #expect(firstResult.importedCount == 2)
+        #expect(await bookStore.snapshot().count == 2)
         #expect(await pendingStore.tokens().isEmpty)
     }
 

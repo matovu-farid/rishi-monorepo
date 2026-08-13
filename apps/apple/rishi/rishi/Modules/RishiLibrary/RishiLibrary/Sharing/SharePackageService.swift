@@ -43,17 +43,21 @@ public actor SharePackageService {
         case missingResponseItems
         case accountChanged
         case alreadyUsed
+        case syncQueueUnavailable
     }
 
     private let workerClient: WorkerClient
     private let bookStore: any BookStore
     private let fileStorage: BookFileStorage
     private let syncBeforeCreate: @Sendable () async -> Void
-    private let markBookDirty: @Sendable (BookID) async -> Void
+    private let syncAfterImport: @Sendable () async -> Void
+    private let markBookDirty: @Sendable (BookID) async -> Bool
     private let urlSession: URLSession
     private let pendingStore: PendingShareStore
     private let currentUserId: @Sendable () async -> UserID?
-    private var pendingRedemptionInFlight = false
+    private var redemptionTask: Task<PendingShareResult, Never>?
+    private var pendingRedemptionRerunRequested = false
+    private var accountSwitchInProgress = false
     private var preparedCache: [PreparedCacheKey: PreparedCacheEntry] = [:]
     private var prewarmTasks: [PrewarmKey: Task<Void, Never>] = [:]
     private var handedOutOneTimePackageIDs: Set<String> = []
@@ -72,7 +76,14 @@ public actor SharePackageService {
         self.bookStore = bookStore
         self.fileStorage = fileStorage
         self.syncBeforeCreate = { _ = await syncEngine.runOnce() }
-        self.markBookDirty = { _ = await syncEngine.markBookDirty($0) }
+        self.syncAfterImport = { await syncEngine.requestSyncAndWait() }
+        self.markBookDirty = { bookID in
+            if await syncEngine.markBookDirty(bookID) {
+                await syncEngine.requestSync()
+                return true
+            }
+            return false
+        }
         self.urlSession = urlSession
         self.pendingStore = pendingStore
         self.currentUserId = currentUserId
@@ -86,13 +97,18 @@ public actor SharePackageService {
         pendingStore: PendingShareStore = .shared,
         currentUserId: @escaping @Sendable () async -> UserID?,
         syncBeforeCreate: @escaping @Sendable () async -> Void,
-        markBookDirty: @escaping @Sendable (BookID) async -> Void
+        markBookDirty: @escaping @Sendable (BookID) async -> Void,
+        syncAfterImport: @escaping @Sendable () async -> Void = {}
     ) {
         self.workerClient = workerClient
         self.bookStore = bookStore
         self.fileStorage = fileStorage
         self.syncBeforeCreate = syncBeforeCreate
-        self.markBookDirty = markBookDirty
+        self.markBookDirty = { bookID in
+            await markBookDirty(bookID)
+            return true
+        }
+        self.syncAfterImport = syncAfterImport
         self.urlSession = urlSession
         self.pendingStore = pendingStore
         self.currentUserId = currentUserId
@@ -179,6 +195,21 @@ public actor SharePackageService {
         invalidatePreparedCache()
     }
 
+    /// Prevents a new redemption from starting while the current account is
+    /// being torn down. The flag is set before awaiting so a concurrent
+    /// SwiftUI lifecycle callback cannot register a new task after the wait.
+    public func beginAccountSwitchAndWait() async {
+        accountSwitchInProgress = true
+        pendingRedemptionRerunRequested = false
+        while let redemptionTask {
+            _ = await redemptionTask.value
+        }
+    }
+
+    public func endAccountSwitch() {
+        accountSwitchInProgress = false
+    }
+
     /// Returns a prepared single-book response, refreshing it when the local
     /// freshness policy says the cached slot is no longer safe to use.
     public func preparedShare(
@@ -238,22 +269,66 @@ public actor SharePackageService {
     /// Called after authentication and onboarding are complete. Network and
     /// transfer failures intentionally remain queued for a later retry.
     public func redeemPendingIfEligible() async -> PendingShareResult {
-        guard !pendingRedemptionInFlight else {
+        Log.event("sharing.pending_redeem.service_entered")
+        guard !accountSwitchInProgress else {
+            Log.event("sharing.pending_redeem.skipped", data: ["reason": "account_switch"])
             return PendingShareResult(importedCount: 0, discardedCount: 0, alreadyUsedCount: 0)
         }
-        pendingRedemptionInFlight = true
-        defer { pendingRedemptionInFlight = false }
+        if let redemptionTask {
+            // RootView can receive several lifecycle/account/share events while
+            // a download is running. Remember those requests so a token queued
+            // during this operation is not stranded when the first pass ends.
+            pendingRedemptionRerunRequested = true
+            return await redemptionTask.value
+        }
 
+        // Keep the actual redemption operation in an unstructured child task.
+        // SwiftUI may cancel the caller when a view identity changes; that
+        // cancellation must not cancel the durable share transfer itself.
+        let task = Task { [weak self] in
+            guard let self else {
+                return PendingShareResult(importedCount: 0, discardedCount: 0, alreadyUsedCount: 0)
+            }
+            return await self.runPendingRedemptionLoop()
+        }
+        redemptionTask = task
+        return await task.value
+    }
+
+    private func runPendingRedemptionLoop() async -> PendingShareResult {
+        defer { redemptionTask = nil }
+
+        var total = PendingShareResult(importedCount: 0, discardedCount: 0, alreadyUsedCount: 0)
+        repeat {
+            pendingRedemptionRerunRequested = false
+            let pass = await redeemPendingPass()
+            total = PendingShareResult(
+                importedCount: total.importedCount + pass.importedCount,
+                discardedCount: total.discardedCount + pass.discardedCount,
+                alreadyUsedCount: total.alreadyUsedCount + pass.alreadyUsedCount
+            )
+        } while pendingRedemptionRerunRequested
+        return total
+    }
+
+    private func redeemPendingPass() async -> PendingShareResult {
         var importedCount = 0
         var discardedCount = 0
         var alreadyUsedCount = 0
         guard let userID = await currentUserId() else {
+            Log.event("sharing.pending_redeem.no_user")
             return PendingShareResult(importedCount: 0, discardedCount: 0, alreadyUsedCount: 0)
         }
-        for token in await pendingStore.tokens(for: userID) {
+        let tokens = await pendingStore.tokens(for: userID)
+        Log.event("sharing.pending_redeem.tokens", data: ["count": String(tokens.count)])
+        for token in tokens {
             await pendingStore.bindToken(token, to: userID)
             do {
+                Log.event("sharing.pending_redeem.request_started")
                 let response = try await workerClient.send(ShareRedeemEndpoint(token: token))
+                Log.event("sharing.pending_redeem.response_received", data: [
+                    "items": String(response.items?.count ?? -1),
+                ])
                 guard response.items != nil else { throw ServiceError.missingResponseItems }
                 importedCount += try await importItems(response: response, packageID: response.id, userID: userID)
                 await pendingStore.remove(token: token)
@@ -293,18 +368,40 @@ public actor SharePackageService {
     ) async throws -> Int {
         guard let items = response.items else { throw ServiceError.missingResponseItems }
         var imported = 0
-        var existingBooks = (try? await bookStore.books(for: userID)) ?? []
+        var requiresSync = false
+        // A failed read must not be treated as an empty library. Doing so
+        // would turn a transient persistence error into a duplicate import.
+        var existingBooks = try await bookStore.books(for: userID)
         for item in items {
             guard await currentUserId() == userID else { throw ServiceError.accountChanged }
             guard let format = BookFormat(rawValue: item.format.lowercased()) else {
                 throw ServiceError.invalidBookFormat(item.format)
             }
             if await alreadyOwns(item, among: existingBooks) {
+                Log.event("sharing.pending_redeem.item_skipped", data: ["reason": "already_owned"])
+                if let existingImportedID = await pendingStore.bookID(packageID: packageID, itemID: item.id),
+                   !(await markBookDirty(existingImportedID)) {
+                    throw ServiceError.syncQueueUnavailable
+                }
+                if await pendingStore.bookID(packageID: packageID, itemID: item.id) != nil {
+                    requiresSync = true
+                }
                 continue
             }
-            let localID = await pendingStore.bookID(packageID: packageID, itemID: item.id)
+            let recordedLocalID = await pendingStore.bookID(packageID: packageID, itemID: item.id)
+            var localID = recordedLocalID
                 ?? DeterministicBookID.make(title: item.title, author: item.author, format: format)
                 ?? UUID()
+            if let existingLocal = try await bookStore.book(localID),
+               recordedLocalID == nil || existingLocal.userId != userID {
+                // Book IDs are local, but deterministic IDs can collide with
+                // an unrelated record (or a record from another account) left
+                // on the device. Never treat that record as this package's
+                // imported book.
+                localID = UUID()
+                await pendingStore.recordBookID(localID, packageID: packageID, itemID: item.id)
+                Log.event("sharing.pending_redeem.id_collision", data: ["action": "rotate_local_id"])
+            }
             let book = Book(
                 id: localID,
                 userId: userID,
@@ -317,7 +414,11 @@ public actor SharePackageService {
                 await pendingStore.recordBookID(localID, packageID: packageID, itemID: item.id)
             }
 
-            if try await bookStore.book(localID) == nil {
+            let existingLocal = try await bookStore.book(localID)
+            let localFileExists = existingLocal.map {
+                FileManager.default.fileExists(atPath: fileStorage.absoluteFileURL(for: $0).path)
+            } ?? false
+            if existingLocal == nil || !localFileExists {
                 guard let url = URL(string: item.fileURL) else { throw ServiceError.malformedDownloadURL }
                 let (data, response) = try await urlSession.data(from: url)
                 guard let http = response as? HTTPURLResponse,
@@ -330,9 +431,17 @@ public actor SharePackageService {
                 try await bookStore.upsert(materialized)
                 existingBooks.append(materialized)
                 guard await currentUserId() == userID else { throw ServiceError.accountChanged }
-                await markBookDirty(localID)
+                guard await markBookDirty(localID) else {
+                    throw ServiceError.syncQueueUnavailable
+                }
+                requiresSync = true
                 imported += 1
+            } else {
+                Log.event("sharing.pending_redeem.item_skipped", data: ["reason": "local_file_present"])
             }
+        }
+        if requiresSync {
+            await syncAfterImport()
         }
         return imported
     }
@@ -341,14 +450,7 @@ public actor SharePackageService {
         _ item: ShareDownloadItem,
         among books: [Book]
     ) async -> Bool {
-        let identity = bookIdentity(title: item.title, author: item.author, format: item.format)
-        if books.contains(where: {
-            bookIdentity(title: $0.title, author: $0.author, format: $0.formatType.rawValue) == identity
-        }) {
-            return true
-        }
-
-        if let fileHash = item.fileHash, !fileHash.isEmpty {
+        if let fileHash = item.fileHash?.trimmingCharacters(in: .whitespacesAndNewlines), !fileHash.isEmpty {
             for book in books {
                 let url = fileStorage.absoluteFileURL(for: book)
                 guard let data = try? Data(contentsOf: url) else { continue }
@@ -359,11 +461,17 @@ public actor SharePackageService {
                     return true
                 }
             }
+            // A content hash is authoritative. Matching title/author/format
+            // alone would incorrectly discard a different edition or file.
+            return false
         }
 
         // Older share rows may not have a file hash. The metadata identity
-        // check above is the compatibility fallback for those rows.
-        return false
+        // check is the compatibility fallback for those rows.
+        let identity = bookIdentity(title: item.title, author: item.author, format: item.format)
+        return books.contains(where: {
+            bookIdentity(title: $0.title, author: $0.author, format: $0.formatType.rawValue) == identity
+        })
     }
 
     private func bookIdentity(title: String, author: String?, format: String) -> String {

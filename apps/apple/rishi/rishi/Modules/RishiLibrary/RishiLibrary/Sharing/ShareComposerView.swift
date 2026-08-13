@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 public struct ShareComposerView: View {
@@ -7,6 +8,7 @@ public struct ShareComposerView: View {
     private let onCompleted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(CurrentUserBox.self) private var currentUserBox
     @State private var access: ShareAccess = .oneTime
     @State private var response: SharePackageResponse?
     @State private var errorMessage: String?
@@ -118,16 +120,30 @@ public struct ShareComposerView: View {
         let requestedAccess = access
         let requestedGeneration = loadGeneration
         let requestScope = [access.rawValue, kind.rawValue, bookIDs.map(\.uuidString).sorted().joined(separator: ",")].joined(separator: "|")
-        let idempotencyKey = idempotencyKeys[requestScope] ?? UUID().uuidString
+        let idempotencyKey = idempotencyKey(for: requestScope, access: requestedAccess)
         idempotencyKeys[requestScope] = idempotencyKey
         Task {
             do {
-                let result = try await service.createShare(
-                    bookIDs: bookIDs,
-                    kind: kind,
-                    access: access,
-                    idempotencyKey: idempotencyKey
-                )
+                let result: SharePackageResponse
+                do {
+                    result = try await service.createShare(
+                        bookIDs: bookIDs,
+                        kind: kind,
+                        access: requestedAccess,
+                        idempotencyKey: idempotencyKey
+                    )
+                } catch let error as RishiError {
+                    guard requestedAccess == .public,
+                          case .network(let code, _) = error,
+                          code == "SHARE_EXPIRED"
+                    else { throw error }
+                    result = try await service.createShare(
+                        bookIDs: bookIDs,
+                        kind: kind,
+                        access: requestedAccess,
+                        idempotencyKey: idempotencyKey
+                    )
+                }
                 await MainActor.run {
                     guard requestedAccess == access, requestedGeneration == loadGeneration else { return }
                     response = result
@@ -146,6 +162,17 @@ public struct ShareComposerView: View {
                 }
             }
         }
+    }
+
+    private func idempotencyKey(for requestScope: String, access: ShareAccess) -> String {
+        if let existing = idempotencyKeys[requestScope] { return existing }
+        guard access == .public else { return UUID().uuidString }
+
+        let account = currentUserBox.signedInUserID?.uuidString ?? "anonymous"
+        let digest = SHA256.hash(data: Data("\(account)|\(requestScope)".utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "public-\(digest)"
     }
 
     private func loadPreparedLink(for requestedAccess: ShareAccess, generation: UUID) {
@@ -170,5 +197,12 @@ public struct ShareComposerView: View {
                 }
             }
         }
+    }
+}
+
+private extension CurrentUserBox {
+    var signedInUserID: UUID? {
+        guard case .signedIn(let user) = state else { return nil }
+        return user.id
     }
 }

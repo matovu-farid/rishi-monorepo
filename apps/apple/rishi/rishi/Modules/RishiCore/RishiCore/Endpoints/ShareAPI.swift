@@ -230,7 +230,7 @@ public struct ShareRedeemEndpoint: WorkerEndpointWithBody {
 
     public let method: HTTPMethod = .POST
     public let path: String = "/api/shares/redeem"
-    public let requiresDataUseConsent = true
+    public let requiresDataUseConsent = false
     public let body: Body
 
     public init(token: String) { self.body = Body(token: token) }

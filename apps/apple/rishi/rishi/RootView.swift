@@ -63,11 +63,14 @@ struct RootView: View {
                                 readerWindows.invalidate(userID: user.id)
                             }
                         #endif
+                        let sharePackageService = deps.services?.library.sharePackageService
+                        await sharePackageService?.beginAccountSwitchAndWait()
                         if case .signedIn(let user) = currentUserBox.state {
                             await PendingShareStore.shared.clearTransientState(for: user.id)
                         }
                         await deps.services?.voice.presenter.requestEnd()
                         await deps.performSignOut(currentUserBox: currentUserBox)
+                        await sharePackageService?.endAccountSwitch()
                         showOnboarding = false
                         showNoCardTrialIntro = false
                     }
@@ -168,14 +171,18 @@ struct RootView: View {
             bootstrapped = true
             await updateOnboardingPresentation(deps: deps)
         }
-        .task(id: currentUserBox.isSigned) {
-            await redeemPendingSharesIfEligible(deps: deps)
-        }
-        .onChange(of: showOnboarding) { _, isPresented in
-            guard !isPresented else { return }
+        .task(id: signedInUserID) {
+            // A SwiftUI `.task(id:)` is cancelled whenever the signed-in
+            // branch is rebuilt. Redemption owns durable queue state, so run
+            // it in an unstructured task instead of allowing a view rebuild to
+            // cancel the network request halfway through.
+            guard signedInUserID != nil else { return }
             Task { await redeemPendingSharesIfEligible(deps: deps) }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
+            Task { await redeemPendingSharesIfEligible(deps: deps) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareRedemptionReady)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
         }
         .alert(
@@ -224,10 +231,26 @@ struct RootView: View {
         showOnboarding = !completed
     }
 
+    private var signedInUserID: UUID? {
+        guard case .signedIn(let user) = currentUserBox.state else { return nil }
+        return user.id
+    }
+
     private func redeemPendingSharesIfEligible(deps: AppDependencies) async {
-        guard currentUserBox.isSigned else { return }
-        guard await deps.services!.onboarding.state.hasCompletedOnboarding() else { return }
+        guard currentUserBox.isSigned else {
+            Log.event("sharing.pending_redeem.skipped", data: ["reason": "signed_out"])
+            return
+        }
+        // Sharing is an explicit bearer-link action. It must not wait for the
+        // optional onboarding flow; a newly signed-in recipient should receive
+        // the book immediately and can finish onboarding afterward.
+        Log.event("sharing.pending_redeem.started")
         let result = await deps.services!.library.sharePackageService.redeemPendingIfEligible()
+        Log.event("sharing.pending_redeem.completed", data: [
+            "imported": String(result.importedCount),
+            "discarded": String(result.discardedCount),
+            "already_used": String(result.alreadyUsedCount),
+        ])
         guard result.discardedCount > 0 else { return }
         await MainActor.run {
             if result.alreadyUsedCount > 0 {

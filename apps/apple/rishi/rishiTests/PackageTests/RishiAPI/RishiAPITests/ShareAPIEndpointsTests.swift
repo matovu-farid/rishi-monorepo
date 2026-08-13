@@ -53,6 +53,11 @@ struct ShareAPIEndpointsTests {
         #expect(endpoint.path.contains("abc"))
     }
 
+    @Test("redeem endpoint is not blocked by AI-data consent")
+    func redeemEndpointDoesNotRequireAIConsent() {
+        #expect(!ShareRedeemEndpoint(token: "share-token").requiresDataUseConsent)
+    }
+
     @Test("decodes the worker's reference-date expiry and download response")
     func responseDecoding() throws {
         let data = Data(#"{"id":"package-1","expires_at":800000000,"items":[{"id":"item-1","title":"Book","author":null,"format":"epub","file_size":12,"file_hash":"abc123","file_url":"https://files.test/book"}]}"#.utf8)

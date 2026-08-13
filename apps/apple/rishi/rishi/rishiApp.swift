@@ -32,10 +32,6 @@ struct rishiApp: App {
 
     init() {
         SentryLaunchConfiguration.start()
-
-        #if canImport(UIKit)
-            RishiAppDelegate.shared.dependencies = deps
-        #endif
     
     }
 
@@ -51,7 +47,15 @@ struct rishiApp: App {
                     // URL events continue to propagate to existing deep-link
                     // handlers.
                     _ = GoogleSignInCoordinator.handle(url)
-                    router.handle(url: url, bookStore: nil, conversationStore: nil)
+                    if !AppRouter.enqueueShareToken(from: url) {
+                        router.handle(url: url, bookStore: nil, conversationStore: nil)
+                    }
+                }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { userActivity in
+                    guard let url = userActivity.webpageURL else { return }
+                    if !AppRouter.enqueueShareToken(from: url) {
+                        router.handle(url: url, bookStore: nil, conversationStore: nil)
+                    }
                 }
                 .environment(currentUserBox)
                 .environment(\.appDependencies, deps)
@@ -66,6 +70,13 @@ struct rishiApp: App {
          
 
                 .task {
+                    #if canImport(UIKit)
+                        // `deps` is a State-backed reference and is not
+                        // installed until the app view exists. Wiring the
+                        // delegate here avoids constructing a second
+                        // AppDependencies instance during App.init.
+                        appDelegate.dependencies = deps
+                    #endif
                     await deps.bootstrap()
                     await refreshEntitlementSnapshot(reason: .launch)
                 }
@@ -164,7 +175,19 @@ struct rishiApp: App {
         nonisolated(unsafe) static var shared: RishiAppDelegate =
             RishiAppDelegate(boot: true)
 
-        weak var dependencies: AppDependencies?
+        private var backgroundSyncRegistered = false
+
+        weak var dependencies: AppDependencies? {
+            didSet {
+                registerBackgroundSyncIfNeeded()
+            }
+        }
+
+        private func registerBackgroundSyncIfNeeded() {
+            guard !backgroundSyncRegistered, let dependencies else { return }
+            dependencies.backgroundSyncLifecycle.registerSynchronously()
+            backgroundSyncRegistered = true
+        }
 
         private nonisolated init(boot: Bool) {
             super.init()
@@ -181,9 +204,7 @@ struct rishiApp: App {
                 .LaunchOptionsKey: Any]? = nil
         ) -> Bool {
 
-            if let deps = dependencies {
-                deps.backgroundSyncLifecycle.registerSynchronously()
-            }
+            registerBackgroundSyncIfNeeded()
 
             UNUserNotificationCenter.current().delegate = self
             DispatchQueue.main.async {
@@ -217,15 +238,24 @@ struct rishiApp: App {
             open url: URL,
             options: [UIApplication.OpenURLOptionsKey: Any] = [:]
         ) -> Bool {
-            if case .shareRedeem(let token) = DeepLinkRouter().route(url) {
-                Task {
-                    await PendingShareStore.shared.enqueue(token: token)
-                    await MainActor.run {
-                        NotificationCenter.default.post(name: AppRouter.shareTokenQueued, object: nil)
-                    }
-                }
+            if AppRouter.enqueueShareToken(from: url) {
+                return true
             }
             return GoogleSignInCoordinator.handle(url)
+        }
+
+        func application(
+            _ application: UIApplication,
+            continue userActivity: NSUserActivity,
+            restorationHandler: @escaping ([any UIUserActivityRestoring]?) -> Void
+        ) -> Bool {
+            guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+                  let url = userActivity.webpageURL
+            else { return false }
+            // Only claim the activity when it is a share URL. Returning true
+            // for every web link would swallow ordinary book/conversation
+            // Universal Links before SwiftUI's router can handle them.
+            return AppRouter.enqueueShareToken(from: url)
         }
 
         func application(

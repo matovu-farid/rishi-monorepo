@@ -25,6 +25,10 @@ public struct SettingsScreen: View {
         await consentStore.grant(for: userID)
         guard await consentStore.isCurrent(for: userID) else { return }
         await onSyncNow()
+        NotificationCenter.default.post(
+            name: Notification.Name("Rishi.shareRedemptionReady"),
+            object: nil
+        )
     }
 
     public let user: User

@@ -323,9 +323,30 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
     .where(and(eq(sharePackages.senderUserId, userId), eq(sharePackages.idempotencyKey, body.idempotency_key)))
     .get();
   if (existing) {
-    if (isShareExpired(existing.pkg.expiresAt)) return errorResponse(c, "SHARE_EXPIRED", 410);
-    if (existing.pkg.status === "building") return errorResponse(c, "SHARE_IN_PROGRESS", 409);
-    if (existing.pkg.recipientUserId || existing.pkg.access !== access) {
+    if (isShareExpired(existing.pkg.expiresAt)) {
+      // Public request identities are stable across devices. Once the
+      // seven-day public package expires, remove only that expired package so
+      // the same logical request can create the next generation. One-time
+      // links remain terminal after expiry and are never silently recreated.
+      if (existing.pkg.access === "public" && body.access === "public") {
+        await db.delete(sharePackages).where(and(
+          eq(sharePackages.id, existing.pkg.id),
+          eq(sharePackages.access, "public"),
+          lt(sharePackages.expiresAt, new Date()),
+        )).run();
+      } else {
+        return errorResponse(c, "SHARE_EXPIRED", 410);
+      }
+    }
+  }
+  const currentExisting = await db
+    .select({ pkg: sharePackages })
+    .from(sharePackages)
+    .where(and(eq(sharePackages.senderUserId, userId), eq(sharePackages.idempotencyKey, body.idempotency_key)))
+    .get();
+  if (currentExisting) {
+    if (currentExisting.pkg.status === "building") return errorResponse(c, "SHARE_IN_PROGRESS", 409);
+    if (currentExisting.pkg.recipientUserId || currentExisting.pkg.access !== access) {
       return errorResponse(c, "SHARE_IDEMPOTENCY_CONFLICT", 409);
     }
     const sender = await db
@@ -334,8 +355,8 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
       .where(eq(user.id, userId))
       .get();
     if (!sender) return errorResponse(c, "SHARE_NOT_FOUND", 404);
-    const preview = await previewFor(c, db, existing.pkg, sender.name);
-    const linkToken = await packageToken(c.env, existing.pkg, userId);
+    const preview = await previewFor(c, db, currentExisting.pkg, sender.name);
+    const linkToken = await packageToken(c.env, currentExisting.pkg, userId);
     return c.json({
       id: preview.id,
       expires_at: preview.expires_at,
@@ -727,7 +748,11 @@ async function claimPackage(
   return c.json(await downloadResponse(c, db, pkg.id, owned));
 }
 
-sharesRoutes.post("/redeem", requireAuth, requireAiDataConsent, async (c) => {
+// Redeeming an explicit share is a library transfer, not an AI-data
+// operation. The bearer token itself is the sender's authorization for this
+// package, and recipients must be able to accept it even before they have
+// completed the optional AI-data consent flow.
+sharesRoutes.post("/redeem", requireAuth, async (c) => {
   const body = await c.req.json().catch(() => null) as { token?: unknown } | null;
   if (!body || typeof body.token !== "string" || body.token.length < 20) return errorResponse(c, "SHARE_INVALID_REQUEST", 400);
   const db = createDb(c.env.DB);

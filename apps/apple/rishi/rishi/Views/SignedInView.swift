@@ -196,6 +196,7 @@ struct SignedInContent: View {
                         await dependencies.dataUseConsentStore.grant(for: user.id.uuidString)
                         dataUseConsentGranted = await dependencies.dataUseConsentStore.isCurrent(for: user.id.uuidString)
                         showDataUseConsent = false
+                        NotificationCenter.default.post(name: AppRouter.shareRedemptionReady, object: nil)
                         if retryVoiceAfterConsent {
                             retryVoiceAfterConsent = false
                             await dependencies.voicePresenter.retry()

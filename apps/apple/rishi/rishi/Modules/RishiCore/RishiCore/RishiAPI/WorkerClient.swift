@@ -300,6 +300,13 @@ public actor WorkerClient {
         let http = response as? HTTPURLResponse
         let status = http?.statusCode ?? -1
 
+        if endpoint.path == "/api/shares/redeem" {
+            Log.event("sharing.worker.redeem.response", data: [
+                "status": String(status),
+                "attempt": String(attempt),
+            ])
+        }
+
   
 
         switch status {
