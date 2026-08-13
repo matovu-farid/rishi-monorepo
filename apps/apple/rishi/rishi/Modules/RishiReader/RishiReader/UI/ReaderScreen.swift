@@ -425,10 +425,6 @@ public struct ReaderScreen: View {
             }
         #endif
 
-        .onDisappear {
-            Task { await viewModel.flush() }
-        }
-
         .preferredColorScheme(viewModel.theme.preferredColorScheme)
     }
 

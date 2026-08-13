@@ -172,6 +172,135 @@ struct ReaderViewModelTests {
         #expect(received.value.isEmpty)
     }
 
+    @Test("read-aloud location persists without firing user navigation")
+    func readAloudLocationPersistsWithoutUserNavigation() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let visibleLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.1, totalProgression: 0.1)
+        )
+        let narratedLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.7, totalProgression: 0.7)
+        )
+        let userNavigationCount = LockedBox(0)
+        vm.onUserNavigation = { _ in userNavigationCount.mutate { $0 += 1 } }
+
+        vm.didChangeLocation(visibleLocator)
+        vm.didChangeReadAloudLocation(narratedLocator)
+        await vm.flush()
+
+        let stored = try #require(await store.position(for: book.id))
+        let wrapper = try #require(try? ReaderPositionLocator.decode(jsonString: stored.locator))
+        let restored = try #require(wrapper.toReadiumLocator())
+        #expect(userNavigationCount.value == 1)
+        #expect(restored.locations.progression == narratedLocator.locations.progression)
+        #expect(restored.locations.totalProgression == narratedLocator.locations.totalProgression)
+    }
+
+    @Test("manual navigation remains authoritative after a read-aloud update")
+    func manualNavigationRemainsAuthoritativeAfterReadAloudUpdate() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let narratedLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.2, totalProgression: 0.2)
+        )
+        let manualLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.9, totalProgression: 0.9)
+        )
+
+        vm.didChangeReadAloudLocation(narratedLocator)
+        vm.didChangeLocation(manualLocator)
+        vm.currentVisibleLocatorProvider = { narratedLocator }
+        let start = try #require(await vm.readAloudStartLocator())
+        await vm.flush()
+
+        let stored = try #require(await store.position(for: book.id))
+        let wrapper = try #require(try? ReaderPositionLocator.decode(jsonString: stored.locator))
+        let restored = try #require(wrapper.toReadiumLocator())
+        #expect(start.locations.progression == manualLocator.locations.progression)
+        #expect(restored.locations.progression == manualLocator.locations.progression)
+        #expect(restored.locations.totalProgression == manualLocator.locations.totalProgression)
+    }
+
+    @Test("saved read-aloud locator wins over the live visible locator")
+    func savedReadAloudLocatorWinsOverVisibleLocator() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let savedLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.4, totalProgression: 0.4)
+        )
+        let visibleLocator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.05, totalProgression: 0.05)
+        )
+
+        vm.didChangeReadAloudLocation(savedLocator)
+        await vm.flush()
+
+        let restoredVM = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await restoredVM.load()
+        restoredVM.currentVisibleLocatorProvider = { visibleLocator }
+
+        let start = try #require(await restoredVM.readAloudStartLocator())
+        #expect(start.locations.progression == savedLocator.locations.progression)
+    }
+
     @Test("didChangeLocation default fires the TTS page prefetch callback")
     func userNavigationFiresOnUserNavigationForTTSPagePrefetch() async throws {
         let url = try aliceURL()

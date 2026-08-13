@@ -98,14 +98,14 @@ struct ReaderNavigatorCoordinatorFollowTests {
         // Readium's first location establishes the initial reader position;
         // it must not replace the toolbar's longer initial timer.
         coordinator.handleLocationChange(try makeLocator(progression: 0.50))
-        #expect(events == ["tts"])
+        #expect(events.isEmpty)
 
         coordinator.handleLocationChange(try makeLocator(progression: 0.66))
-        #expect(events == ["tts", "chrome", "tts"])
+        #expect(events == ["chrome", "tts"])
 
         coordinator.registerProgrammaticNavigation()
         coordinator.handleLocationChange(try makeLocator(progression: 0.75))
-        #expect(events == ["tts", "chrome", "tts"])
+        #expect(events == ["chrome", "tts"])
     }
 }
 #endif

@@ -33,6 +33,11 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// Most recent locator emitted by the navigator delegate (or
     /// restored from the position store on load).
     public private(set) var latestLocator: Locator?
+    /// Exact locator last reported by Read Aloud. Manual navigation clears
+    /// this candidate; programmatic page-follow does not.
+    private var readAloudResumeLocator: Locator?
+    private var latestPositionSource: ReaderPositionLocator.Source = .reader
+    private var hasManualNavigationSinceLoad = false
 
     /// Title pulled from the publication once loaded.
     public private(set) var title: String = ""
@@ -102,6 +107,7 @@ public final class ReaderViewModel: @unchecked Sendable {
     private let loader: any PublicationLoading
     private let debounceSeconds: Double
     private var pendingPositionTask: Task<Void, Never>?
+    private var positionWriteTail: Task<Void, Never>?
 
     /// Read-aloud resource/page parsing + chapter-continuation cursor. Created
     /// when the publication loads (the cursor holds the publication). `nil`
@@ -174,21 +180,28 @@ public final class ReaderViewModel: @unchecked Sendable {
         let bookId = book.id
         let positionStoreRef = positionStore
         let pub: Publication?
-        let restoredLocator: Locator?
+        let restoredPosition: (locator: Locator, source: ReaderPositionLocator.Source)?
         do {
-            let result: (Publication, Locator?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
+            let result: (Publication, (locator: Locator, source: ReaderPositionLocator.Source)?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
                 let publication = try await loader.open(fileURL: documentURL)
-                let restored: Locator?
+                let restored: (locator: Locator, source: ReaderPositionLocator.Source)?
                 if let last = try? await positionStoreRef.position(for: bookId) {
-                    restored = (try? ReaderPositionLocator.decode(jsonString: last.locator))?.toReadiumLocator()
-                        ?? (try? EPUBPositionLocator.decode(jsonString: last.locator))?.toReadiumLocator()
+                    if let wrapper = try? ReaderPositionLocator.decode(jsonString: last.locator),
+                       let locator = wrapper.toReadiumLocator()
+                    {
+                        restored = (locator, wrapper.source)
+                    } else if let locator = (try? EPUBPositionLocator.decode(jsonString: last.locator))?.toReadiumLocator() {
+                        restored = (locator, .reader)
+                    } else {
+                        restored = nil
+                    }
                 } else {
                     restored = nil
                 }
                 return (publication, restored)
             }.value
             pub = result.0
-            restoredLocator = result.1
+            restoredPosition = result.1
         } catch {
             Log.reader.error("ReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             self.loadingState = .failed(reason: error.localizedDescription)
@@ -206,8 +219,12 @@ public final class ReaderViewModel: @unchecked Sendable {
         self.publication = pub
         self.readAloudCursor = EPUBReadAloudCursor(publication: pub)
         self.title = pub.metadata.title ?? book.title
-        if let restoredLocator {
-            self.latestLocator = restoredLocator
+        if let restoredPosition {
+            self.latestLocator = restoredPosition.locator
+            self.latestPositionSource = restoredPosition.source
+            if restoredPosition.source == .readAloud {
+                self.readAloudResumeLocator = restoredPosition.locator
+            }
         }
         self.loadingState = .loaded
     }
@@ -224,21 +241,83 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// cases; only the user-navigation callbacks are suppressed for
     /// programmatic changes so the auto-follow does not feed back into
     /// playback lifecycle or page-entry prefetch.
-    public func didChangeLocation(_ locator: Locator, isProgrammatic: Bool = false) {
-        latestLocator = locator
-        schedulePositionWrite(for: locator)
-        if !isProgrammatic {
+    public func didChangeLocation(
+        _ locator: Locator,
+        isProgrammatic: Bool = false,
+        isInitialLocation: Bool = false
+    ) {
+        let hasExactResume = readAloudResumeLocator != nil
+        if !hasExactResume || (!isInitialLocation && !isProgrammatic) {
+            latestLocator = locator
+        }
+        if !isProgrammatic && !isInitialLocation {
+            readAloudResumeLocator = nil
+            latestPositionSource = .reader
+            hasManualNavigationSinceLoad = true
+        }
+        if !(isProgrammatic && readAloudResumeLocator != nil) {
+            schedulePositionWrite(
+                for: latestLocator ?? locator,
+                source: latestPositionSource
+            )
+        }
+        if !isProgrammatic && !isInitialLocation {
             onUserNavigation?(locator)
             onUserNavigationForTTSPagePrefetch?(locator)
         }
     }
 
+    /// Records the exact locator currently narrated by Read Aloud without
+    /// treating the playback update as user navigation. Read Aloud follows
+    /// the reader's position persistence path, but must not feed the
+    /// navigation callbacks that can stop playback or trigger prefetching.
+    public func didChangeReadAloudLocation(_ locator: Locator) {
+        readAloudResumeLocator = locator
+        latestLocator = locator
+        latestPositionSource = .readAloud
+        schedulePositionWrite(for: locator, source: .readAloud)
+    }
+
+    /// Clears a narration candidate after a deliberate page change. This is
+    /// separate from the navigator callback so a late Readium state callback
+    /// cannot resurrect the old paragraph during navigation teardown.
+    public func clearReadAloudResumeLocator() {
+        readAloudResumeLocator = nil
+        latestPositionSource = .reader
+    }
+
+    /// Returns the locator Read Aloud should use for a fresh synthesizer.
+    /// Explicit selection always wins, followed by the exact saved narration
+    /// position, followed by the live visible navigator position.
+    @MainActor
+    public func readAloudStartLocator(explicit: Locator? = nil) async -> Locator? {
+        if let explicit { return explicit }
+        if let readAloudResumeLocator { return readAloudResumeLocator }
+        if hasManualNavigationSinceLoad, let latestLocator { return latestLocator }
+        return await currentVisibleLocatorForReadAloud()
+    }
+
     /// Flushes any pending debounced write immediately. Call on view dismiss.
     public func flush() async {
-        pendingPositionTask?.cancel()
-        pendingPositionTask = nil
-        if let locator = latestLocator {
-            await writePosition(for: locator)
+        while true {
+            let pending = pendingPositionTask
+            pending?.cancel()
+            pendingPositionTask = nil
+            await pending?.value
+            // Debounced writes are serialized behind this tail. Awaiting the
+            // tail drains writes that were already inside PositionStore when
+            // cancellation happened; cancellation alone is not a barrier.
+            await positionWriteTail?.value
+            let locator = latestPositionSource == .readAloud
+                ? (readAloudResumeLocator ?? latestLocator)
+                : latestLocator
+            if let locator {
+                enqueuePositionWrite(for: locator, source: latestPositionSource)
+                await positionWriteTail?.value
+            }
+            // A new locator may have arrived while the store write awaited;
+            // loop once more to serialize and drain that newer write too.
+            guard pendingPositionTask != nil else { return }
         }
     }
 
@@ -482,25 +561,43 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// cursor rather than a hidden side effect of paragraph fetching.
     private func applyReadAloudNavigation(_ locator: Locator?) {
         guard let locator else { return }
-        latestLocator = locator
+        didChangeReadAloudLocation(locator)
     }
 
     // MARK: - Debounce
 
-    private func schedulePositionWrite(for locator: Locator) {
+    private func schedulePositionWrite(
+        for locator: Locator,
+        source: ReaderPositionLocator.Source
+    ) {
         pendingPositionTask?.cancel()
         let seconds = debounceSeconds
         // KEEP: VM is @Observable (not @MainActor); writePosition awaits
         // positionStore.upsert (actor). No main-bound work.
-        pendingPositionTask = Task { [weak self] in
+        pendingPositionTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             if Task.isCancelled { return }
-            await self?.writePosition(for: locator)
+            self?.enqueuePositionWrite(for: locator, source: source)
         }
     }
 
-    private func writePosition(for locator: Locator) async {
-        let wrapper = ReaderPositionLocator(locator: locator)
+    private func enqueuePositionWrite(
+        for locator: Locator,
+        source: ReaderPositionLocator.Source
+    ) {
+        let previous = positionWriteTail
+        positionWriteTail = Task { [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await self?.writePosition(for: locator, source: source)
+        }
+    }
+
+    private func writePosition(
+        for locator: Locator,
+        source: ReaderPositionLocator.Source
+    ) async {
+        let wrapper = ReaderPositionLocator(locator: locator, source: source)
         let encoded: String
         do {
             encoded = try wrapper.encodedJSONString()

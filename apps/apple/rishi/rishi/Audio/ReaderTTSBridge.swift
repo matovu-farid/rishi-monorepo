@@ -83,7 +83,12 @@ final class ReaderTTSBridge {
         consumeTask = nil
         advanceWatcher.cancel()
         await readAhead.cancelAll()
-        await engine.stop()
+        // A reader can be reopened before an older controller finishes its
+        // async teardown. Cancel this bridge's work, but never stop the
+        // shared engine after a replacement session has claimed ownership.
+        if state.ownsPlaybackSession(sessionToken) {
+            await engine.stop()
+        }
         await tracker.detach()
         paragraphs = []
         currentIndex = 0

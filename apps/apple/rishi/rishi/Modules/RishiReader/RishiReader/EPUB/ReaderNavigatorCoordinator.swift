@@ -667,7 +667,8 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
         }
         viewModel.didChangeLocation(
             locator,
-            isProgrammatic: isProgrammatic
+            isProgrammatic: isProgrammatic,
+            isInitialLocation: isInitialLocation
         )
     }
 

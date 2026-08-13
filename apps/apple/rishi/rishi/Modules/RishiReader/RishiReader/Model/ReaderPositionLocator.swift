@@ -9,15 +9,23 @@ public struct ReaderPositionLocator: Codable, Hashable, Sendable, JSONStringCoda
     public static let format = "reader-v1"
     static let jsonStringDecodeErrorLabel = "Reader position locator JSON is not valid UTF-8"
 
-    public let readiumLocator: String
+    public enum Source: String, Codable, Hashable, Sendable {
+        case reader
+        case readAloud
+    }
 
-    public init(locator: Locator) {
+    public let readiumLocator: String
+    public let source: Source
+
+    public init(locator: Locator, source: Source = .reader) {
         self.readiumLocator = (try? locator.jsonString()) ?? "{}"
+        self.source = source
     }
 
     private enum CodingKeys: String, CodingKey {
         case format
         case readiumLocator
+        case source
     }
 
     public init(from decoder: Decoder) throws {
@@ -31,12 +39,16 @@ public struct ReaderPositionLocator: Codable, Hashable, Sendable, JSONStringCoda
             )
         }
         readiumLocator = try container.decode(String.self, forKey: .readiumLocator)
+        // Older reader-v1 positions predate source tagging and are ordinary
+        // reader positions, not guaranteed exact narration positions.
+        source = try container.decodeIfPresent(Source.self, forKey: .source) ?? .reader
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(Self.format, forKey: .format)
         try container.encode(readiumLocator, forKey: .readiumLocator)
+        try container.encode(source, forKey: .source)
     }
 
     public func encodedJSONString() throws -> String {

@@ -96,7 +96,12 @@ struct EPUBIntegrationSmokeTests {
         vm2.typography = await settingsStore.typography(for: book.id)
         vm2.theme = await settingsStore.theme(for: book.id)
 
-        #expect(vm2.latestLocator != nil)
+        let restoredLocator = try #require(vm2.latestLocator)
+        #expect(restoredLocator.href == locator.href)
+        #expect(restoredLocator.locations.progression == locator.locations.progression)
+        let readAloudStartLocator = try #require(await vm2.readAloudStartLocator())
+        #expect(readAloudStartLocator.href == locator.href)
+        #expect(readAloudStartLocator.locations.progression == locator.locations.progression)
         #expect(vm2.typography.fontFamily == .serif)
         #expect(vm2.typography.fontSize.points == 20)
         #expect(vm2.theme == .sepia)

@@ -92,6 +92,7 @@ struct ReaderDestination: View {
     @State private var readAloud: ReadAloudController? = nil
     @State private var syncBinding: ReaderPositionSyncBinding? = nil
     @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
+    @State private var pendingNarrationUpgradeSessionToken: UUID?
     @State private var paywallRequestHandoff = ReaderPaywallRequestHandoff()
 
     @State private var voiceEntry: ReaderVoiceEntry
@@ -167,9 +168,14 @@ struct ReaderDestination: View {
 
 
             vm.onUserNavigation = { locator in
+                guard let readAloud else { return }
+                // Fence late Readium callbacks immediately. Resolving the
+                // navigation intent can await paragraph extraction, and an
+                // old `.playing` callback must not restore the old resume
+                // candidate during that interval.
+                readAloud.invalidateReadAloudPositionUpdates()
                 Task { @MainActor in
                     readerTour?.userNavigated()
-                    guard let readAloud else { return }
                     let snapshot = readAloud.beginUserNavigationIntent()
                     let destinationParagraphs = await vm.paragraphsForUserNavigationIntent(at: locator)
                     guard let intent = readAloud.resolveUserNavigationIntent(
@@ -182,9 +188,12 @@ struct ReaderDestination: View {
                     }
                     switch intent {
                     case .continuePlaying:
+                        readAloud.allowReadAloudPositionUpdates()
                         return
                     case .stopPlaying:
-                        await readAloud.stop()
+                        vm.clearReadAloudResumeLocator()
+                        readAloud.invalidateReadAloudPositionUpdates()
+                        await readAloud.stop(preservingPosition: false)
                     }
                 }
             }
@@ -217,10 +226,11 @@ struct ReaderDestination: View {
 
             let controller = readAloud
             let readAloudBinding = $readAloud
-            Task { @MainActor [controller, voicePresenter = dependencies.voicePresenter, readAloudBinding] in
+            Task { @MainActor [controller, voicePresenter = dependencies.voicePresenter, readAloudBinding, viewModel = vm] in
                 voicePresenter.cancelPrewarm()
                 await voicePresenter.parkSession()
                 await controller?.stop()
+                await viewModel.flush()
                 controller?.dispose()
                 if let controller,
                    let current = readAloudBinding.wrappedValue,
@@ -338,7 +348,10 @@ struct ReaderDestination: View {
         .sheet(
             item: $pendingNarrationUpgradePrompt,
             onDismiss: {
-                dependencies.ttsState.endSession()
+                if let token = pendingNarrationUpgradeSessionToken {
+                    dependencies.ttsState.clearPreservedFailure(ifCurrent: token)
+                }
+                pendingNarrationUpgradeSessionToken = nil
                 forwardPaywallRequestIfNeeded()
             }
         ) { reason in
@@ -350,7 +363,10 @@ struct ReaderDestination: View {
                 },
                 onDismiss: {
                     pendingNarrationUpgradePrompt = nil
-                    dependencies.ttsState.endSession()
+                    if let token = pendingNarrationUpgradeSessionToken {
+                        dependencies.ttsState.clearPreservedFailure(ifCurrent: token)
+                    }
+                    pendingNarrationUpgradeSessionToken = nil
                 }
             )
         }
@@ -390,8 +406,16 @@ struct ReaderDestination: View {
             userId: userId,
             nowPlayingController: dependencies.nowPlayingController,
             bookFileStorage: dependencies.bookFileStorage,
-            onAllowanceFailure: { failure in
+            onAllowanceFailure: { failure, sessionToken in
                 pendingNarrationUpgradePrompt = readAloudUpgradeReason(for: failure)
+                pendingNarrationUpgradeSessionToken = sessionToken
+            },
+            onReadAloudPositionChange: { locator in
+                vm.didChangeReadAloudLocation(locator)
+            },
+            onPersistReadAloudPosition: { locator in
+                vm.didChangeReadAloudLocation(locator)
+                await vm.flush()
             },
             onFirstUtteranceFinished: { [weak readerTour] in
                 readerTour?.firstUtteranceFinished()

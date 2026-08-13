@@ -1,4 +1,5 @@
 import Foundation
+import ReadiumShared
 
 
 import Testing
@@ -16,7 +17,8 @@ struct ReadAloudControllerTests {
         script: FakeTTSEngine.Script = .holds,
         source: any TTSChunkSource = ControllerNoopChunkSource(),
         nowPlayingController: NowPlayingController? = nil,
-        audioSessionConfigurator: FakeAudioSessionConfigurator = FakeAudioSessionConfigurator()
+        audioSessionConfigurator: FakeAudioSessionConfigurator = FakeAudioSessionConfigurator(),
+        onPersistReadAloudPosition: (@MainActor (Locator) async -> Void)? = nil
     ) -> ReadAloudController {
         let state = TTSPlaybackState()
         let engine = FakeTTSEngine(state: state, script: script)
@@ -36,7 +38,8 @@ struct ReadAloudControllerTests {
             ttsPresence: presence,
             coordidator: coordinator,
             userId: userId,
-            nowPlayingController: nowPlayingController
+            nowPlayingController: nowPlayingController,
+            onPersistReadAloudPosition: onPersistReadAloudPosition
         )
     }
 
@@ -68,6 +71,48 @@ struct ReadAloudControllerTests {
         #expect(controller.currentParagraph == nil)
 
         await controller.stop()
+    }
+
+    @Test("stop persists the current Readium locator before teardown")
+    func stopPersistsCurrentReadAloudLocator() async {
+        let received = ControllerLockedBox<[Locator]>([])
+        let controller = makeController(
+            onPersistReadAloudPosition: { locator in
+                received.mutate { $0.append(locator) }
+            }
+        )
+        let locator = Locator(
+            href: RelativeURL(path: "chapter1.xhtml")!,
+            mediaType: .xhtml,
+            locations: Locator.Locations(progression: 0.7, totalProgression: 0.7)
+        )
+        controller.setReadAloudPositionForTests(locator)
+
+        await controller.stop()
+
+        #expect(received.value.count == 1)
+        #expect(received.value.first?.locations.progression == 0.7)
+    }
+
+    @Test("navigation-triggered stop does not overwrite the deliberate destination")
+    func navigationTriggeredStopDoesNotPersistOldReadAloudLocator() async {
+        let received = ControllerLockedBox<[Locator]>([])
+        let controller = makeController(
+            onPersistReadAloudPosition: { locator in
+                received.mutate { $0.append(locator) }
+            }
+        )
+        controller.setReadAloudPositionForTests(
+            Locator(
+                href: RelativeURL(path: "chapter1.xhtml")!,
+                mediaType: .xhtml,
+                locations: Locator.Locations(progression: 0.2, totalProgression: 0.2)
+            )
+        )
+
+        await controller.stop(preservingPosition: false)
+
+        #expect(received.value.isEmpty)
     }
 
     @Test("typed allowance failure is sticky until endSession and observers are one-shot")
@@ -518,6 +563,27 @@ struct ReadAloudControllerTests {
 private struct ControllerNoopChunkSource: TTSChunkSource {
     func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
         AsyncThrowingStream { $0.finish() }
+    }
+}
+
+private final class ControllerLockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Value
+
+    init(_ value: Value) {
+        _value = value
+    }
+
+    var value: Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return _value
+    }
+
+    func mutate(_ body: (inout Value) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        body(&_value)
     }
 }
 
