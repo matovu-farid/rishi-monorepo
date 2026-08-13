@@ -18,5 +18,7 @@
 	<array>
 		<string>applinks:rishi.fidexa.org</string>
 	</array>
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
 </dict>
 </plist>

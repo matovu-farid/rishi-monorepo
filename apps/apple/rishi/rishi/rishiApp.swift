@@ -15,7 +15,7 @@ import StoreKit
 
 @main
 struct rishiApp: App {
-    @State private var deps = AppDependencies()
+    @State private var deps = AppDependencies.shared
     @State private var router = AppRouter()
     #if targetEnvironment(macCatalyst)
         @State private var readerWindows = ReaderWindowCoordinator()

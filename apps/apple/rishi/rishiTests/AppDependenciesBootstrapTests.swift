@@ -7,6 +7,11 @@ import Testing
 @Suite("AppDependencies two-phase bootstrap (F-P0-01)")
 struct AppDependenciesBootstrapTests {
 
+    @Test("the phone and CarPlay hosts use one AppDependencies instance")
+    func sharedInstanceIsStable() {
+        #expect(AppDependencies.shared === AppDependencies.shared)
+    }
+
     @Test("init() returns in well under 10ms")
     func test_emptyInit_returnsUnder10ms() {
         let clock = ContinuousClock()

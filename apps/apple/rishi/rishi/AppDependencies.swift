@@ -22,6 +22,8 @@ import SwiftUI
 @Observable
 final class AppDependencies {
 
+    @MainActor static let shared = AppDependencies()
+
     private(set) var services: BootstrappedServices?
 
     private var bootstrapTask: Task<Void, Never>?
