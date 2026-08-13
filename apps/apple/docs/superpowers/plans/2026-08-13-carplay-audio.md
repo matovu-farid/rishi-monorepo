@@ -452,6 +452,18 @@ The executor must append concrete tables here. A final PASS requires 0 open Crit
 
 Two independent reviewers re-checked the updated design and plan. Both reported no open Critical or High findings. The remaining implementation risks are carried forward as explicit tests and artifact checks above; implementation may begin.
 
+#### Round 3 — Task 3 implementation review
+
+| Severity | Finding and evidence | Resolution | Status |
+|---|---|---|---|
+| High | Phone and CarPlay constructed controllers outside a shared owner, and phone registration raced with start. | Centralized controller construction in `ReadAloudPlaybackOwner`; phone and CarPlay now start through the owner and use host bindings. | Closed |
+| High | Replacement/allowance failure could strand the prior session. | Owner retains the prior controller/reader, validates the candidate start, stops stale candidates before disposal, and restarts the prior reader on candidate error. | Closed |
+| High | Sign-out and stale CarPlay operations could tear down or mutate a newer session. | Account generation increments before teardown; owner teardown validates generation/controller identity; coordinator serializes selection generations and guards controls/toggle after awaits. | Closed |
+| High | Concurrent starts could leave a superseded synthesizer running. | Owner start generations invalidate superseded requests and stop candidates before disposal; prior controllers are explicitly stopped before disposal. | Closed |
+| Important | Account-deletion cleanup previously purged local material before audio teardown. | Account deletion now stops the shared playback owner before local purge. | Closed |
+
+Independent implementation re-review returned **PASS — 0 open Critical/High findings**. The iOS app build completed successfully. Focused test execution remains blocked by pre-existing shared-test-target compile errors (`ReaderViewModel` actor isolation, missing `ParagraphChunker`, and unrelated sync initializer drift); those failures are not caused by the CarPlay slice.
+
 ## Explicit out of scope
 
 - Dashboard/navigation/instrument-cluster scenes.

@@ -19,6 +19,8 @@ extension AppDependencies {
     func performSignOut(currentUserBox: CurrentUserBox) async {
         GoogleSignInCoordinator.signOut()
         let outgoing = try? Keychain.load(.userId)
+        incrementAccountGeneration()
+        await services?.audio.playbackOwner.stopForAccountChange()
         await services?.dataUseConsentStore.clearCurrentUser()
         await clearEntitlementState(for: outgoing)
         await services!.sync.engine.resetForAccountSwitch()

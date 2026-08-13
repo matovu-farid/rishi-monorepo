@@ -25,6 +25,7 @@ final class AppDependencies {
     @MainActor static let shared = AppDependencies()
 
     private(set) var services: BootstrappedServices?
+    private(set) var accountGeneration: UInt64 = 0
 
     private var bootstrapTask: Task<Void, Never>?
 
@@ -58,7 +59,19 @@ final class AppDependencies {
 
     }
     func setUserId(_ userId: UUID){
+        if userIdBox.value != userId {
+            incrementAccountGeneration()
+        }
         self.userIdBox.setUserId(value: userId)
+    }
+
+    func incrementAccountGeneration() {
+        accountGeneration &+= 1
+    }
+
+    var carPlayAccountSnapshot: CarPlayAccountSnapshot? {
+        guard let userID = userIdBox.value else { return nil }
+        return CarPlayAccountSnapshot(userID: userID, generation: accountGeneration)
     }
 
     func bootstrap() async {
@@ -127,6 +140,7 @@ extension BootstrappedServices {
             },
             purgeLocal: { [self] in
                 var cleanupError: Error?
+                await audio.playbackOwner.stopForAccountChange()
                 await voice.presenter.requestEnd()
                 await sync.engine.resetForAccountSwitch()
                 do { try library.bookFileStorage.purgeAll() }
@@ -175,6 +189,7 @@ struct AudioRuntime: @unchecked Sendable {
     let nowPlayingController: NowPlayingController
     let ttsPresenceController: TTSPresenceController
     let ttsPrewarmer: TTSPrewarmer
+    let playbackOwner: ReadAloudPlaybackOwner
 }
 
 struct ChatRuntime: @unchecked Sendable {

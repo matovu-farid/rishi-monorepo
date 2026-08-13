@@ -532,7 +532,18 @@ enum ServiceGraphFactory {
                 ttsSettingsStore: audioStack.settingsStore,
                 nowPlayingController: audioStack.nowPlaying,
                 ttsPresenceController: audioStack.presence,
-                ttsPrewarmer: audioStack.prewarmer
+                ttsPrewarmer: audioStack.prewarmer,
+                playbackOwner: await MainActor.run {
+                    ReadAloudPlaybackOwner(
+                        ttsEngine: audioStack.engine,
+                        ttsState: audioStack.state,
+                        ttsSettingsStore: audioStack.settingsStore,
+                        ttsPrewarmer: audioStack.prewarmer,
+                        ttsPresence: audioStack.presence,
+                        coordinator: audioStack.coordinator,
+                        nowPlayingController: audioStack.nowPlaying
+                    )
+                }
             ),
             sync: SyncRuntime(
                 metadataStore: syncMetadataStore,

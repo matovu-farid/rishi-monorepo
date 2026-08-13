@@ -24,6 +24,7 @@ struct ReaderDestinationDependencies {
     let nowPlayingController: NowPlayingController
     let ttsPresenceController: TTSPresenceController
     let ttsPrewarmer: TTSPrewarmer
+    let playbackOwner: ReadAloudPlaybackOwner
 
     @MainActor
     static func make(services: BootstrappedServices) -> Self {
@@ -48,7 +49,8 @@ struct ReaderDestinationDependencies {
             ttsSettingsStore: services.audio.ttsSettingsStore,
             nowPlayingController: services.audio.nowPlayingController,
             ttsPresenceController: services.audio.ttsPresenceController,
-            ttsPrewarmer: services.audio.ttsPrewarmer
+            ttsPrewarmer: services.audio.ttsPrewarmer,
+            playbackOwner: services.audio.playbackOwner
         )
     }
 }
@@ -90,6 +92,7 @@ struct ReaderDestination: View {
     @State private var readAloudStartRequest = UUID()
     @State private var vm: ReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
+    private let readAloudHost = UUID()
     @State private var syncBinding: ReaderPositionSyncBinding? = nil
     @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
     @State private var pendingNarrationUpgradeSessionToken: UUID?
@@ -224,19 +227,12 @@ struct ReaderDestination: View {
             readAloudStartTask = nil
             readAloudStartRequest = UUID()
 
-            let controller = readAloud
-            let readAloudBinding = $readAloud
-            Task { @MainActor [controller, voicePresenter = dependencies.voicePresenter, readAloudBinding, viewModel = vm] in
+            Task { @MainActor [voicePresenter = dependencies.voicePresenter, viewModel = vm] in
                 voicePresenter.cancelPrewarm()
                 await voicePresenter.parkSession()
-                await controller?.stop()
                 await viewModel.flush()
-                controller?.dispose()
-                if let controller,
-                   let current = readAloudBinding.wrappedValue,
-                   current === controller {
-                    readAloudBinding.wrappedValue = nil
-                }
+                await dependencies.playbackOwner.release(host: readAloudHost)
+                readAloud = nil
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -277,7 +273,16 @@ struct ReaderDestination: View {
                     onOpenReadAloud: {
                         Task {
                             await dependencies.voicePresenter.requestEnd()
-                            await ensureReadAloudController().openReadAloudFromVoice(vm: vm)
+                            let controller = ensureReadAloudController()
+                            if dependencies.playbackOwner.activeController === controller {
+                                await controller.openReadAloudFromVoice(vm: vm)
+                            } else {
+                                _ = await dependencies.playbackOwner.start(
+                                    controller: controller,
+                                    reader: vm,
+                                    host: readAloudHost
+                                )
+                            }
                         }
                     },
                     onEndVoice: {
@@ -396,15 +401,8 @@ struct ReaderDestination: View {
     @MainActor
     private func ensureReadAloudController() -> ReadAloudController {
         if let readAloud { return readAloud }
-        let controller = ReadAloudController(
-            ttsEngine: dependencies.ttsEngine,
-            ttsState: dependencies.ttsState,
-            ttsSettingsStore: dependencies.ttsSettingsStore,
-            ttsPrewarmer: dependencies.ttsPrewarmer,
-            ttsPresence: dependencies.ttsPresenceController,
-            coordidator: dependencies.ttsCoordinator,
+        let controller = dependencies.playbackOwner.makeController(
             userId: userId,
-            nowPlayingController: dependencies.nowPlayingController,
             bookFileStorage: dependencies.bookFileStorage,
             onAllowanceFailure: { failure, sessionToken in
                 pendingNarrationUpgradePrompt = readAloudUpgradeReason(for: failure)
@@ -454,11 +452,13 @@ struct ReaderDestination: View {
             }
 
             let controller = ensureReadAloudController()
-            if let startLocator {
-                await controller.startReader(vm: vm, from: startLocator)
-            } else {
-                await controller.startReader(vm: vm)
-            }
+            let started = await dependencies.playbackOwner.start(
+                controller: controller,
+                reader: vm,
+                host: readAloudHost,
+                from: startLocator
+            )
+            if !started { readerTour?.readAloudFailed() }
         }
     }
 }
