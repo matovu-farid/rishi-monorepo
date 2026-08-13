@@ -115,6 +115,8 @@ public struct ShareComposerView: View {
     private func create() {
         isWorking = true
         errorMessage = nil
+        let requestedAccess = access
+        let requestedGeneration = loadGeneration
         let requestScope = [access.rawValue, kind.rawValue, bookIDs.map(\.uuidString).sorted().joined(separator: ",")].joined(separator: "|")
         let idempotencyKey = idempotencyKeys[requestScope] ?? UUID().uuidString
         idempotencyKeys[requestScope] = idempotencyKey
@@ -127,11 +129,13 @@ public struct ShareComposerView: View {
                     idempotencyKey: idempotencyKey
                 )
                 await MainActor.run {
+                    guard requestedAccess == access, requestedGeneration == loadGeneration else { return }
                     response = result
                     isWorking = false
                 }
             } catch {
                 await MainActor.run {
+                    guard requestedAccess == access, requestedGeneration == loadGeneration else { return }
                     if case let RishiError.network(code, _) = error,
                        code == "SHARE_BOOK_NOT_READY" {
                         errorMessage = "Some selected books are not synced or use an unsupported format. Sync them and try again."

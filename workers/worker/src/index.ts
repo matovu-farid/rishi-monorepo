@@ -51,7 +51,7 @@ import { error } from "node:console";
 import { userRoutes } from "./routes/user";
 import { authCompatRoutes } from "./routes/auth-compat";
 import { registerBetterAuthRoutes } from "./routes/better-auth";
-import { purgeExpiredShares, sharesRoutes } from "./routes/shares";
+import { precreateShareLinks, purgeExpiredShares, sharesRoutes } from "./routes/shares";
 import { retryPendingDeletions } from "./account-deletion";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
@@ -1421,6 +1421,7 @@ const scheduled = async (_controller: ScheduledController, env: Env): Promise<vo
   const db = createDb(env.DB);
   await retryPendingDeletions(db, env);
   await purgeExpiredShares(db, env.BOOK_STORAGE);
+  await precreateShareLinks(db, env);
   await purgeExpiredRetention(db);
   await redactOwnerlessAppleNotificationLogs(db);
 };

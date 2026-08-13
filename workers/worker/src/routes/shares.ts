@@ -65,31 +65,31 @@ function packageLink(token: string): string {
   return `https://rishi.fidexa.org/sharing/join?token=${encodeURIComponent(token)}`;
 }
 
-function shareTokenSecrets(c: ShareContext): string[] {
-  const env = c.env as unknown as {
+function shareTokenSecrets(env: Env): string[] {
+  const secrets = env as unknown as {
     SHARE_TOKEN_SECRET?: string;
     SHARE_TOKEN_SECRET_PREVIOUS?: string;
     BETTER_AUTH_SECRET_PREVIOUS?: string;
   };
   return [...new Set([
-    env.SHARE_TOKEN_SECRET,
-    c.env.BETTER_AUTH_SECRET,
-    env.SHARE_TOKEN_SECRET_PREVIOUS,
-    env.BETTER_AUTH_SECRET_PREVIOUS,
+    secrets.SHARE_TOKEN_SECRET,
+    env.BETTER_AUTH_SECRET,
+    secrets.SHARE_TOKEN_SECRET_PREVIOUS,
+    secrets.BETTER_AUTH_SECRET_PREVIOUS,
   ].filter((secret): secret is string => Boolean(secret)))];
 }
 
 async function packageToken(
-  c: ShareContext,
+  env: Env,
   pkg: typeof sharePackages.$inferSelect,
   senderUserId: string,
 ): Promise<string> {
-  const secrets = shareTokenSecrets(c);
+  const secrets = shareTokenSecrets(env);
   for (const secret of secrets) {
     const token = await createShareTokenFromSecret(secret, senderUserId, pkg.idempotencyKey);
     if (!pkg.tokenHash || await hashShareToken(token) === pkg.tokenHash) return token;
   }
-  return createShareTokenFromSecret(secrets[0] ?? c.env.BETTER_AUTH_SECRET, senderUserId, pkg.idempotencyKey);
+  return createShareTokenFromSecret(secrets[0] ?? env.BETTER_AUTH_SECRET, senderUserId, pkg.idempotencyKey);
 }
 
 async function signedItem(
@@ -335,7 +335,7 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
       .get();
     if (!sender) return errorResponse(c, "SHARE_NOT_FOUND", 404);
     const preview = await previewFor(c, db, existing.pkg, sender.name);
-    const linkToken = await packageToken(c, existing.pkg, userId);
+    const linkToken = await packageToken(c.env, existing.pkg, userId);
     return c.json({
       id: preview.id,
       expires_at: preview.expires_at,
@@ -354,7 +354,7 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
   }
 
   const packageId = crypto.randomUUID();
-  const tokenSecret = shareTokenSecrets(c)[0] ?? c.env.BETTER_AUTH_SECRET;
+  const tokenSecret = shareTokenSecrets(c.env)[0] ?? c.env.BETTER_AUTH_SECRET;
   const token = await createShareTokenFromSecret(tokenSecret, userId, body.idempotency_key);
   const packageItems = sourceBooks.map((book) => {
     const itemId = crypto.randomUUID();
@@ -428,7 +428,7 @@ sharesRoutes.post("/", requireAuth, requireAiDataConsent, async (c) => {
 });
 
 async function preparedLinkFor(
-  c: ShareContext,
+  env: Env,
   db: ReturnType<typeof createDb>,
   userId: string,
   book: typeof books.$inferSelect,
@@ -464,7 +464,7 @@ async function preparedLinkFor(
   if (slot.activePackageId) {
     const active = await db.select().from(sharePackages).where(eq(sharePackages.id, slot.activePackageId)).get();
     if (active && !isShareExpired(active.expiresAt) && active.status === "pending") {
-      const token = await packageToken(c, active, userId);
+      const token = await packageToken(env, active, userId);
       return { bookID: book.id, access, packageID: active.id, generation: slot.generation, expiresAt: active.expiresAt, link: packageLink(token) };
     }
     if (active?.status === "building" && now.getTime() - active.createdAt.getTime() < PREPARED_BUILD_LEASE_MS) {
@@ -494,7 +494,7 @@ async function preparedLinkFor(
   }
   if (!pkg) {
     const packageID = crypto.randomUUID();
-    const tokenSecret = shareTokenSecrets(c)[0] ?? c.env.BETTER_AUTH_SECRET;
+    const tokenSecret = shareTokenSecrets(env)[0] ?? env.BETTER_AUTH_SECRET;
     const token = await createShareTokenFromSecret(tokenSecret, userId, idempotencyKey);
     try {
       await db.insert(sharePackages).values({
@@ -572,11 +572,45 @@ async function preparedLinkFor(
         )).run();
       }
     }
-    const winnerToken = await packageToken(c, winner.pkg, userId);
+    const winnerToken = await packageToken(env, winner.pkg, userId);
     return { bookID: book.id, access, packageID: winner.pkg.id, generation: winner.slot.generation, expiresAt: winner.pkg.expiresAt, link: packageLink(winnerToken) };
   }
-  const token = await packageToken(c, pkg, userId);
+  const token = await packageToken(env, pkg, userId);
   return { bookID: book.id, access, packageID: pkg.id, generation: nextGeneration, expiresAt: pkg.expiresAt, link: packageLink(token) };
+}
+
+/**
+ * Idempotently fills the public and one-time slots for every synced book.
+ * This runs from the scheduled Worker job so links exist before a sender
+ * opens the share sheet. The HTTP prepare route remains the immediate retry
+ * path for newly uploaded books or a failed scheduled run.
+ */
+export async function precreateShareLinks(
+  db: ReturnType<typeof createDb>,
+  env: Env,
+): Promise<{ processed: number; prepared: number; skipped: number }> {
+  const sourceBooks = await db.select().from(books).where(eq(books.isDeleted, false)).all();
+  let processed = 0;
+  let prepared = 0;
+  let skipped = 0;
+  for (const book of sourceBooks) {
+    if (!book.userId || !book.fileR2Key || !SUPPORTED_FORMATS.has(book.format)) {
+      skipped += 1;
+      continue;
+    }
+    processed += 1;
+    try {
+      await Promise.all([
+        preparedLinkFor(env, db, book.userId, book, "public"),
+        preparedLinkFor(env, db, book.userId, book, "one_time"),
+      ]);
+      prepared += 1;
+    } catch (error) {
+      skipped += 1;
+      console.error("scheduled share precreate failed", { bookId: book.id, userId: book.userId, error });
+    }
+  }
+  return { processed, prepared, skipped };
 }
 
 sharesRoutes.post("/prepare", requireAuth, requireAiDataConsent, async (c) => {
@@ -606,8 +640,8 @@ sharesRoutes.post("/prepare", requireAuth, requireAiDataConsent, async (c) => {
     }
     try {
       const preparedForBook = await Promise.all([
-        preparedLinkFor(c, db, userId, book, "public"),
-        preparedLinkFor(c, db, userId, book, "one_time"),
+        preparedLinkFor(c.env, db, userId, book, "public"),
+        preparedLinkFor(c.env, db, userId, book, "one_time"),
       ]);
       const [publicLink, oneTimeLink] = preparedForBook;
       const packagePayload = (link: typeof publicLink) => ({

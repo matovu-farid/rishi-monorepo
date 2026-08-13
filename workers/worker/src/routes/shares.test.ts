@@ -16,7 +16,7 @@ import {
 } from "../db/schema";
 import { hashShareToken } from "../shares/shareTokens";
 import { AI_DATA_CONSENT_HEADER, AI_DATA_CONSENT_VERSION } from "../middleware/ai-data-consent";
-import { purgeExpiredShares, sharesRoutes } from "./shares";
+import { precreateShareLinks, purgeExpiredShares, sharesRoutes } from "./shares";
 
 const baseEnv = {
   ACCESS_TOKEN_SECRET: "access-secret",
@@ -135,6 +135,20 @@ describe("book sharing schema", () => {
     expect(body.links[0]?.public).toBeDefined();
     expect(body.links[0]?.one_time).toBeDefined();
     expect(await db.select().from(shareLinkSlots)).toHaveLength(2);
+    closeD1(d1);
+  });
+
+  it("precreates missing links for eligible books without a user request", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    await db.insert(user).values(testUser("alice", "Alice")).run();
+    await db.insert(books).values(testBook("alice")).run();
+
+    const result = await precreateShareLinks(db, baseEnv, 50);
+
+    expect(result).toEqual({ processed: 1, prepared: 1, skipped: 0 });
+    expect(await db.select().from(shareLinkSlots)).toHaveLength(2);
+    expect(await db.select().from(sharePackages)).toHaveLength(2);
     closeD1(d1);
   });
   it("defines the package and item tables with the claim fields", () => {
