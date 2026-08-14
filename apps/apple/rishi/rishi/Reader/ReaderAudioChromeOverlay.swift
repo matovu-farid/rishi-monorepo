@@ -18,7 +18,6 @@ struct ReaderAudioChromeOverlay: View {
     let onOpenReadAloud: () -> Void
     let onEndVoice: () -> Void
     let onOpenTextChat: (() -> Void)?
-    let onSizeChange: (CGSize) -> Void
 
     @State private var location: CGPoint?
     @State private var controlSize: CGSize = .zero
@@ -56,7 +55,6 @@ struct ReaderAudioChromeOverlay: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .animation(.easeInOut(duration: 0.25), value: isVisible)
             .animation(.easeInOut(duration: 0.25), value: mode)
-            .onDisappear { onSizeChange(.zero) }
         }
     }
 
@@ -111,7 +109,6 @@ struct ReaderAudioChromeOverlay: View {
         )
         .readChromeSize { size in
             controlSize = size
-            onSizeChange(size)
         }
     }
 

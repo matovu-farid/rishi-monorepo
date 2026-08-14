@@ -59,7 +59,6 @@ public struct ReaderView: UIViewControllerRepresentable {
     ///
     /// `point` is in the container view's coordinate space.
     public let onTap: (CGPoint) -> Void
-    public let reservedPlayerHeight: CGFloat
     /// Mutable reference holder so the screen can reach the
     /// coordinator after the SwiftUI representable has installed it.
     /// Mirrors the `pdfViewRef` pattern from Phase 5.
@@ -76,8 +75,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         onPageBackward: @escaping () -> Void = {},
         onEscape: @escaping () -> Bool = { false },
         onTap: @escaping (CGPoint) -> Void = { _ in },
-        coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef(),
-        reservedPlayerHeight: CGFloat = 0
+        coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
         self.viewModel = viewModel
         self.pageTheme = pageTheme
@@ -90,7 +88,6 @@ public struct ReaderView: UIViewControllerRepresentable {
         self.onEscape = onEscape
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
-        self.reservedPlayerHeight = max(0, reservedPlayerHeight)
     }
 
     public func makeCoordinator() -> ReaderNavigatorCoordinator {
@@ -101,7 +98,6 @@ public struct ReaderView: UIViewControllerRepresentable {
         c.onPageBackward = onPageBackward
         c.onEscape = onEscape
         c.onTap = onTap
-        c.setReservedPlayerHeight(reservedPlayerHeight)
         coordinatorRef.coordinator = c
         return c
     }
@@ -115,7 +111,6 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onEscape = onEscape
         context.coordinator.onTap = onTap
-        context.coordinator.setReservedPlayerHeight(reservedPlayerHeight)
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
         installContainerTapRecognizer(on: container.view, coordinator: context.coordinator)
@@ -133,7 +128,6 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onEscape = onEscape
         context.coordinator.onTap = onTap
-        context.coordinator.setReservedPlayerHeight(reservedPlayerHeight)
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
         attachNavigatorIfReady(into: uiViewController, coordinator: context.coordinator)
@@ -207,10 +201,25 @@ public struct ReaderView: UIViewControllerRepresentable {
 
     private func backgroundUIColor(_ theme: ReaderTheme) -> UIColor {
         switch theme {
-        case .matchDevice: return UIColor(RishiColor.readerBackgroundLight)
-        case .light: return UIColor(RishiColor.readerBackgroundLight)
+        case .matchDevice:
+            return UIColor(readerSurfaceColor(for: theme))
+        case .light:
+            return UIColor(readerSurfaceColor(for: theme))
         case .sepia: return UIColor(RishiColor.readerBackgroundSepia)
         case .dark:  return UIColor(RishiColor.readerBackgroundDark)
+        }
+    }
+
+    private func readerSurfaceColor(for theme: ReaderTheme) -> SwiftUI.Color {
+        switch theme {
+        case .matchDevice, .light:
+            return viewModel.book.formatType == .epub
+                ? .white
+                : RishiColor.readerBackgroundLight
+        case .sepia:
+            return RishiColor.readerBackgroundSepia
+        case .dark:
+            return RishiColor.readerBackgroundDark
         }
     }
 }

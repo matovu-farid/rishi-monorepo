@@ -220,8 +220,7 @@ public struct ReaderScreen: View {
                 }
             },
 
-            coordinatorRef: coordinatorRef,
-            reservedPlayerHeight: reservedPlayerHeight
+            coordinatorRef: coordinatorRef
         )
     }
 
@@ -247,6 +246,14 @@ public struct ReaderScreen: View {
                             : 0
                     )
                     .allowsHitTesting(false)
+            }
+
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if readerPlayerInsetHeight > 0 {
+                    readerContentBackground
+                        .frame(height: readerPlayerInsetHeight)
+                        .allowsHitTesting(false)
+                }
             }
         #endif
 
@@ -340,7 +347,6 @@ public struct ReaderScreen: View {
             }
             .onChange(of: colorScheme) { _, _ in applyPreferencesForColorSchemeChange() }
             .onChange(of: currentSpread) { _, _ in applyPreferences() }
-            .onChange(of: reservedPlayerHeight) { _, _ in applyPreferences() }
 
             .onChange(of: readAloudParagraph) { _, _ in
                 readAloudPresenter.apply(
@@ -443,6 +449,11 @@ public struct ReaderScreen: View {
 
     private var isEPUBReader: Bool {
         viewModel.book.formatType == .epub
+    }
+
+    private var readerPlayerInsetHeight: CGFloat {
+        guard isEPUBReader, reservedPlayerHeight > 0 else { return 0 }
+        return reservedPlayerHeight + RishiSpacing.m
     }
 
     private func handleFontStepNotification(_ note: Notification) {
@@ -632,12 +643,7 @@ public struct ReaderScreen: View {
 
     @ViewBuilder
     private var background: some View {
-        switch resolvedTheme {
-        case .matchDevice: RishiColor.readerBackgroundLight.ignoresSafeArea()
-        case .light: RishiColor.readerBackgroundLight.ignoresSafeArea()
-        case .sepia: RishiColor.readerBackgroundSepia.ignoresSafeArea()
-        case .dark: RishiColor.readerBackgroundDark.ignoresSafeArea()
-        }
+        readerSurfaceColor.ignoresSafeArea()
     }
 
     ///
@@ -646,7 +652,7 @@ public struct ReaderScreen: View {
         #if targetEnvironment(macCatalyst)
             return [.bottom, .horizontal]
         #else
-            return isEPUBReader && chrome.isVisible ? [.bottom, .horizontal] : .all
+            return isEPUBReader ? [.horizontal] : .all
         #endif
     }
 
@@ -655,11 +661,21 @@ public struct ReaderScreen: View {
     }
 
     private var readerBarColor: SwiftUI.Color {
+        readerSurfaceColor
+    }
+
+    private var readerContentBackground: SwiftUI.Color {
+        readerSurfaceColor
+    }
+
+    private var readerSurfaceColor: SwiftUI.Color {
         switch resolvedTheme {
-        case .matchDevice: return RishiColor.readerBackgroundLight
-        case .light: return RishiColor.readerBackgroundLight
-        case .sepia: return RishiColor.readerBackgroundSepia
-        case .dark: return RishiColor.readerBackgroundDark
+        case .matchDevice, .light:
+            return isEPUBReader ? .white : RishiColor.readerBackgroundLight
+        case .sepia:
+            return RishiColor.readerBackgroundSepia
+        case .dark:
+            return RishiColor.readerBackgroundDark
         }
     }
 

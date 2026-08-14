@@ -102,7 +102,9 @@ struct ReaderDestination: View {
     @State private var readerTour: ReaderOnboardingTourCoordinator?
     @State private var showVoiceTextChat = false
     @State private var voiceTextVM: ChatPanelViewModel?
-    @State private var audioChromeSize: CGSize = .zero
+    /// Keep the EPUB viewport stable before playback starts. This is the
+    /// compact player's reserved maximum, including its card and controls.
+    private static let playerReservationHeight: CGFloat = 96
 
     init(
         vm: ReaderViewModel,
@@ -294,7 +296,6 @@ struct ReaderDestination: View {
                         }
                     },
                     onOpenTextChat: { showVoiceTextChat = true },
-                    onSizeChange: { audioChromeSize = $0 }
                 )
             }
         }
@@ -396,8 +397,7 @@ struct ReaderDestination: View {
     }
 
     private var reservedPlayerHeight: CGFloat {
-        guard vm.book.formatType == .epub else { return 0 }
-        return max(0, audioChromeSize.height)
+        vm.book.formatType == .epub ? Self.playerReservationHeight : 0
     }
 
     @MainActor

@@ -50,7 +50,7 @@ public struct ReadAloudControlsView: View {
 
             Button(action: performButtonAction(onOpenVoiceChat)) {
                 Image(systemName: "waveform.circle.fill")
-                    .font(RishiTypography.titleM)
+                    .font(RishiTypography.bodyEmphasized)
                     .foregroundStyle(RishiColor.accent)
                     .frame(width: 40, height: 40)
             }
@@ -63,7 +63,7 @@ public struct ReadAloudControlsView: View {
 
             Button(action: performButtonAction(onOpenPicker)) {
                 Image(systemName: "gear")
-                    .font(RishiTypography.titleM)
+                    .font(RishiTypography.bodyEmphasized)
                     .foregroundStyle(RishiColor.accent)
                     .frame(width: 40, height: 40)
             }
@@ -71,7 +71,8 @@ public struct ReadAloudControlsView: View {
             .accessibilityLabel("Voice and Speed")
             Spacer(minLength: 0)
         }
-        .padding(RishiSpacing.l)
+        .padding(.horizontal, RishiSpacing.m)
+        .padding(.vertical, RishiSpacing.s)
         .sensoryFeedback(.impact(weight: .light), trigger: buttonHapticTick)
         // No opaque fill here: the host (RootView) supplies the card surface —
         // an iOS 26 Liquid Glass effect, or `.regularMaterial` on iOS 18 — so
@@ -130,7 +131,7 @@ public struct ReadAloudControlsView: View {
     private var playPauseButton: some View {
         Button(action: performButtonAction(onPlayPause)) {
             playPauseBody
-                .frame(width: 56, height: 56)
+                .frame(width: 52, height: 52)
         }
         .accessibilityIdentifier(isPlaying ? "tts-pause" : "tts-play")
         .accessibilityLabel(isPlaying ? "Pause" : "Play")
@@ -165,7 +166,7 @@ public struct ReadAloudControlsView: View {
             ProgressView()
         } else {
             Image(systemName: currentIcon)
-                .font(RishiTypography.titleL)
+                .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.accent)
         }
     }
@@ -180,7 +181,7 @@ public struct ReadAloudControlsView: View {
     ) -> some View {
         Button(action: performButtonAction(action)) {
             Image(systemName: systemName)
-                .font(RishiTypography.titleM)
+                .font(RishiTypography.bodyEmphasized)
                 .foregroundStyle(RishiColor.textSecondary)
                 .frame(width: 42, height: 42)
         }

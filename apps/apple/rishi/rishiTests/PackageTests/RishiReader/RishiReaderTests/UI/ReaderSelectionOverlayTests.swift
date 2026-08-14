@@ -163,20 +163,37 @@ struct ReaderSelectionOverlayTests {
         #expect(normalized.contains("staticletreaderToolbarContentBuffer:CGFloat=0"))
         #expect(screen.contains(".safeAreaInset(edge: .top, spacing: 0)"))
         #expect(screen.contains("Self.readerToolbarContentBuffer"))
-        #expect(screen.contains("isEPUBReader && chrome.isVisible ? [.bottom, .horizontal] : .all"))
+        #expect(screen.contains(".safeAreaInset(edge: .bottom, spacing: 0)"))
+        #expect(screen.contains("readerContentBackground"))
+        #expect(!screen.contains("proxy.size.height - readerPlayerInsetHeight"))
         #expect(screen.contains("isEPUBReader && chrome.isVisible"))
-        #expect(screen.contains(".onChange(of: reservedPlayerHeight)"))
-        #expect(screen.contains("reservedPlayerHeight: reservedPlayerHeight"))
-        #expect(readerView.contains("setReservedPlayerHeight"))
+        #expect(screen.contains("return isEPUBReader ? .white : RishiColor.readerBackgroundLight"))
+        #expect(readerView.contains("viewModel.book.formatType == .epub"))
+        #expect(!readerView.contains("reservedPlayerHeight"))
         #expect(coordinator.contains("navigatorContentInset"))
-        #expect(coordinator.contains("additionalSafeAreaInsets"))
         #expect(coordinator.contains("#if !targetEnvironment(macCatalyst)\n    /// Readium's"))
         #expect(coordinator.contains("_ navigator: VisualNavigator"))
         #expect(coordinator.contains("-> UIEdgeInsets?"))
         #expect(coordinator.contains("top: 0"))
         #expect(coordinator.contains("defaultBottom"))
-        #expect(coordinator.contains("reservedPlayerHeight"))
-        #expect(coordinator.contains("ReaderAudioChromeContentInset.bottomInset("))
+        #expect(coordinator.contains("bottom: max(defaultBottom, safeAreaBottom)"))
+    }
+
+    @Test("EPUB player reservation is stable before audio starts")
+    func epubPlayerReservationDoesNotDependOnVisibility() throws {
+        let destination = try String(
+            contentsOf: Self.appRoot().appendingPathComponent(
+                "rishi/Reader/ReaderDestination.swift"
+            ),
+            encoding: .utf8
+        )
+        let screen = try Self.source(named: "ReaderScreen.swift", in: Self.readerUIDir())
+
+        #expect(destination.contains("private static let playerReservationHeight: CGFloat = 96"))
+        #expect(destination.contains("vm.book.formatType == .epub ? Self.playerReservationHeight : 0"))
+        #expect(!destination.contains("readAloud?.showControls == true"))
+        #expect(screen.contains("readerContentBackground"))
+        #expect(screen.contains("readerPlayerInsetHeight"))
     }
 
     private static func readerUIDir() -> URL {

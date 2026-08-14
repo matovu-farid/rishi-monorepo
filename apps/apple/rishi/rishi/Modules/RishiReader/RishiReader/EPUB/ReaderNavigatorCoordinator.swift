@@ -5,18 +5,6 @@ import PDFKit
 import ReadiumShared
 import ReadiumNavigator
 
-enum ReaderAudioChromeContentInset {
-    nonisolated static func bottomInset(
-        defaultBottom: CGFloat,
-        safeAreaBottom: CGFloat,
-        reservedPlayerHeight: CGFloat
-    ) -> CGFloat {
-        max(defaultBottom, safeAreaBottom) + max(0, reservedPlayerHeight)
-    }
-}
-
-
-
 /// Constructs and owns the Readium visual navigator for a single
 /// publication. The coordinator is the bridge between Readium's
 /// delegate callbacks and our `ReaderViewModel`.
@@ -90,19 +78,6 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// Dismisses a pending selection when Escape is pressed. Returns true
     /// when the callback consumed the key and false when it should pass on.
     public var onEscape: () -> Bool = { false }
-
-    /// Additional bottom clearance needed while the floating read-aloud or
-    /// voice controls are mounted above EPUB content.
-    public var reservedPlayerHeight: CGFloat = 0 {
-        didSet {
-            guard oldValue != reservedPlayerHeight else { return }
-            refreshReservedPlayerInset()
-        }
-    }
-
-    public func setReservedPlayerHeight(_ height: CGFloat) {
-        reservedPlayerHeight = max(0, height)
-    }
 
     /// The focused Catalyst PDF presentation mode. EPUB ignores this value.
     public var pdfViewMode: PDFViewModeSetting = .continuous {
@@ -411,22 +386,6 @@ public final class ReaderNavigatorCoordinator: NSObject {
         }
     }
 
-    /// Causes Readium to re-query ``navigatorContentInset(_:)`` for the
-    /// already-loaded spread. Readium refreshes the spread inset when its
-    /// safe-area insets change, but changing our SwiftUI overlay height does
-    /// not otherwise produce that UIKit event.
-    private func refreshReservedPlayerInset() {
-        #if !targetEnvironment(macCatalyst)
-        guard let epubNavigator = navigator as? EPUBNavigatorViewController else {
-            return
-        }
-
-        var insets = epubNavigator.additionalSafeAreaInsets
-        insets.bottom = max(0, reservedPlayerHeight)
-        epubNavigator.additionalSafeAreaInsets = insets
-        #endif
-    }
-
     #if !targetEnvironment(macCatalyst)
     /// Readium's default reflowable EPUB inset includes a 34pt top margin on
     /// compact screens, then takes the window's safe-area top as a minimum.
@@ -446,11 +405,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
         return UIEdgeInsets(
             top: 0,
             left: 0,
-            bottom: ReaderAudioChromeContentInset.bottomInset(
-                defaultBottom: defaultBottom,
-                safeAreaBottom: safeAreaBottom,
-                reservedPlayerHeight: reservedPlayerHeight
-            ),
+            bottom: max(defaultBottom, safeAreaBottom),
             right: 0
         )
     }
@@ -529,7 +484,6 @@ public final class ReaderNavigatorCoordinator: NSObject {
         })
         #endif
         self.navigator = nav
-        refreshReservedPlayerInset()
         #if targetEnvironment(macCatalyst)
         if publication.manifest.conforms(to: .pdf) {
             applyPDFViewMode(to: nav as? PDFNavigatorViewController)
