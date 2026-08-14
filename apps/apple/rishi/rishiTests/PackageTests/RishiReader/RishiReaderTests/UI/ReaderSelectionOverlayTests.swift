@@ -152,6 +152,10 @@ struct ReaderSelectionOverlayTests {
             named: "ReaderNavigatorCoordinator.swift",
             in: Self.epubDir()
         )
+        let readerView = try Self.source(
+            named: "ReaderView.swift",
+            in: Self.epubDir()
+        )
         let normalized = screen.filter { !$0.isWhitespace }
 
         #expect(screen.contains("isEPUB: viewModel.book.formatType == .epub"))
@@ -161,13 +165,18 @@ struct ReaderSelectionOverlayTests {
         #expect(screen.contains("Self.readerToolbarContentBuffer"))
         #expect(screen.contains("isEPUBReader && chrome.isVisible ? [.bottom, .horizontal] : .all"))
         #expect(screen.contains("isEPUBReader && chrome.isVisible"))
+        #expect(screen.contains(".onChange(of: reservedPlayerHeight)"))
+        #expect(screen.contains("reservedPlayerHeight: reservedPlayerHeight"))
+        #expect(readerView.contains("setReservedPlayerHeight"))
         #expect(coordinator.contains("navigatorContentInset"))
+        #expect(coordinator.contains("additionalSafeAreaInsets"))
         #expect(coordinator.contains("#if !targetEnvironment(macCatalyst)\n    /// Readium's"))
         #expect(coordinator.contains("_ navigator: VisualNavigator"))
         #expect(coordinator.contains("-> UIEdgeInsets?"))
         #expect(coordinator.contains("top: 0"))
         #expect(coordinator.contains("defaultBottom"))
-        #expect(coordinator.contains("bottom: max(defaultBottom, safeAreaBottom)"))
+        #expect(coordinator.contains("reservedPlayerHeight"))
+        #expect(coordinator.contains("ReaderAudioChromeContentInset.bottomInset("))
     }
 
     private static func readerUIDir() -> URL {

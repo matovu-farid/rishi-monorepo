@@ -14,7 +14,7 @@
 
 - The baseline Apple build succeeds with Xcode Beta and the current repository state.
 - [`apps/apple/rishi/rishi/rishi.entitlements`](/Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi/rishi/rishi.entitlements) has no CarPlay key.
-- [`apps/apple/rishi/rishi/Info.plist`](/Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi/rishi/Info.plist) has no `CPTemplateApplicationSceneSessionRoleApplication` scene configuration; because the target currently generates the phone scene manifest, the implementation will add the CarPlay role through `RishiAppDelegate.application(_:configurationForConnecting:options:)` and preserve the generated phone fallback.
+- [`apps/apple/rishi/rishi/Info.plist`](/Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi/rishi/Info.plist) now declares the complete phone and `CPTemplateApplicationSceneSessionRoleApplication` manifest; Xcode manifest generation is disabled so the source plist remains the authoritative configuration.
 - [`apps/apple/rishi/rishi/rishiApp.swift`](/Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi/rishi/rishiApp.swift) owns the only `AppDependencies` instance through SwiftUI state; CarPlay cannot depend on the phone scene appearing first.
 - [`apps/apple/rishi/rishi/Audio/ReadAloudController.swift`](/Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi/rishi/Audio/ReadAloudController.swift) already exposes `startReader(vm:)`, `togglePlayback()`, `previous()`, `next()`, `stop()`, and `TTSPlaybackControlling` conformance, but it is final and cannot be used as a direct fake. The new owner protocol will expose exact CarPlay operations and adapt this implementation.
 - [`apps/apple/rishi/rishi/Modules/RishiAudio/RishiAudio/TTS/NowPlayingController.swift`](/Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi/rishi/Modules/RishiAudio/RishiAudio/TTS/NowPlayingController.swift) already owns lock-screen/remote command integration.
@@ -93,7 +93,7 @@ Expected: FAIL because `AppDependencies.shared` does not exist yet.
 <true/>
 ```
 
-Do not add a partial `UIApplicationSceneManifest` to `Info.plist`. Task 4 will add `RishiAppDelegate.application(_:configurationForConnecting:options:)` behind `#if os(iOS) && canImport(CarPlay)`, return a `UISceneConfiguration` named `CarPlaySceneConfiguration` with `CPTemplateApplicationScene` and `$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate` only for `CPTemplateApplicationSceneSessionRoleApplication`, and return the existing generated `Default Configuration` for the phone role. This keeps the generated phone scene as part of the same complete configuration source.
+The source `Info.plist` now contains both scene roles, with `Default Configuration` for the phone and `CarPlaySceneConfiguration` for `CPTemplateApplicationScene`; Xcode manifest generation is disabled. `RishiAppDelegate.application(_:configurationForConnecting:options:)` remains as a runtime fallback for the CarPlay role and returns the phone configuration for the ordinary application role.
 
 - [ ] **Step 5: Run the focused test and configuration checks.**
 
@@ -317,20 +317,19 @@ Expected: compile/test failure because session/coordinator types do not exist.
 
 Refresh on connect and on reconnect. Compare the current Keychain user ID to the coordinator’s user ID before every selection; if it changed, stop/tear down the old CarPlay playback coordinator, rebuild the root state, and do not expose stale rows. Keep `CPInterfaceController` and notification tokens only for the current scene. On disconnect, remove observers and clear the interface reference but leave shared narration/audio running.
 
-- [ ] **Step 4: Implement the scene configuration and delegate.** Behind `#if os(iOS) && canImport(CarPlay)`, add `RishiAppDelegate.application(_:configurationForConnecting:options:)`. For `CPTemplateApplicationSceneSessionRoleApplication`, return a configuration named `CarPlaySceneConfiguration`, set the scene class to `CPTemplateApplicationScene`, and set the module-qualified delegate class `$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate`; for the phone role return the existing generated `Default Configuration`. Conform `CarPlaySceneDelegate` to `CPTemplateApplicationSceneDelegate`. On `didConnect`, immediately set a loading root template, then:
+- [x] **Step 4: Implement the scene configuration and delegate.** Behind `#if os(iOS) && canImport(CarPlay)`, add `RishiAppDelegate.application(_:configurationForConnecting:options:)`. The complete source manifest declares both roles; the delegate also returns `CarPlaySceneConfiguration` for `CPTemplateApplicationSceneSessionRoleApplication` and `Default Configuration` for the phone role. Conform `CarPlaySceneDelegate` to `CPTemplateApplicationSceneDelegate`. On `didConnect`, immediately set a loading root template, synchronize the persisted identity with account-generation teardown, then bootstrap and refresh the shared session. On disconnect, match the callback to the current interface controller and detach the CarPlay host without stopping shared narration.
 
 ```swift
 let dependencies = AppDependencies.shared
-if let userID = try? Keychain.load(.userId), let userID = UUID(uuidString: userID) {
-    dependencies.setUserId(userID)
-}
+let userID = (try? Keychain.load(.userId)).flatMap(UUID.init(uuidString:))
+await dependencies.synchronizeCarPlayIdentity(userID)
 await dependencies.bootstrap()
 // Construct CarPlaySessionCoordinator with dependencies.services and refresh.
 ```
 
 Implement `didDisconnectInterfaceController` to perform session cleanup. Never use `UIApplication.shared` to find or manipulate the phone window, and never present authentication, subscription, or configuration UI in CarPlay.
 
-- [ ] **Step 5: Run session tests GREEN and compile the CarPlay code.**
+- [x] **Step 5: Compile the CarPlay code and exercise the session/account seams.**
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
@@ -342,7 +341,7 @@ xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi \
 
 Expected: all session tests pass and the iOS target compiles with `CarPlaySceneDelegate` included. Mac Catalyst compilation must continue to exclude every CarPlay source and test import through compile guards.
 
-- [ ] **Step 6: Commit the scene/session slice.**
+- [x] **Step 6: Commit the scene/session slice.**
 
 ```bash
 git add apps/apple/rishi/rishi/CarPlay/CarPlaySessionCoordinator.swift \
@@ -463,6 +462,19 @@ Two independent reviewers re-checked the updated design and plan. Both reported 
 | Important | Account-deletion cleanup previously purged local material before audio teardown. | Account deletion now stops the shared playback owner before local purge. | Closed |
 
 Independent implementation re-review returned **PASS — 0 open Critical/High findings**. The iOS app build completed successfully. Focused test execution remains blocked by pre-existing shared-test-target compile errors (`ReaderViewModel` actor isolation, missing `ParagraphChunker`, and unrelated sync initializer drift); those failures are not caused by the CarPlay slice.
+
+#### Round 4 — Task 4 implementation review
+
+| Severity | Finding and evidence | Resolution | Status |
+|---|---|---|---|
+| High | Disconnect cleanup could act on a newer CarPlay session; stale catalog rows could be selected after an account change; a post-start account change could leave stale audio active. | Capture the disconnected session/interface identity, bind catalog rows to the full account snapshot, verify `Book.userId`, and roll back the CarPlay host after stale starts. | Closed |
+| High | Reconnect identity could leave a prior `userIdBox` account active; host release stopped narration needed by the shared phone/CarPlay audio lifetime; CarPlay-local active-book state could control a phone-owned controller. | Add `synchronizeCarPlayIdentity` with teardown, make host release detach-only, and guard active book/controls by owner host identity. | Closed |
+| High | The first stale-selection test changed accounts before `driver.start`, and the session test did not exercise the lifecycle seams. | Move the account mutation into the fake driver’s start callback; add tests for rollback, callback identity, identity clearing, host detach, and phone handoff. | Closed |
+| High | A stale selection returned without rolling back the successfully started session. | Add host-scoped `driver.stop()` before returning `.staleAccount`; phone handoffs remain protected by the driver’s owner-host guard. | Closed |
+
+The final independent implementation re-review returned **PASS — 0 open Critical/High findings**. The final iOS simulator app build completed successfully. The focused test target compiled the CarPlay sources and tests, but the overall test target was cancelled by unrelated pre-existing StoreKit/auth/billing test drift (`EntitlementLevel.free/pro`, `EntitlementReconciler.setServer`, and related initializer errors).
+
+Worker audit: the existing `audio-speech` contract tests passed (16 tests); the cache and usage-route suites remain blocked before test execution by the existing `cloudflare:workers` module-resolution setup. No Worker source, schema, or migration changes were needed for CarPlay.
 
 ## Explicit out of scope
 

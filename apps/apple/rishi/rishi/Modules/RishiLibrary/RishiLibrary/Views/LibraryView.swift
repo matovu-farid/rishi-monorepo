@@ -11,6 +11,8 @@ import SwiftUI
 public struct LibraryView: View {
 
     public let books: [Book]
+    public let readingNow: [ReadingNowEntry]
+    public let libraryBookCount: Int?
     public let positionLookup: (BookID) -> Position?
     public let coverURL: (Book) -> URL?
     public let onOpen: (Book) -> Void
@@ -22,6 +24,8 @@ public struct LibraryView: View {
     public let onShareSingle: (Book) -> Void
 
     public init(books: [Book],
+                readingNow: [ReadingNowEntry] = [],
+                libraryBookCount: Int? = nil,
                 positionLookup: @escaping (BookID) -> Position?,
                 coverURL: @escaping (Book) -> URL?,
                 onOpen: @escaping (Book) -> Void,
@@ -32,6 +36,8 @@ public struct LibraryView: View {
                 onToggleSelection: @escaping (Book) -> Void = { _ in },
                 onShareSingle: @escaping (Book) -> Void = { _ in }) {
         self.books = books
+        self.readingNow = readingNow
+        self.libraryBookCount = libraryBookCount
         self.positionLookup = positionLookup
         self.coverURL = coverURL
         self.onOpen = onOpen
@@ -43,6 +49,10 @@ public struct LibraryView: View {
         self.onShareSingle = onShareSingle
     }
 
+    public static func shouldShowReadingNow(_ entries: [ReadingNowEntry]) -> Bool {
+        !entries.isEmpty
+    }
+
     public var body: some View {
         ZStack{
             Color(RishiColor.accent)
@@ -50,29 +60,32 @@ public struct LibraryView: View {
                 .ignoresSafeArea()
             
             Group {
-                if books.isEmpty {
+                if libraryBookCount.map { $0 == 0 } ?? (books.isEmpty && readingNow.isEmpty) {
                     LibraryEmptyStateView()
                 } else {
                     ScrollView {
-//                        if !readingNow.isEmpty {
-//                            ReadingNowShelf(
-//                                entries: readingNow,
-//                                coverURL: coverURL,
-//                                onOpen: onOpen
-//                            )
-//                        }
-                        LibraryGrid(
-                            books: books,
-                            positionLookup: positionLookup,
-                            coverURL: coverURL,
-                            onOpen: onOpen,
-                            onDelete: onDelete,
-                            selectionMode: selectionMode,
-                            selectedBookIDs: selectedBookIDs,
-                            onBeginSelection: onBeginSelection,
-                            onToggleSelection: onToggleSelection,
-                            onShareSingle: onShareSingle
-                        )
+                        if Self.shouldShowReadingNow(readingNow) {
+                            ReadingNowShelf(
+                                entries: readingNow,
+                                coverURL: coverURL,
+                                onOpen: onOpen
+                            )
+                        }
+
+                        if !books.isEmpty {
+                            LibraryGrid(
+                                books: books,
+                                positionLookup: positionLookup,
+                                coverURL: coverURL,
+                                onOpen: onOpen,
+                                onDelete: onDelete,
+                                selectionMode: selectionMode,
+                                selectedBookIDs: selectedBookIDs,
+                                onBeginSelection: onBeginSelection,
+                                onToggleSelection: onToggleSelection,
+                                onShareSingle: onShareSingle
+                            )
+                        }
                     }
                     .tint(RishiColor.accent)
                     

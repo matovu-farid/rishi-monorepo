@@ -88,8 +88,12 @@ struct LibraryViewSmokeTests {
             positionLookup: stub.positionLookup,
             coverURL: stub.coverURL,
             onOpen: stub.onOpen,
-            onDelete: stub.onDelete
+            onDelete: stub.onDelete,
+            readingNow: stub.readingNow,
+            libraryBookCount: stub.books.count
         )
+        #expect(LibraryView.shouldShowReadingNow([]) == false)
+        #expect(LibraryView.shouldShowReadingNow(stub.readingNow) == true)
         #expect(stub.readingNow.count == 1)
         #expect(stub.readingNow.first?.book.id == started.id)
     }

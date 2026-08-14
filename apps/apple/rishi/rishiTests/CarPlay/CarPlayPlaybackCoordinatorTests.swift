@@ -7,11 +7,13 @@ private final class FakeCarPlayPlaybackDriver: CarPlayPlaybackDriving {
     var activeBookID: BookID?
     var calls: [String] = []
     var startError: Error?
+    var onStart: (() -> Void)?
 
     func start(bookID: BookID) async throws {
         calls.append("start")
         if let startError { throw startError }
         activeBookID = bookID
+        onStart?()
     }
 
     func toggle() async { calls.append("toggle") }
@@ -76,6 +78,46 @@ struct CarPlayPlaybackCoordinatorTests {
         #expect(driver.calls.isEmpty)
     }
 
+    @Test("account changes after start release the CarPlay host")
+    func staleStartReleasesHost() async throws {
+        let driver = FakeCarPlayPlaybackDriver()
+        var snapshot: CarPlayAccountSnapshot? = CarPlayAccountSnapshot(
+            userID: userID,
+            generation: 1
+        )
+        driver.onStart = {
+            snapshot = CarPlayAccountSnapshot(userID: UUID(), generation: 2)
+        }
+        let coordinator = CarPlayPlaybackCoordinator(
+            driver: driver,
+            accountSnapshot: { snapshot },
+            entitlementGate: { true }
+        )
+
+        let result = try await coordinator.select(bookID: bookID)
+
+        #expect(result == .staleAccount)
+        #expect(driver.calls == ["start", "stop"])
+    }
+
+    @Test("CarPlay active-book state clears after a phone handoff")
+    func activeBookRequiresCarPlayHostOwnership() {
+        let carPlayHost = UUID()
+        let phoneHost = UUID()
+        let startedBook = bookID
+
+        #expect(ReadAloudCarPlayDriver.activeBookID(
+            ownerHost: carPlayHost,
+            carPlayHost: carPlayHost,
+            startedBookID: startedBook
+        ) == startedBook)
+        #expect(ReadAloudCarPlayDriver.activeBookID(
+            ownerHost: phoneHost,
+            carPlayHost: carPlayHost,
+            startedBookID: startedBook
+        ) == nil)
+    }
+
     @Test("disconnect releases only the CarPlay host")
     func disconnectReleasesHost() async {
         let driver = FakeCarPlayPlaybackDriver()
@@ -90,4 +132,3 @@ struct CarPlayPlaybackCoordinatorTests {
         #expect(driver.calls == ["release"])
     }
 }
-

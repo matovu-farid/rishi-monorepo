@@ -40,18 +40,41 @@ struct ReadingNowShelf: View {
 
     @ViewBuilder
     private func card(for entry: ReadingNowEntry) -> some View {
+        let clampedPercent = min(max(entry.percentComplete, 0), 1)
+        let author = entry.book.author.flatMap { $0.isEmpty ? nil : $0 }
+        let accessibilityLabel = author.map {
+            "\(entry.book.title), \($0), \(Int(clampedPercent * 100))% read"
+        } ?? "\(entry.book.title), \(Int(clampedPercent * 100))% read"
+
         Button {
             onOpen(entry.book)
         } label: {
-            // Phase 21 UI pass: pure cover, no per-tile label. The shelf
-            // title ("Reading Now") above already tells the user what this
-            // strip is; VoiceOver announces the book + percent via the
-            // accessibility label.
-            BookCoverImageView(book: entry.book, coverURL: coverURL(entry.book))
-                .frame(width: 110, height: 165)
+            VStack(alignment: .leading, spacing: RishiSpacing.xs) {
+                BookCoverImageView(book: entry.book, coverURL: coverURL(entry.book))
+                    .frame(width: 110, height: 165)
+
+                Text(entry.book.title)
+                    .font(RishiTypography.bodyEmphasized)
+                    .foregroundStyle(RishiColor.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: 110, alignment: .leading)
+
+                if let author = entry.book.author, !author.isEmpty {
+                    Text(author)
+                        .font(RishiTypography.caption)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: 110, alignment: .leading)
+                }
+
+                ProgressView(value: clampedPercent)
+                    .tint(RishiColor.accent)
+                    .frame(width: 110)
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(entry.book.title), \(Int(entry.percentComplete * 100))% read")
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 

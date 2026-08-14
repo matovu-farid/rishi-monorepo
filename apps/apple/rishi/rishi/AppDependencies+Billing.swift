@@ -19,12 +19,14 @@ extension AppDependencies {
     func performSignOut(currentUserBox: CurrentUserBox) async {
         GoogleSignInCoordinator.signOut()
         let outgoing = try? Keychain.load(.userId)
+        invalidateIdentityRequests()
         incrementAccountGeneration()
         await services?.audio.playbackOwner.stopForAccountChange()
         await services?.dataUseConsentStore.clearCurrentUser()
         await clearEntitlementState(for: outgoing)
         await services!.sync.engine.resetForAccountSwitch()
         userIdBox.value = nil
+        notifyCarPlayAccountChange()
         if let metadataStore = services?.sync.metadataStore as? SwiftDataSyncMetadataStore {
             do {
                 try await metadataStore.resetAll()

@@ -184,6 +184,8 @@ public struct LibraryRootView: View {
         @Bindable var vm = vm
         LibraryView(
             books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
+            readingNow: vm.readingNow,
+            libraryBookCount: vm.books.count,
             positionLookup: { bookID in vm.position(for: bookID) },
             coverURL: { book in vm.coverURLs[book.id] },
             onOpen: onOpenBook,

@@ -102,6 +102,7 @@ struct ReaderDestination: View {
     @State private var readerTour: ReaderOnboardingTourCoordinator?
     @State private var showVoiceTextChat = false
     @State private var voiceTextVM: ChatPanelViewModel?
+    @State private var audioChromeSize: CGSize = .zero
 
     init(
         vm: ReaderViewModel,
@@ -150,6 +151,7 @@ struct ReaderDestination: View {
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
+            reservedPlayerHeight: reservedPlayerHeight,
             pdfViewMode: pdfViewMode?.wrappedValue ?? dependencies.readerDefaults.pdfViewMode,
             pdfViewModeBinding: pdfViewMode,
             keepChromeVisible: startReaderTour
@@ -291,7 +293,8 @@ struct ReaderDestination: View {
                             await readAloud?.resumeAfterVoiceIfNeeded()
                         }
                     },
-                    onOpenTextChat: { showVoiceTextChat = true }
+                    onOpenTextChat: { showVoiceTextChat = true },
+                    onSizeChange: { audioChromeSize = $0 }
                 )
             }
         }
@@ -390,6 +393,11 @@ struct ReaderDestination: View {
                 onDismiss: { voiceEntry.dismissUpgradePrompt() }
             )
         }
+    }
+
+    private var reservedPlayerHeight: CGFloat {
+        guard vm.book.formatType == .epub else { return 0 }
+        return max(0, audioChromeSize.height)
     }
 
     @MainActor

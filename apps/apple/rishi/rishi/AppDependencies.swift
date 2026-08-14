@@ -28,6 +28,8 @@ final class AppDependencies {
     private(set) var accountGeneration: UInt64 = 0
 
     private var bootstrapTask: Task<Void, Never>?
+    private var identityRequestToken: UInt64 = 0
+    private var carPlayAccountChangeObservers: [UUID: (CarPlayAccountSnapshot?) -> Void] = [:]
 
     nonisolated private static let signposter = OSSignposter(
         subsystem: "org.fidexa.rishi",
@@ -40,7 +42,13 @@ final class AppDependencies {
 
     var cachedUserId: UUID? {
         get { userIdBox.value }
-        set { userIdBox.value = newValue }
+        set {
+            guard userIdBox.value != newValue else { return }
+            identityRequestToken &+= 1
+            incrementAccountGeneration()
+            userIdBox.value = newValue
+            notifyCarPlayAccountChange()
+        }
     }
 
     public let userIdBox = UserIdBox()
@@ -59,10 +67,49 @@ final class AppDependencies {
 
     }
     func setUserId(_ userId: UUID){
-        if userIdBox.value != userId {
-            incrementAccountGeneration()
-        }
+        guard userIdBox.value != userId else { return }
+        identityRequestToken &+= 1
+        incrementAccountGeneration()
         self.userIdBox.setUserId(value: userId)
+        notifyCarPlayAccountChange()
+    }
+
+    /// Synchronizes the CarPlay scene with the persisted identity. CarPlay
+    /// can connect while the phone app is still alive, so an identity change
+    /// must tear down the shared reader before exposing the new account.
+    func synchronizeCarPlayIdentity(_ userID: UUID?) async {
+        guard userIdBox.value != userID else { return }
+        identityRequestToken &+= 1
+        let requestToken = identityRequestToken
+        incrementAccountGeneration()
+        await services?.audio.playbackOwner.stopForAccountChange()
+        guard identityRequestToken == requestToken else { return }
+        userIdBox.value = userID
+        notifyCarPlayAccountChange()
+    }
+
+    func invalidateIdentityRequests() {
+        identityRequestToken &+= 1
+    }
+
+    @discardableResult
+    func addCarPlayAccountChangeObserver(
+        _ observer: @escaping (CarPlayAccountSnapshot?) -> Void
+    ) -> UUID {
+        let token = UUID()
+        carPlayAccountChangeObservers[token] = observer
+        return token
+    }
+
+    func removeCarPlayAccountChangeObserver(_ token: UUID) {
+        carPlayAccountChangeObservers.removeValue(forKey: token)
+    }
+
+    func notifyCarPlayAccountChange() {
+        let snapshot = carPlayAccountSnapshot
+        for observer in carPlayAccountChangeObservers.values {
+            observer(snapshot)
+        }
     }
 
     func incrementAccountGeneration() {

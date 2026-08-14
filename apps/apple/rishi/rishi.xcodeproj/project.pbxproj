@@ -536,7 +536,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Rishi can save book covers to your Photo Library.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Rishi uses on-device speech recognition to detect when you start speaking during voice chat setup.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -593,7 +593,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Rishi can save book covers to your Photo Library.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Rishi uses on-device speech recognition to detect when you start speaking during voice chat setup.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;

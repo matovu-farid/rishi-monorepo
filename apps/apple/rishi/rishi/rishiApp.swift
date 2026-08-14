@@ -12,6 +12,9 @@ import StoreKit
     import UIKit
     import UserNotifications
 #endif
+#if os(iOS) && canImport(CarPlay)
+    import CarPlay
+#endif
 
 @main
 struct rishiApp: App {
@@ -215,6 +218,28 @@ struct rishiApp: App {
             }
             return true
         }
+
+        #if os(iOS) && canImport(CarPlay)
+        func application(
+            _ application: UIApplication,
+            configurationForConnecting connectingSceneSession: UISceneSession,
+            options: UIScene.ConnectionOptions
+        ) -> UISceneConfiguration {
+            if connectingSceneSession.role == .carTemplateApplication {
+                let configuration = UISceneConfiguration(
+                    name: "CarPlaySceneConfiguration",
+                    sessionRole: connectingSceneSession.role
+                )
+                configuration.sceneClass = CPTemplateApplicationScene.self
+                configuration.delegateClass = CarPlaySceneDelegate.self
+                return configuration
+            }
+            return UISceneConfiguration(
+                name: "Default Configuration",
+                sessionRole: connectingSceneSession.role
+            )
+        }
+        #endif
 
         func userNotificationCenter(
             _ center: UNUserNotificationCenter,

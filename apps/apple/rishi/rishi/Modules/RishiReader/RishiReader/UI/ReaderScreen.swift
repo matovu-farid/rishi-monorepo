@@ -65,6 +65,7 @@ public struct ReaderScreen: View {
 
     private let readAloudParagraph: String?
     private let readAloudLocator: Locator?
+    private let reservedPlayerHeight: CGFloat
     private let pdfViewMode: PDFViewModeSetting
     private let pdfViewModeBinding: Binding<PDFViewModeSetting>?
     private let keepChromeVisible: Bool
@@ -149,6 +150,7 @@ public struct ReaderScreen: View {
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
+        reservedPlayerHeight: CGFloat = 0,
         pdfViewMode: PDFViewModeSetting = .continuous,
         pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
         keepChromeVisible: Bool = false
@@ -164,6 +166,7 @@ public struct ReaderScreen: View {
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
+        self.reservedPlayerHeight = max(0, reservedPlayerHeight)
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
         self.keepChromeVisible = keepChromeVisible
@@ -217,7 +220,8 @@ public struct ReaderScreen: View {
                 }
             },
 
-            coordinatorRef: coordinatorRef
+            coordinatorRef: coordinatorRef,
+            reservedPlayerHeight: reservedPlayerHeight
         )
     }
 
@@ -336,6 +340,7 @@ public struct ReaderScreen: View {
             }
             .onChange(of: colorScheme) { _, _ in applyPreferencesForColorSchemeChange() }
             .onChange(of: currentSpread) { _, _ in applyPreferences() }
+            .onChange(of: reservedPlayerHeight) { _, _ in applyPreferences() }
 
             .onChange(of: readAloudParagraph) { _, _ in
                 readAloudPresenter.apply(

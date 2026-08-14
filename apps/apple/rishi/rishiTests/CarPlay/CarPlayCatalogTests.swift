@@ -59,6 +59,83 @@ struct CarPlayCatalogTests {
         ])
     }
 
+    @Test("catalog preserves cover data on both sections and allows missing artwork")
+    func preservesCoverDataAcrossSections() {
+        let inProgress = makeBook("000000000207", title: "In Progress")
+        let missingArtwork = makeBook("000000000208", title: "Missing Artwork")
+        let coverData = Data([1, 2, 3])
+
+        let snapshot = CarPlayCatalog.project(
+            currentUserID: currentUserID,
+            books: [inProgress, missingArtwork],
+            positions: [
+                Position(bookId: inProgress.id, locator: "start", percentComplete: 0.5)
+            ],
+            coverDataByBookID: [inProgress.id: coverData],
+            perSectionCap: 10
+        )
+
+        #expect(snapshot.sections[0].rows.first(where: { $0.id == inProgress.id })?.coverData == coverData)
+        #expect(snapshot.sections[1].rows.first(where: { $0.id == inProgress.id })?.coverData == coverData)
+        #expect(snapshot.sections[1].rows.first(where: { $0.id == missingArtwork.id })?.coverData == nil)
+    }
+
+    @Test("book row display detail includes author and completion")
+    func displaysAuthorAndCompletion() {
+        let row = CarPlayBookRow(
+            id: UUID(),
+            title: "Book",
+            author: "Author",
+            percentComplete: 0.42
+        )
+
+        #expect(row.displayDetail == "Author · 42% complete")
+    }
+
+    @Test("book row display detail is absent without author or completion")
+    func omitsDisplayDetailWithoutAuthorOrCompletion() {
+        let row = CarPlayBookRow(id: UUID(), title: "Book", author: nil, percentComplete: nil)
+
+        #expect(row.displayDetail == nil)
+    }
+
+    @Test("book row display detail includes completion without author")
+    func displaysCompletionWithoutAuthor() {
+        let row = CarPlayBookRow(id: UUID(), title: "Book", author: nil, percentComplete: 0.42)
+
+        #expect(row.displayDetail == "42% complete")
+    }
+
+    @Test("cover reader rejects corrupt bytes")
+    func rejectsCorruptCoverBytes() throws {
+        let url = URL.temporaryDirectory.appendingPathComponent("carplay-corrupt-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data([0, 1, 2, 3]).write(to: url)
+
+        #expect(CarPlayCoverReader.read(from: url) == nil)
+    }
+
+    @Test("cover reader rejects files larger than 4 MiB")
+    func rejectsOversizedCover() throws {
+        let url = URL.temporaryDirectory.appendingPathComponent("carplay-oversized-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(repeating: 0, count: 4 * 1024 * 1024 + 1).write(to: url)
+
+        #expect(CarPlayCoverReader.read(from: url) == nil)
+    }
+
+    @Test("cover reader accepts a valid small image")
+    func acceptsValidSmallImage() throws {
+        let url = URL.temporaryDirectory.appendingPathComponent("carplay-valid-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let imageData = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ))
+        try imageData.write(to: url)
+
+        #expect(CarPlayCoverReader.read(from: url) != nil)
+    }
+
     @Test("catalog caps each section for vehicle display")
     func capsRows() {
         let books = (1...4).map { index in

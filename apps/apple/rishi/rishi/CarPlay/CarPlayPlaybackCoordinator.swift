@@ -28,7 +28,23 @@ final class ReadAloudCarPlayDriver: CarPlayPlaybackDriving {
     private let owner: ReadAloudPlaybackOwner
     private let accountSnapshot: @MainActor @Sendable () -> CarPlayAccountSnapshot?
     private let host: UUID
-    private(set) var activeBookID: BookID?
+    private var startedBookID: BookID?
+
+    static func activeBookID(
+        ownerHost: UUID?,
+        carPlayHost: UUID,
+        startedBookID: BookID?
+    ) -> BookID? {
+        ownerHost == carPlayHost ? startedBookID : nil
+    }
+
+    var activeBookID: BookID? {
+        Self.activeBookID(
+            ownerHost: owner.activeHost,
+            carPlayHost: host,
+            startedBookID: startedBookID
+        )
+    }
 
     init(
         services: BootstrappedServices,
@@ -47,6 +63,9 @@ final class ReadAloudCarPlayDriver: CarPlayPlaybackDriving {
             throw CarPlayPlaybackDriverError.staleAccount
         }
         guard let book = try await services.library.bookStore.book(bookID) else {
+            throw CarPlayPlaybackDriverError.bookUnavailable
+        }
+        guard book.userId == captured.userID else {
             throw CarPlayPlaybackDriverError.bookUnavailable
         }
         guard accountSnapshot() == captured else {
@@ -89,39 +108,52 @@ final class ReadAloudCarPlayDriver: CarPlayPlaybackDriving {
             throw CarPlayPlaybackDriverError.startFailed
         }
         guard accountSnapshot() == captured else {
+            await stop()
             throw CarPlayPlaybackDriverError.staleAccount
         }
-        activeBookID = book.id
+        startedBookID = book.id
     }
 
     func toggle() async {
+        guard owner.activeHost == host else {
+            startedBookID = nil
+            return
+        }
         await owner.activeController?.togglePlayback()
     }
 
     func pause() async {
+        guard owner.activeHost == host else { return }
         await owner.activeController?.pause()
     }
 
     func resume() async {
+        guard owner.activeHost == host else { return }
         await owner.activeController?.resume()
     }
 
     func next() async {
+        guard owner.activeHost == host else { return }
         await owner.activeController?.next()
     }
 
     func previous() async {
+        guard owner.activeHost == host else { return }
         await owner.activeController?.previous()
     }
 
     func stop() async {
+        guard owner.activeHost == host else {
+            startedBookID = nil
+            return
+        }
         await owner.activeController?.stop()
-        activeBookID = nil
+        startedBookID = nil
     }
 
     func releaseCarPlayHost() async {
         await owner.release(host: host)
-        activeBookID = nil
+        startedBookID = nil
     }
 }
 
@@ -171,7 +203,15 @@ final class CarPlayPlaybackCoordinator {
             throw error
         }
         guard requestGeneration == selectionGeneration,
-              accountSnapshot() == snapshot else { return .staleAccount }
+              accountSnapshot() == snapshot,
+              driver.activeBookID == bookID else {
+            // The driver owns a host-scoped session. Stop only if that host
+            // still owns the shared controller; a phone handoff is preserved.
+            if driver.activeBookID == bookID {
+                await driver.stop()
+            }
+            return .staleAccount
+        }
         return .started
     }
 
@@ -202,7 +242,8 @@ final class CarPlayPlaybackCoordinator {
     }
 
     func disconnect() async {
-        await driver.releaseCarPlayHost()
+        selectionGeneration &+= 1
         capturedSnapshot = nil
+        await driver.releaseCarPlayHost()
     }
 }

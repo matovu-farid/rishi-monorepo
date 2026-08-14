@@ -138,7 +138,10 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
 
     func release(host: UUID) async {
         guard activeHost == host else { return }
-        await stopAndClear()
+        // Releasing a host only detaches that scene. The shared audio session
+        // may still be intentionally playing while the phone is locked or
+        // while CarPlay reconnects.
+        activeHost = nil
     }
 
     func stopForAccountChange() async {
