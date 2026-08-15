@@ -303,17 +303,4 @@ struct RestoreServiceTests {
         #expect(reconciler.level == .free)
     }
 
-    // MARK: - AppStore.sync() failure throws RestoreError.syncFailed
-
-    @Test(.disabled("Manual-only: simulate Apple-side outage via airplane mode. AppStore.sync() is a static; injectability is impractical at the StoreKit API boundary."))
-    func testRestore_syncFailed_throwsSyncFailed() async throws {
-        // Documented placeholder — covered by manual sandbox testing per
-        // the runbook. The production code path under test is explicit:
-        // do { try await AppStore.sync() } catch { throw .syncFailed(...) }
-        let reconciler = makeReconciler()
-        let service = RestoreService(reconciler: reconciler)
-        await #expect(throws: RestoreError.self) {
-            _ = try await service.restore()
-        }
-    }
 }
