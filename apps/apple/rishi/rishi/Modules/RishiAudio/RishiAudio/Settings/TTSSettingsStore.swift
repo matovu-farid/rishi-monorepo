@@ -8,7 +8,15 @@ import Foundation
 public protocol TTSSettingsStore: Sendable {
     func load(userId: UserID) async -> TTSSettings
     func save(_ settings: TTSSettings, userId: UserID) async
+    func save(_ settings: TTSSettings, userId: UserID, lease: any TTSMutationLease) async
     func remove(userId: UserID) async
+}
+
+public extension TTSSettingsStore {
+    func save(_ settings: TTSSettings, userId: UserID, lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await save(settings, userId: userId)
+    }
 }
 
 // MARK: - UserDefaults impl
@@ -48,6 +56,11 @@ public final class UserDefaultsTTSSettingsStore: TTSSettingsStore, @unchecked Se
         ])
     }
 
+    public func save(_ settings: TTSSettings, userId: UserID, lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await save(settings, userId: userId)
+    }
+
     public func remove(userId: UserID) async {
         defaults.removeObject(forKey: Self.key(for: userId))
     }
@@ -69,6 +82,11 @@ public actor InMemoryTTSSettingsStore: TTSSettingsStore {
     }
 
     public func save(_ settings: TTSSettings, userId: UserID) async {
+        values[userId] = settings
+    }
+
+    public func save(_ settings: TTSSettings, userId: UserID, lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
         values[userId] = settings
     }
 

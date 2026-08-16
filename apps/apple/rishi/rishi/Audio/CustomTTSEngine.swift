@@ -138,8 +138,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                         "textLen": String(piece.count),
                         "textPrefix": piecePrefix,
                     ])
-                    await player.start(request: request)
-                    try await player.waitUntilFinished()
+                    let lease = TTSAlwaysValidLease()
+                    await player.start(request: request, lease: lease)
+                    try await player.waitUntilFinished(lease: lease)
                 }
                 try Task.checkCancellation()
             } onCancel: {
@@ -215,7 +216,8 @@ private actor CancellationStopGate {
 
     func startIfNeeded(using player: any TTSPlaying) {
         guard stopTask == nil, let currentTokens else { return }
-        stopTask = Task { await player.stop(ifCurrent: currentTokens) }
+        let lease = TTSAlwaysValidLease()
+        stopTask = Task { await player.stop(ifCurrent: currentTokens, lease: lease) }
     }
 
     func wait(using player: any TTSPlaying) async {

@@ -116,6 +116,7 @@ final class ReadAloudController {
     private var firstUtteranceGeneration: UInt64?
     var onFirstUtteranceFinished: (@MainActor () -> Void)?
     var onFirstUtteranceFailed: (@MainActor () -> Void)?
+    var onPlaybackSessionInvalidated: (@MainActor () -> Void)?
     private var keyboardParagraphNavigationTask: Task<Void, Never>?
     private var keyboardParagraphNavigationGeneration: UInt64 = 0
     private var keyboardParagraphNavigationTaskID: UInt64 = 0
@@ -294,7 +295,12 @@ final class ReadAloudController {
         synthesizer.start(from: startLocator)
     }
 
-    func stop(preservingPosition: Bool) async {
+    func stop(
+        preservingPosition: Bool,
+        lease: RemoteCommandLease? = nil
+    ) async {
+        guard lease?.isValid ?? true else { return }
+        onPlaybackSessionInvalidated?()
         let stoppingGeneration = playbackGeneration
         let stoppingSessionToken = playbackSessionToken
         let resumeLocator = preservingPosition ? currentLocator : nil
@@ -328,7 +334,8 @@ final class ReadAloudController {
         guard playbackGeneration == stoppingGeneration &+ 1,
               ownsStoppingSession
         else { return }
-        await stopCurrentPlayback()
+        await stopCurrentPlayback(lease: lease)
+        guard lease?.isValid ?? true else { return }
         // teardownPlaybackSession may have suspended while a replacement
         // session claimed the shared state. Never end that replacement's
         // presence from the older stop path.
@@ -343,8 +350,8 @@ final class ReadAloudController {
         currentLocator = nil
     }
 
-    func stop() async {
-        await stop(preservingPosition: true)
+    func stop(lease: RemoteCommandLease? = nil) async {
+        await stop(preservingPosition: true, lease: lease)
     }
 
     /// Whether speech is in flight (Readium utterance or legacy bridge).
@@ -357,6 +364,10 @@ final class ReadAloudController {
         if case .playing = readiumState, !isReadiumPlaybackPaused { return true }
         if bridge != nil, ttsState.status == .playing { return true }
         return false
+    }
+
+    var hasActivePlaybackSession: Bool {
+        playbackSessionToken != nil || readiumSynthesizer != nil || bridge != nil
     }
 
     /// Starts a user-navigation intent and snapshots spoken state for that swipe.
@@ -467,22 +478,24 @@ final class ReadAloudController {
         acceptsReadAloudPositionUpdates = true
     }
 
-    func togglePlayback() async {
+    func togglePlayback(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         if readiumSynthesizer != nil {
             if isReadiumPlaybackPaused {
-                await resumeReadiumPlayback()
+                await resumeReadiumPlayback(lease: lease)
             } else if case .playing = readiumState {
-                await pauseReadiumPlayback()
+                await pauseReadiumPlayback(lease: lease)
             }
         } else if let bridge {
             if ttsState.status == .playing {
                 isPageEntryPrefetchEligible = true
-                await bridge.pause()
+                await bridge.pause(lease: lease)
             } else {
                 isPageEntryPrefetchEligible = false
-                await bridge.resume()
+                await bridge.resume(lease: lease)
             }
         }
+        guard lease?.isValid ?? true else { return }
         if ttsState.status == .paused {
             wantsAutoResumeAfterVoice = false
         }
@@ -538,21 +551,25 @@ final class ReadAloudController {
         }
     }
 
-    private func pauseReadiumPlayback() async {
+    private func pauseReadiumPlayback(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         guard !isReadiumPlaybackPaused,
               case .playing = readiumState
         else { return }
 
-        await ttsEngine.pause()
+        await ttsEngine.pause(lease: lease ?? TTSAlwaysValidLease())
+        guard lease?.isValid ?? true else { return }
         isReadiumPlaybackPaused = true
         isPageEntryPrefetchEligible = true
         ttsState.update(status: .paused)
     }
 
-    private func resumeReadiumPlayback() async {
+    private func resumeReadiumPlayback(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         guard isReadiumPlaybackPaused else { return }
 
-        await ttsEngine.resume()
+        await ttsEngine.resume(lease: lease ?? TTSAlwaysValidLease())
+        guard lease?.isValid ?? true else { return }
         isReadiumPlaybackPaused = false
         isPageEntryPrefetchEligible = false
         ttsState.update(status: .playing)
@@ -565,19 +582,21 @@ final class ReadAloudController {
         await coordinator.requestActiveMode(.tts)
     }
 
-    func previous() async {
+    func previous(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         if let readiumSynthesizer {
             readiumSynthesizer.previous()
         } else {
-            await bridge?.previous()
+            await bridge?.previous(lease: lease)
         }
     }
 
-    func next() async {
+    func next(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         if let readiumSynthesizer {
             readiumSynthesizer.next()
         } else {
-            await bridge?.next()
+            await bridge?.next(lease: lease)
         }
     }
 
@@ -590,25 +609,36 @@ final class ReadAloudController {
         }
     }
 
-    func applySettings(_ settings: TTSSettings) async {
+    func applySettings(_ settings: TTSSettings, lease: RemoteCommandLease? = nil) async {
+        let mutationLease: any TTSMutationLease = lease ?? TTSAlwaysValidLease()
+        guard mutationLease.isValid else { return }
+        await ttsSettingsStore.save(settings, userId: userId, lease: mutationLease)
+        guard mutationLease.isValid else { return }
         pickerInitial = settings
-        await ttsSettingsStore.save(settings, userId: userId)
+        guard mutationLease.isValid else { return }
         readiumSynthesizer?.config.voiceIdentifier = settings.voice
         await readiumPrefetcher?.stop()
+        guard mutationLease.isValid else { return }
         await ttsPresence.updatePlaybackSettings(
             voice: settings.voice,
             model: settings.model,
             speed: settings.speed
         )
+        guard mutationLease.isValid else { return }
     }
 
     /// Applies a speed selected by a system media surface. Keep this guard in
     /// the reader as well as in the command surface so invalid direct callers
     /// cannot persist unsupported values.
-    func applyPlaybackRate(_ rate: Double) async {
+    func applyPlaybackRate(_ rate: Double, lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         guard TTSSettings.speedPresets.contains(where: { abs($0 - rate) < 0.0001 }) else { return }
         guard abs(pickerInitial.speed - rate) >= 0.0001 else { return }
-        await applySettings(TTSSettings(voice: pickerInitial.voice, model: pickerInitial.model, speed: rate))
+        await applySettings(
+            TTSSettings(voice: pickerInitial.voice, model: pickerInitial.model, speed: rate),
+            lease: lease
+        )
+        guard lease?.isValid ?? true else { return }
     }
 
     func start(
@@ -759,7 +789,11 @@ final class ReadAloudController {
         currentParagraph = paragraphs[index]
     }
 
-    private func teardownPlaybackSession(preservingFailure: Bool = false) async {
+    private func teardownPlaybackSession(
+        preservingFailure: Bool = false,
+        lease: RemoteCommandLease? = nil
+    ) async {
+        guard lease?.isValid ?? true else { return }
         playbackTeardownDepth += 1
         defer { playbackTeardownDepth -= 1 }
 
@@ -771,6 +805,7 @@ final class ReadAloudController {
         // to return before stopping the bridge so an old request cannot resume
         // and publish `.playing` after this teardown or a replacement session.
         await inFlightKeyboardNavigation?.value
+        guard lease?.isValid ?? true else { return }
 
         let ownedSessionToken = playbackSessionToken
         let ownsSharedSession = ownedSessionToken.map {
@@ -791,9 +826,10 @@ final class ReadAloudController {
         lastPlayingLocator = nil
         lastPlayingUtteranceText = nil
         if let bridge {
-            await bridge.stop()
+            await bridge.stop(lease: lease)
             self.bridge = nil
         }
+        guard lease?.isValid ?? true else { return }
         if ownsSharedSession {
             readiumSynthesizer?.stop()
         }
@@ -815,8 +851,8 @@ final class ReadAloudController {
         await coordinator.releaseActiveMode(.tts)
     }
 
-    private func stopCurrentPlayback() async {
-        await teardownPlaybackSession()
+    private func stopCurrentPlayback(lease: RemoteCommandLease? = nil) async {
+        await teardownPlaybackSession(lease: lease)
     }
 
     private func handleTypedAllowanceFailure(
@@ -1090,6 +1126,11 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
 }
 
 extension ReadAloudController: TTSPlaybackControlling {
+    @MainActor
+    func stop() async {
+        await stop(lease: nil)
+    }
+
     @MainActor
     func pause() async {
         guard ttsState.status == .playing || isActivelySpeaking else { return }

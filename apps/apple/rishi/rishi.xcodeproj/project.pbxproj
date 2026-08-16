@@ -23,6 +23,10 @@
 		D10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* ReadiumZIPFoundation */; };
 		D10000000000000000000010 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000010 /* GoogleSignIn */; };
 		D10000000000000000000011 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000011 /* GoogleSignInSwift */; };
+		E10000000000000000000001 /* RishiWatchShared in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000001 /* RishiWatchShared */; };
+		E10000000000000000000002 /* RishiWatchShared in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000001 /* RishiWatchShared */; };
+		E10000000000000000000003 /* RishiWatchShared in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000001 /* RishiWatchShared */; };
+		E10000000000000000000004 /* RishiWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E46000000000000000000001 /* RishiWatch.app */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,7 +44,28 @@
 			remoteGlobalIDString = 092254932FD83183008C5ADE;
 			remoteInfo = rishi;
 		};
+		E51000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0922548C2FD83183008C5ADE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E41000000000000000000001;
+			remoteInfo = RishiWatch;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		E49000000000000000000001 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				E10000000000000000000004 /* RishiWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		092254942FD83183008C5ADE /* rishi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rishi.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -50,6 +75,7 @@
 		1A1111202FD83183008C5ADE /* TTSPresenceWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSPresenceWidgetBundle.swift; sourceTree = "<group>"; };
 		1A1111212FD83183008C5ADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A1111222FD83183008C5ADE /* TTSPresenceWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TTSPresenceWidget.entitlements; sourceTree = "<group>"; };
+		E46000000000000000000001 /* RishiWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RishiWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -82,6 +108,11 @@
 			path = rishiUITests;
 			sourceTree = "<group>";
 		};
+		E47000000000000000000001 /* watch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = watch;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +131,7 @@
 				C10000000000000000000009 /* LiveKitWebRTC in Frameworks */,
 				D10000000000000000000010 /* GoogleSignIn in Frameworks */,
 				D10000000000000000000011 /* GoogleSignInSwift in Frameworks */,
+				E10000000000000000000001 /* RishiWatchShared in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -111,6 +143,7 @@
 				D10000000000000000000002 /* ReadiumNavigator in Frameworks */,
 				D10000000000000000000005 /* ReadiumZIPFoundation in Frameworks */,
 				BBB28AB44A15558BFB39403C /* PropertyBased in Frameworks */,
+				E10000000000000000000002 /* RishiWatchShared in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +151,14 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E43000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E10000000000000000000003 /* RishiWatchShared in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,6 +172,7 @@
 				092254962FD83183008C5ADE /* rishi */,
 				092254A62FD83186008C5ADE /* rishiTests */,
 				092254B02FD83186008C5ADE /* rishiUITests */,
+				E47000000000000000000001 /* watch */,
 				1A1111102FD83183008C5ADE /* TTSPresenceWidget */,
 				09B561A42FF1256400972BA3 /* Frameworks */,
 				092254952FD83183008C5ADE /* Products */,
@@ -143,6 +185,7 @@
 				092254942FD83183008C5ADE /* rishi.app */,
 				092254A32FD83186008C5ADE /* rishiTests.xctest */,
 				092254AD2FD83186008C5ADE /* rishiUITests.xctest */,
+				E46000000000000000000001 /* RishiWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -175,10 +218,12 @@
 				092254902FD83183008C5ADE /* Sources */,
 				092254912FD83183008C5ADE /* Frameworks */,
 				092254922FD83183008C5ADE /* Resources */,
+				E49000000000000000000001 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				E52000000000000000000001 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				092254962FD83183008C5ADE /* rishi */,
@@ -196,6 +241,7 @@
 				B10000000000000000000009 /* LiveKitWebRTC */,
 				B10000000000000000000010 /* GoogleSignIn */,
 				B10000000000000000000011 /* GoogleSignInSwift */,
+				E20000000000000000000001 /* RishiWatchShared */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -223,6 +269,7 @@
 				B10000000000000000000002 /* ReadiumNavigator */,
 				B10000000000000000000005 /* ReadiumZIPFoundation */,
 				4FA89280AD0D00847DBD767F /* PropertyBased */,
+				E20000000000000000000001 /* RishiWatchShared */,
 			);
 			productName = rishiTests;
 			productReference = 092254A32FD83186008C5ADE /* rishiTests.xctest */;
@@ -249,6 +296,29 @@
 			productReference = 092254AD2FD83186008C5ADE /* rishiUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		E41000000000000000000001 /* RishiWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E45000000000000000000001 /* Build configuration list for PBXNativeTarget "RishiWatch" */;
+			buildPhases = (
+				E42000000000000000000001 /* Sources */,
+				E43000000000000000000001 /* Frameworks */,
+				E44000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				E47000000000000000000001 /* watch */,
+			);
+			name = RishiWatch;
+			packageProductDependencies = (
+				E20000000000000000000001 /* RishiWatchShared */,
+			);
+			productName = RishiWatch;
+			productReference = E46000000000000000000001 /* RishiWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -270,6 +340,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 092254932FD83183008C5ADE;
 					};
+					E41000000000000000000001 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 0922548F2FD83183008C5ADE /* Build configuration list for PBXProject "rishi" */;
@@ -290,6 +363,7 @@
 				A10000000000000000000006 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
 				409EA85688A9CBA8B4DFA13A /* XCRemoteSwiftPackageReference "swift-property-based" */,
 				A10000000000000000000007 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				E30000000000000000000001 /* XCLocalSwiftPackageReference "../RishiWatchShared" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 092254952FD83183008C5ADE /* Products */;
@@ -299,6 +373,7 @@
 				092254932FD83183008C5ADE /* rishi */,
 				092254A22FD83186008C5ADE /* rishiTests */,
 				092254AC2FD83186008C5ADE /* rishiUITests */,
+				E41000000000000000000001 /* RishiWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -320,6 +395,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		092254AB2FD83186008C5ADE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E44000000000000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -373,6 +455,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E42000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -385,6 +474,12 @@
 			isa = PBXTargetDependency;
 			target = 092254932FD83183008C5ADE /* rishi */;
 			targetProxy = 092254AE2FD83186008C5ADE /* PBXContainerItemProxy */;
+		};
+		E52000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = E41000000000000000000001 /* RishiWatch */;
+			targetProxy = E51000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -450,6 +545,7 @@
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_INCLUDE_PATHS = "$(inherited) $(BUILD_DIR)/../../RishiWatchShared/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -508,6 +604,7 @@
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_INCLUDE_PATHS = "$(inherited) $(BUILD_DIR)/../../RishiWatchShared/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -531,12 +628,13 @@
 				GOOGLE_SERVER_CLIENT_ID = "127421659754-dp421g459b4n471vgo2rb8qml3hmp90s.apps.googleusercontent.com";
 				INFOPLIST_FILE = rishi/Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Audio is sent to OpenAI during active voice conversations.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Rishi can save book covers to your Photo Library.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Rishi uses on-device speech recognition to detect when you start speaking during voice chat setup.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -588,12 +686,13 @@
 				GOOGLE_SERVER_CLIENT_ID = "127421659754-dp421g459b4n471vgo2rb8qml3hmp90s.apps.googleusercontent.com";
 				INFOPLIST_FILE = rishi/Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Rishi uses camera features provided by its voice communication framework when video input is enabled.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Rishi uses your microphone to let you talk with the AI about the book you are reading. Audio is only sent during a conversation.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Audio is sent to OpenAI during active voice conversations.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Rishi can save book covers to your Photo Library.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Rishi uses on-device speech recognition to detect when you start speaking during voice chat setup.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -712,6 +811,49 @@
 			};
 			name = Release;
 		};
+		E45100000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = watch/RishiWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 63;
+				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = org.fidexa.rishi;
+				MARKETING_VERSION = 2.1.5;
+				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		E45200000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = watch/RishiWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 63;
+				DEVELOPMENT_TEAM = 9VL7VRY6QZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = org.fidexa.rishi;
+				MARKETING_VERSION = 2.1.5;
+				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -751,7 +893,23 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		E45000000000000000000001 /* Build configuration list for PBXNativeTarget "RishiWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E45100000000000000000001 /* Debug */,
+				E45200000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		E30000000000000000000001 /* XCLocalSwiftPackageReference "../RishiWatchShared" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../RishiWatchShared;
+		};
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		409EA85688A9CBA8B4DFA13A /* XCRemoteSwiftPackageReference "swift-property-based" */ = {
@@ -882,6 +1040,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000007 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
+		};
+		E20000000000000000000001 /* RishiWatchShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E30000000000000000000001 /* XCLocalSwiftPackageReference "../RishiWatchShared" */;
+			productName = RishiWatchShared;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

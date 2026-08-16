@@ -87,6 +87,7 @@ struct ReaderDestination: View {
     let onRequestPaywall: (String) -> Void
     let startReaderTour: Bool
     let pdfViewMode: Binding<PDFViewModeSetting>?
+    let readerWindowCloseHandle: ReaderWindowCloseHandle?
 
     @State private var readAloudStartTask: Task<Void, Never>?
     @State private var readAloudStartRequest = UUID()
@@ -112,7 +113,8 @@ struct ReaderDestination: View {
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void,
         startReaderTour: Bool = false,
-        pdfViewMode: Binding<PDFViewModeSetting>? = nil
+        pdfViewMode: Binding<PDFViewModeSetting>? = nil,
+        readerWindowCloseHandle: ReaderWindowCloseHandle? = nil
     ) {
         let peeked = dependencies.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? dependencies.readerDefaults.theme
@@ -124,6 +126,7 @@ struct ReaderDestination: View {
         self.onRequestPaywall = onRequestPaywall
         self.startReaderTour = startReaderTour
         self.pdfViewMode = pdfViewMode
+        self.readerWindowCloseHandle = readerWindowCloseHandle
         let tour = startReaderTour ? ReaderOnboardingTourCoordinator() : nil
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: dependencies.voicePresenter,
@@ -168,6 +171,17 @@ struct ReaderDestination: View {
             }
         )
         .task {
+#if targetEnvironment(macCatalyst)
+            if let readerWindowCloseHandle {
+                let playbackOwner = dependencies.playbackOwner
+                let voiceEntry = voiceEntry
+                let host = readAloudHost
+                readerWindowCloseHandle.register {
+                    await playbackOwner.stop(host: host)
+                    await voiceEntry.endForReader()
+                }
+            }
+#endif
 
             if startReaderTour {
                 dependencies.voicePresenter.prewarmVoiceChat(for: vm.book.id, userID: userId)
@@ -233,9 +247,13 @@ struct ReaderDestination: View {
 
             Task { @MainActor [voicePresenter = dependencies.voicePresenter, viewModel = vm] in
                 voicePresenter.cancelPrewarm()
+#if !targetEnvironment(macCatalyst)
                 await voicePresenter.parkSession()
+#endif
                 await viewModel.flush()
+#if !targetEnvironment(macCatalyst)
                 await dependencies.playbackOwner.release(host: readAloudHost)
+#endif
                 readAloud = nil
             }
         }

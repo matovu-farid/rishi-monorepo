@@ -1,5 +1,18 @@
 import Foundation
 
+public protocol TTSMutationLease: Sendable {
+    var isValid: Bool { get }
+}
+
+public struct TTSAlwaysValidLease: TTSMutationLease, Sendable {
+    public init() {}
+    public var isValid: Bool { true }
+}
+
+public struct TTSPlaybackRevokedError: Error, Sendable, Equatable {
+    public init() {}
+}
+
 /// Testability seam at the top of the TTS pipeline (Phase 29, 29-RESEARCH §2).
 ///
 /// `ReaderTTSBridge` consumes exactly this four-method subset of `TTSEngine`'s
@@ -24,11 +37,52 @@ public protocol TTSPlaying: Sendable {
     /// - Throws on failure, stop, or finish-without-start.
     /// - Safe if finish happens before this call (pending result).
     func waitUntilFinished() async throws
+
+    /// Lease-aware entry points used by remote/system control paths. The
+    /// legacy methods remain available to existing local playback orchestration;
+    /// all Watch-originated mutations use these guarded forms.
+    func start(request: TTSStreamRequest, lease: any TTSMutationLease) async
+    func pause(lease: any TTSMutationLease) async
+    func resume(lease: any TTSMutationLease) async
+    func stop(lease: any TTSMutationLease) async
+    func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot, lease: any TTSMutationLease) async
+    func waitUntilFinished(lease: any TTSMutationLease) async throws
 }
 
 public extension TTSPlaying {
     func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot) async {
         _ = tokens
         await stop()
+    }
+
+    func start(request: TTSStreamRequest, lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await start(request: request)
+    }
+
+    func pause(lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await pause()
+    }
+
+    func resume(lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await resume()
+    }
+
+    func stop(lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await stop()
+    }
+
+    func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot, lease: any TTSMutationLease) async {
+        guard lease.isValid else { return }
+        await stop(ifCurrent: tokens)
+    }
+
+    func waitUntilFinished(lease: any TTSMutationLease) async throws {
+        guard lease.isValid else { throw TTSPlaybackRevokedError() }
+        try await waitUntilFinished()
+        guard lease.isValid else { throw TTSPlaybackRevokedError() }
     }
 }

@@ -507,6 +507,14 @@ enum ServiceGraphFactory {
             await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .launch)
         }
 
+        let spotlightCoordinator = RishiSpotlightCoordinator(
+            bookStore: bookStore,
+            highlightStore: highlightStore,
+            conversationStore: conversationStore,
+            currentUserID: { await userIdBox.value },
+            indexingClient: RishiCoreSpotlightIndexingClient()
+        )
+
         return BootstrappedServices(
             workerClient: workerClient,
             dataUseConsentStore: dataUseConsentStore,
@@ -585,6 +593,7 @@ enum ServiceGraphFactory {
                 trialState: trialOnboardingState,
                 coordinator: onboardingCoordinator
             ),
+            systemIntegration: SystemIntegrationRuntime(spotlight: spotlightCoordinator),
         )
     }
 

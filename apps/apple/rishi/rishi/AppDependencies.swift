@@ -18,6 +18,11 @@ import Observation
 
 import SwiftUI
 
+extension Notification.Name {
+    static let rishiAccountDidChange = Notification.Name("rishi.account.didChange")
+    static let rishiAccountTransitionStarted = Notification.Name("rishi.account.transitionStarted")
+}
+
 @MainActor
 @Observable
 final class AppDependencies {
@@ -25,10 +30,14 @@ final class AppDependencies {
     @MainActor static let shared = AppDependencies()
 
     private(set) var services: BootstrappedServices?
-    private(set) var accountGeneration: UInt64 = 0
+    nonisolated private static let accountGenerationKey = "rishi.account.generation"
+    private(set) var accountGeneration: UInt64 =
+        (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
 
     private var bootstrapTask: Task<Void, Never>?
     private var identityRequestToken: UInt64 = 0
+    var pendingAccountChange: AccountChangeTransaction?
+    private var synchronousAccountTransitionFence: (@MainActor () -> Void)?
     private var carPlayAccountChangeObservers: [UUID: (CarPlayAccountSnapshot?) -> Void] = [:]
 
     nonisolated private static let signposter = OSSignposter(
@@ -40,16 +49,7 @@ final class AppDependencies {
 
     let macAccountMenu = MacAccountMenuModel()
 
-    var cachedUserId: UUID? {
-        get { userIdBox.value }
-        set {
-            guard userIdBox.value != newValue else { return }
-            identityRequestToken &+= 1
-            incrementAccountGeneration()
-            userIdBox.value = newValue
-            notifyCarPlayAccountChange()
-        }
-    }
+    var cachedUserId: UUID? { userIdBox.value }
 
     public let userIdBox = UserIdBox()
 
@@ -63,33 +63,82 @@ final class AppDependencies {
         _backgroundSyncLifecycle
     }
 
-    nonisolated init() {
+    nonisolated init() {}
+    @discardableResult
+    func replaceUserId(
+        _ newValue: UUID?,
+        allowDeferredCleanup: Bool = false,
+        forceTransition: Bool = false,
+        skipAccountFence: Bool = false
+    ) async -> Bool {
+        guard forceTransition || userIdBox.value != newValue else { return true }
+        let transaction: AccountChangeTransaction?
+        if skipAccountFence {
+            transaction = nil
+        } else {
+            transaction = try? beginAccountChange()
+            pendingAccountChange = nil
+        }
+        let requestToken = identityRequestToken
+        await transaction?.drain.value
 
-    }
-    func setUserId(_ userId: UUID){
-        guard userIdBox.value != userId else { return }
-        identityRequestToken &+= 1
-        incrementAccountGeneration()
-        self.userIdBox.setUserId(value: userId)
-        notifyCarPlayAccountChange()
+        guard let spotlight = services?.systemIntegration.spotlight else {
+            guard identityRequestToken == requestToken else { return false }
+            userIdBox.value = newValue
+            notifyCarPlayAccountChange()
+            return true
+        }
+
+        let result = await spotlight.transitionAccount {
+            guard self.identityRequestToken == requestToken else { return false }
+            if let newValue {
+                guard (try? await RishiAppIntentRuntime.validatedPersistedIdentity()) == newValue,
+                      self.identityRequestToken == requestToken else { return false }
+            }
+            self.userIdBox.value = newValue
+            self.notifyCarPlayAccountChange()
+            return true
+        }
+        return result.identityApplied
+            && (result.cleanupComplete || allowDeferredCleanup)
     }
 
     /// Synchronizes the CarPlay scene with the persisted identity. CarPlay
     /// can connect while the phone app is still alive, so an identity change
     /// must tear down the shared reader before exposing the new account.
-    func synchronizeCarPlayIdentity(_ userID: UUID?) async {
-        guard userIdBox.value != userID else { return }
+    @discardableResult
+    func synchronizeCarPlayIdentity(_ userID: UUID?) async -> Bool {
+        guard userIdBox.value != userID else { return true }
+        return await replaceUserId(userID)
+    }
+
+    /// Invalidates identity work synchronously, then begins the owner drain.
+    /// The returned transaction is safe to await from a later Task.
+    func beginAccountChange() throws -> AccountChangeTransaction {
+        synchronousAccountTransitionFence?()
         identityRequestToken &+= 1
-        let requestToken = identityRequestToken
         incrementAccountGeneration()
-        await services?.audio.playbackOwner.stopForAccountChange()
-        guard identityRequestToken == requestToken else { return }
-        userIdBox.value = userID
-        notifyCarPlayAccountChange()
+        let services = services
+        let drain = Task { @MainActor in
+            guard let services else { return }
+            await services.audio.playbackOwner.stopForAccountChange()
+        }
+        let transaction = AccountChangeTransaction(
+            expectedAccountGeneration: accountGeneration,
+            drain: drain
+        )
+        pendingAccountChange = transaction
+        return transaction
+    }
+
+    func installSynchronousAccountTransitionFence(
+        _ fence: @escaping @MainActor () -> Void
+    ) {
+        synchronousAccountTransitionFence = fence
     }
 
     func invalidateIdentityRequests() {
-        identityRequestToken &+= 1
+        _ = try? beginAccountChange()
     }
 
     @discardableResult
@@ -110,10 +159,24 @@ final class AppDependencies {
         for observer in carPlayAccountChangeObservers.values {
             observer(snapshot)
         }
+        NotificationCenter.default.post(
+            name: .rishiAccountDidChange,
+            object: self,
+            userInfo: [
+                "generation": NSNumber(value: accountGeneration),
+                "hasAccount": NSNumber(value: userIdBox.value != nil)
+            ]
+        )
     }
 
-    func incrementAccountGeneration() {
+    private func incrementAccountGeneration() {
         accountGeneration &+= 1
+        UserDefaults.standard.set(accountGeneration, forKey: Self.accountGenerationKey)
+        NotificationCenter.default.post(
+            name: .rishiAccountTransitionStarted,
+            object: self,
+            userInfo: ["generation": NSNumber(value: accountGeneration)]
+        )
     }
 
     var carPlayAccountSnapshot: CarPlayAccountSnapshot? {
@@ -174,6 +237,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let settings: SettingsRuntime
     let onboarding: OnboardingRuntime
+    let systemIntegration: SystemIntegrationRuntime
 }
 
 extension BootstrappedServices {
@@ -187,6 +251,7 @@ extension BootstrappedServices {
             },
             purgeLocal: { [self] in
                 var cleanupError: Error?
+                await systemIntegration.spotlight.clearForAccountDeletion()
                 await audio.playbackOwner.stopForAccountChange()
                 await voice.presenter.requestEnd()
                 await sync.engine.resetForAccountSwitch()
@@ -206,7 +271,8 @@ extension BootstrappedServices {
                 await MainActor.run { billing.entitlementReconciler.reset() }
                 if let cleanupError { throw cleanupError }
             },
-            signOut: signOut
+            signOut: signOut,
+            beginAccountChange: { try AppDependencies.shared.beginAccountChange() }
         )
     }
 }
@@ -290,12 +356,6 @@ final class UserIdBox {
 
     nonisolated init(
         _ value: UUID? = nil
-    ) {
-        
-        self.value =  value
-    }
-    func setUserId(
-        value: UUID
     ) {
         
         self.value =  value

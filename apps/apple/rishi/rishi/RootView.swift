@@ -54,6 +54,7 @@ struct RootView: View {
             .environment(
                 \.signOut,
                 {
+                    guard (try? deps.beginAccountChange()) != nil else { return }
                     Task {
                         router.clearReaderTourRequest()
                         deps.services?.voice.presenter.cancelPrewarm()
@@ -78,6 +79,9 @@ struct RootView: View {
             )
             .loadProducts()
             .observeErrors()
+            .onReceive(NotificationCenter.default.publisher(for: .rishiSearchableDataDidChange)) { _ in
+                Task { await deps.services?.systemIntegration.spotlight.requestReindex() }
+            }
             .task {
                 guard case .signedOut = currentUserBox.state else { return }
                 currentUserBox.state = .loading
@@ -85,21 +89,45 @@ struct RootView: View {
                     let uuidUserId = UUID(uuidString: userId)
                 {
 
-                    deps.setUserId(uuidUserId)
                     let workerClient = deps.services!.workerClient
                     do {
-                        let user = try await workerClient.send(
-                            UserGetEndpoint()
+                        guard try await RishiAppIntentRuntime.validatedPersistedIdentity() == uuidUserId else {
+                            throw RishiAppIntentRuntimeError.signedOut
+                        }
+                        let user = try await RishiAppIntentRuntime.validateServerIdentity(
+                            using: workerClient,
+                            userID: uuidUserId
                         )
+                        guard await deps.replaceUserId(uuidUserId) else {
+                            throw RishiAppIntentRuntimeError.unavailable
+                        }
                         currentUserBox.signIn(user: user)
                         await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                             reason: .signIn
                         )
                     } catch {
                         Log.error("root.current_user.bootstrap_failed", error: error)
+                        Keychain.delete(.accessToken)
+                        Keychain.delete(.refreshToken)
+                        Keychain.delete(.userId)
+                        do {
+                            try await KeychainSessionStore().delete()
+                        } catch {
+                            Log.error("root.current_user.session-delete.failed", error: error)
+                        }
+                        _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
                         currentUserBox.state = .signedOut
                     }
                 } else {
+                    Keychain.delete(.accessToken)
+                    Keychain.delete(.refreshToken)
+                    Keychain.delete(.userId)
+                    do {
+                        try await KeychainSessionStore().delete()
+                    } catch {
+                        Log.error("root.current_user.session-delete.failed", error: error)
+                    }
+                    _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
                     currentUserBox.state = .signedOut
                 }
             }

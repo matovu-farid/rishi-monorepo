@@ -17,16 +17,35 @@ extension AppDependencies {
     /// Full sign-out sequence: clear entitlement caches, then reset auth UI state.
     @MainActor
     func performSignOut(currentUserBox: CurrentUserBox) async {
+        // Consume a preflight transaction when the caller created one before
+        // entering a Task; direct callers still receive the same fence here.
+        let transaction = pendingAccountChange ?? (try? beginAccountChange())
+        pendingAccountChange = nil
+        await transaction?.drain.value
+        let hadCurrentAccount = userIdBox.value != nil
+        if hadCurrentAccount {
+            userIdBox.value = nil
+            notifyCarPlayAccountChange()
+        }
         GoogleSignInCoordinator.signOut()
         let outgoing = try? Keychain.load(.userId)
-        invalidateIdentityRequests()
-        incrementAccountGeneration()
-        await services?.audio.playbackOwner.stopForAccountChange()
         await services?.dataUseConsentStore.clearCurrentUser()
         await clearEntitlementState(for: outgoing)
         await services!.sync.engine.resetForAccountSwitch()
-        userIdBox.value = nil
-        notifyCarPlayAccountChange()
+        Keychain.delete(.accessToken)
+        Keychain.delete(.refreshToken)
+        Keychain.delete(.userId)
+        do {
+            try await KeychainSessionStore().delete()
+        } catch {
+            Log.error("auth.signout.session-delete.failed", error: error)
+        }
+        _ = await replaceUserId(
+            nil,
+            allowDeferredCleanup: true,
+            forceTransition: hadCurrentAccount,
+            skipAccountFence: true
+        )
         if let metadataStore = services?.sync.metadataStore as? SwiftDataSyncMetadataStore {
             do {
                 try await metadataStore.resetAll()

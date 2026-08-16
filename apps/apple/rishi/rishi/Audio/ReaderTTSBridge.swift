@@ -77,77 +77,92 @@ final class ReaderTTSBridge {
         }
     }
 
-    func stop() async {
+    func stop(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         
         consumeTask?.cancel()
         consumeTask = nil
         advanceWatcher.cancel()
         await readAhead.cancelAll()
+        guard lease?.isValid ?? true else { return }
         // A reader can be reopened before an older controller finishes its
         // async teardown. Cancel this bridge's work, but never stop the
         // shared engine after a replacement session has claimed ownership.
         if state.ownsPlaybackSession(sessionToken) {
-            await engine.stop()
+            await engine.stop(lease: lease ?? TTSAlwaysValidLease())
         }
+        guard lease?.isValid ?? true else { return }
         await tracker.detach()
         paragraphs = []
         currentIndex = 0
         onPassageChange(nil)
     }
 
-    func pause() async {
+    func pause(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         
         await readAhead.cancelAll()
-        await engine.pause()
+        guard lease?.isValid ?? true else { return }
+        await engine.pause(lease: lease ?? TTSAlwaysValidLease())
+        guard lease?.isValid ?? true else { return }
         state.update(status: .paused)
         
         
     }
-    private func requestActiveMode()async{
+    private func requestActiveMode(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         await coordinator.registerPreemption(for: .tts) { [weak self] in
             await self?.pause()
         }
         await coordinator.registerSuspension(for: .tts) { [weak self] in
             await self?.pause()
         }
+        guard lease?.isValid ?? true else { return }
         await coordinator.requestActiveMode(.tts)
     }
 
-    func resume() async {
-        await requestActiveMode()
-        await engine.resume()
+    func resume(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
+        await requestActiveMode(lease: lease)
+        guard lease?.isValid ?? true else { return }
+        await engine.resume(lease: lease ?? TTSAlwaysValidLease())
+        guard lease?.isValid ?? true else { return }
         state.update(status: .playing)
     }
 
-    func jump(to index: Int) async {
+    func jump(to index: Int, lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         guard index >= 0, index < paragraphs.count else { return }
 
         advanceWatcher.cancel()
         await readAhead.cancelAll()
+        guard lease?.isValid ?? true else { return }
 
         currentIndex = index
         startAdvanceWatcher()
-        await playCurrent()
+        await playCurrent(lease: lease)
     }
     
     var currentState:TTSPlaybackState {
         state
     }
 
-    func next() async {
+    func next(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         if currentIndex + 1 >= paragraphs.count {
 
-            await advanceToNextBatch()
+            await advanceToNextBatch(lease: lease)
         } else {
-            await jump(to: currentIndex + 1)
+            await jump(to: currentIndex + 1, lease: lease)
         }
     }
 
-    func previous() async {
+    func previous(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         if currentIndex == 0 {
-            await retreatToPreviousBatch()
+            await retreatToPreviousBatch(lease: lease)
         } else {
-            await jump(to: currentIndex - 1)
+            await jump(to: currentIndex - 1, lease: lease)
         }
     }
 
@@ -169,10 +184,12 @@ final class ReaderTTSBridge {
         }
     }
 
-    private func playCurrent() async {
+    private func playCurrent(lease: RemoteCommandLease? = nil) async {
+        guard lease?.isValid ?? true else { return }
         guard currentIndex < paragraphs.count else { return }
         let settings = await settingsStore.load(userId: userId)
 
+        guard lease?.isValid ?? true else { return }
         guard currentIndex < paragraphs.count else { return }
         let paragraph = paragraphs[currentIndex]
         let request = TTSStreamRequest(
@@ -193,7 +210,9 @@ final class ReaderTTSBridge {
             model: settings.model,
             speed: settings.speed
         )
-        await engine.start(request: request)
+        guard lease?.isValid ?? true else { return }
+        await engine.start(request: request, lease: lease ?? TTSAlwaysValidLease())
+        guard lease?.isValid ?? true else { return }
         // Engines retain terminal failures. Do not turn a failed request into
         // apparent playback while the bridge is awaiting its completion.
         if state.typedFailure == nil, state.status != .error {
@@ -213,31 +232,36 @@ final class ReaderTTSBridge {
     }
 
     @discardableResult
-    private func advanceToNextBatch() async -> Bool {
+    private func advanceToNextBatch(lease: RemoteCommandLease? = nil) async -> Bool {
+        guard lease?.isValid ?? true else { return false }
         advanceWatcher.cancel()
         await readAhead.cancelAll()
+        guard lease?.isValid ?? true else { return false }
         let next = await onParagraphsExhausted()
+        guard lease?.isValid ?? true else { return false }
         guard !next.isEmpty else {
-            await stop()
+            await stop(lease: lease)
             return false
         }
         paragraphs = next
         currentIndex = 0
         startAdvanceWatcher()
-        await playCurrent()
+        await playCurrent(lease: lease)
         return true
     }
 
     @discardableResult
-    private func retreatToPreviousBatch() async -> Bool {
+    private func retreatToPreviousBatch(lease: RemoteCommandLease? = nil) async -> Bool {
+        guard lease?.isValid ?? true else { return false }
         let previous = await onParagraphsBeforeStart()
+        guard lease?.isValid ?? true else { return false }
         guard !previous.isEmpty else { return false }
         advanceWatcher.cancel()
         await readAhead.cancelAll()
         paragraphs = previous
         currentIndex = previous.count - 1
         startAdvanceWatcher()
-        await playCurrent()
+        await playCurrent(lease: lease)
         return true
     }
 }

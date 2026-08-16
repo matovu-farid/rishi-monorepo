@@ -81,6 +81,15 @@ struct rishiApp: App {
                         appDelegate.dependencies = deps
                     #endif
                     await deps.bootstrap()
+                    #if os(iOS) && canImport(WatchConnectivity)
+                    if let owner = deps.services?.audio.playbackOwner {
+                        appDelegate.attachWatchServices(
+                            owner,
+                            accountGeneration: deps.accountGeneration,
+                            hasAccount: deps.cachedUserId != nil
+                        )
+                    }
+                    #endif
                     await refreshEntitlementSnapshot(reason: .launch)
                 }
                 .task {
@@ -112,7 +121,16 @@ struct rishiApp: App {
                     await deps.services?.voice.presenter.requestEnd()
                 }
             case .active:
-                Task { await refreshEntitlementSnapshot(reason: .foreground) }
+                Task { @MainActor in
+                    #if os(iOS) && canImport(WatchConnectivity)
+                    appDelegate.refreshWatchAccountState(
+                        generation: deps.accountGeneration,
+                        hasAccount: deps.cachedUserId != nil
+                    )
+                    #endif
+                    await deps.services?.systemIntegration.spotlight.requestReindex()
+                    await refreshEntitlementSnapshot(reason: .foreground)
+                }
             default:
                 break
             }
@@ -183,8 +201,22 @@ struct rishiApp: App {
         weak var dependencies: AppDependencies? {
             didSet {
                 registerBackgroundSyncIfNeeded()
+                #if os(iOS) && canImport(WatchConnectivity)
+                dependencies?.installSynchronousAccountTransitionFence { [weak self] in
+                    self?.watchPlaybackBridge?.invalidateForAccountChange()
+                    self?.watchConnectivityCoordinator?.clearPublishedSnapshot()
+                }
+                #endif
             }
         }
+
+        #if os(iOS) && canImport(WatchConnectivity)
+        private var watchConnectivityCoordinator: WatchConnectivityCoordinator?
+        private var watchConnectivityAdapter: WatchConnectivityDelegateAdapter?
+        private var watchPlaybackBridge: WatchPlaybackBridge?
+        private var watchAccountChangeObserver: NSObjectProtocol?
+        private var watchAccountTransitionObserver: NSObjectProtocol?
+        #endif
 
         private func registerBackgroundSyncIfNeeded() {
             guard !backgroundSyncRegistered, let dependencies else { return }
@@ -207,6 +239,37 @@ struct rishiApp: App {
                 .LaunchOptionsKey: Any]? = nil
         ) -> Bool {
 
+            #if os(iOS) && canImport(WatchConnectivity)
+            let coordinator = WatchConnectivityCoordinator()
+            watchConnectivityCoordinator = coordinator
+            watchConnectivityAdapter = WatchConnectivityDelegateAdapter(coordinator: coordinator)
+            watchAccountChangeObserver = NotificationCenter.default.addObserver(
+                forName: .rishiAccountDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let generation = (notification.userInfo?["generation"] as? NSNumber)?.uint64Value ?? 0
+                let hasAccount = (notification.userInfo?["hasAccount"] as? NSNumber)?.boolValue ?? false
+                Task { @MainActor [weak self] in
+                    self?.refreshWatchAccountState(generation: generation, hasAccount: hasAccount)
+                }
+            }
+            watchAccountTransitionObserver = NotificationCenter.default.addObserver(
+                forName: .rishiAccountTransitionStarted,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, let bridge = self.watchPlaybackBridge else { return }
+                    if let snapshot = bridge.redactedSnapshotForCurrentClient() {
+                        self.watchConnectivityCoordinator?.publish(snapshot: snapshot)
+                    } else {
+                        self.watchConnectivityCoordinator?.clearPublishedSnapshot()
+                    }
+                }
+            }
+            #endif
+
             registerBackgroundSyncIfNeeded()
 
             UNUserNotificationCenter.current().delegate = self
@@ -218,6 +281,62 @@ struct rishiApp: App {
             }
             return true
         }
+
+        #if os(iOS) && canImport(WatchConnectivity)
+        @MainActor
+        func attachWatchServices(
+            _ owner: ReadAloudPlaybackOwner,
+            accountGeneration: UInt64,
+            hasAccount: Bool
+        ) {
+            guard let watchConnectivityCoordinator else { return }
+            let bridge = WatchPlaybackBridge(owner: owner)
+            do {
+                if hasAccount {
+                    try bridge.installVerifiedMarker(minimumAccountGeneration: accountGeneration)
+                } else {
+                    bridge.invalidateForAccountChange()
+                }
+                watchPlaybackBridge = bridge
+                watchConnectivityCoordinator.attach(handler: bridge)
+            } catch {
+                // Fail closed but keep the bridge attached. A later account
+                // event or foreground bootstrap can retry marker installation.
+                bridge.invalidateForAccountChange()
+                watchPlaybackBridge = bridge
+                watchConnectivityCoordinator.attach(handler: bridge)
+            }
+        }
+
+        @MainActor
+        func refreshWatchAccountState(generation: UInt64, hasAccount: Bool) {
+            guard let bridge = watchPlaybackBridge else { return }
+            guard hasAccount else {
+                bridge.invalidateForAccountChange()
+                if let snapshot = bridge.redactedSnapshotForCurrentClient() {
+                    watchConnectivityCoordinator?.publish(snapshot: snapshot)
+                } else {
+                    watchConnectivityCoordinator?.clearPublishedSnapshot()
+                }
+                return
+            }
+            do {
+                try bridge.installVerifiedMarker(minimumAccountGeneration: generation)
+                if let snapshot = bridge.redactedSnapshotForCurrentClient() {
+                    watchConnectivityCoordinator?.publish(snapshot: snapshot)
+                } else {
+                    watchConnectivityCoordinator?.clearPublishedSnapshot()
+                }
+            } catch {
+                bridge.invalidateForAccountChange()
+                if let snapshot = bridge.redactedSnapshotForCurrentClient() {
+                    watchConnectivityCoordinator?.publish(snapshot: snapshot)
+                } else {
+                    watchConnectivityCoordinator?.clearPublishedSnapshot()
+                }
+            }
+        }
+        #endif
 
         #if os(iOS) && canImport(CarPlay)
         func application(
