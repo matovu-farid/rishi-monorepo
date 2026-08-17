@@ -302,6 +302,25 @@ struct VoiceSessionPresenterParkTests {
         #expect(presenter.isPresenting == false)
     }
 
+    @Test("reader identity guards live and parked session teardown")
+    func readerIdentityGuardsEnd() async {
+        let client = ParkTestRealtimeClient()
+        let presenter = makePresenter(client: client)
+        let currentReader = ReaderSessionIdentity()
+        let otherReader = ReaderSessionIdentity()
+
+        await presenter.start(bookId: UUID(), readerSessionIdentity: currentReader)
+        await presenter.requestEnd(readerSessionIdentity: otherReader)
+        #expect(presenter.getSession() != nil)
+
+        await presenter.parkSession()
+        await presenter.requestEnd(readerSessionIdentity: otherReader)
+        #expect(presenter.getSession() != nil)
+
+        await presenter.requestEnd(readerSessionIdentity: currentReader)
+        #expect(presenter.getSession() == nil)
+    }
+
     @Test("terminal allowance failure closes voice chrome and prepares upgrade alert")
     func terminalAllowanceFailureClosesChromeAndPreparesUpgradeAlert() async {
         let terminalCallback = TerminalCallbackBox()

@@ -3,6 +3,30 @@ import Foundation
 
 import SwiftUI
 
+@MainActor
+final class ReaderWindowCloseHandle {
+    private var action: (@MainActor () async -> Void)?
+    private var didClose = false
+
+    func register(_ action: @escaping @MainActor () async -> Void) {
+        guard !didClose else {
+            Task { @MainActor in
+                await action()
+            }
+            return
+        }
+        self.action = action
+    }
+
+    func close() async {
+        guard !didClose else { return }
+        didClose = true
+        let action = self.action
+        self.action = nil
+        await action?()
+    }
+}
+
 #if targetEnvironment(macCatalyst)
 
 /// Stable identity for a Catalyst reader window. The account is part of the
@@ -75,6 +99,7 @@ final class ReaderWindowCoordinator {
 
     private var openWindowAction: OpenWindowAction?
     private var closeWindowAction: DismissWindowAction?
+    private var closeHandles: [ReaderWindowID: ReaderWindowCloseHandle] = [:]
 
     func configure(
         openWindow: OpenWindowAction,
@@ -106,14 +131,24 @@ final class ReaderWindowCoordinator {
         openWindowAction?(id: "reader", value: input)
     }
 
-    func close(bookID: BookID, userID: UserID) {
+    func close(bookID: BookID, userID: UserID) async {
         let id = ReaderWindowID(userID: userID, bookID: bookID)
         guard let input = openWindows.removeValue(forKey: id) else { return }
+        let closeHandle = closeHandles.removeValue(forKey: id)
+        await closeHandle?.close()
         closeWindowAction?(value: input)
     }
 
     func register(_ input: ReaderWindowInput) {
         openWindows[input.id] = input
+    }
+
+    func register(
+        _ input: ReaderWindowInput,
+        closeHandle: ReaderWindowCloseHandle
+    ) {
+        openWindows[input.id] = input
+        closeHandles[input.id] = closeHandle
     }
 
     func activate(
@@ -135,13 +170,33 @@ final class ReaderWindowCoordinator {
         activePDFViewMode = mode
     }
 
-    func unregister(_ input: ReaderWindowInput) {
-        openWindows.removeValue(forKey: input.id)
-        if activeReader?.id == input.id {
-            activeReader = nil
-            activeTheme = .default
-            activePDFViewMode = .automatic
+    func unregister(
+        _ input: ReaderWindowInput,
+        closeHandle: ReaderWindowCloseHandle
+    ) async {
+        let ownsRegistration = closeHandles[input.id] === closeHandle
+        if ownsRegistration {
+            if openWindows[input.id] == input {
+                openWindows.removeValue(forKey: input.id)
+            }
+            closeHandles.removeValue(forKey: input.id)
+            if activeReader == input {
+                activeReader = nil
+                activeTheme = .default
+                activePDFViewMode = .automatic
+            }
         }
+        await closeHandle.close()
+    }
+
+    /// Native Catalyst scene-disconnect entry point. SwiftUI view disappearance
+    /// is not guaranteed when the user closes a WindowGroup scene, so the
+    /// scene observer routes through the same identity-safe teardown path.
+    func sceneDidDisconnect(
+        _ input: ReaderWindowInput,
+        closeHandle: ReaderWindowCloseHandle
+    ) async {
+        await unregister(input, closeHandle: closeHandle)
     }
 
     func deactivate(_ input: ReaderWindowInput) {
@@ -153,7 +208,9 @@ final class ReaderWindowCoordinator {
     func invalidate(userID: UserID) {
         let ids = openWindows.keys.filter { $0.userID == userID }
         for id in ids {
-            close(bookID: id.bookID, userID: id.userID)
+            Task { @MainActor in
+                await self.close(bookID: id.bookID, userID: id.userID)
+            }
         }
     }
 

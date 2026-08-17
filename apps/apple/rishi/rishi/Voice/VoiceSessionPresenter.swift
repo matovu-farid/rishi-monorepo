@@ -663,7 +663,9 @@ final class VoiceSessionPresenter {
     /// `POST …/end` in the background. Single-flight across End button,
     /// cover swipe, and audio preemption. Does **not** gate delivery on
     /// `isPresenting` (optimistic dismiss clears it first).
-    func requestEnd() async {
+    func requestEnd(readerSessionIdentity: ReaderSessionIdentity? = nil) async {
+        guard readerSessionIdentity == nil
+                || currentReaderSessionIdentity == readerSessionIdentity else { return }
         cancelPrewarm()
         // Nothing left to tear down (and not mid-present) — ignore double tap.
         guard session != nil || isPresenting else { return }

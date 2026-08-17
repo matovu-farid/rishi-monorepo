@@ -109,4 +109,8 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     func dismissUpgradePrompt() {
         pendingUpgradePrompt = nil
     }
+
+    func endForReader() async {
+        await voicePresenter.requestEnd(readerSessionIdentity: readerSessionIdentity)
+    }
 }

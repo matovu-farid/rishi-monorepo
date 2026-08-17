@@ -51,6 +51,7 @@ struct CatalystReaderWindow: View {
     let input: ReaderWindowInput
     @State private var presentationState = PDFReaderPresentationState()
     @State private var subscriptionState = CatalystReaderSubscriptionPresentationState()
+    @State private var closeHandle = ReaderWindowCloseHandle()
 
     @Environment(\.appDependencies) private var appDependencies
     @Environment(CurrentUserBox.self) private var currentUser
@@ -69,7 +70,8 @@ struct CatalystReaderWindow: View {
                         route: input.route,
                         hint: nil,
                         onRequestPaywall: subscriptionState.handlePaywallRequest,
-                        pdfViewMode: $presentation.requestedMode
+                        pdfViewMode: $presentation.requestedMode,
+                        readerWindowCloseHandle: closeHandle
                     )
                 }
                 .sheet(isPresented: $subscriptions.isPresented, onDismiss: {
@@ -100,13 +102,26 @@ struct CatalystReaderWindow: View {
                     Text("Thank you for subscribing. Your plan is now active.")
                 }
                 .background {
-                    ReaderWindowKeyObserver {
-                        guard scenePhase == .active else { return }
-                        coordinator.activate(
-                            input,
-                            theme: services.settings.readerDefaults.theme,
-                            pdfViewMode: isPDFReader ? services.settings.readerDefaults.pdfViewMode : nil
-                        )
+                    ZStack {
+                        ReaderWindowKeyObserver {
+                            guard scenePhase == .active else { return }
+                            coordinator.activate(
+                                input,
+                                theme: services.settings.readerDefaults.theme,
+                                pdfViewMode: isPDFReader ? services.settings.readerDefaults.pdfViewMode : nil
+                            )
+                        }
+                        .frame(width: 0, height: 0)
+
+                        ReaderWindowSceneDisconnectObserver {
+                            Task { @MainActor in
+                                await coordinator.sceneDidDisconnect(
+                                    input,
+                                    closeHandle: closeHandle
+                                )
+                            }
+                        }
+                        .frame(width: 0, height: 0)
                     }
                     .frame(width: 0, height: 0)
                 }
@@ -119,13 +134,18 @@ struct CatalystReaderWindow: View {
                 )
                 .toolbarBackground(.visible, for: .navigationBar)
                 .onAppear {
+                    coordinator.register(input, closeHandle: closeHandle)
                     coordinator.activate(
                         input,
                         theme: services.settings.readerDefaults.theme,
                         pdfViewMode: isPDFReader ? services.settings.readerDefaults.pdfViewMode : nil
                     )
                 }
-                .onDisappear { coordinator.unregister(input) }
+                .onDisappear {
+                    Task { @MainActor in
+                        await coordinator.unregister(input, closeHandle: closeHandle)
+                    }
+                }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         coordinator.activate(
@@ -204,6 +224,20 @@ private struct ReaderWindowKeyObserver: UIViewRepresentable {
     }
 }
 
+private struct ReaderWindowSceneDisconnectObserver: UIViewRepresentable {
+    let onDisconnect: () -> Void
+
+    func makeUIView(context: Context) -> SceneDisconnectProbeView {
+        let view = SceneDisconnectProbeView()
+        view.onDisconnect = onDisconnect
+        return view
+    }
+
+    func updateUIView(_ uiView: SceneDisconnectProbeView, context: Context) {
+        uiView.onDisconnect = onDisconnect
+    }
+}
+
 private final class KeyWindowProbeView: UIView {
     var onBecameKey: (() -> Void)?
 
@@ -236,6 +270,45 @@ private final class KeyWindowProbeView: UIView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+}
+
+private final class SceneDisconnectProbeView: UIView {
+    var onDisconnect: (() -> Void)?
+
+    private weak var observedScene: UIScene?
+    private var disconnectObserver: NSObjectProtocol?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard disconnectObserver == nil,
+              let scene = window?.windowScene
+        else { return }
+
+        observedScene = scene
+        disconnectObserver = NotificationCenter.default.addObserver(
+            forName: UIScene.didDisconnectNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let notificationScene = note.object as? UIScene,
+                  notificationScene === self.observedScene
+            else { return }
+            self.onDisconnect?()
+        }
+    }
+
+    private func removeDisconnectObserver() {
+        if let disconnectObserver {
+            NotificationCenter.default.removeObserver(disconnectObserver)
+            self.disconnectObserver = nil
+        }
+        observedScene = nil
+    }
+
+    deinit {
+        removeDisconnectObserver()
     }
 }
 

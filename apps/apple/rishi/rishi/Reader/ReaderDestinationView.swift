@@ -7,6 +7,7 @@ struct ReaderDestinationView: View {
     let hint: Book?
     let onRequestPaywall: (String) -> Void
     var pdfViewMode: Binding<PDFViewModeSetting>? = nil
+    var readerWindowCloseHandle: ReaderWindowCloseHandle? = nil
 
     @Environment(AppRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
@@ -44,7 +45,8 @@ struct ReaderDestinationView: View {
                         userId: userId,
                         onRequestPaywall: onRequestPaywall,
                         startReaderTour: startReaderTour,
-                        pdfViewMode: pdfViewMode
+                        pdfViewMode: pdfViewMode,
+                        readerWindowCloseHandle: readerWindowCloseHandle
                     )
                     // The transient tour request is consumed when this
                     // destination appears. Recreate the destination subtree
