@@ -15,6 +15,8 @@
 .claude/kanban/
 **/.claude/
 /CLAUDE.md
+/.agents/
+skills-lock.json
 docs/superpowers/plans/
 apps/apple/docs/
 apps/mobile/__tests__/rag/chunker-parity.test.ts
@@ -26,6 +28,14 @@ apps/mobile/__tests__/rag/chunker-parity.test.ts
 # Test runner artifacts
 **/test-results/
 **/e2e/screenshots/
+
+# Local design and App Store screenshot assets
+/RishiScreenshotDesign.fig
+/Rishi_Desktop_AppStore_*.png
+/apps/apple/fastlane/screenshots/
+
+# Xcode compiler cache
+/apps/apple/rishi/rishi.xcodeproj/-Xcc/
 
 # Local build and brainstorming artifacts
 /.build/
