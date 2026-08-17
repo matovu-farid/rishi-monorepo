@@ -43,6 +43,14 @@ struct ReadAloudControllerTests {
         )
     }
 
+    @Test("controller exposes the Now Playing playback control surface")
+    func conformsToTTSPlaybackControlling() async {
+        let controller = makeController()
+        let playbackController: any TTSPlaybackControlling = controller
+
+        await playbackController.stop()
+    }
+
     private func start(
         _ controller: ReadAloudController,
         paragraphs: [String],
