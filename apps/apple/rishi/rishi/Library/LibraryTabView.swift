@@ -346,7 +346,11 @@ struct LibraryTabView: View {
             Text("Thank you for subscribing. Your plan is now active.")
         }
 
-        .deepLinkHandling(model: model, refreshLibrary: { await vm.refresh() })
+        .deepLinkHandling(
+            model: model,
+            refreshLibrary: { await vm.refresh() },
+            currentUserID: user.id
+        )
     }
 
     @MainActor

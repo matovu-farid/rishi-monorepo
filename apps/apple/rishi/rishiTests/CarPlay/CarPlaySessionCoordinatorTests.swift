@@ -45,7 +45,7 @@ struct CarPlaySessionCoordinatorTests {
     @Test("CarPlay identity synchronization clears a stale account")
     func identitySynchronizationClearsStaleAccount() async {
         let dependencies = AppDependencies()
-        dependencies.setUserId(UUID(uuidString: "00000000-0000-0000-0000-000000000023")!)
+        await dependencies.replaceUserId(UUID(uuidString: "00000000-0000-0000-0000-000000000023")!)
         let generation = dependencies.accountGeneration
 
         await dependencies.synchronizeCarPlayIdentity(nil)
@@ -55,7 +55,7 @@ struct CarPlaySessionCoordinatorTests {
     }
 
     @Test("account observers receive sign-in and sign-out transitions")
-    func accountObserversReceiveTransitions() {
+    func accountObserversReceiveTransitions() async {
         let dependencies = AppDependencies()
         var observed: [CarPlayAccountSnapshot?] = []
         let token = dependencies.addCarPlayAccountChangeObserver { snapshot in
@@ -63,15 +63,15 @@ struct CarPlaySessionCoordinatorTests {
         }
         let userID = UUID(uuidString: "00000000-0000-0000-0000-000000000024")!
 
-        dependencies.setUserId(userID)
-        dependencies.cachedUserId = nil
+        await dependencies.replaceUserId(userID)
+        await dependencies.replaceUserId(nil)
 
         #expect(observed.count == 2)
         #expect(observed[0]?.userID == userID)
         #expect(observed.last == nil)
 
         dependencies.removeCarPlayAccountChangeObserver(token)
-        dependencies.setUserId(userID)
+        await dependencies.replaceUserId(userID)
         #expect(observed.count == 2)
     }
 

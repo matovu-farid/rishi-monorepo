@@ -231,6 +231,12 @@ struct SignedOutView: View {
                 message: "Authentication returned an invalid user identifier."
             )
         }
+        guard auth.user.id == userId else {
+            throw RishiError.network(
+                code: invalidUserIDCode,
+                message: "Authentication returned mismatched user identifiers."
+            )
+        }
 
         do {
             try Keychain.save(auth.accessToken, for: .accessToken)
@@ -247,8 +253,18 @@ struct SignedOutView: View {
             throw error
         }
 
+        guard await deps.replaceUserId(userId) else {
+            Keychain.delete(.accessToken)
+            Keychain.delete(.refreshToken)
+            Keychain.delete(.userId)
+            try? await KeychainSessionStore().delete()
+            _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
+            throw RishiError.network(
+                code: "spotlight_transition_failed",
+                message: "Unable to switch to the signed-in account. Please try again."
+            )
+        }
         currentUser = auth.user
-        deps.setUserId(userId)
         await deps.backgroundSyncLifecycle.retryPendingDeviceTokenIfAvailable(
             platform: {
                 #if targetEnvironment(macCatalyst)

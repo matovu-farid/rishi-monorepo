@@ -14,6 +14,12 @@ final class AppRouter {
     var path: NavigationPath = NavigationPath()
 
     private var pendingReaderTour: (userID: UserID, bookID: BookID)?
+    private var pendingAccountURLs: [URL] = []
+    private var pendingAccountDrainTask: Task<Void, Never>?
+    private var recentlyResolvedAccountURLs: Set<URL> = []
+    private var resolvingAccountURLs: Set<URL> = []
+
+    private static let maxPendingAccountURLs = 8
 
     private let deepLinks = DeepLinkRouter()
     var onBookResolved: ((Book) -> Void)?
@@ -29,7 +35,8 @@ final class AppRouter {
     func handle(
         url: URL,
         bookStore: (any BookStore)?,
-        conversationStore: (any ConversationStore)?
+        conversationStore: (any ConversationStore)?,
+        currentUserID: UserID? = nil
     ) {
         let destination = deepLinks.route(url)
         switch destination {
@@ -41,30 +48,85 @@ final class AppRouter {
             Self.enqueueShareToken(token)
 
         case .openBook(let bookId):
-            guard let bookStore else { return }
+            guard !recentlyResolvedAccountURLs.contains(url),
+                  resolvingAccountURLs.insert(url).inserted else { return }
+            guard let bookStore, let currentUserID else {
+                resolvingAccountURLs.remove(url)
+                enqueuePendingAccountURL(url)
+                return
+            }
 
             Task {
-                let book: Book? = try? await bookStore.book(bookId)
-                guard let book else { return }
-
-                onBookResolved?(book)
-                #if targetEnvironment(macCatalyst)
-                    onCatalystBookResolved?(book)
-                #else
-                    var p = NavigationPath()
-                    p.append(ReaderRoute.route(for: book))
-                    path = p
-                #endif
+                do {
+                    let book = try await bookStore.book(bookId)
+                    guard let book else {
+                        resolvingAccountURLs.remove(url)
+                        enqueuePendingAccountURL(url)
+                        schedulePendingAccountDrain(
+                            bookStore: bookStore,
+                            conversationStore: conversationStore,
+                            currentUserID: currentUserID
+                        )
+                        return
+                    }
+                    guard book.userId == currentUserID,
+                          AppDependencies.shared.cachedUserId == currentUserID else {
+                        resolvingAccountURLs.remove(url)
+                        return
+                    }
+                    removePendingAccountURL(url)
+                    markAccountURLResolved(url)
+                    present(book: book)
+                } catch {
+                    resolvingAccountURLs.remove(url)
+                    enqueuePendingAccountURL(url)
+                    schedulePendingAccountDrain(
+                        bookStore: bookStore,
+                        conversationStore: conversationStore,
+                        currentUserID: currentUserID
+                    )
+                }
             }
 
         case .openConversation(let conversationId):
-            guard let conversationStore else { return }
+            guard !recentlyResolvedAccountURLs.contains(url),
+                  resolvingAccountURLs.insert(url).inserted else { return }
+            guard let conversationStore, let currentUserID else {
+                resolvingAccountURLs.remove(url)
+                enqueuePendingAccountURL(url)
+                return
+            }
 
             Task {
-                let convo: Conversation? =
-                    try? await conversationStore.conversation(conversationId)
-                guard let convo else { return }
-                onConversationResolved?(convo)
+                do {
+                    let convo = try await conversationStore.conversation(conversationId)
+                    guard let convo else {
+                        resolvingAccountURLs.remove(url)
+                        enqueuePendingAccountURL(url)
+                        schedulePendingAccountDrain(
+                            bookStore: bookStore,
+                            conversationStore: conversationStore,
+                            currentUserID: currentUserID
+                        )
+                        return
+                    }
+                    guard convo.userId == currentUserID,
+                          AppDependencies.shared.cachedUserId == currentUserID else {
+                        resolvingAccountURLs.remove(url)
+                        return
+                    }
+                    removePendingAccountURL(url)
+                    markAccountURLResolved(url)
+                    present(conversation: convo)
+                } catch {
+                    resolvingAccountURLs.remove(url)
+                    enqueuePendingAccountURL(url)
+                    schedulePendingAccountDrain(
+                        bookStore: bookStore,
+                        conversationStore: conversationStore,
+                        currentUserID: currentUserID
+                    )
+                }
             }
 
         case .unknown:
@@ -72,6 +134,147 @@ final class AppRouter {
             if url.isFileURL {
                 onFileURL?(url)
             }
+        }
+    }
+
+    private func enqueuePendingAccountURL(_ url: URL) {
+        guard !pendingAccountURLs.contains(url) else { return }
+        if pendingAccountURLs.count == Self.maxPendingAccountURLs {
+            pendingAccountURLs.removeFirst()
+        }
+        pendingAccountURLs.append(url)
+    }
+
+    private func removePendingAccountURL(_ url: URL) {
+        pendingAccountURLs.removeAll { $0 == url }
+    }
+
+    private func markAccountURLResolved(_ url: URL) {
+        resolvingAccountURLs.remove(url)
+        recentlyResolvedAccountURLs.insert(url)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            self?.recentlyResolvedAccountURLs.remove(url)
+        }
+    }
+
+    private func present(book: Book) {
+        onBookResolved?(book)
+        #if targetEnvironment(macCatalyst)
+            onCatalystBookResolved?(book)
+        #else
+            var p = NavigationPath()
+            p.append(ReaderRoute.route(for: book))
+            path = p
+        #endif
+    }
+
+    private func present(conversation: Conversation) {
+        onConversationResolved?(conversation)
+    }
+
+    func drainPendingAccountURLs(
+        bookStore: (any BookStore)?,
+        conversationStore: (any ConversationStore)?,
+        currentUserID: UserID
+    ) async {
+        guard AppDependencies.shared.cachedUserId == currentUserID else { return }
+        while let url = pendingAccountURLs.first {
+            guard AppDependencies.shared.cachedUserId == currentUserID else { return }
+            if recentlyResolvedAccountURLs.contains(url) {
+                pendingAccountURLs.removeFirst()
+                continue
+            }
+            guard resolvingAccountURLs.insert(url).inserted else { return }
+            switch deepLinks.route(url) {
+            case .openBook(let bookID):
+                guard let bookStore else {
+                    resolvingAccountURLs.remove(url)
+                    return
+                }
+                do {
+                    guard let book = try await bookStore.book(bookID) else {
+                        resolvingAccountURLs.remove(url)
+                        schedulePendingAccountDrain(
+                            bookStore: bookStore,
+                            conversationStore: conversationStore,
+                            currentUserID: currentUserID
+                        )
+                        return
+                    }
+                    guard book.userId == currentUserID,
+                          AppDependencies.shared.cachedUserId == currentUserID else {
+                        resolvingAccountURLs.remove(url)
+                        pendingAccountURLs.removeFirst()
+                        continue
+                    }
+                    pendingAccountURLs.removeFirst()
+                    markAccountURLResolved(url)
+                    present(book: book)
+                } catch {
+                    resolvingAccountURLs.remove(url)
+                    schedulePendingAccountDrain(
+                        bookStore: bookStore,
+                        conversationStore: conversationStore,
+                        currentUserID: currentUserID
+                    )
+                    return
+                }
+            case .openConversation(let conversationID):
+                guard let conversationStore else {
+                    resolvingAccountURLs.remove(url)
+                    return
+                }
+                do {
+                    guard let conversation = try await conversationStore.conversation(conversationID) else {
+                        resolvingAccountURLs.remove(url)
+                        schedulePendingAccountDrain(
+                            bookStore: bookStore,
+                            conversationStore: conversationStore,
+                            currentUserID: currentUserID
+                        )
+                        return
+                    }
+                    guard conversation.userId == currentUserID,
+                          AppDependencies.shared.cachedUserId == currentUserID else {
+                        resolvingAccountURLs.remove(url)
+                        pendingAccountURLs.removeFirst()
+                        continue
+                    }
+                    pendingAccountURLs.removeFirst()
+                    markAccountURLResolved(url)
+                    present(conversation: conversation)
+                } catch {
+                    resolvingAccountURLs.remove(url)
+                    schedulePendingAccountDrain(
+                        bookStore: bookStore,
+                        conversationStore: conversationStore,
+                        currentUserID: currentUserID
+                    )
+                    return
+                }
+            default:
+                resolvingAccountURLs.remove(url)
+                pendingAccountURLs.removeFirst()
+            }
+        }
+    }
+
+    private func schedulePendingAccountDrain(
+        bookStore: (any BookStore)?,
+        conversationStore: (any ConversationStore)?,
+        currentUserID: UserID
+    ) {
+        guard pendingAccountDrainTask == nil else { return }
+        pendingAccountDrainTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self else { return }
+            self.pendingAccountDrainTask = nil
+            await self.drainPendingAccountURLs(
+                bookStore: bookStore,
+                conversationStore: conversationStore,
+                currentUserID: currentUserID
+            )
         }
     }
 

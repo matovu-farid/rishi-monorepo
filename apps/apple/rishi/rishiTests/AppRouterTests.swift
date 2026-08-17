@@ -108,9 +108,10 @@ struct AppRouterTests {
     @Test("openBook deep link resolves book, fires onBookResolved, replaces path")
     func openBookHappyPath() async {
         let bookId = UUID()
+        let userID = UUID()
         let book = Book(
             id: bookId,
-            userId: UUID(),
+            userId: userID,
             title: "Test Book",
             formatType: .epub,
             fileURL: "test.epub"
@@ -125,7 +126,13 @@ struct AppRouterTests {
         router.onBookResolved = { b in resolvedBook = b }
 
         let url = URL(string: "rishi://book/\(bookId.uuidString)")!
-        router.handle(url: url, bookStore: store, conversationStore: nil)
+        _ = await AppDependencies.shared.replaceUserId(userID)
+        router.handle(
+            url: url,
+            bookStore: store,
+            conversationStore: nil,
+            currentUserID: book.userId
+        )
 
         
         await Task.yield()
@@ -135,14 +142,16 @@ struct AppRouterTests {
         #expect(resolvedBook?.id == bookId)
         
         #expect(router.path.count == 1)
+        _ = await AppDependencies.shared.replaceUserId(nil)
     }
 
     @Test("openConversation deep link resolves conversation, fires onConversationResolved")
     func openConversationHappyPath() async {
         let convoId = UUID()
+        let userID = UUID()
         let convo = Conversation(
             id: convoId,
-            userId: UUID(),
+            userId: userID,
             title: "Test Conversation"
         )
         let store = InMemoryConversationStore(initial: [convo])
@@ -152,7 +161,13 @@ struct AppRouterTests {
         router.onConversationResolved = { c in resolvedConvo = c }
 
         let url = URL(string: "rishi://conversation/\(convoId.uuidString)")!
-        router.handle(url: url, bookStore: nil, conversationStore: store)
+        _ = await AppDependencies.shared.replaceUserId(userID)
+        router.handle(
+            url: url,
+            bookStore: nil,
+            conversationStore: store,
+            currentUserID: convo.userId
+        )
 
         await Task.yield()
         await Task.yield()
@@ -161,6 +176,7 @@ struct AppRouterTests {
         #expect(resolvedConvo?.id == convoId)
         
         #expect(router.path.isEmpty)
+        _ = await AppDependencies.shared.replaceUserId(nil)
     }
 
     @Test("openBook with nil bookStore is a no-op")

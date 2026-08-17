@@ -21,7 +21,7 @@ struct PremptionTest {
     @Test  func PremptionStopsPlayBack() async throws {
         let dep = AppDependencies()
         await dep.bootstrap()
-        await dep.setUserId(UUID())
+        await dep.replaceUserId(UUID())
         guard let services = await dep.services else {
             throw PremptionTestError.NoServices
         }

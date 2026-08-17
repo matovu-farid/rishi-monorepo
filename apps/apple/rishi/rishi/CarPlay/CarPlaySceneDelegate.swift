@@ -42,12 +42,50 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let connectionID = UUID()
         self.connectionID = connectionID
         Task { @MainActor [weak self] in
-            let userUUID = (try? Keychain.load(.userId)).flatMap(UUID.init(uuidString:))
-            await dependencies.synchronizeCarPlayIdentity(userUUID)
+            let userUUID: UUID
+            do {
+                userUUID = try await RishiAppIntentRuntime.validatedPersistedIdentity()
+            } catch let error as RishiAppIntentRuntimeError {
+                guard case .signedOut = error,
+                      self?.connectionID == connectionID else { return }
+                _ = await dependencies.synchronizeCarPlayIdentity(nil)
+                Self.showUnavailable(on: interfaceController, detail: error.localizedDescription)
+                return
+            } catch {
+                guard self?.connectionID == connectionID else { return }
+                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
+                return
+            }
             guard self?.connectionID == connectionID else { return }
             await dependencies.bootstrap()
             guard self?.connectionID == connectionID else { return }
-            guard let services = dependencies.services else { return }
+            guard let services = dependencies.services else {
+                guard self?.connectionID == connectionID else { return }
+                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
+                return
+            }
+            do {
+                _ = try await RishiAppIntentRuntime.validateServerIdentity(
+                    using: services.workerClient,
+                    userID: userUUID
+                )
+            } catch let error as RishiAppIntentRuntimeError {
+                guard case .signedOut = error,
+                      self?.connectionID == connectionID else { return }
+                _ = await dependencies.synchronizeCarPlayIdentity(nil)
+                Self.showUnavailable(on: interfaceController, detail: error.localizedDescription)
+                return
+            } catch {
+                guard self?.connectionID == connectionID else { return }
+                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
+                return
+            }
+            guard self?.connectionID == connectionID else { return }
+            guard await dependencies.synchronizeCarPlayIdentity(userUUID) else {
+                guard self?.connectionID == connectionID else { return }
+                Self.showUnavailable(on: interfaceController, detail: "Please reconnect and try again.")
+                return
+            }
             let session = CarPlaySessionCoordinator(
                 dependencies: dependencies,
                 services: services,
@@ -57,6 +95,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             self?.session = session
             await session.refresh()
         }
+    }
+
+    private static func showUnavailable(on interfaceController: CPInterfaceController, detail: String) {
+        let item = CPListItem(text: "Rishi unavailable", detailText: detail)
+        item.isEnabled = false
+        interfaceController.setRootTemplate(
+            CPListTemplate(title: "Rishi", sections: [CPListSection(items: [item])]),
+            animated: false
+        )
     }
 
     func templateApplicationScene(

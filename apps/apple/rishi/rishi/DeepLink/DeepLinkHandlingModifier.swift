@@ -8,6 +8,7 @@ struct DeepLinkHandlingModifier: ViewModifier {
 
     let model: SignedInViewModel
     let refreshLibrary: () async -> Void
+    let currentUserID: UserID
 
 
     @Environment(AppRouter.self) private var router
@@ -32,7 +33,16 @@ struct DeepLinkHandlingModifier: ViewModifier {
                 router.handle(
                     url: url,
                     bookStore: services.library.bookStore,
-                    conversationStore: services.chat.conversationStore
+                    conversationStore: services.chat.conversationStore,
+                    currentUserID: currentUserID
+                )
+            }
+            .task {
+                guard let services = servicesEnv else { return }
+                await router.drainPendingAccountURLs(
+                    bookStore: services.library.bookStore,
+                    conversationStore: services.chat.conversationStore,
+                    currentUserID: currentUserID
                 )
             }
     }
@@ -41,8 +51,15 @@ struct DeepLinkHandlingModifier: ViewModifier {
 extension View {
     func deepLinkHandling(
         model: SignedInViewModel,
-        refreshLibrary: @escaping () async -> Void
+        refreshLibrary: @escaping () async -> Void,
+        currentUserID: UserID
     ) -> some View {
-        modifier(DeepLinkHandlingModifier(model: model, refreshLibrary: refreshLibrary))
+        modifier(
+            DeepLinkHandlingModifier(
+                model: model,
+                refreshLibrary: refreshLibrary,
+                currentUserID: currentUserID
+            )
+        )
     }
 }
