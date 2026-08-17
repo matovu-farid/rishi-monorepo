@@ -72,6 +72,7 @@ public struct BookFileStorage:Sendable {
     public func delete(_ book: Book) async throws {
         try await deleteMaterial(for: book)
         try await bookStore.delete(book.id)
+        NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
     }
 
     /// Removes the local file and cover cache while leaving the metadata row

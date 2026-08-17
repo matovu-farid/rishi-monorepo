@@ -115,6 +115,7 @@ public final class ConversationsListViewModel {
                 try await messageStore.delete(message.id)
             }
             try await conversationStore.delete(id)
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
             conversations.removeAll { $0.id == id }
             messagesByConversation.removeValue(forKey: id)
         } catch {

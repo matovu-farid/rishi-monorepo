@@ -34,6 +34,7 @@ public actor ConversationLookup {
             title: defaultTitle()
         )
         try await store.upsert(convo)
+        NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
         Log.event("chat.conversation.created", level: .info, data: [
             "conversation_id": convo.id.uuidString,
             "has_book_id": bookId == nil ? "false" : "true",
@@ -45,5 +46,6 @@ public actor ConversationLookup {
     /// operation beside find-or-create ensures chat has one persistence seam.
     public func upsert(_ conversation: Conversation) async throws {
         try await store.upsert(conversation)
+        NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
     }
 }

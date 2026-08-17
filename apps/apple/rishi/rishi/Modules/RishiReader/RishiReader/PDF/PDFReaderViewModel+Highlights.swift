@@ -119,6 +119,7 @@ extension PDFReaderViewModel {
                 createdAt: Date()
             )
             try await store.upsert(highlight)
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
             Self.cache.mutate(self) { $0.append(highlight) }
             bumpHighlightsObservation()
             return highlight
@@ -140,6 +141,7 @@ extension PDFReaderViewModel {
         updated.note = note
         do {
             try await store.upsert(updated)
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
             Self.cache.mutate(self) { rows in
                 if let idx = rows.firstIndex(where: { $0.id == updated.id }) {
                     rows[idx] = updated
@@ -160,6 +162,7 @@ extension PDFReaderViewModel {
     ) async {
         do {
             try await store.delete(highlight.id)
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
             Self.cache.mutate(self) { rows in
                 rows.removeAll { $0.id == highlight.id }
             }

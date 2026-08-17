@@ -80,6 +80,7 @@ public final class ChangeApplier: Sendable {
 
     public func apply(_ changes: [SyncChange], expectedUserId: UserID? = nil) async -> ApplyResult {
         var result = ApplyResult()
+        var searchableDataApplied = false
 
         for change in changes {
             do { try await ensureAccount(expectedUserId) }
@@ -96,9 +97,19 @@ public final class ChangeApplier: Sendable {
                 case .position:
                     try await applyPosition(change, into: &result, expectedUserId: expectedUserId)
                 case .highlight:
-                    try await applyHighlight(change, into: &result, expectedUserId: expectedUserId)
+                    try await applyHighlight(
+                        change,
+                        into: &result,
+                        searchableDataApplied: &searchableDataApplied,
+                        expectedUserId: expectedUserId
+                    )
                 case .book:
-                    try await applyBook(change, into: &result, expectedUserId: expectedUserId)
+                    try await applyBook(
+                        change,
+                        into: &result,
+                        searchableDataApplied: &searchableDataApplied,
+                        expectedUserId: expectedUserId
+                    )
                 case .bookmark:
                     try await applyBookmark(change, into: &result, expectedUserId: expectedUserId)
                 case .chapterIndex:
@@ -135,6 +146,9 @@ public final class ChangeApplier: Sendable {
             "conflicts": String(result.conflicts),
             "errors": String(result.errors.count),
         ])
+        if searchableDataApplied {
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
+        }
         return result
     }
 
@@ -171,7 +185,12 @@ public final class ChangeApplier: Sendable {
         result.applied += 1
     }
 
-    private func applyHighlight(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
+    private func applyHighlight(
+        _ change: SyncChange,
+        into result: inout ApplyResult,
+        searchableDataApplied: inout Bool,
+        expectedUserId: UserID?
+    ) async throws {
         let entityId = change.id
         let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .highlight)
         if expectedDirtyAt != nil {
@@ -192,6 +211,7 @@ public final class ChangeApplier: Sendable {
                 try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .highlight, updatedAt: change.updatedAt)
                 throw ConditionalAcknowledgementFailed()
             }
+            searchableDataApplied = true
             try await ensureAccount(expectedUserId)
             guard try await metadataStore.acknowledgeTombstoneIfUnchanged(
                 entityId: change.id,
@@ -201,6 +221,7 @@ public final class ChangeApplier: Sendable {
                 remoteEtag: nil
             ) else { throw ConditionalAcknowledgementFailed() }
             result.applied += 1
+            searchableDataApplied = true
             return
         }
         let remote = try SyncPayloadCodec.decodeHighlight(change.payload, fallbackCreatedAt: change.updatedAt)
@@ -213,6 +234,7 @@ public final class ChangeApplier: Sendable {
         }
         try await ensureAccount(expectedUserId)
         try await highlightStore.upsert(remote)
+        searchableDataApplied = true
         try await ensureAccount(expectedUserId)
         guard try await metadataStore.markCleanIfUnchanged(
             entityId: remote.id,
@@ -222,6 +244,7 @@ public final class ChangeApplier: Sendable {
             remoteEtag: nil
         ) else { throw ConditionalAcknowledgementFailed() }
         result.applied += 1
+        searchableDataApplied = true
     }
 
     private func applyBookmark(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
@@ -304,7 +327,12 @@ public final class ChangeApplier: Sendable {
         result.applied += 1
     }
 
-    private func applyBook(_ change: SyncChange, into result: inout ApplyResult, expectedUserId: UserID?) async throws {
+    private func applyBook(
+        _ change: SyncChange,
+        into result: inout ApplyResult,
+        searchableDataApplied: inout Bool,
+        expectedUserId: UserID?
+    ) async throws {
         let entityId = change.id
         let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .book)
         if change.deleted {
@@ -318,6 +346,7 @@ public final class ChangeApplier: Sendable {
                 try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
                 throw ConditionalAcknowledgementFailed()
             }
+            searchableDataApplied = true
             // Clean only after the conditional row delete succeeds. If this
             // fails, the next retry still addresses material by ID even when
             // the row is already gone, and acknowledgement remains blocked.
@@ -337,6 +366,7 @@ public final class ChangeApplier: Sendable {
                 throw ConditionalAcknowledgementFailed()
             }
             result.applied += 1
+            searchableDataApplied = true
             return
         }
         if expectedDirtyAt != nil {
@@ -387,6 +417,7 @@ public final class ChangeApplier: Sendable {
             throw ConditionalAcknowledgementFailed()
         }
         try await bookStore.upsert(materialized)
+        searchableDataApplied = true
         if let position = embeddedPosition {
             if let local = try await positionStore.position(for: position.bookId),
                local.updatedAt >= position.updatedAt {
@@ -418,6 +449,7 @@ public final class ChangeApplier: Sendable {
             remoteEtag: nil
         ) else { throw ConditionalAcknowledgementFailed() }
         result.applied += 1
+        searchableDataApplied = true
         // NOTE: File bytes pull-side is deferred to 07-04. The engine sees
         // the new book row and schedules a /api/sync/download-url + GET into
         // BookFileStorage on the next foreground sweep.

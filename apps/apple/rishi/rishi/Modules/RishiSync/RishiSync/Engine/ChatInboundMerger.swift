@@ -32,6 +32,8 @@ struct ChatInboundMerger: Sendable {
         /// Count of chat rows that actually changed a store — drives the
         /// engine's `ChatSyncRefreshDelegate` gate.
         var chatRowsApplied: Int = 0
+        /// Conversation metadata is searchable; message bodies are not.
+        var searchableConversationsApplied: Bool = false
         init() {}
     }
 
@@ -81,6 +83,7 @@ struct ChatInboundMerger: Sendable {
                     return result
                 }
                 try await conversationStore.upsert(convo)
+                result.searchableConversationsApplied = true
                 guard await isExpected(expectedUserId) else {
                     result.errors.append("account switched during inbound chat sync")
                     return result
@@ -129,6 +132,9 @@ struct ChatInboundMerger: Sendable {
             result.errors.append("messages.fetch: \(error)")
         }
 
+        if result.searchableConversationsApplied {
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
+        }
         return result
     }
 

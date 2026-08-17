@@ -117,6 +117,7 @@ struct BookImporter: Sendable {
             coverPath: coverPath
         )
         try await bookStore.upsert(book)
+        NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
 
         await bookIndexingHook.scheduleIndexing(for: book, fileURL: destURL)
         return book

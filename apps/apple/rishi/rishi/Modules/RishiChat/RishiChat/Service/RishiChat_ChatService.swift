@@ -261,6 +261,7 @@ public actor RishiChatService: ChatService {
         updated.updatedAt = clock()
         if let legacyConversationStore {
             try await legacyConversationStore.upsert(updated)
+            NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
         } else {
             try await conversationLookup.upsert(updated)
         }

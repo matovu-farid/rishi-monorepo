@@ -353,14 +353,15 @@ public actor SharePackageService {
                     "items": String(response.items?.count ?? -1),
                 ])
                 guard response.items != nil else { throw ServiceError.missingResponseItems }
-                importedCount += try await importItems(
+                let tokenImportedCount = try await importItems(
                     response: response,
                     token: token,
                     packageID: response.id,
                     userID: userID
                 )
+                importedCount += tokenImportedCount
                 await pendingStore.remove(token: token)
-                if importedCount > 0 {
+                if tokenImportedCount > 0 {
                     NotificationCenter.default.post(name: Self.libraryDidChange, object: nil)
                 }
             } catch {
@@ -458,6 +459,7 @@ public actor SharePackageService {
                 let materialized = try fileStorage.materializeDownloadedBook(book, data: data)
                 guard await currentUserId() == userID else { throw ServiceError.accountChanged }
                 try await bookStore.upsert(materialized)
+                NotificationCenter.default.post(name: .rishiSearchableDataDidChange, object: nil)
                 existingBooks.append(materialized)
                 guard await currentUserId() == userID else { throw ServiceError.accountChanged }
                 guard await markBookDirty(localID) else {
