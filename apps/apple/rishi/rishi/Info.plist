@@ -2,16 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.education</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Audio is sent to OpenAI during active voice conversations.</string>
-	<key>SentryDSN</key>
-	<string>$(SENTRY_DSN)</string>
-	<key>SentryEnvironment</key>
-	<string>$(SENTRY_ENVIRONMENT)</string>
-	<key>SentryRelease</key>
-	<string>$(SENTRY_RELEASE)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>org.fidexa.rishi.sync.refresh</string>
@@ -73,40 +63,23 @@
 	<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
 	<key>GIDServerClientID</key>
 	<string>$(GOOGLE_SERVER_CLIENT_ID)</string>
-	<key>NSSupportsLiveActivities</key>
-	<true/>
 	<key>LSEnvironment</key>
 	<dict>
-		<!-- Workaround for a PDFKit bug: PDFPageAnalyzerV2 form-field
-		     detection runs on its background formFillingQueue and mutates a
-		     PDFAnnotation via -[PDFAnnotation updateAnnotationEffect], which
-		     asserts main-actor isolation. Under the Swift 6 runtime that
-		     assertion (swift_task_isCurrentExecutor -> checkIsolated ->
-		     dispatch_assert_queue) aborts the process. Legacy mode makes
-		     isCurrentExecutor return false instead of aborting. macOS/Catalyst
-		     LaunchServices launches only; ignored on iOS. -->
 		<key>SWIFT_IS_CURRENT_EXECUTOR_LEGACY_MODE_OVERRIDE</key>
 		<string>legacy</string>
 	</dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-		<string>processing</string>
-		<string>remote-notification</string>
-	</array>
+	<key>SentryDSN</key>
+	<string>$(SENTRY_DSN)</string>
+	<key>SentryEnvironment</key>
+	<string>$(SENTRY_ENVIRONMENT)</string>
+	<key>SentryRelease</key>
+	<string>$(SENTRY_RELEASE)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>
 		<key>UISceneConfigurations</key>
 		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneConfigurationName</key>
-					<string>Default Configuration</string>
-				</dict>
-			</array>
 			<key>CPTemplateApplicationSceneSessionRoleApplication</key>
 			<array>
 				<dict>
@@ -118,7 +91,20 @@
 					<string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
 				</dict>
 			</array>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+				</dict>
+			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>processing</string>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>
