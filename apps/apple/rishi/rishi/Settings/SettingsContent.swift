@@ -138,7 +138,7 @@ struct SettingsContent: View {
             initialAudio = await dependencies.ttsSettingsStore.load(userId: user.id)
             audioLoaded = true
         }
-        .sheet(isPresented: $showSubscriptions, onDismiss: {
+        .rishiSubscriptionPresentation(isPresented: $showSubscriptions, onDismiss: {
             Task {
             await dependencies.entitlementRefreshCoordinator.refreshIfSignedIn(
                     reason: .foreground

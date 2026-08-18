@@ -55,8 +55,11 @@ public struct SubscriptionDependencies {
 }
 
 public struct SubscriptionsView: View {
+    private static let macPaywallContentWidth: CGFloat = 560
+
     @Environment(Store.self) private var store
     @Environment(\.services) private var services
+    @Environment(\.dismiss) private var dismiss
     @Environment(EntitlementSnapshotStore.self) private var entitlementStore
     private let dependencies: SubscriptionDependencies?
     @State private var customerEntitlements = CustomerEntitlements.shared
@@ -141,12 +144,18 @@ public struct SubscriptionsView: View {
             }
         }
         #if targetEnvironment(macCatalyst)
-        .frame(
-            minWidth: 880,
-            idealWidth: 880,
-            minHeight: 1_000,
-            idealHeight: 1_000
-        )
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .padding(.leading, 12)
+                .accessibilityLabel("Close subscriptions")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         #endif
     }
 
@@ -227,6 +236,9 @@ public struct SubscriptionsView: View {
                 Text(
                     "Listen to books with natural voices, ask questions as you read, and pick up where you left off on any device"
                 )
+                #if targetEnvironment(macCatalyst)
+                .frame(maxWidth: Self.macPaywallContentWidth)
+                #endif
             }
             .padding(10)
             .multilineTextAlignment(.center)
@@ -258,6 +270,9 @@ public struct SubscriptionsView: View {
                 }
             }
         }
+        #if targetEnvironment(macCatalyst)
+        .frame(maxWidth: Self.macPaywallContentWidth)
+        #endif
     }
 
     private func configuredSubscriptionStore<Content: View>(
@@ -276,7 +291,15 @@ public struct SubscriptionsView: View {
             .onInAppPurchaseCompletion { _, result in
                 await handlePurchaseCompletion(result)
             }
+            #if targetEnvironment(macCatalyst)
+            // Keep one actionable button per plan and let StoreKit choose its
+            // supported Catalyst placement for the full-window presentation.
+            .subscriptionStoreControlStyle(.buttons)
             .subscriptionStoreButtonLabel(.multiline)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #else
+            .subscriptionStoreButtonLabel(.multiline)
+            #endif
             .subscriptionStorePickerItemBackground(.thinMaterial)
             .subscriptionStorePolicyDestination(
                 url: URL(string: "https://rishi.fidexa.org/privacy")!,
@@ -343,5 +366,33 @@ public struct SubscriptionsView: View {
             )
             restoreMessage = "We couldn’t verify your purchases right now. Check your Apple ID connection and try again."
         }
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func rishiSubscriptionPresentation<Content: View>(
+        isPresented: Binding<Bool>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        #if targetEnvironment(macCatalyst)
+        fullScreenCover(isPresented: isPresented, onDismiss: onDismiss, content: content)
+        #else
+        sheet(isPresented: isPresented, onDismiss: onDismiss, content: content)
+        #endif
+    }
+
+    @ViewBuilder
+    func rishiSubscriptionPresentation<Item: Identifiable, Content: View>(
+        item: Binding<Item?>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping (Item) -> Content
+    ) -> some View {
+        #if targetEnvironment(macCatalyst)
+        fullScreenCover(item: item, onDismiss: onDismiss, content: content)
+        #else
+        sheet(item: item, onDismiss: onDismiss, content: content)
+        #endif
     }
 }

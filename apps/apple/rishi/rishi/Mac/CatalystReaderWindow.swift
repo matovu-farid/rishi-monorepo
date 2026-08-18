@@ -74,7 +74,7 @@ struct CatalystReaderWindow: View {
                         readerWindowCloseHandle: closeHandle
                     )
                 }
-                .sheet(isPresented: $subscriptions.isPresented, onDismiss: {
+                .rishiSubscriptionPresentation(isPresented: $subscriptions.isPresented, onDismiss: {
                     Task { @MainActor in
                         await services.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
                             reason: .foreground

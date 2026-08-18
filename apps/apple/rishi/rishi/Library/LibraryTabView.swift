@@ -286,7 +286,7 @@ struct LibraryTabView: View {
             }
         #endif
 
-        .sheet(item: Bindable(model).paywallFeature, onDismiss: {
+        .rishiSubscriptionPresentation(item: Bindable(model).paywallFeature, onDismiss: {
             // Best-effort: purchase/restore via SubscriptionStoreView may have
             // synced entitlements while the sheet was up.
             Task {

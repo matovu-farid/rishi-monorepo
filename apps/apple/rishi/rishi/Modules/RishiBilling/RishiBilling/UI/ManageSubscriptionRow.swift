@@ -18,7 +18,7 @@ public struct ManageSubscriptionRow: View {
         } label: {
             Label("Change Subscription", systemImage: "creditcard")
         }
-        .sheet(isPresented: $showSubscriptions) {
+        .rishiSubscriptionPresentation(isPresented: $showSubscriptions) {
             SubscriptionsView()
         }
     }

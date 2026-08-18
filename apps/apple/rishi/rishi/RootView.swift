@@ -135,7 +135,7 @@ struct RootView: View {
             .onReceive(NotificationCenter.default.publisher(for: .rishiPresentSubscriptions)) { _ in
                 showSubscriptions = true
             }
-            .sheet(isPresented: $showSubscriptions, onDismiss: {
+            .rishiSubscriptionPresentation(isPresented: $showSubscriptions, onDismiss: {
                 Task {
                     await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
                     guard pendingSubscriptionConfirmation else { return }
