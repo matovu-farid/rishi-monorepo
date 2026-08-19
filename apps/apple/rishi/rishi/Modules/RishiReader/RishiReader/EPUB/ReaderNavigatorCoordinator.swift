@@ -2,8 +2,14 @@
 import Foundation
 import UIKit
 import PDFKit
+import os.signpost
 import ReadiumShared
 import ReadiumNavigator
+
+private let readerNavigatorSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "reader"
+)
 
 /// Constructs and owns the Readium visual navigator for a single
 /// publication. The coordinator is the bridge between Readium's
@@ -75,6 +81,11 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageBackward: () -> Void = {}
 
+    /// Fired once after Readium reports the initial visible location. The
+    /// reader uses this boundary to start non-critical background work only
+    /// after the first page exists, not merely after `setupPDFView`.
+    public var onFirstContentReady: @MainActor () async -> Void = {}
+
     /// Dismisses a pending selection when Escape is pressed. Returns true
     /// when the callback consumed the key and false when it should pass on.
     public var onEscape: () -> Bool = { false }
@@ -104,12 +115,33 @@ public final class ReaderNavigatorCoordinator: NSObject {
     private var pdfFitCandidatePasses = 0
     private var isApplyingPDFViewMode = false
     private var pendingPDFViewMode: PDFViewModeSetting?
+    private var didReportFirstContentReady = false
+    private var firstContentCallbackTask: Task<Void, Never>?
 
     public init(viewModel: ReaderViewModel) {
         self.viewModel = viewModel
         super.init()
         viewModel.currentVisibleLocatorProvider = { [weak self] in
             await self?.navigator?.firstVisibleElementLocator()
+        }
+    }
+
+    /// Cancels the deferred first-content callback when UIKit dismantles the
+    /// representable. The task captures only the callback value, not the
+    /// coordinator, so it cannot retain the UIKit hierarchy.
+    public func cancelPendingFirstContentCallback() {
+        firstContentCallbackTask?.cancel()
+        firstContentCallbackTask = nil
+    }
+
+    private func reportFirstContentReadyIfNeeded() {
+        guard !didReportFirstContentReady else { return }
+        didReportFirstContentReady = true
+        let callback = onFirstContentReady
+        firstContentCallbackTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            await callback()
         }
     }
 
@@ -447,6 +479,10 @@ public final class ReaderNavigatorCoordinator: NSObject {
             Log.reader.debug("ReaderNavigatorCoordinator: publication not yet loaded; deferring navigator build")
             return
         }
+        let constructionState = readerNavigatorSignposter.beginInterval("reader.navigator.construct")
+        defer {
+            readerNavigatorSignposter.endInterval("reader.navigator.construct", constructionState)
+        }
         let nav: UIViewController & VisualNavigator
         if publication.manifest.conforms(to: .pdf) {
             let pdf = try PDFNavigatorViewController(
@@ -668,6 +704,9 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
             isProgrammatic: isProgrammatic,
             isInitialLocation: isInitialLocation
         )
+        if isInitialLocation {
+            reportFirstContentReadyIfNeeded()
+        }
     }
 
     public func navigator(_ navigator: any Navigator, presentExternalURL url: URL) {

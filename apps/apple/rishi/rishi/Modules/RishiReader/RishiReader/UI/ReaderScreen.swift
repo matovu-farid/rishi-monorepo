@@ -57,6 +57,8 @@ public struct ReaderScreen: View {
 
     private let onReadAloud: (() -> Void)?
     private let onReadAloudFrom: ((Locator) -> Void)?
+    private let onFirstContentReady: @MainActor () async -> Void
+    private let onLoadFailed: @MainActor () async -> Void
 
     private let voicePresenter: (any ReaderVoicePresenter)?
     
@@ -147,6 +149,8 @@ public struct ReaderScreen: View {
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         onReadAloudFrom: ((Locator) -> Void)? = nil,
+        onFirstContentReady: @escaping @MainActor () async -> Void = {},
+        onLoadFailed: @escaping @MainActor () async -> Void = {},
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
@@ -163,6 +167,8 @@ public struct ReaderScreen: View {
         self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloudFrom = onReadAloudFrom
         self.onReadAloud = onReadAloud
+        self.onFirstContentReady = onFirstContentReady
+        self.onLoadFailed = onLoadFailed
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
@@ -199,6 +205,7 @@ public struct ReaderScreen: View {
             onPageForward: goForward,
             onPageBackward: goBackward,
             onEscape: dismissPendingSelection,
+            onFirstContentReady: onFirstContentReady,
             onTap: { location in
                 let resolver = ReaderTapRegionResolver()
                 let decision = resolver.decide(
@@ -282,12 +289,22 @@ public struct ReaderScreen: View {
             .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
         #endif
         .task {
-
-            let state = epubReaderSignposter.beginInterval("reader.epub.open")
-            defer {
-                epubReaderSignposter.endInterval("reader.epub.open", state)
+            if viewModel.book.formatType == .pdf {
+                let state = epubReaderSignposter.beginInterval("reader.pdf.load")
+                await viewModel.load()
+                epubReaderSignposter.endInterval("reader.pdf.load", state)
+            } else {
+                let state = epubReaderSignposter.beginInterval("reader.epub.load")
+                await viewModel.load()
+                epubReaderSignposter.endInterval("reader.epub.load", state)
             }
-            await viewModel.load()
+            if case .failed = viewModel.loadingState {
+                await onLoadFailed()
+            }
+            let enrichmentState = epubReaderSignposter.beginInterval("reader.enrichment")
+            defer {
+                epubReaderSignposter.endInterval("reader.enrichment", enrichmentState)
+            }
             if let settings = readerSettingsStore {
                 if await settings.persistedTheme(for: viewModel.book.id) == nil {
                     await settings.setTheme(appDefaultTheme, for: viewModel.book.id)

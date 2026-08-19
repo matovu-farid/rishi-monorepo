@@ -169,23 +169,27 @@ public final class ReaderViewModel: @unchecked Sendable {
         // single awaiter (this Task), so the non-Sendable `Publication`
         // crosses the boundary via the detached-task `sending` result.
         //
-        // Phase 21 audit fix: the position-restore await is hoisted
-        // into the detached block alongside the publication open so the
-        // full round-trip is off-main and only the final assignment
-        // block runs on the caller's isolation (MainActor under
-        // SwiftUI's `.task`). Previously `positionStore.position(for:)`
-        // ran between the parse completion and the `.loaded` write,
-        // which left a tiny but real MainActor-resumed window between
-        // two off-main hops.
+        // The position lookup starts alongside publication opening so a
+        // slow position store cannot add its full latency after parsing.
+        // It is deliberately an unstructured child: if publication open
+        // fails, we cancel the lookup without awaiting a store that may be
+        // slow or non-cooperative. On success we still await the lookup
+        // before publishing the one cohesive publication + locator state,
+        // preserving the saved-page initial-location behavior.
         let bookId = book.id
         let positionStoreRef = positionStore
         let pub: Publication?
         let restoredPosition: (locator: Locator, source: ReaderPositionLocator.Source)?
         do {
             let result: (Publication, (locator: Locator, source: ReaderPositionLocator.Source)?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
+                let positionTask = Task.detached(priority: .userInitiated) {
+                    try? await positionStoreRef.position(for: bookId)
+                }
+
+                do {
                 let publication = try await loader.open(fileURL: documentURL)
                 let restored: (locator: Locator, source: ReaderPositionLocator.Source)?
-                if let last = try? await positionStoreRef.position(for: bookId) {
+                if let last = await positionTask.value {
                     if let wrapper = try? ReaderPositionLocator.decode(jsonString: last.locator),
                        let locator = wrapper.toReadiumLocator()
                     {
@@ -199,6 +203,10 @@ public final class ReaderViewModel: @unchecked Sendable {
                     restored = nil
                 }
                 return (publication, restored)
+                } catch {
+                    positionTask.cancel()
+                    throw error
+                }
             }.value
             pub = result.0
             restoredPosition = result.1

@@ -19,6 +19,44 @@ import Testing
 @Suite("RishiSearchIndexingHook (25-11)", .serialized)
 struct RishiSearchIndexingHookTests {
 
+    actor ExtractionRecorder {
+        private(set) var count = 0
+
+        func record() { count += 1 }
+    }
+
+    private struct CountingBlockingTextExtractor: PerBookTextExtractor {
+        let recorder: ExtractionRecorder
+        let gate: RishiReaderLoadGate
+
+        func extractParagraphs(
+            from _: URL
+        ) async throws -> [(page: Int, text: String)] {
+            await recorder.record()
+            await gate.wait()
+            return [(page: 1, text: "alpha")]
+        }
+    }
+
+    actor RishiReaderLoadGate {
+        private var isOpen = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            if isOpen { return }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+
+        func open() {
+            isOpen = true
+            let pending = waiters
+            waiters.removeAll()
+            for waiter in pending { waiter.resume() }
+        }
+    }
+
     // MARK: - Fixtures
 
     /// Stub extractor that always returns the canned paragraph rows.
@@ -179,6 +217,47 @@ struct RishiSearchIndexingHookTests {
             return false
         }
         #expect(indexingVisible, "The hook should publish .indexing before extraction completes")
+    }
+
+    @Test("concurrent calls coalesce into one in-flight extraction")
+    func scheduleIndexing_coalescesConcurrentCalls() async throws {
+        let root = Self.makeTempRoot()
+        let bookId = UUID()
+        let book = Self.makeBook(id: bookId)
+        let recorder = ExtractionRecorder()
+        let gate = RishiReaderLoadGate()
+        let builder = IndexBuilder(rootURL: root, embedder: IdentityEmbedder())
+        let hook = RishiSearchIndexingHook(
+            builder: builder,
+            extractors: ["pdf": CountingBlockingTextExtractor(recorder: recorder, gate: gate)]
+        )
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await hook.scheduleIndexing(
+                    for: book,
+                    fileURL: URL(fileURLWithPath: "/tmp/fixture.pdf")
+                )
+            }
+            group.addTask {
+                await hook.scheduleIndexing(
+                    for: book,
+                    fileURL: URL(fileURLWithPath: "/tmp/fixture.pdf")
+                )
+            }
+        }
+
+        let started = await Self.waitUntil {
+            await recorder.count > 0
+        }
+        #expect(started)
+        #expect(await recorder.count == 1)
+
+        await gate.open()
+        let ready = await Self.waitUntil {
+            IndexStatusStore(url: BookIndexLocator(rootURL: root).statusURL(bookId)).read() == .ready
+        }
+        #expect(ready)
     }
 
     @Test("Built index is searchable via USearchBookSearch")

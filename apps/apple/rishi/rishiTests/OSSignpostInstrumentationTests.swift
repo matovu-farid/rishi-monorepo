@@ -70,7 +70,7 @@ struct OSSignpostInstrumentationTests {
 
     @Test("LibraryRootView carries OSSignposter and emits library.first-paint interval")
     func test_libraryFirstPaintSignpost() throws {
-        let src = try Self.read("Packages/RishiLibrary/Sources/RishiLibrary/Views/LibraryRootView.swift")
+        let src = try Self.read("rishi/Library/LibraryRootView.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("category: \"library\""))
@@ -81,13 +81,15 @@ struct OSSignpostInstrumentationTests {
 
     
 
-    @Test("ReaderScreen carries OSSignposter and emits reader.epub.open interval")
+    @Test("ReaderScreen carries OSSignposter and emits format-specific load intervals")
     func test_epubReaderOpenSignpost() throws {
-        let src = try Self.read("Packages/RishiReader/Sources/RishiReader/UI/ReaderScreen.swift")
+        let src = try Self.read("rishi/Modules/RishiReader/RishiReader/UI/ReaderScreen.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("category: \"reader\""))
-        #expect(src.contains("reader.epub.open"))
+        #expect(src.contains("reader.epub.load"))
+        #expect(src.contains("reader.pdf.load"))
+        #expect(src.contains("reader.enrichment"))
         #expect(src.contains("beginInterval"))
         #expect(src.contains("endInterval"))
     }
@@ -96,7 +98,7 @@ struct OSSignpostInstrumentationTests {
 
     @Test("PDFReaderScreen carries OSSignposter and emits reader.pdf.open interval")
     func test_pdfReaderOpenSignpost() throws {
-        let src = try Self.read("Packages/RishiReader/Sources/RishiReader/UI/PDFReaderScreen.swift")
+        let src = try Self.read("rishi/Modules/RishiReader/RishiReader/UI/PDFReaderScreen.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("category: \"reader\""))
@@ -105,11 +107,28 @@ struct OSSignpostInstrumentationTests {
         #expect(src.contains("endInterval"))
     }
 
+    @Test("Unified reader reports first content after the initial location")
+    func test_unifiedReaderFirstContentBoundary() throws {
+        let coordinator = try Self.read(
+            "rishi/Modules/RishiReader/RishiReader/EPUB/ReaderNavigatorCoordinator.swift"
+        )
+        let readerView = try Self.read(
+            "rishi/Modules/RishiReader/RishiReader/EPUB/ReaderView.swift"
+        )
+        #expect(coordinator.contains("locationDidChange"))
+        #expect(coordinator.contains("reportFirstContentReadyIfNeeded"))
+        #expect(coordinator.contains("await callback()"))
+        #expect(coordinator.contains("reader.navigator.construct"))
+        #expect(readerView.contains("dismantleUIViewController"))
+        #expect(readerView.contains("cancelPendingFirstContentCallback"))
+        #expect(readerView.contains("reader.navigator.attach"))
+    }
+
     
 
     @Test("ReaderChromeController carries OSSignposter and emits reader.chrome.toggle interval")
     func test_chromeToggleSignpost() throws {
-        let src = try Self.read("Packages/RishiReader/Sources/RishiReader/UI/ReaderChromeController.swift")
+        let src = try Self.read("rishi/Modules/RishiReader/RishiReader/UI/ReaderChromeController.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("category: \"chrome\""))
@@ -122,7 +141,7 @@ struct OSSignpostInstrumentationTests {
 
     @Test("SyncEngine.runOnce carries OSSignposter and emits sync.wave interval")
     func test_syncWaveSignpost() throws {
-        let src = try Self.read("Packages/RishiSync/Sources/RishiSync/Engine/SyncEngine.swift")
+        let src = try Self.read("rishi/Modules/RishiSync/RishiSync/Engine/SyncEngine.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("category: \"sync\""))
@@ -138,15 +157,23 @@ struct OSSignpostInstrumentationTests {
         let expectedIntervalNames: [(file: String, interval: String)] = [
             ("rishi/rishi/AppDependencies.swift",
              "cold-launch.bootstrap"),
-            ("Packages/RishiLibrary/Sources/RishiLibrary/Views/LibraryRootView.swift",
+            ("rishi/Library/LibraryRootView.swift",
              "library.first-paint"),
-            ("Packages/RishiReader/Sources/RishiReader/UI/ReaderScreen.swift",
-             "reader.epub.open"),
-            ("Packages/RishiReader/Sources/RishiReader/UI/PDFReaderScreen.swift",
+            ("rishi/Modules/RishiReader/RishiReader/UI/ReaderScreen.swift",
+             "reader.epub.load"),
+            ("rishi/Modules/RishiReader/RishiReader/UI/ReaderScreen.swift",
+             "reader.pdf.load"),
+            ("rishi/Modules/RishiReader/RishiReader/UI/ReaderScreen.swift",
+             "reader.enrichment"),
+            ("rishi/Modules/RishiReader/RishiReader/EPUB/ReaderNavigatorCoordinator.swift",
+             "reader.navigator.construct"),
+            ("rishi/Modules/RishiReader/RishiReader/EPUB/ReaderView.swift",
+             "reader.navigator.attach"),
+            ("rishi/Modules/RishiReader/RishiReader/UI/PDFReaderScreen.swift",
              "reader.pdf.open"),
-            ("Packages/RishiReader/Sources/RishiReader/UI/ReaderChromeController.swift",
+            ("rishi/Modules/RishiReader/RishiReader/UI/ReaderChromeController.swift",
              "reader.chrome.toggle"),
-            ("Packages/RishiSync/Sources/RishiSync/Engine/SyncEngine.swift",
+            ("rishi/Modules/RishiSync/RishiSync/Engine/SyncEngine.swift",
              "sync.wave"),
         ]
 

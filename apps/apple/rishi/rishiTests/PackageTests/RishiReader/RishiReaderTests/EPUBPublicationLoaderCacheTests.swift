@@ -35,6 +35,16 @@ struct PublicationLoaderCacheTests {
         return dest
     }
 
+    private func makeBookLayoutPDF(bookId: BookID) throws -> URL {
+        let bookDir = URL.temporaryDirectory
+            .appendingPathComponent("plan-21-04-loader-(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(bookId.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: bookDir, withIntermediateDirectories: true)
+        let dest = bookDir.appendingPathComponent("fixture.pdf")
+        try RishiReader_FixtureBuilders.writeTinyPDF(to: dest)
+        return dest
+    }
+
     private func makeCacheRoot() -> URL {
         let dir = URL.temporaryDirectory
             .appendingPathComponent("plan-21-04-cache-\(UUID().uuidString)", isDirectory: true)
@@ -134,5 +144,27 @@ struct PublicationLoaderCacheTests {
     func bookIdNilForBundleURL() throws {
         let url = try aliceURL()
         #expect(PublicationLoader.bookId(forFileURL: url) == nil)
+    }
+
+    @Test("PDFs bypass the EPUB unpack cache and still open through Readium")
+    func pdfBypassesEPUBUnpackCache() async throws {
+        let bookId = BookID()
+        let pdf = try makeBookLayoutPDF(bookId: bookId)
+        defer {
+            try? FileManager.default.removeItem(
+                at: pdf.deletingLastPathComponent().deletingLastPathComponent()
+            )
+        }
+        let cacheRoot = makeCacheRoot()
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+
+        let cache = EPUBUnpackedCache(configuration: .init(rootDirectory: cacheRoot))
+        let loader = PublicationLoader(unpackedCache: cache)
+
+        let publication = try await loader.open(fileURL: pdf)
+
+        #expect(publication.conforms(to: .pdf))
+        #expect(await cache.didAttemptUnpackCount == 0)
+        #expect(await cache.didUnpackCount == 0)
     }
 }

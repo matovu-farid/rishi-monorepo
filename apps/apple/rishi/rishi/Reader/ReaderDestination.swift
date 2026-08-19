@@ -98,6 +98,7 @@ struct ReaderDestination: View {
     @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
     @State private var pendingNarrationUpgradeSessionToken: UUID?
     @State private var paywallRequestHandoff = ReaderPaywallRequestHandoff()
+    @State private var didScheduleReaderIndexBackfill = false
 
     @State private var voiceEntry: ReaderVoiceEntry
     @State private var readerTour: ReaderOnboardingTourCoordinator?
@@ -153,6 +154,8 @@ struct ReaderDestination: View {
                 startReadAloud()
             },
             onReadAloudFrom: { locator in startReadAloud(from: locator) },
+            onFirstContentReady: { await scheduleReaderIndexBackfillIfNeeded() },
+            onLoadFailed: { await scheduleReaderIndexBackfillIfNeeded() },
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
@@ -234,12 +237,9 @@ struct ReaderDestination: View {
 
 
 
-            if await dependencies.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
-                let url = dependencies.bookFileStorage.absoluteFileURL(for: vm.book)
-                await dependencies.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
-            }
         }
         .onDisappear {
+            didScheduleReaderIndexBackfill = false
             syncBinding = nil
             readAloudStartTask?.cancel()
             readAloudStartTask = nil
@@ -486,6 +486,17 @@ struct ReaderDestination: View {
             )
             if !started { readerTour?.readAloudFailed() }
         }
+    }
+
+    @MainActor
+    private func scheduleReaderIndexBackfillIfNeeded() async {
+        guard !didScheduleReaderIndexBackfill else { return }
+        didScheduleReaderIndexBackfill = true
+        guard await dependencies.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex else {
+            return
+        }
+        let url = dependencies.bookFileStorage.absoluteFileURL(for: vm.book)
+        await dependencies.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
     }
 }
 

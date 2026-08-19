@@ -41,7 +41,11 @@ public actor EPUBUnpackedCache {
     }
 
     private let store: EPUBUnpackedFileStore
-    /// Test-only counter: number of physical unpack operations performed.
+    /// Test-only counter: number of physical unpack attempts started.
+    /// Exposed as actor-isolated so tests can prove non-EPUBs never enter
+    /// this cache's slow path, even when unzip fails before completion.
+    public private(set) var didAttemptUnpackCount: Int = 0
+    /// Test-only counter: number of physical unpack operations completed.
     /// Exposed as actor-isolated so concurrent reads from the parallel-
     /// unpack tests see a coherent value.
     public private(set) var didUnpackCount: Int = 0
@@ -106,6 +110,7 @@ public actor EPUBUnpackedCache {
         if let existing = inflight[bookId] {
             return await existing.value
         }
+        didAttemptUnpackCount &+= 1
         // KEEP: actor-method await; the actor already retains this task
         // in `inflight[bookId]`, so a weak-self capture would orphan the
         // in-flight unzip if the actor briefly released. Strong capture

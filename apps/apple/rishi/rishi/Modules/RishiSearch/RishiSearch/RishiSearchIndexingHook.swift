@@ -1,5 +1,17 @@
 import Foundation
 
+private actor IndexingInFlightClaims {
+    private var bookIDs: Set<UUID> = []
+
+    func claim(_ bookID: UUID) -> Bool {
+        guard bookIDs.insert(bookID).inserted else { return false }
+        return true
+    }
+
+    func release(_ bookID: UUID) {
+        bookIDs.remove(bookID)
+    }
+}
 
 
 
@@ -22,6 +34,7 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
     private let builder: IndexBuilder
     private let extractors: [String: any PerBookTextExtractor]
     private let onIndexReady: (@Sendable (UUID) async -> Void)?
+    private let inFlightClaims = IndexingInFlightClaims()
 
     public init(
         builder: IndexBuilder,
@@ -50,6 +63,14 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
             await builder.markFailed(bookId: bookId, reason: "no extractor for .\(ext)")
             return
         }
+        guard await inFlightClaims.claim(bookId) else {
+            Log.event("rag.index.coalesced", level: .info, data: [
+                "bookId": bookId.uuidString,
+                "ext": ext,
+            ])
+            return
+        }
+        let inFlightClaims = self.inFlightClaims
         // Detached — returns immediately. CONTEXT.md: indexing is non-blocking,
         // failures surface via `index.status.json` (IndexBuilder writes the
         // sidecar). We log scheduling so the cold-start window is observable.
@@ -70,10 +91,12 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
                     // sidecar moves out of `.notIndexed` and the cold-start
                     // sentinel doesn't stick.
                     try await builder.buildIndex(bookId: bookId, paragraphs: [])
+                    await inFlightClaims.release(bookId)
                     await onIndexReady?(bookId)
                     return
                 }
                 try await builder.buildIndex(bookId: bookId, paragraphs: paragraphs)
+                await inFlightClaims.release(bookId)
                 await onIndexReady?(bookId)
                 Log.event("rag.index.scheduled.done", level: .info, data: [
                     "bookId": bookId.uuidString,
@@ -92,6 +115,7 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
                     bookId: bookId,
                     reason: String(describing: error)
                 )
+                await inFlightClaims.release(bookId)
             }
         }
     }

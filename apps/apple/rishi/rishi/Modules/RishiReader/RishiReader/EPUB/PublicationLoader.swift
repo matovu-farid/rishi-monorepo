@@ -33,8 +33,9 @@ public protocol PublicationLoading: Sendable {
 /// 3.9 `AssetRetriever` + `PublicationOpener` + `DefaultPublicationParser`
 /// pipeline (Spike A locked this exact shape).
 ///
-/// **Phase 21 Plan 21-04 — warm directory cache.** Before invoking the
-/// Readium pipeline this loader consults the injected ``EPUBUnpackedCache``:
+/// **Phase 21 Plan 21-04 — warm directory cache.** For EPUB files only,
+/// before invoking the Readium pipeline this loader consults the injected
+/// ``EPUBUnpackedCache``:
 ///   1. If the cache holds a fresh unpacked directory for the EPUB's bookId,
 ///      open Readium against that directory URL (no per-launch ZIP unpack).
 ///   2. On cache miss, ask the cache to unpack the EPUB into its cache
@@ -71,8 +72,9 @@ public final class PublicationLoader: PublicationLoading, Sendable {
         self.unpackedCache = unpackedCache
     }
 
-    /// Opens the EPUB at `fileURL`. Throws on any failure in the
-    /// retrieve → open pipeline.
+    /// Opens the EPUB or PDF at `fileURL`. EPUB files may use the warm
+    /// unpacked-directory path; PDFs always use the normal Readium asset
+    /// retrieval and PDF publication parser path.
     ///
     /// Per Phase 19 plan 19-09 (F-P0-08 EPUB slice): this body runs
     /// off-main when called from ``ReaderViewModel/load()`` because
@@ -185,7 +187,8 @@ public final class PublicationLoader: PublicationLoading, Sendable {
     /// the slow-path unpack succeeded. Caller still safely falls back
     /// to the ZIP-asset path if Readium can't open the directory.
     private func resolveWarmDirectoryURL(for fileURL: URL) async -> URL? {
-        guard let cache = unpackedCache,
+        guard fileURL.pathExtension.caseInsensitiveCompare("epub") == .orderedSame,
+              let cache = unpackedCache,
               let bookId = Self.bookId(forFileURL: fileURL)
         else { return nil }
 

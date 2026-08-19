@@ -1,8 +1,14 @@
 #if canImport(UIKit)
 import SwiftUI
 import UIKit
+import os.signpost
 import ReadiumShared
 import ReadiumNavigator
+
+private let readerNavigatorAttachmentSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "reader"
+)
 
 
 
@@ -44,6 +50,8 @@ public struct ReaderView: UIViewControllerRepresentable {
     public let onPageForward: () -> Void
     public let onPageBackward: () -> Void
     public let onEscape: () -> Bool
+    /// Called once after Readium reports the initial visible location.
+    public let onFirstContentReady: @MainActor () async -> Void
     /// Phase 21 — single-tap callback driven by a UIKit
     /// `UITapGestureRecognizer` attached directly to the engine's
     /// container view with `cancelsTouchesInView = false`. This replaces
@@ -74,6 +82,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         onPageForward: @escaping () -> Void = {},
         onPageBackward: @escaping () -> Void = {},
         onEscape: @escaping () -> Bool = { false },
+        onFirstContentReady: @escaping @MainActor () async -> Void = {},
         onTap: @escaping (CGPoint) -> Void = { _ in },
         coordinatorRef: ReaderCoordinatorRef = ReaderCoordinatorRef()
     ) {
@@ -86,6 +95,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         self.onPageForward = onPageForward
         self.onPageBackward = onPageBackward
         self.onEscape = onEscape
+        self.onFirstContentReady = onFirstContentReady
         self.onTap = onTap
         self.coordinatorRef = coordinatorRef
     }
@@ -97,6 +107,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         c.onPageForward = onPageForward
         c.onPageBackward = onPageBackward
         c.onEscape = onEscape
+        c.onFirstContentReady = onFirstContentReady
         c.onTap = onTap
         coordinatorRef.coordinator = c
         return c
@@ -110,6 +121,7 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.onPageForward = onPageForward
         context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onEscape = onEscape
+        context.coordinator.onFirstContentReady = onFirstContentReady
         context.coordinator.onTap = onTap
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
@@ -127,10 +139,18 @@ public struct ReaderView: UIViewControllerRepresentable {
         context.coordinator.onPageForward = onPageForward
         context.coordinator.onPageBackward = onPageBackward
         context.coordinator.onEscape = onEscape
+        context.coordinator.onFirstContentReady = onFirstContentReady
         context.coordinator.onTap = onTap
         context.coordinator.pdfViewMode = pdfViewModeBinding?.wrappedValue ?? pdfViewMode
         coordinatorRef.coordinator = context.coordinator
         attachNavigatorIfReady(into: uiViewController, coordinator: context.coordinator)
+    }
+
+    public static func dismantleUIViewController(
+        _ uiViewController: UIViewController,
+        coordinator: ReaderNavigatorCoordinator
+    ) {
+        coordinator.cancelPendingFirstContentCallback()
     }
 
     /// Installs a single-tap `UITapGestureRecognizer` on the container
@@ -167,6 +187,10 @@ public struct ReaderView: UIViewControllerRepresentable {
         guard let navigator = coordinator.navigator else { return }
         // Avoid re-adding once installed.
         if navigator.parent === container { return }
+        let attachmentState = readerNavigatorAttachmentSignposter.beginInterval("reader.navigator.attach")
+        defer {
+            readerNavigatorAttachmentSignposter.endInterval("reader.navigator.attach", attachmentState)
+        }
         // Detach from any previous parent (defensive — coordinator could
         // be reused if SwiftUI rebuilds the container).
         navigator.willMove(toParent: nil)

@@ -25,6 +25,33 @@ import ReadiumShared
 @Suite("ReaderViewModel.load isolation", .serialized)
 struct ReaderViewModelLoadTests {
 
+    actor AsyncGate {
+        private var isOpen = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            if isOpen { return }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+
+        func open() {
+            isOpen = true
+            let pending = waiters
+            waiters.removeAll()
+            for waiter in pending { waiter.resume() }
+        }
+    }
+
+    actor ProbeState {
+        private(set) var didStart = false
+        private(set) var didFinish = false
+
+        func markStarted() { didStart = true }
+        func markFinished() { didFinish = true }
+    }
+
     // MARK: - Probe loader
 
     /// Probe that records `Thread.isMainThread` on entry and forwards
@@ -72,6 +99,60 @@ struct ReaderViewModelLoadTests {
         }
     }
 
+    final class GateLoader: PublicationLoading, @unchecked Sendable {
+        private let inner: PublicationLoader
+        private let gate: AsyncGate
+        private let state: ProbeState
+
+        init(inner: PublicationLoader = PublicationLoader(), gate: AsyncGate, state: ProbeState) {
+            self.inner = inner
+            self.gate = gate
+            self.state = state
+        }
+
+        func open(fileURL: URL) async throws -> Publication {
+            await state.markStarted()
+            await gate.wait()
+            return try await inner.open(fileURL: fileURL)
+        }
+    }
+
+    struct ThrowingLoader: PublicationLoading {
+        let state: ProbeState
+
+        func open(fileURL _: URL) async throws -> Publication {
+            await state.markStarted()
+            throw NSError(domain: "ReaderViewModelLoadTests", code: 1)
+        }
+    }
+
+    struct HangingPositionStore: PositionStore {
+        let gate: AsyncGate
+        let state: ProbeState
+
+        func position(for _: BookID) async throws -> Position? {
+            await state.markStarted()
+            await gate.wait()
+            return nil
+        }
+
+        func upsert(_: Position) async throws {}
+        func delete(_: PositionID) async throws {}
+    }
+
+    struct RecordingPositionStore: PositionStore {
+        let state: ProbeState
+        let position: Position
+
+        func position(for _: BookID) async throws -> Position? {
+            await state.markStarted()
+            return position
+        }
+
+        func upsert(_: Position) async throws {}
+        func delete(_: PositionID) async throws {}
+    }
+
     // MARK: - Helpers
 
     private func aliceURL() throws -> URL {
@@ -80,6 +161,18 @@ struct ReaderViewModelLoadTests {
 
     private func makeBook() -> Book {
         Book(userId: UUID(), title: "Alice", formatType: .epub, fileURL: "Books/x/alice.epub")
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 1.0,
+        _ predicate: @escaping @Sendable () async -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if await predicate() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await predicate()
     }
 
     // MARK: - Tests
@@ -157,5 +250,76 @@ struct ReaderViewModelLoadTests {
 
         let recorded: Bool = try #require(probe.wasInvokedOnMain)
         #expect(recorded == false)
+    }
+
+    @Test("load starts position lookup before publication open completes")
+    func test_loadStartsPositionLookupConcurrently() async throws {
+        let url = try aliceURL()
+        let book = makeBook()
+        let openGate = AsyncGate()
+        let loaderState = ProbeState()
+        let positionState = ProbeState()
+        let position = Position(
+            bookId: book.id,
+            locator: try EPUBPositionLocator(
+                locator: Locator(
+                    href: try #require(RelativeURL(path: "chapter1.xhtml")),
+                    mediaType: .xhtml,
+                    locations: Locator.Locations(progression: 0.42)
+                )
+            ).encodedJSONString()
+        )
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: RecordingPositionStore(state: positionState, position: position),
+            loader: GateLoader(gate: openGate, state: loaderState),
+            debounceSeconds: 0.05
+        )
+
+        let loadTask = Task { await vm.load() }
+        #expect(await waitUntil { await loaderState.didStart })
+        #expect(await waitUntil { await positionState.didStart })
+
+        await openGate.open()
+        await loadTask.value
+
+        #expect(vm.loadingState == .loaded)
+        let restoredHref = try #require(vm.latestLocator?.href)
+        #expect(String(describing: restoredHref).contains("chapter1.xhtml"))
+    }
+
+    @Test("publication failure does not wait for a hanging position lookup")
+    func test_publicationFailureDoesNotWaitForPositionLookup() async throws {
+        let book = makeBook()
+        let positionGate = AsyncGate()
+        let loaderState = ProbeState()
+        let positionState = ProbeState()
+        let finishedState = ProbeState()
+        let vm = ReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: try aliceURL(),
+            positionStore: HangingPositionStore(gate: positionGate, state: positionState),
+            loader: ThrowingLoader(state: loaderState),
+            debounceSeconds: 0.05
+        )
+
+        let loadTask = Task {
+            await vm.load()
+            await finishedState.markFinished()
+        }
+
+        #expect(await waitUntil { await loaderState.didStart })
+        #expect(await waitUntil { await positionState.didStart })
+        #expect(await waitUntil { await finishedState.didFinish })
+        #expect({
+            if case .failed = vm.loadingState { return true }
+            return false
+        }())
+
+        await positionGate.open()
+        await loadTask.value
     }
 }
