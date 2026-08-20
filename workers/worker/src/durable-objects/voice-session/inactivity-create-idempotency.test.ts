@@ -66,18 +66,18 @@ describe("create idempotency after inactivity / null-callId orphan", () => {
   });
 
   /**
-   * Documented contract: terminal inactivity_timeout + hangup succeeded does
-   * not match findLiveVoiceSession's blocking predicate (live statuses OR
-   * terminal with hangup not_started/pending). Therefore create proceeds.
+   * Documented contract: terminal rows never match findLiveVoiceSession's
+   * admission predicate. Provider hangup remains alarm-driven cleanup, but
+   * it is not allowed to turn a completed client session into a false
+   * single-session lock.
    */
-  it("terminal + hangup succeeded is not a blocking live session", () => {
+  it("terminal rows are never a blocking live session", () => {
     const sqlSrc = readFileSync(join(here, "sql.ts"), "utf8");
     const findStart = sqlSrc.indexOf("export async function findLiveVoiceSession");
     const findEnd = sqlSrc.indexOf("export async function findVoiceSessionById", findStart);
     const body = sqlSrc.slice(findStart, findEnd);
     expect(body).toMatch(/pending_registration',\s*'active'/);
-    expect(body).toMatch(/hangupStatus.*not_started.*pending|not_started',\s*'pending'/);
-    // Succeeded hangup is intentionally absent from the blocking set.
-    expect(body).not.toMatch(/'succeeded'/);
+    expect(body).not.toMatch(/'terminal'/);
+    expect(body).not.toMatch(/hangupStatus/);
   });
 });

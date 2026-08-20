@@ -36,7 +36,8 @@ final class AppRouter {
         url: URL,
         bookStore: (any BookStore)?,
         conversationStore: (any ConversationStore)?,
-        currentUserID: UserID? = nil
+        currentUserID: UserID? = nil,
+        beforePresentingBook: @escaping @MainActor () async -> Bool = { true }
     ) {
         let destination = deepLinks.route(url)
         switch destination {
@@ -65,13 +66,31 @@ final class AppRouter {
                         schedulePendingAccountDrain(
                             bookStore: bookStore,
                             conversationStore: conversationStore,
-                            currentUserID: currentUserID
+                            currentUserID: currentUserID,
+                            beforePresentingBook: beforePresentingBook
                         )
                         return
                     }
                     guard book.userId == currentUserID,
                           AppDependencies.shared.cachedUserId == currentUserID else {
                         resolvingAccountURLs.remove(url)
+                        return
+                    }
+                    guard await beforePresentingBook() else {
+                        resolvingAccountURLs.remove(url)
+                        enqueuePendingAccountURL(url)
+                        schedulePendingAccountDrain(
+                            bookStore: bookStore,
+                            conversationStore: conversationStore,
+                            currentUserID: currentUserID,
+                            beforePresentingBook: beforePresentingBook
+                        )
+                        return
+                    }
+                    guard book.userId == currentUserID,
+                          AppDependencies.shared.cachedUserId == currentUserID else {
+                        resolvingAccountURLs.remove(url)
+                        enqueuePendingAccountURL(url)
                         return
                     }
                     removePendingAccountURL(url)
@@ -83,7 +102,8 @@ final class AppRouter {
                     schedulePendingAccountDrain(
                         bookStore: bookStore,
                         conversationStore: conversationStore,
-                        currentUserID: currentUserID
+                        currentUserID: currentUserID,
+                        beforePresentingBook: beforePresentingBook
                     )
                 }
             }
@@ -106,7 +126,8 @@ final class AppRouter {
                         schedulePendingAccountDrain(
                             bookStore: bookStore,
                             conversationStore: conversationStore,
-                            currentUserID: currentUserID
+                            currentUserID: currentUserID,
+                            beforePresentingBook: beforePresentingBook
                         )
                         return
                     }
@@ -124,7 +145,8 @@ final class AppRouter {
                     schedulePendingAccountDrain(
                         bookStore: bookStore,
                         conversationStore: conversationStore,
-                        currentUserID: currentUserID
+                        currentUserID: currentUserID,
+                        beforePresentingBook: beforePresentingBook
                     )
                 }
             }
@@ -176,7 +198,8 @@ final class AppRouter {
     func drainPendingAccountURLs(
         bookStore: (any BookStore)?,
         conversationStore: (any ConversationStore)?,
-        currentUserID: UserID
+        currentUserID: UserID,
+        beforePresentingBook: @escaping @MainActor () async -> Bool = { true }
     ) async {
         guard AppDependencies.shared.cachedUserId == currentUserID else { return }
         while let url = pendingAccountURLs.first {
@@ -198,7 +221,8 @@ final class AppRouter {
                         schedulePendingAccountDrain(
                             bookStore: bookStore,
                             conversationStore: conversationStore,
-                            currentUserID: currentUserID
+                            currentUserID: currentUserID,
+                            beforePresentingBook: beforePresentingBook
                         )
                         return
                     }
@@ -206,6 +230,21 @@ final class AppRouter {
                           AppDependencies.shared.cachedUserId == currentUserID else {
                         resolvingAccountURLs.remove(url)
                         pendingAccountURLs.removeFirst()
+                        continue
+                    }
+                    guard await beforePresentingBook() else {
+                        resolvingAccountURLs.remove(url)
+                        schedulePendingAccountDrain(
+                            bookStore: bookStore,
+                            conversationStore: conversationStore,
+                            currentUserID: currentUserID,
+                            beforePresentingBook: beforePresentingBook
+                        )
+                        return
+                    }
+                    guard book.userId == currentUserID,
+                          AppDependencies.shared.cachedUserId == currentUserID else {
+                        resolvingAccountURLs.remove(url)
                         continue
                     }
                     pendingAccountURLs.removeFirst()
@@ -216,7 +255,8 @@ final class AppRouter {
                     schedulePendingAccountDrain(
                         bookStore: bookStore,
                         conversationStore: conversationStore,
-                        currentUserID: currentUserID
+                        currentUserID: currentUserID,
+                        beforePresentingBook: beforePresentingBook
                     )
                     return
                 }
@@ -231,7 +271,8 @@ final class AppRouter {
                         schedulePendingAccountDrain(
                             bookStore: bookStore,
                             conversationStore: conversationStore,
-                            currentUserID: currentUserID
+                            currentUserID: currentUserID,
+                            beforePresentingBook: beforePresentingBook
                         )
                         return
                     }
@@ -249,7 +290,8 @@ final class AppRouter {
                     schedulePendingAccountDrain(
                         bookStore: bookStore,
                         conversationStore: conversationStore,
-                        currentUserID: currentUserID
+                        currentUserID: currentUserID,
+                        beforePresentingBook: beforePresentingBook
                     )
                     return
                 }
@@ -263,7 +305,8 @@ final class AppRouter {
     private func schedulePendingAccountDrain(
         bookStore: (any BookStore)?,
         conversationStore: (any ConversationStore)?,
-        currentUserID: UserID
+        currentUserID: UserID,
+        beforePresentingBook: @escaping @MainActor () async -> Bool = { true }
     ) {
         guard pendingAccountDrainTask == nil else { return }
         pendingAccountDrainTask = Task { @MainActor [weak self] in
@@ -273,7 +316,8 @@ final class AppRouter {
             await self.drainPendingAccountURLs(
                 bookStore: bookStore,
                 conversationStore: conversationStore,
-                currentUserID: currentUserID
+                currentUserID: currentUserID,
+                beforePresentingBook: beforePresentingBook
             )
         }
     }

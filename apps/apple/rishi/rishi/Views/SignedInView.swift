@@ -50,6 +50,7 @@ struct SignedInContentDependencies {
                 sharePackageService: services.library.sharePackageService,
                 entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
                 entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
+                voicePresenter: services.voice.presenter,
                 groupID: services.billing.groupID,
                 settings: SettingsContentDependencies(
                     workerClient: services.workerClient,
@@ -176,11 +177,21 @@ struct SignedInContent: View {
         .task {
             router.onCatalystBookResolved = { book in
                 model.hint(book)
+                dependencies.voicePresenter.scheduleRegisteredReaderCleanup()
                 readerWindows.open(book: book, user: user)
             }
         }
         .onDisappear {
             readerWindows.invalidate(userID: user.id)
+        }
+        .onChange(of: readerWindows.openWindows.isEmpty) { wasEmpty, isEmpty in
+            guard !wasEmpty, isEmpty else { return }
+            Task { await dependencies.voicePresenter.cleanupRegisteredReaderSessions() }
+        }
+#else
+        .onChange(of: router.path.isEmpty) { wasEmpty, isEmpty in
+            guard !wasEmpty, isEmpty else { return }
+            Task { await dependencies.voicePresenter.cleanupRegisteredReaderSessions() }
         }
 #endif
         .task(id: user.id) {

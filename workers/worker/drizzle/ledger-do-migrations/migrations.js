@@ -4,14 +4,16 @@ import m0002 from './20260717121820_colossal_pepper_potts/migration.sql';
 import m0003 from './20260718170000_reservations_pool_columns/migration.sql';
 import m0004 from './20260801071816_fluffy_molten_man/migration.sql';
 import m0005 from './20260801164853_productive_vision/migration.sql';
+import m0006 from './20260819130259_quiet_nightmare/migration.sql';
 
-export default {
-  migrations: {
-    "20260717105621_real_purple_man": m0000,
-    "20260717120125_nostalgic_slyde": m0001,
-    "20260717121820_colossal_pepper_potts": m0002,
-    "20260718170000_reservations_pool_columns": m0003,
-    "20260801071816_fluffy_molten_man": m0004,
-    "20260801164853_productive_vision": m0005,
-  },
-};
+  export default {
+    migrations: {
+      "20260717105621_real_purple_man": m0000,
+"20260717120125_nostalgic_slyde": m0001,
+"20260717121820_colossal_pepper_potts": m0002,
+"20260718170000_reservations_pool_columns": m0003,
+"20260801071816_fluffy_molten_man": m0004,
+"20260801164853_productive_vision": m0005,
+"20260819130259_quiet_nightmare": m0006
+}
+  }

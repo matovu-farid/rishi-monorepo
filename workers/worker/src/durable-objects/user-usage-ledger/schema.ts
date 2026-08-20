@@ -80,6 +80,9 @@ export const voiceSession = sqliteTable("voice_session", {
     .notNull()
     .default("not_started"),
   hangupAttempts: integer("hangup_attempts").notNull().default(0),
+  // Durable deadline for the next provider cleanup attempt. Nullable keeps
+  // restored rows from older migrations immediately eligible for cleanup.
+  nextHangupAttemptAt: integer("next_hangup_attempt_at"),
   // Last real user/assistant activity (not interval ticks). Nullable for
   // legacy rows until the generated migration adds the column.
   lastActivityAt: integer("last_activity_at"), // epoch ms

@@ -28,6 +28,11 @@ final class VoiceSessionRegistry {
 
     static let persistedIDKey = "voice.pendingEndRishiSessionId"
 
+    private struct PersistedSession: Codable {
+        let id: String
+        let userID: UserID
+    }
+
     private(set) var state: State = .ended
     private(set) var activeSession: (any VoiceSessionRegistrySession)?
     private(set) var parkedUntil: Date?
@@ -35,28 +40,46 @@ final class VoiceSessionRegistry {
     private let defaults: UserDefaults
     private let gracePeriod: Duration
     private let endServerSession: @MainActor @Sendable (String) async throws -> Void
+    private let currentUserIDProvider: @MainActor () -> UserID?
     private static let maxServerEndAttempts = 3
     private var expiryTask: Task<Void, Never>?
+    /// Covers the entire close flight, including a potentially slow local
+    /// transport end before `deliveryTask` is created.
+    private var closeFlightTask: Task<Void, Never>?
     private var deliveryTask: Task<Void, Never>?
 
     var persistedServerSessionID: String? {
-        get { defaults.string(forKey: Self.persistedIDKey) }
-        set {
-            if let newValue {
-                defaults.set(newValue, forKey: Self.persistedIDKey)
-            } else {
-                defaults.removeObject(forKey: Self.persistedIDKey)
+        get {
+            guard let currentUserID = currentUserIDProvider(),
+                  let data = defaults.data(forKey: Self.persistedIDKey),
+                  let persisted = try? JSONDecoder().decode(PersistedSession.self, from: data),
+                  persisted.userID == currentUserID else {
+                return nil
             }
+            return persisted.id
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: Self.persistedIDKey)
+                return
+            }
+            guard let currentUserID = currentUserIDProvider(),
+                  let data = try? JSONEncoder().encode(
+                      PersistedSession(id: newValue, userID: currentUserID)
+                  ) else { return }
+            defaults.set(data, forKey: Self.persistedIDKey)
         }
     }
 
     init(
         defaults: UserDefaults = .standard,
         gracePeriod: Duration = .seconds(3 * 60),
+        currentUserIDProvider: @escaping @MainActor () -> UserID? = { nil },
         endServerSession: @escaping @MainActor @Sendable (String) async throws -> Void = { _ in }
     ) {
         self.defaults = defaults
         self.gracePeriod = gracePeriod
+        self.currentUserIDProvider = currentUserIDProvider
         self.endServerSession = endServerSession
     }
 
@@ -105,7 +128,7 @@ final class VoiceSessionRegistry {
     /// separate task. Call ``waitForServerEnd()`` when a caller needs to await
     /// confirmation; this preserves the presenter's optimistic dismissal.
     func close() async {
-        guard state != .closing, deliveryTask == nil else { return }
+        guard closeFlightTask == nil, deliveryTask == nil else { return }
         guard activeSession != nil || persistedServerSessionID != nil else {
             state = .ended
             return
@@ -118,42 +141,50 @@ final class VoiceSessionRegistry {
 
         let session = activeSession
         activeSession = nil
-        var id = await session?.rishiSessionId ?? persistedServerSessionID
-        if let session {
-            let endedID = await session.end()
-            if let endedID {
-                id = endedID
-                recordServerSessionID(endedID)
-            }
-        }
-
-        guard let id else {
-            state = .ended
-            return
-        }
-        recordServerSessionID(id)
-        deliveryTask?.cancel()
-        deliveryTask = Task { @MainActor [weak self] in
+        closeFlightTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            for attempt in 1...Self.maxServerEndAttempts {
-                do {
-                    try await self.endServerSession(id)
-                    self.persistedServerSessionID = nil
-                    break
-                } catch {
-                    // Keep the id durable so the next launch can retry recovery.
-                    if attempt < Self.maxServerEndAttempts {
-                        try? await Task.sleep(for: .milliseconds(400 * attempt))
+            var id = await session?.rishiSessionId ?? self.persistedServerSessionID
+            if let session {
+                let endedID = await session.end()
+                if let endedID {
+                    id = endedID
+                    self.recordServerSessionID(endedID)
+                }
+            }
+
+            guard let id else {
+                self.state = .ended
+                self.closeFlightTask = nil
+                return
+            }
+            self.recordServerSessionID(id)
+            let deliveryTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                for attempt in 1...Self.maxServerEndAttempts {
+                    do {
+                        try await self.endServerSession(id)
+                        self.persistedServerSessionID = nil
+                        break
+                    } catch {
+                        // Keep the id durable so the next launch can retry recovery.
+                        if attempt < Self.maxServerEndAttempts {
+                            try? await Task.sleep(for: .milliseconds(400 * attempt))
+                        }
                     }
                 }
             }
+            self.deliveryTask = deliveryTask
+            await deliveryTask.value
             self.state = .ended
             self.deliveryTask = nil
+            self.closeFlightTask = nil
         }
     }
 
     func waitForServerEnd() async {
+        await closeFlightTask?.value
         await deliveryTask?.value
+        closeFlightTask = nil
         deliveryTask = nil
     }
 

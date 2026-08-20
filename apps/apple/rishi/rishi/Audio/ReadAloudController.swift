@@ -266,8 +266,11 @@ final class ReadAloudController {
         #endif
         showControls = true
 
-        await registerTTSPreemption()
-        guard isCurrentPlaybackGeneration(generation) else { return }
+        await registerTTSPreemption(ownerID: sessionToken)
+        guard isCurrentPlaybackGeneration(generation) else {
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return
+        }
         await ttsPresence.beginSession(
             bookID: vm.book.id.uuidString,
             title: vm.book.title,
@@ -276,13 +279,29 @@ final class ReadAloudController {
             model: settings.model,
             speed: settings.speed
         )
-        guard isCurrentPlaybackGeneration(generation) else { return }
+        guard isCurrentPlaybackGeneration(generation) else {
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return
+        }
 
         // Readium owns publication iteration. The custom tokenizer supplied
         // above keeps EPUB utterances paragraph-scoped and uses sentence
         // utterances for PDF playback.
-        await activateAudioSessionForReadiumStart()
-        guard isCurrentPlaybackGeneration(generation) else { return }
+        guard await activateAudioSessionForReadiumStart() else {
+            guard isCurrentPlaybackGeneration(generation) else {
+                await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+                return
+            }
+            await stopCurrentPlayback()
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            await ttsPresence.endSession()
+            showControls = false
+            return
+        }
+        guard isCurrentPlaybackGeneration(generation) else {
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return
+        }
         attachNowPlayingImmediately(
             title: vm.book.title,
             author: vm.book.author,
@@ -531,11 +550,14 @@ final class ReadAloudController {
         }
     }
 
-    private func registerTTSPreemption() async {
-        await coordinator.registerPreemption(for: .tts) { [weak self] in
+    private func registerTTSPreemption(ownerID: UUID) async {
+        await coordinator.registerPreemption(for: .tts, ownerID: ownerID) { [weak self] in
             await self?.pauseForVoiceHandoff()
         }
-        await coordinator.registerSuspension(for: .tts) { [weak self] in
+        await coordinator.registerRecovery(for: .tts, ownerID: ownerID) { [weak self] in
+            await self?.resumeAfterVoiceIfNeeded()
+        }
+        await coordinator.registerSuspension(for: .tts, ownerID: ownerID) { [weak self] in
             await self?.pauseForSystemAudioEvent()
         }
     }
@@ -578,7 +600,7 @@ final class ReadAloudController {
     /// Claims the shared playback session before Readium starts delivering
     /// speech. Unlike the legacy bridge, Readium bypasses `ReaderTTSBridge`,
     /// so it must activate `.playback` / `.spokenAudio` itself.
-    func activateAudioSessionForReadiumStart() async {
+    func activateAudioSessionForReadiumStart() async -> Bool {
         await coordinator.requestActiveMode(.tts)
     }
 
@@ -602,7 +624,7 @@ final class ReadAloudController {
 
     func repeatCurrent() async {
         if let readiumSynthesizer, let currentLocator {
-            await coordinator.requestActiveMode(.tts)
+            guard await coordinator.requestActiveMode(.tts) else { return }
             readiumSynthesizer.start(from: currentLocator)
         } else {
             await bridge?.repeatCurrent()
@@ -721,10 +743,16 @@ final class ReadAloudController {
             model: pickerInitial.model,
             speed: pickerInitial.speed
         )
-        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
+        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else {
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return
+        }
         showControls = true
-        await registerTTSPreemption()
-        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
+        await registerTTSPreemption(ownerID: sessionToken)
+        guard isCurrentPlaybackGeneration(generation), bridge === newBridge else {
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return
+        }
         // Publish the system card before narration begins. Any cover stored on
         // disk is upgraded asynchronously after playback has started.
         attachNowPlayingImmediately(
@@ -735,7 +763,19 @@ final class ReadAloudController {
             playbackRate: pickerInitial.speed,
             generation: generation
         )
-        await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
+        let bridgeStarted = await newBridge.start(paragraphs: paragraphs, startIndex: startIndex)
+        guard bridgeStarted else {
+            guard isCurrentPlaybackGeneration(generation), bridge === newBridge else {
+                await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+                return
+            }
+            await stopCurrentPlayback()
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            bridge = nil
+            await ttsPresence.endSession()
+            showControls = false
+            return
+        }
         guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
     }
 
@@ -849,6 +889,7 @@ final class ReadAloudController {
         // The controller owns the Readium lifecycle, so it releases the
         // coordinator only when a session actually stops—not between passages.
         await coordinator.releaseActiveMode(.tts)
+        await coordinator.unregisterHandlers(for: .tts, ownerID: ownedSessionToken)
     }
 
     private func stopCurrentPlayback(lease: RemoteCommandLease? = nil) async {
@@ -1119,8 +1160,15 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
                 ttsState.recordUserFacingFailure(userFacingError)
             }
         }
-        Task { [coordinator] in
-            await coordinator.releaseActiveMode(.tts)
+        let preservingFailure = ttsState.typedFailure != nil || ttsState.userFacingFailure != nil
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.readiumSynthesizer === synthesizer,
+                  self.readiumSynthesizerGeneration == generation,
+                  self.playbackSessionToken == sessionToken,
+                  self.ttsState.ownsPlaybackSession(sessionToken)
+            else { return }
+            await self.teardownPlaybackSession(preservingFailure: preservingFailure)
         }
     }
 }

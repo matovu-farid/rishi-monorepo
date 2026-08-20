@@ -57,17 +57,26 @@ final class ReaderTTSBridge {
     
    
 
-    func start(paragraphs: [String], startIndex: Int = 0) async {
+    @discardableResult
+    func start(paragraphs: [String], startIndex: Int = 0) async -> Bool {
         await stop()
-        guard !paragraphs.isEmpty else { return }
+        guard !paragraphs.isEmpty else { return false }
         self.paragraphs = paragraphs
         self.currentIndex = min(max(startIndex, 0), paragraphs.count - 1)
         await tracker.attach(state: state)
         startConsumingPassages()
         startAdvanceWatcher()
-        await requestActiveMode()
-        await playCurrent()
-
+        guard await requestActiveMode() else {
+            await stop()
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return false
+        }
+        guard await playCurrent() else {
+            await stop()
+            await coordinator.unregisterHandlers(for: .tts, ownerID: sessionToken)
+            return false
+        }
+        return true
     }
 
     private func startAdvanceWatcher() {
@@ -109,21 +118,24 @@ final class ReaderTTSBridge {
         
         
     }
-    private func requestActiveMode(lease: RemoteCommandLease? = nil) async {
-        guard lease?.isValid ?? true else { return }
-        await coordinator.registerPreemption(for: .tts) { [weak self] in
+    private func requestActiveMode(lease: RemoteCommandLease? = nil) async -> Bool {
+        guard lease?.isValid ?? true else { return false }
+        await coordinator.registerPreemption(for: .tts, ownerID: sessionToken) { [weak self] in
             await self?.pause()
         }
-        await coordinator.registerSuspension(for: .tts) { [weak self] in
+        await coordinator.registerRecovery(for: .tts, ownerID: sessionToken) { [weak self] in
+            await self?.resume()
+        }
+        await coordinator.registerSuspension(for: .tts, ownerID: sessionToken) { [weak self] in
             await self?.pause()
         }
-        guard lease?.isValid ?? true else { return }
-        await coordinator.requestActiveMode(.tts)
+        guard lease?.isValid ?? true else { return false }
+        return await coordinator.requestActiveMode(.tts)
     }
 
     func resume(lease: RemoteCommandLease? = nil) async {
         guard lease?.isValid ?? true else { return }
-        await requestActiveMode(lease: lease)
+        guard await requestActiveMode(lease: lease) else { return }
         guard lease?.isValid ?? true else { return }
         await engine.resume(lease: lease ?? TTSAlwaysValidLease())
         guard lease?.isValid ?? true else { return }
@@ -184,13 +196,13 @@ final class ReaderTTSBridge {
         }
     }
 
-    private func playCurrent(lease: RemoteCommandLease? = nil) async {
-        guard lease?.isValid ?? true else { return }
-        guard currentIndex < paragraphs.count else { return }
+    private func playCurrent(lease: RemoteCommandLease? = nil) async -> Bool {
+        guard lease?.isValid ?? true else { return false }
+        guard currentIndex < paragraphs.count else { return false }
         let settings = await settingsStore.load(userId: userId)
 
-        guard lease?.isValid ?? true else { return }
-        guard currentIndex < paragraphs.count else { return }
+        guard lease?.isValid ?? true else { return false }
+        guard currentIndex < paragraphs.count else { return false }
         let paragraph = paragraphs[currentIndex]
         let request = TTSStreamRequest(
             text: paragraph,
@@ -210,14 +222,15 @@ final class ReaderTTSBridge {
             model: settings.model,
             speed: settings.speed
         )
-        guard lease?.isValid ?? true else { return }
+        guard lease?.isValid ?? true else { return false }
         await engine.start(request: request, lease: lease ?? TTSAlwaysValidLease())
-        guard lease?.isValid ?? true else { return }
+        guard lease?.isValid ?? true else { return false }
         // Engines retain terminal failures. Do not turn a failed request into
         // apparent playback while the bridge is awaiting its completion.
         if state.typedFailure == nil, state.status != .error {
             state.update(status: .playing)
         }
+        return state.typedFailure == nil && state.status != .error
     }
 
     private func advance() async {

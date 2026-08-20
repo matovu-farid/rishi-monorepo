@@ -34,7 +34,11 @@ struct DeepLinkHandlingModifier: ViewModifier {
                     url: url,
                     bookStore: services.library.bookStore,
                     conversationStore: services.chat.conversationStore,
-                    currentUserID: currentUserID
+                    currentUserID: currentUserID,
+                    beforePresentingBook: {
+                        services.voice.presenter.scheduleRegisteredReaderCleanup()
+                        return true
+                    }
                 )
             }
             .task {
@@ -42,7 +46,11 @@ struct DeepLinkHandlingModifier: ViewModifier {
                 await router.drainPendingAccountURLs(
                     bookStore: services.library.bookStore,
                     conversationStore: services.chat.conversationStore,
-                    currentUserID: currentUserID
+                    currentUserID: currentUserID,
+                    beforePresentingBook: {
+                        services.voice.presenter.scheduleRegisteredReaderCleanup()
+                        return true
+                    }
                 )
             }
     }

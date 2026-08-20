@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
@@ -10,11 +10,9 @@ import {
 import type { VoiceSessionTerminalReason } from "./messages";
 
 /**
- * Rows that block creating a new voice session: a live session, or a
- * terminal session whose OpenAI hangup is still unresolved (`not_started` /
- * `pending`). Spec: the client must not start another live session that
- * would steal this DO's single alarm until hangup resolves
- * (`succeeded` / `failed_permanently`).
+ * Rows that block creating a new voice session. Provider cleanup is tracked
+ * separately: a terminal row may still need an OpenAI hangup retry, but it is
+ * no longer a client-owned live session and must not block the next reader.
  */
 export async function findLiveVoiceSession(
   db: DrizzleSqliteDODatabase,
@@ -23,8 +21,7 @@ export async function findLiveVoiceSession(
     .select()
     .from(voiceSession)
     .where(
-      sql`${voiceSession.status} IN ('pending_registration', 'active')
-          OR (${voiceSession.status} = 'terminal' AND ${voiceSession.hangupStatus} IN ('not_started', 'pending'))`,
+      sql`${voiceSession.status} IN ('pending_registration', 'active')`,
     )
     .orderBy(desc(voiceSession.updatedAt))
     .limit(1);
@@ -43,25 +40,21 @@ export async function findVoiceSessionById(
 }
 
 /**
- * The single row the `alarm()` handler should act on: whichever of
- * (a) a live session awaiting registration or ticking, or
- * (b) a terminal session whose OpenAI hangup hasn't resolved yet,
- * was touched most recently. There is at most one such row at a time given
- * "one active voice session per account".
+ * Every row that may need alarm work. A new live session may coexist with
+ * older terminal rows whose provider hangup is still retrying, so returning
+ * only one row would starve one of those two responsibilities.
  */
-export async function findRowNeedingAlarm(
+export async function findRowsNeedingAlarm(
   db: DrizzleSqliteDODatabase,
-): Promise<VoiceSessionRow | null> {
-  const rows = await db
+): Promise<VoiceSessionRow[]> {
+  return await db
     .select()
     .from(voiceSession)
     .where(
       sql`${voiceSession.status} IN ('pending_registration', 'active')
           OR (${voiceSession.status} = 'terminal' AND ${voiceSession.hangupStatus} IN ('not_started', 'pending'))`,
     )
-    .orderBy(desc(voiceSession.updatedAt))
-    .limit(1);
-  return rows[0] ?? null;
+    .orderBy(asc(voiceSession.updatedAt));
 }
 
 export async function insertVoiceSession(
@@ -76,8 +69,8 @@ export async function markNonceUsedAndRegisterCall(
   rishiSessionId: string,
   callId: string,
   now: number,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .update(voiceSession)
     .set({
       status: "active",
@@ -87,7 +80,12 @@ export async function markNonceUsedAndRegisterCall(
       lastActivityAt: now,
       updatedAt: now,
     })
-    .where(eq(voiceSession.rishiSessionId, rishiSessionId));
+    .where(
+      sql`${voiceSession.rishiSessionId} = ${rishiSessionId}
+          AND ${voiceSession.status} = 'pending_registration'
+          AND ${voiceSession.nonceUsed} = false`,
+    );
+  return result.rowsWritten > 0;
 }
 
 /**
@@ -141,9 +139,15 @@ export async function setHangupStatus(
   status: HangupStatus,
   attempts: number,
   now: number,
+  nextAttemptAt: number | null = null,
 ): Promise<void> {
   await db
     .update(voiceSession)
-    .set({ hangupStatus: status, hangupAttempts: attempts, updatedAt: now })
+    .set({
+      hangupStatus: status,
+      hangupAttempts: attempts,
+      nextHangupAttemptAt: nextAttemptAt,
+      updatedAt: now,
+    })
     .where(eq(voiceSession.rishiSessionId, rishiSessionId));
 }

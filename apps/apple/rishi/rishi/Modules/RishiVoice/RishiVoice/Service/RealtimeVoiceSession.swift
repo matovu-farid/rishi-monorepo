@@ -44,6 +44,12 @@ import Foundation
 /// teardown path; they diverge in how the ephemeral key is obtained and what
 /// happens immediately after WebRTC `connect()` succeeds. See
 /// `startLegacyFlow` / `startTrialVoiceSession`.
+public enum RealtimeVoiceSessionStartResult: Sendable, Equatable {
+    case live
+    case failed(VoiceSessionFailureReason)
+    case cancelled
+}
+
 public actor RealtimeVoiceSession {
 
     public typealias BookContextResponderFactory = @Sendable (UUID) -> BookContextResponder
@@ -187,19 +193,20 @@ public actor RealtimeVoiceSession {
         activeParagraphText: String? = nil,
         preflighted: Bool = false,
         prewarmed: Bool = false
-    ) async {
+    ) async -> RealtimeVoiceSessionStartResult {
+        guard !Task.isCancelled else { return .cancelled }
         await MainActor.run { state.beginLifecycle(lifecycleToken) }
         guard await dataUseConsentProvider.hasCurrentDataUseConsent() else {
-            guard !isEnding else { return }
+            guard !isEnding else { return .cancelled }
             await fail(reason: .unknown("Data use consent required"))
-            return
+            return .failed(.unknown("Data use consent required"))
         }
         await update(.requestingMic)
         guard !isEnding else {
             if preflighted {
                 await coordinator.releaseActiveMode(.voice)
             }
-            return
+            return .cancelled
         }
 
         // Claim shared audio ownership. Do NOT register a preempt handler here —
@@ -208,11 +215,18 @@ public actor RealtimeVoiceSession {
         // that handler during connect/register and skip POST …/end on preempt.
         // Package tests that need preempt must register explicitly before start.
         if !preflighted {
-            await coordinator.requestActiveMode(.voice)
+            guard await coordinator.requestVoiceActiveMode() else {
+                await fail(reason: .audioSession)
+                return .failed(.audioSession)
+            }
         }
         guard !isEnding else {
             await coordinator.releaseActiveMode(.voice)
-            return
+            return .cancelled
+        }
+        guard !Task.isCancelled else {
+            await coordinator.releaseActiveMode(.voice)
+            return .cancelled
         }
 
         let snapshot: BookContextSnapshot? = bookId.map { id in
@@ -263,6 +277,13 @@ public actor RealtimeVoiceSession {
                 prewarmTask: prewarmTask
             )
         }
+
+        let status = await MainActor.run { state.status }
+        if case let .failed(reason) = status {
+            return .failed(reason)
+        }
+        if case .live = status { return .live }
+        return .cancelled
     }
 
     /// Pre-existing behavior, unchanged: fetch a plain ephemeral key from
@@ -275,6 +296,11 @@ public actor RealtimeVoiceSession {
         bookId: UUID?,
         prewarmTask: Task<Void, Never>?
     ) async {
+        guard !Task.isCancelled, !isEnding else {
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
         await update(.fetchingKey)
 
         let key: EphemeralKey
@@ -289,6 +315,11 @@ public actor RealtimeVoiceSession {
             return
         }
         guard !isEnding else {
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
+        guard !Task.isCancelled else {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
             return
@@ -308,6 +339,13 @@ public actor RealtimeVoiceSession {
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
             guard !isEnding else { return }
             await fail(reason: .connect)
+            return
+        }
+        await client.setMicCaptureEnabled(true)
+        guard !Task.isCancelled else {
+            prewarmTask?.cancel()
+            await client.disconnect()
+            await coordinator.releaseActiveMode(.voice)
             return
         }
 
@@ -337,6 +375,11 @@ public actor RealtimeVoiceSession {
         bookId: UUID?,
         prewarmTask: Task<Void, Never>?
     ) async {
+        guard !Task.isCancelled, !isEnding else {
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            return
+        }
         await update(.creatingSession)
 
         let started: StartedVoiceSession
@@ -350,13 +393,31 @@ public actor RealtimeVoiceSession {
             await fail(reason: .sessionStart(failure), message: Self.sessionStartMessage(failure))
             return
         }
+        // Record the server session immediately. If cancellation arrives
+        // before transport connects, teardown still has the id needed to
+        // close the pending-registration row on the Worker.
+        activeVoiceSession = started
+        lastRishiSessionId = started.rishiSessionId
         guard !isEnding else {
+            do {
+                try await sessionCoordinator.endSession(rishiSessionId: started.rishiSessionId)
+                lastRishiSessionId = nil
+            } catch {
+                Log.event("voice.session.cancelled_start_end.failed", level: .warning, data: [
+                    "rishiSessionId": started.rishiSessionId,
+                    "error": String(describing: error),
+                ])
+            }
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
             return
         }
-        activeVoiceSession = started
-        lastRishiSessionId = started.rishiSessionId
+        guard !Task.isCancelled else {
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            activeVoiceSession = nil
+            return
+        }
         Log.event("voice.session.realtime_model", level: .info, data: ["present": "true"])
 
         await update(.connecting)
@@ -374,6 +435,14 @@ public actor RealtimeVoiceSession {
             Log.event("voice.session.connect.failed", level: .error, data: ["error": String(describing: error)])
             guard !isEnding else { return }
             await fail(reason: .connect)
+            return
+        }
+        await client.setMicCaptureEnabled(true)
+        guard !Task.isCancelled else {
+            await client.disconnect()
+            prewarmTask?.cancel()
+            await coordinator.releaseActiveMode(.voice)
+            activeVoiceSession = nil
             return
         }
         guard !isEnding else {
@@ -469,6 +538,19 @@ public actor RealtimeVoiceSession {
                 "error": String(describing: error),
             ])
             await fail(reason: .callRegistration(failure), message: Self.registrationMessage(failure))
+            if let onTerminalFailure {
+                await onTerminalFailure(.callRegistration(failure))
+            } else {
+                do {
+                    try await sessionCoordinator.endSession(rishiSessionId: started.rishiSessionId)
+                    lastRishiSessionId = nil
+                } catch {
+                    Log.event("voice.session.register_call_end.failed", level: .warning, data: [
+                        "rishiSessionId": started.rishiSessionId,
+                        "error": String(describing: error),
+                    ])
+                }
+            }
         }
     }
 
@@ -479,7 +561,10 @@ public actor RealtimeVoiceSession {
     /// delivery belongs to the first caller).
     @discardableResult
     public func end() async -> String? {
-        guard !isEnding else { return nil }
+        // A concurrent start/cancel or terminal callback may already own
+        // teardown. Return the retained id so the caller can still deliver
+        // the server end if that owner failed before completing it.
+        guard !isEnding else { return lastRishiSessionId }
         isEnding = true
         await MainActor.run { state.beginEndingLifecycle(lifecycleToken) }
         let sessionId = activeVoiceSession?.rishiSessionId ?? lastRishiSessionId

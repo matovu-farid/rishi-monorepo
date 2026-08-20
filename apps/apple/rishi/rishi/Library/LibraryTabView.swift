@@ -23,6 +23,7 @@ struct LibraryTabDependencies {
     let sharePackageService: SharePackageService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
+    let voicePresenter: VoiceSessionPresenter
     let groupID: GroupId?
     let settings: SettingsContentDependencies
 }
@@ -109,6 +110,11 @@ struct LibraryTabView: View {
     @MainActor
     private func openBook(_ book: Book) {
         model.hint(book)
+        // The reader exit callback and the library boundary both initiate
+        // cleanup asynchronously. Serialize the next reader launch behind
+        // that cleanup at voice-start time, while keeping book navigation
+        // responsive.
+        dependencies.voicePresenter.scheduleRegisteredReaderCleanup()
         #if targetEnvironment(macCatalyst)
             readerWindows.open(book: book, user: user)
         #else

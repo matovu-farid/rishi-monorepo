@@ -29,6 +29,10 @@ public struct SystemMicPermissionGate: MicPermissionGate {
         self.probe = probe
     }
 
+    public var currentDecision: MicPermissionDecision {
+        probe.currentPermission()
+    }
+
     public func request() async -> MicPermissionDecision {
         let cached = probe.currentPermission()
         switch cached {

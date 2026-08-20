@@ -340,21 +340,25 @@ public final class ReaderViewModel: @unchecked Sendable {
         return toc.map { $0.title ?? $0.href }
     }
 
+    private var isPDFPublication: Bool {
+        book.formatType == .pdf || publication?.manifest.conforms(to: .pdf) == true
+    }
+
     /// Build the live reading context handed to the voice session. Title +
     /// author always come from `book` so the model always knows the book.
     ///
-    /// `currentPage` is left nil — reflowable EPUB has no fixed integer page
-    /// model. `pageText` / `activeParagraphText` are left nil in v1: surfacing
-    /// the visible text requires the async resource read in
-    /// ``paragraphsForReadAloud()``, which we do not block the synchronous
-    /// toolbar action on. The outline `chapters` + book identity already
-    /// ground the model.
+    /// Reflowable EPUB leaves `currentPage` nil because it has no fixed integer
+    /// page model. PDFs expose their current Readium page when available.
+    /// `pageText` / `activeParagraphText` are left nil in the synchronous
+    /// snapshot; surfacing visible text requires the async resource read in
+    /// ``liveVoiceContext()``. The outline `chapters` + book identity already
+    /// ground the model while that live context is being resolved.
     public func voiceContext() -> ReaderVoiceContext {
         ReaderVoiceContext(
             title: book.title,
             author: book.author,
             chapters: voiceChapters,
-            currentPage: nil,
+            currentPage: isPDFPublication ? latestLocator?.locations.page : nil,
             pageText: nil,
             activeParagraphText: nil
         )
@@ -363,6 +367,31 @@ public final class ReaderViewModel: @unchecked Sendable {
     @MainActor
     public func liveVoiceContext() async -> ReaderVoiceContext {
         let base = voiceContext()
+
+        // The unified reader serves both EPUB and PDF publications. PDF
+        // locators expose page text through Readium's PDF content sequence;
+        // sending them through EPUBReadAloudCursor silently produces an empty
+        // page context, which leaves the realtime model waiting on a useless
+        // currentPageContext result even though the PDF contains selectable
+        // text.
+        if isPDFPublication,
+           let publication,
+           let locator = await currentVisibleLocatorForReadAloud() ?? latestLocator
+        {
+            let passages = await Self.pdfSentences(
+                publication: publication,
+                locator: locator
+            )
+            return ReaderVoiceContext(
+                title: base.title,
+                author: base.author,
+                chapters: base.chapters,
+                currentPage: locator.locations.page ?? base.currentPage,
+                pageText: passages.isEmpty ? nil : passages.joined(separator: "\n\n"),
+                activeParagraphText: base.activeParagraphText
+            )
+        }
+
         let paragraphs = await paragraphsForReadAloud()
         let text = paragraphs.isEmpty ? nil : paragraphs.joined(separator: "\n\n")
         return ReaderVoiceContext(

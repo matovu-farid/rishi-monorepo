@@ -425,6 +425,7 @@ enum ServiceGraphFactory {
         }
         let voiceSessionRegistry = await MainActor.run {
             VoiceSessionRegistry(
+                currentUserIDProvider: { [userIdBox] in userIdBox.value },
                 endServerSession: { id in
                     try await voiceSessionCoordinator.endSession(rishiSessionId: id)
                 }

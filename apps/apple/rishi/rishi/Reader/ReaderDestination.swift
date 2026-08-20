@@ -190,6 +190,16 @@ struct ReaderDestination: View {
                 dependencies.voicePresenter.prewarmVoiceChat(for: vm.book.id, userID: userId)
             }
 
+            // First-content is the preferred boundary for this non-critical
+            // work. PDF navigators can legitimately finish their first page
+            // without emitting a location callback, so keep a PDF-only
+            // fallback. EPUB indexing is intentionally left on the
+            // first-content boundary because extraction and embedding can be
+            // expensive enough to compete with reader and voice startup.
+            if vm.book.formatType == .pdf {
+                await scheduleReaderIndexBackfillIfNeeded()
+            }
+
 
             vm.onUserNavigation = { locator in
                 guard let readAloud else { return }
@@ -245,10 +255,10 @@ struct ReaderDestination: View {
             readAloudStartTask = nil
             readAloudStartRequest = UUID()
 
-            Task { @MainActor [voicePresenter = dependencies.voicePresenter, viewModel = vm] in
+            Task { @MainActor [voiceEntry, voicePresenter = dependencies.voicePresenter, viewModel = vm] in
                 voicePresenter.cancelPrewarm()
 #if !targetEnvironment(macCatalyst)
-                await voicePresenter.parkSession()
+                await voiceEntry.endForReader()
 #endif
                 await viewModel.flush()
 #if !targetEnvironment(macCatalyst)
@@ -491,10 +501,10 @@ struct ReaderDestination: View {
     @MainActor
     private func scheduleReaderIndexBackfillIfNeeded() async {
         guard !didScheduleReaderIndexBackfill else { return }
-        didScheduleReaderIndexBackfill = true
         guard await dependencies.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex else {
             return
         }
+        didScheduleReaderIndexBackfill = true
         let url = dependencies.bookFileStorage.absoluteFileURL(for: vm.book)
         await dependencies.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
     }

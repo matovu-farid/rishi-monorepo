@@ -1,0 +1,1 @@
+ALTER TABLE `voice_session` ADD `next_hangup_attempt_at` integer;

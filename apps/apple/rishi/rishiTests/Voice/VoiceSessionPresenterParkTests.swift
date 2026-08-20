@@ -302,6 +302,38 @@ struct VoiceSessionPresenterParkTests {
         #expect(presenter.isPresenting == false)
     }
 
+    @Test("library cleanup ends only a registered reader session and is idempotent")
+    func libraryCleanupDrainsRegisteredReaderSession() async {
+        let client = ParkTestRealtimeClient()
+        let presenter = makePresenter(client: client)
+        let reader = ReaderSessionIdentity()
+
+        await presenter.start(bookId: UUID(), readerSessionIdentity: reader)
+        #expect(presenter.pendingReaderCleanupCount == 1)
+
+        await presenter.cleanupRegisteredReaderSessions()
+        #expect(presenter.getSession() == nil)
+        #expect(presenter.pendingReaderCleanupCount == 0)
+
+        await presenter.cleanupRegisteredReaderSessions()
+        #expect(presenter.getSession() == nil)
+        #expect(presenter.pendingReaderCleanupCount == 0)
+    }
+
+    @Test("reader end keeps its cleanup registration until the library drains it")
+    func readerEndDoesNotDropLibraryCleanupRegistrationEarly() async {
+        let client = ParkTestRealtimeClient()
+        let presenter = makePresenter(client: client)
+        let reader = ReaderSessionIdentity()
+
+        await presenter.start(bookId: UUID(), readerSessionIdentity: reader)
+        await presenter.requestEnd(readerSessionIdentity: reader)
+
+        #expect(presenter.pendingReaderCleanupCount == 1)
+        await presenter.cleanupRegisteredReaderSessions()
+        #expect(presenter.pendingReaderCleanupCount == 0)
+    }
+
     @Test("reader identity guards live and parked session teardown")
     func readerIdentityGuardsEnd() async {
         let client = ParkTestRealtimeClient()

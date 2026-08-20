@@ -32,7 +32,7 @@ import { VoiceSessionError } from "../voice-session/errors";
 import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
 import {
   findLiveVoiceSession,
-  findRowNeedingAlarm,
+  findRowsNeedingAlarm,
   findVoiceSessionById,
   incrementConsumedIntervals,
   insertVoiceSession,
@@ -866,10 +866,11 @@ export class UserUsageLedger extends DurableObject<Env> {
     nonce: string;
     capIntervals: number;
   }> {
-    await this.assertLedgerWritable();
-    const userId = this.requireUserId();
-    await this.grantTrialIfAbsent();
-    await this.assertNoBlockingLiveSession(userId);
+    return this.ctx.blockConcurrencyWhile(async () => {
+      await this.assertLedgerWritable();
+      const userId = this.requireUserId();
+      await this.grantTrialIfAbsent();
+      await this.assertNoBlockingLiveSession();
 
     const activePeriod = await this.getActiveAllowancePeriod();
 
@@ -929,33 +930,29 @@ export class UserUsageLedger extends DurableObject<Env> {
       terminalAt: null,
       hangupStatus: "not_started",
       hangupAttempts: 0,
+      nextHangupAttemptAt: null,
       lastActivityAt: now,
       createdAt: now,
       updatedAt: now,
     });
 
     await this.ensureAlarmAtOrBefore(now + REGISTRATION_GRACE_MS);
-    await this.appendAuditLog(userId, "voice_session.created", { rishiSessionId, planKind });
+    this.ctx.waitUntil(
+      this.appendAuditLog(userId, "voice_session.created", { rishiSessionId, planKind }),
+    );
 
-    return { rishiSessionId, nonce: minted.nonce, capIntervals };
+      return { rishiSessionId, nonce: minted.nonce, capIntervals };
+    });
   }
 
-  private async assertNoBlockingLiveSession(userId: string): Promise<void> {
-    // One-shot reconcile: a terminal row stuck in hangup not_started/pending
-    // (e.g. lost alarm) would otherwise block new sessions forever.
+  private async assertNoBlockingLiveSession(): Promise<void> {
+    // Provider hangup is durable background cleanup, not admission state.
+    // Only pending_registration and active rows are returned here.
     let live = await findLiveVoiceSession(this.db);
-    if (
-      live &&
-      live.status === "terminal" &&
-      (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
-    ) {
-      await this.reconcileTerminalHangup(live, userId);
-      live = await findLiveVoiceSession(this.db);
-    }
     // Null-callId sessions (abandoned pending_registration, or any path
     // without an OpenAI call) only tear down locally. Auto-clear those
     // orphans so a restart / mint-retry can start a new session.
-    if (live && !live.callId) {
+    if (live && !live.callId && Date.now() - live.createdAt >= REGISTRATION_GRACE_MS) {
       await this.forceEndSession(live, "client_ended");
       live = await findLiveVoiceSession(this.db);
     }
@@ -978,24 +975,26 @@ export class UserUsageLedger extends DurableObject<Env> {
    * optimistic local teardown may have left a registered row active server-side.
    */
   async endActiveVoiceSession(): Promise<{ ok: true; rishiSessionId?: string }> {
-    await this.assertLedgerWritable();
-    this.requireUserId();
-    const userId = this.requireUserId();
-    let live = await findLiveVoiceSession(this.db);
-    if (
-      live &&
-      live.status === "terminal" &&
-      (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
-    ) {
-      await this.reconcileTerminalHangup(live, userId);
-      live = await findLiveVoiceSession(this.db);
-    }
-    if (!live) {
-      return { ok: true };
-    }
-    const endedId = live.rishiSessionId;
-    await this.forceEndSession(live, "client_ended");
-    return { ok: true, rishiSessionId: endedId };
+    return this.ctx.blockConcurrencyWhile(async () => {
+      await this.assertLedgerWritable();
+      this.requireUserId();
+      const userId = this.requireUserId();
+      let live = await findLiveVoiceSession(this.db);
+      if (
+        live &&
+        live.status === "terminal" &&
+        (live.hangupStatus === "not_started" || live.hangupStatus === "pending")
+      ) {
+        await this.reconcileTerminalHangup(live, userId);
+        live = await findLiveVoiceSession(this.db);
+      }
+      if (!live) {
+        return { ok: true };
+      }
+      const endedId = live.rishiSessionId;
+      await this.forceEndSession(live, "client_ended");
+      return { ok: true, rishiSessionId: endedId };
+    });
   }
 
   async endVoiceSession(rishiSessionId: string): Promise<{ ok: true }> {
@@ -1014,6 +1013,12 @@ export class UserUsageLedger extends DurableObject<Env> {
     if (row.status === "terminal" && row.hangupStatus === "failed_permanently") {
       return { ok: true };
     }
+    if (row.status === "terminal" && row.hangupStatus === "pending") {
+      // The durable alarm (or the immediate waitUntil task from forceEnd)
+      // already owns provider cleanup. Do not start duplicate hangup calls
+      // when the client retries an otherwise successful end request.
+      return { ok: true };
+    }
     await this.forceEndSession(row, "client_ended");
     return { ok: true };
   }
@@ -1029,17 +1034,28 @@ export class UserUsageLedger extends DurableObject<Env> {
     }
     // No provider call to hang up — resolve immediately so create is unblocked.
     if (!row.callId) {
-      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now);
-      try {
-        await this.ctx.storage.deleteAlarm();
-      } catch {
-        // No alarm — fine.
-      }
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now, null);
+      // Keep the shared alarm intact. It may belong to a reservation, a
+      // different voice row, or a pending registration deadline.
     } else if (row.hangupStatus === "not_started" || row.hangupStatus === "pending") {
-      await this.reconcileTerminalHangup(
-        { ...row, status: "terminal", terminalReason: reason, terminalAt: now },
-        userId,
+      // The local WebRTC transport has already been torn down by the Apple
+      // client. Persist terminal state and return immediately; OpenAI's
+      // hangup endpoint only acknowledges that termination has begun, and a
+      // provider timeout must not turn this user's next reader into a false
+      // "already active" failure.
+      const nextAttemptAt = now + HANGUP_BACKOFF_MS[0]!;
+      await setHangupStatus(
+        this.db,
+        row.rishiSessionId,
+        "pending",
+        row.hangupAttempts,
+        now,
+        nextAttemptAt,
       );
+      await this.ensureAlarmAtOrBefore(nextAttemptAt);
+      // The alarm owns the provider attempt. Do not also start one via
+      // waitUntil: OpenAI hangup can outlive the five-second retry deadline,
+      // which would otherwise allow two attempts to update the same row.
     }
     this.broadcastToActiveSockets({
       type: "session_ended",
@@ -1059,9 +1075,10 @@ export class UserUsageLedger extends DurableObject<Env> {
    * registration attempt against the same session throws.
    */
   async registerCallId(rishiSessionId: string, callId: string, nonce: string): Promise<void> {
-    await this.assertLedgerWritable();
-    const userId = this.requireUserId();
-    const row = await findLiveVoiceSession(this.db);
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.assertLedgerWritable();
+      const userId = this.requireUserId();
+      const row = await findLiveVoiceSession(this.db);
 
     if (!row) {
       throw new VoiceSessionError(
@@ -1097,19 +1114,28 @@ export class UserUsageLedger extends DurableObject<Env> {
     }
 
     const now = Date.now();
-    await markNonceUsedAndRegisterCall(this.db, rishiSessionId, callId, now);
+    const claimed = await markNonceUsedAndRegisterCall(this.db, rishiSessionId, callId, now);
+    if (!claimed) {
+      throw new VoiceSessionError(
+        "nonce_replayed",
+        "this registration nonce has already been used",
+      );
+    }
     // The first 30-second charge is scheduled from the moment registration
     // succeeds, not from session creation — an app that takes a few seconds
     // to complete WebRTC negotiation doesn't lose part of its first interval.
     await this.ensureAlarmAtOrBefore(now + VOICE_INTERVAL_MS);
-    await this.appendAuditLog(userId, "voice_session.call_registered", { rishiSessionId, callId });
+    this.ctx.waitUntil(
+      this.appendAuditLog(userId, "voice_session.call_registered", { rishiSessionId, callId }),
+    );
 
     const allowance = await this.allowanceFieldsForSession(row);
-    this.broadcastToActiveSockets({
+      this.broadcastToActiveSockets({
       type: "allowance_remaining",
       rishiSessionId,
       ...allowance,
       remainingIntervals: row.capIntervals - row.consumedIntervals,
+    });
     });
   }
 
@@ -1207,37 +1233,86 @@ export class UserUsageLedger extends DurableObject<Env> {
   }
 
   private async handleVoiceSessionAlarm(now: number): Promise<void> {
-    const row = await findRowNeedingAlarm(this.db);
-    if (!row) return;
+    const rows = await findRowsNeedingAlarm(this.db);
+    if (rows.length === 0) return;
 
     const userId = this.requireUserId();
 
-    if (row.status === "pending_registration") {
+    const row = rows.find((candidate) => candidate.status !== "terminal");
+    if (row?.status === "pending_registration") {
       if (now - row.createdAt < REGISTRATION_GRACE_MS) {
-        await this.ctx.storage.setAlarm(row.createdAt + REGISTRATION_GRACE_MS);
-        return;
+        await this.ensureAlarmAtOrBefore(row.createdAt + REGISTRATION_GRACE_MS);
+      } else {
+        await markTerminal(this.db, row.rishiSessionId, "registration_timeout", now);
+        await this.appendAuditLog(userId, "voice_session.abandoned", { rishiSessionId: row.rishiSessionId });
+        this.broadcastToActiveSockets({
+          type: "session_ended",
+          rishiSessionId: row.rishiSessionId,
+          reason: "registration_timeout",
+        });
+        this.closeSocketsForSession(row.rishiSessionId, "registration_timeout");
+        // No callId was ever registered — resolve hangup so createVoiceSession
+        // is not blocked by a terminal + not_started hangup row.
+        await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now, null);
       }
-      await markTerminal(this.db, row.rishiSessionId, "registration_timeout", now);
-      await this.appendAuditLog(userId, "voice_session.abandoned", { rishiSessionId: row.rishiSessionId });
-      this.broadcastToActiveSockets({
-        type: "session_ended",
-        rishiSessionId: row.rishiSessionId,
-        reason: "registration_timeout",
-      });
-      this.closeSocketsForSession(row.rishiSessionId, "registration_timeout");
-      // No callId was ever registered — resolve hangup so createVoiceSession
-      // is not blocked by a terminal + not_started hangup row.
-      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now);
+    } else if (row?.status === "active") {
+      // A terminal cleanup retry can fire earlier than this session's normal
+      // interval alarm. Reconstruct the tick deadline from registration time
+      // and consumed intervals so cleanup never causes early billing.
+      const tickOrigin = row.callRegisteredAt ?? row.createdAt;
+      const nextTickAt = tickOrigin + (row.consumedIntervals + 1) * VOICE_INTERVAL_MS;
+      if (now < nextTickAt) {
+        await this.ensureAlarmAtOrBefore(nextTickAt);
+      } else {
+        await this.tickActiveSession(row, userId, now);
+      }
+    }
+
+    // Run at most one provider cleanup after the live deadline has been
+    // handled. A slow hangup therefore cannot delay billing or registration
+    // enforcement, and remaining terminal rows get another alarm turn.
+    const terminal = rows.find(
+      (candidate) =>
+        candidate.status === "terminal" &&
+        (candidate.nextHangupAttemptAt === null ||
+          candidate.nextHangupAttemptAt === undefined ||
+          candidate.nextHangupAttemptAt <= now),
+    );
+    if (terminal) {
+      await this.reconcileTerminalHangup(terminal, userId);
+    }
+
+    // Re-read after the provider attempt. The original snapshot can contain
+    // several due terminal rows; if the first one succeeds, the next one
+    // must still wake the shared alarm instead of being stranded.
+    const remainingRows = terminal ? await findRowsNeedingAlarm(this.db) : rows;
+    const remainingDueTerminal = remainingRows.find(
+      (candidate) =>
+        candidate.status === "terminal" &&
+        (candidate.hangupStatus === "not_started" || candidate.hangupStatus === "pending") &&
+        (candidate.nextHangupAttemptAt === null ||
+          candidate.nextHangupAttemptAt === undefined ||
+          candidate.nextHangupAttemptAt <= Date.now()),
+    );
+    if (remainingDueTerminal) {
+      await this.ensureAlarmAtOrBefore(Date.now());
       return;
     }
 
-    if (row.status === "active") {
-      await this.tickActiveSession(row, userId, now);
-      return;
+    const nextTerminalDeadline = remainingRows
+      .filter(
+        (candidate) =>
+          candidate.status === "terminal" &&
+          candidate.hangupStatus === "pending" &&
+          candidate.nextHangupAttemptAt !== null &&
+          candidate.nextHangupAttemptAt !== undefined &&
+          candidate.nextHangupAttemptAt > now,
+      )
+      .map((candidate) => candidate.nextHangupAttemptAt!)
+      .sort((a, b) => a - b)[0];
+    if (nextTerminalDeadline !== undefined) {
+      await this.ensureAlarmAtOrBefore(nextTerminalDeadline);
     }
-
-    // status === "terminal" and hangup hasn't resolved yet.
-    await this.reconcileTerminalHangup(row, userId);
   }
 
   /**
@@ -1248,7 +1323,7 @@ export class UserUsageLedger extends DurableObject<Env> {
    */
   private async reconcileTerminalHangup(row: VoiceSessionRow, userId: string): Promise<void> {
     if (!row.callId) {
-      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", row.hangupAttempts, Date.now());
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", row.hangupAttempts, Date.now(), null);
       return;
     }
     await this.attemptHangup(row.rishiSessionId, row.callId, userId, row.hangupAttempts);
@@ -1392,15 +1467,17 @@ export class UserUsageLedger extends DurableObject<Env> {
     if (!row.callId) {
       // Terminated before a call was ever registered (shouldn't happen for
       // "active" sessions, but stay defensive) — nothing to hang up.
-      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now);
+      await setHangupStatus(this.db, row.rishiSessionId, "succeeded", 0, now, null);
       return;
     }
 
-    await setHangupStatus(this.db, row.rishiSessionId, "pending", 0, now);
+    const nextAttemptAt = now + HANGUP_BACKOFF_MS[0]!;
+    await setHangupStatus(this.db, row.rishiSessionId, "pending", 0, now, nextAttemptAt);
     // Schedule a retry deadline before the first attempt so a lost/failed
     // attempt cannot leave terminal+pending with no alarm forever.
-    await this.ensureAlarmAtOrBefore(now + HANGUP_BACKOFF_MS[0]!);
-    await this.attemptHangup(row.rishiSessionId, row.callId, userId, 0);
+    await this.ensureAlarmAtOrBefore(nextAttemptAt);
+    // The alarm performs the first provider attempt. Keeping one owner for
+    // hangup attempts prevents an alarm retry from overlapping this call.
   }
 
   /**
@@ -1418,7 +1495,7 @@ export class UserUsageLedger extends DurableObject<Env> {
     const attempt = attemptsSoFar + 1;
     try {
       await this.hangUpCall(callId);
-      await setHangupStatus(this.db, rishiSessionId, "succeeded", attempt, Date.now());
+      await setHangupStatus(this.db, rishiSessionId, "succeeded", attempt, Date.now(), null);
       await this.appendAuditLog(userId, "voice_session.hangup_succeeded", { rishiSessionId, callId, attempt });
       return;
     } catch (err) {
@@ -1430,7 +1507,7 @@ export class UserUsageLedger extends DurableObject<Env> {
       });
 
       if (attempt >= MAX_HANGUP_ATTEMPTS) {
-        await setHangupStatus(this.db, rishiSessionId, "failed_permanently", attempt, Date.now());
+        await setHangupStatus(this.db, rishiSessionId, "failed_permanently", attempt, Date.now(), null);
         console.error(
           JSON.stringify({
             event: "voice_session.hangup_failed_permanently",
@@ -1449,9 +1526,10 @@ export class UserUsageLedger extends DurableObject<Env> {
         return;
       }
 
-      await setHangupStatus(this.db, rishiSessionId, "pending", attempt, Date.now());
       const nextDelay = HANGUP_BACKOFF_MS[attempt - 1]!;
-      await this.ensureAlarmAtOrBefore(Date.now() + nextDelay);
+      const nextAttemptAt = Date.now() + nextDelay;
+      await setHangupStatus(this.db, rishiSessionId, "pending", attempt, Date.now(), nextAttemptAt);
+      await this.ensureAlarmAtOrBefore(nextAttemptAt);
     }
   }
 

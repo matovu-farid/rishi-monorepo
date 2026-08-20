@@ -71,7 +71,13 @@ vi.mock("./billing/sub-gate", () => ({
   ) => next(),
 }))
 
-import { app, buildRealtimeClientSecretsBody } from "./index"
+import {
+  buildRealtimeClientSecretsBody,
+  MAX_REALTIME_OUTLINE_CHAPTERS,
+  MAX_REALTIME_OUTLINE_TEXT_LENGTH,
+  normalizeRealtimeOutline,
+} from "./realtime/client-secrets"
+import { app } from "./index"
 import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model"
 
 const env = {
@@ -221,6 +227,52 @@ describe("buildRealtimeClientSecretsBody", () => {
     expect(body.expires_after.anchor).toBe("created_at")
     expect(body.expires_after.seconds).toBeGreaterThanOrEqual(10)
     expect(body.expires_after.seconds).toBeLessThanOrEqual(7200)
+  })
+
+  it("preserves a normal outline exactly", () => {
+    expect(
+      normalizeRealtimeOutline({
+        title: "  Moby Dick  ",
+        author: "  Herman Melville  ",
+        chapters: ["  Loomings  ", "The Carpet-Bag"],
+      }),
+    ).toEqual({
+      title: "  Moby Dick  ",
+      author: "  Herman Melville  ",
+      chapters: ["  Loomings  ", "The Carpet-Bag"],
+    })
+  })
+
+  it("bounds oversized outline metadata before rendering the realtime prompt", () => {
+    const longText = "x".repeat(MAX_REALTIME_OUTLINE_TEXT_LENGTH + 100)
+    const oversizedOutline = {
+      title: ` ${longText} `,
+      author: longText,
+      chapters: Array.from(
+        { length: MAX_REALTIME_OUTLINE_CHAPTERS + 5 },
+        (_, index) => ` chapter-${index}-${longText} `,
+      ),
+    }
+    const normalized = normalizeRealtimeOutline(oversizedOutline)
+    expect(normalized).toBeDefined()
+    if (!normalized) throw new Error("outline normalization unexpectedly returned undefined")
+
+    expect(normalized.title).toHaveLength(MAX_REALTIME_OUTLINE_TEXT_LENGTH)
+    expect(normalized.author).toHaveLength(MAX_REALTIME_OUTLINE_TEXT_LENGTH)
+    expect(normalized.chapters).toHaveLength(MAX_REALTIME_OUTLINE_CHAPTERS)
+    expect(normalized.chapters.every((chapter) => chapter.length <= MAX_REALTIME_OUTLINE_TEXT_LENGTH)).toBe(true)
+
+    const prompt = buildRealtimeClientSecretsBody({ language: "en", outline: oversizedOutline }).session.instructions
+    expect(prompt).toContain(`- ${"chapter-0-"}${"x".repeat(MAX_REALTIME_OUTLINE_TEXT_LENGTH - "chapter-0-".length)}`)
+    expect(prompt.match(/^- chapter-/gm)).toHaveLength(MAX_REALTIME_OUTLINE_CHAPTERS)
+    expect(prompt).not.toContain(`chapter-${MAX_REALTIME_OUTLINE_CHAPTERS}-`)
+  })
+
+  it("preserves an absent outline and optional author at the shared boundary", () => {
+    expect(normalizeRealtimeOutline(undefined)).toBeUndefined()
+    expect(
+      normalizeRealtimeOutline({ title: "Title", chapters: [] }),
+    ).toEqual({ title: "Title", chapters: [] })
   })
 })
 

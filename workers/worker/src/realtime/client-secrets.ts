@@ -33,6 +33,43 @@ export function coerceLanguage(raw: string | undefined): string {
 }
 
 /**
+ * Keep the initial Realtime session payload bounded. The outline is embedded
+ * in the provider instructions, so an unexpectedly large book can otherwise
+ * add avoidable request and model-context latency before audio starts.
+ */
+export const MAX_REALTIME_OUTLINE_CHAPTERS = 64;
+export const MAX_REALTIME_OUTLINE_TEXT_LENGTH = 256;
+
+type RealtimeOutline = NonNullable<BuildClientSecretsInput["outline"]>;
+
+function trimAndLimitOutlineText(value: string): string {
+  const codePoints = Array.from(value);
+  if (codePoints.length <= MAX_REALTIME_OUTLINE_TEXT_LENGTH) return value;
+  // Array.from truncates by Unicode code point rather than splitting a UTF-16
+  // surrogate pair in the middle of a character.
+  return Array.from(value.trim())
+    .slice(0, MAX_REALTIME_OUTLINE_TEXT_LENGTH)
+    .join("");
+}
+
+export function normalizeRealtimeOutline(
+  outline: BuildClientSecretsInput["outline"],
+): BuildClientSecretsInput["outline"] {
+  if (!outline) return undefined;
+
+  const normalized: RealtimeOutline = {
+    title: trimAndLimitOutlineText(outline.title),
+    chapters: outline.chapters
+      .slice(0, MAX_REALTIME_OUTLINE_CHAPTERS)
+      .map(trimAndLimitOutlineText),
+  };
+  if (outline.author !== undefined) {
+    normalized.author = trimAndLimitOutlineText(outline.author);
+  }
+  return normalized;
+}
+
+/**
  * Phase 25-06: the worker bakes a book-aware system prompt + the
  * `bookContext` tool spec into the OpenAI realtime session, so the model can
  * actually invoke the iOS-side Responder. All book-context fields are
@@ -72,11 +109,12 @@ export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
   // shared `BookOutline.author: string | null` and our wire-side
   // `author?: string` are behaviourally equivalent. Normalize undefined → null
   // for the type-level handshake.
-  const outline = input.outline
+  const normalizedOutline = normalizeRealtimeOutline(input.outline);
+  const outline = normalizedOutline
     ? {
-        title: input.outline.title,
-        author: input.outline.author ?? null,
-        chapters: input.outline.chapters,
+        title: normalizedOutline.title,
+        author: normalizedOutline.author ?? null,
+        chapters: normalizedOutline.chapters,
       }
     : undefined;
   const instructions = renderRealtimeInstructions({

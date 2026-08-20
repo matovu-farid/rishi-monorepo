@@ -506,6 +506,38 @@ struct ReaderViewModelTests {
         #expect(passages.allSatisfy { $0.contains(where: { $0.isLetter || $0.isNumber }) })
     }
 
+    @Test("PDF voice context exposes the current page")
+    func pdfVoiceContextExposesCurrentPage() async throws {
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let vm = ReaderViewModel(
+            book: Book(
+                userId: UUID(),
+                title: "Sample",
+                formatType: .pdf,
+                fileURL: "Books/x/sample.pdf"
+            ),
+            userId: UUID(),
+            documentURL: url,
+            positionStore: InMemoryPositionStore(),
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let locator = Locator(
+            href: try #require(RelativeURL(path: "publication.pdf")),
+            mediaType: .pdf,
+            locations: Locator.Locations(fragments: ["page=1"])
+        )
+        vm.didChangeLocation(locator, isInitialLocation: true)
+
+        let context = vm.voiceContext()
+        let liveContext = await vm.liveVoiceContext()
+
+        #expect(context.currentPage == 1)
+        #expect(liveContext.currentPage == 1)
+        #expect(liveContext.pageText?.isEmpty == false)
+    }
+
     @Test("PDF page-entry and navigation helpers safely fall back when content is unavailable")
     func pdfHelpersReturnSafeFallbackForUnavailableContent() async throws {
         let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))

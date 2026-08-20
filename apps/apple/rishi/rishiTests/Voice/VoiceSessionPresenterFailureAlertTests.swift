@@ -28,6 +28,18 @@ import Foundation
 @Suite("VoiceSessionPresenter failure alert", .serialized)
 struct VoiceSessionPresenterFailureAlertTests {
 
+    @Test("normal startup does not force a remote stale-session probe")
+    func staleCleanupRequiresLocalSessionEvidence() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rishi/Voice/VoiceSessionPresenter.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        #expect(source.contains("guard let rishiSessionId = staleRishiSessionId else"))
+        #expect(source.contains("resolveServerAlreadyActiveConflict()"))
+    }
+
     private struct DeniedMicGate: MicPermissionGate {
         func request() async -> MicPermissionDecision { .denied }
     }
@@ -53,6 +65,18 @@ struct VoiceSessionPresenterFailureAlertTests {
     private struct StubDirtyHook: VoiceTranscriptDirtyHook {
         func conversationDidUpdate(_ id: ConversationID) async {}
         func messageDidUpdate(_ id: MessageID) async {}
+    }
+
+    private final class InvocationCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _clientFactoryCalls = 0
+        private var _sessionCoordinatorFactoryCalls = 0
+
+        var clientFactoryCalls: Int { lock.withLock { _clientFactoryCalls } }
+        var sessionCoordinatorFactoryCalls: Int { lock.withLock { _sessionCoordinatorFactoryCalls } }
+
+        func recordClientFactoryCall() { lock.withLock { _clientFactoryCalls += 1 } }
+        func recordSessionCoordinatorFactoryCall() { lock.withLock { _sessionCoordinatorFactoryCalls += 1 } }
     }
 
     private func makePresenter() -> VoiceSessionPresenter {
@@ -120,5 +144,40 @@ struct VoiceSessionPresenterFailureAlertTests {
         
         await presenter.start(bookId: UUID())
         #expect(presenter.isPresenting == false)
+    }
+
+    @Test("mic denial happens before realtime client or server session construction")
+    func micDenied_precedesClientAndSessionWork() async {
+        let coordinator = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
+        let worker = WorkerClient(
+            baseURL: URL(string: "https://example.invalid")!,
+            tokenProvider: StubTokenProvider()
+        )
+        let userId: UserID = UUID()
+        let calls = InvocationCounter()
+        let presenter = VoiceSessionPresenter(
+            coordinator: coordinator,
+            workerClient: worker,
+            messageStore: StubMessageStore(),
+            conversationLookup: ConversationLookup(store: EmptyConversationStore()),
+            userIdProvider: { userId },
+            dirtyHook: StubDirtyHook(),
+            micGate: DeniedMicGate(),
+            clientFactory: {
+                calls.recordClientFactoryCall()
+                return FakeRealtimeClient()
+            },
+            sessionCoordinatorFactory: {
+                calls.recordSessionCoordinatorFactoryCall()
+                return nil
+            }
+        )
+
+        await presenter.start(bookId: UUID())
+
+        #expect(presenter.state.status == .failed(reason: .micDenied))
+        #expect(calls.clientFactoryCalls == 0)
+        #expect(calls.sessionCoordinatorFactoryCalls == 0)
+        #expect(await coordinator.currentMode == .idle)
     }
 }

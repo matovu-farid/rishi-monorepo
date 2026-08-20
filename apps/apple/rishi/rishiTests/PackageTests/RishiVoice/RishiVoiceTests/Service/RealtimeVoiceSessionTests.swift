@@ -25,6 +25,7 @@ struct RealtimeVoiceSessionTests {
         await fakes.session.start()
         #expect(fakes.state.status == .live)
         #expect(fakes.client.connectCalls == ["k"])
+        #expect(fakes.client.micCaptureEnabledCalls == [true])
         #expect(fakes.fetcher.lastLanguage() == "en")
         #expect(await fakes.coordinator.currentMode == .voice)
     }

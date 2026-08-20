@@ -75,12 +75,11 @@ const CreateVoiceSessionBodySchema = z
 
 /**
  * Starts a Rishi voice session. Per the pricing/trial-launch design doc's
- * "Latency and background-work contract": "session creation and
- * client-secret minting are synchronous and intentionally short." This
- * handler does exactly two blocking calls — the ledger RPC and the OpenAI
- * mint — and nothing else; the control WebSocket, call-ID registration,
- * interval ticking, and hangup all happen out-of-band afterwards, per the
- * spec's "Voice Chat flow".
+ * "Latency and background-work contract": session creation and client-secret
+ * minting are synchronous and intentionally short. The entitlement refresh is
+ * a required gate before either operation; after it completes, ledger
+ * admission and OpenAI minting run concurrently. The control WebSocket,
+ * call-ID registration, interval ticking, and hangup happen out-of-band.
  *
  * Body is the same optional book-context shape `/api/realtime/client_secrets`
  * accepts (see `workers/worker/src/realtime/client-secrets.ts`), so a voice

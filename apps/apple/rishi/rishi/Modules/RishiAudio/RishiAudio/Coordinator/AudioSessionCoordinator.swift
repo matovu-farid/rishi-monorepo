@@ -25,20 +25,37 @@ public actor AudioSessionCoordinator {
     /// just its AVAudioSession config. Enforces the single-audio-owner
     /// invariant at the resource owner. `@Sendable` to cross actor boundaries.
     private var preemptHandlers: [ActiveMode: @Sendable () async -> Void] = [:]
+    private var recoveryHandlers: [ActiveMode: @Sendable () async -> Void] = [:]
     private var suspensionHandlers: [ActiveMode: @Sendable () async -> Void] = [:]
+    private var handlerOwners: [ActiveMode: UUID] = [:]
 
     /// Register the closure that fully stops the owner of `mode`. Owners call
     /// this just before they `requestActiveMode(mode)`. Re-registering
     /// overwrites (e.g. a fresh per-session voice owner).
-    public func registerPreemption(for mode: ActiveMode, handler: @escaping @Sendable () async -> Void) {
+    public func registerPreemption(for mode: ActiveMode, ownerID: UUID? = nil, handler: @escaping @Sendable () async -> Void) {
         preemptHandlers[mode] = handler
+        if let ownerID { handlerOwners[mode] = ownerID }
+    }
+
+    public func registerRecovery(for mode: ActiveMode, ownerID: UUID? = nil, handler: @escaping @Sendable () async -> Void) {
+        recoveryHandlers[mode] = handler
+        if let ownerID { handlerOwners[mode] = ownerID }
+    }
+
+    public func unregisterHandlers(for mode: ActiveMode, ownerID: UUID? = nil) {
+        if let ownerID, handlerOwners[mode] != ownerID { return }
+        preemptHandlers[mode] = nil
+        recoveryHandlers[mode] = nil
+        suspensionHandlers[mode] = nil
+        handlerOwners[mode] = nil
     }
 
     /// Register the active owner's pause action for system interruptions and
     /// output-route loss. Suspension deliberately keeps ownership in policy so
     /// an explicit Play action can resume the same TTS session.
-    public func registerSuspension(for mode: ActiveMode, handler: @escaping @Sendable () async -> Void) {
+    public func registerSuspension(for mode: ActiveMode, ownerID: UUID? = nil, handler: @escaping @Sendable () async -> Void) {
         suspensionHandlers[mode] = handler
+        if let ownerID { handlerOwners[mode] = ownerID }
     }
 
     /// Await the outgoing owner's stop closure (if any). The closure typically
@@ -73,7 +90,7 @@ public actor AudioSessionCoordinator {
     public var isSuspended: Bool { policy.isSuspended }
 
     /// Apply the reducer's effects against the underlying configurator.
-    private func apply(_ effects: [AudioSessionEffect]) {
+    private func apply(_ effects: [AudioSessionEffect]) -> Bool {
         for effect in effects {
             switch effect {
             case let .configure(category, mode, options):
@@ -83,34 +100,115 @@ public actor AudioSessionCoordinator {
                     Log.event("audio.session.mode.failed", level: .error, data: [
                         "error": String(describing: error),
                     ])
+                    return false
                 }
             case .activate:
-                try? configurator.setActive(true, notifyOthers: false)
+                do {
+                    try configurator.setActive(true, notifyOthers: false)
+                } catch {
+                    Log.event("audio.session.activation.failed", level: .error, data: [
+                        "error": String(describing: error),
+                    ])
+                    // A configure effect may already have changed the
+                    // underlying session before activation failed. Best-effort
+                    // deactivation prevents a partially acquired route from
+                    // surviving while policy rolls back.
+                    try? configurator.setActive(false, notifyOthers: true)
+                    return false
+                }
             case let .deactivate(notifyOthers):
-                try? configurator.setActive(false, notifyOthers: notifyOthers)
+                do {
+                    try configurator.setActive(false, notifyOthers: notifyOthers)
+                } catch {
+                    Log.event("audio.session.deactivation.failed", level: .error, data: [
+                        "error": String(describing: error),
+                    ])
+                    return false
+                }
             }
         }
+        return true
     }
 
     /// Request the coordinator switch (or stay in) the given mode. Returns
     /// after the underlying configurator has finished its work.
-    public func requestActiveMode(_ mode: ActiveMode) async {
+    @discardableResult
+    public func requestActiveMode(_ mode: ActiveMode) async -> Bool {
         switch mode {
         case .idle:
-            return
+            return true
         case .tts:
             // Owner change: a live voice session must be stopped first.
             if policy.mode == .voice { await preempt(.voice) }
             // Already in .tts means this is a passage switch (next/prev/repeat),
             // which the policy treats as a no-churn no-op when not suspended.
-            apply(policy.reduce(policy.mode == .tts ? .switchPassage : .beginPassage))
-            Log.event("audio.session.mode", level: .info, data: ["mode": policy.mode.rawValue])
+            var nextPolicy = policy
+            let applied = apply(nextPolicy.reduce(policy.mode == .tts ? .switchPassage : .beginPassage))
+            // TTS historically treated AVAudioSession setup as best effort:
+            // Readium / AVAudioEngine may be able to reuse an already-valid
+            // route even when one of the redundant category operations throws.
+            // Keep that compatibility contract. Voice remains fail-fast via
+            // requestVoiceActiveMode(), where continuing would create a
+            // connected-but-unusable duplex session.
+            policy = nextPolicy
+            Log.event("audio.session.mode", level: applied ? .info : .warning, data: [
+                "mode": policy.mode.rawValue,
+                "success": String(applied),
+            ])
+            return true
         case .voice:
-            // Owner change: live read-aloud must be stopped first.
-            if policy.mode == .tts { await preempt(.tts) }
-            apply(policy.reduce(.beginVoice))
-            Log.event("audio.session.mode", level: .info, data: ["mode": policy.mode.rawValue])
+            return await requestVoiceActiveMode()
         }
+    }
+
+    /// Voice-only acquisition API. Unlike the legacy `requestActiveMode` API,
+    /// this reports whether AVAudioSession was actually configured and
+    /// activated, allowing voice startup to fail before any network work.
+    @discardableResult
+    public func requestVoiceActiveMode() async -> Bool {
+        // Owner change: live read-aloud must be stopped first.
+        let displacedMode = policy.mode
+        let displacedWasSuspended = policy.isSuspended
+        if displacedMode == .tts { await preempt(.tts) }
+
+        var nextPolicy = policy
+        let applied = apply(nextPolicy.reduce(.beginVoice))
+        if applied {
+            policy = nextPolicy
+        } else if displacedMode == .tts {
+            // Voice acquisition failed after TTS was paused. Restore the
+            // shared playback route and let the owner resume itself; never
+            // report a stale .tts policy without restoring its audio path.
+            var restoredPolicy = AudioSessionPolicy()
+            if apply(restoredPolicy.reduce(.beginPassage)) {
+                if displacedWasSuspended {
+                    _ = restoredPolicy.reduce(.interrupted)
+                    do {
+                        try configurator.setActive(false, notifyOthers: true)
+                    } catch {
+                        Log.event("audio.session.recovery.deactivation.failed", level: .error, data: [
+                            "error": String(describing: error),
+                        ])
+                        policy = AudioSessionPolicy()
+                        return false
+                    }
+                }
+                policy = restoredPolicy
+                if !displacedWasSuspended, let recovery = recoveryHandlers[.tts] {
+                    await recovery()
+                }
+            } else {
+                policy = AudioSessionPolicy()
+            }
+        } else if !applied, displacedMode == .voice {
+            policy = AudioSessionPolicy()
+            try? configurator.setActive(false, notifyOthers: true)
+        }
+        Log.event("audio.session.mode", level: applied ? .info : .error, data: [
+            "mode": policy.mode.rawValue,
+            "success": String(applied),
+        ])
+        return applied
     }
 
     /// Release a mode. Only the current owner can release — calling
@@ -121,9 +219,11 @@ public actor AudioSessionCoordinator {
         case .idle:
             return
         case .tts:
-            apply(policy.reduce(.endPlayback))
+            var nextPolicy = policy
+            if apply(nextPolicy.reduce(.endPlayback)) { policy = nextPolicy }
         case .voice:
-            apply(policy.reduce(.endVoice))
+            var nextPolicy = policy
+            if apply(nextPolicy.reduce(.endVoice)) { policy = nextPolicy }
         }
         Log.event("audio.session.mode", level: .info, data: ["mode": policy.mode.rawValue])
     }
@@ -155,13 +255,16 @@ public actor AudioSessionCoordinator {
         switch event {
         case .began:
             if policy.mode == .tts { await suspend(.tts) }
-            apply(policy.reduce(.interrupted))
+            var nextPolicy = policy
+            if apply(nextPolicy.reduce(.interrupted)) { policy = nextPolicy }
             Log.event("audio.interruption", level: .info, data: ["event": "began"])
         case .endedShouldResume:
-            apply(policy.reduce(.resume))
+            var nextPolicy = policy
+            if apply(nextPolicy.reduce(.resume)) { policy = nextPolicy }
             Log.event("audio.interruption", level: .info, data: ["event": "ended.shouldResume"])
         case .endedNoResume:
-            apply(policy.reduce(.endInterruptionNoResume))
+            var nextPolicy = policy
+            if apply(nextPolicy.reduce(.endInterruptionNoResume)) { policy = nextPolicy }
             Log.event("audio.interruption", level: .info, data: ["event": "ended.noResume"])
         }
     }
@@ -170,7 +273,8 @@ public actor AudioSessionCoordinator {
         switch event {
         case .oldDeviceUnavailable:
             if policy.mode == .tts { await suspend(.tts) }
-            apply(policy.reduce(.routeUnavailable))
+            var nextPolicy = policy
+            if apply(nextPolicy.reduce(.routeUnavailable)) { policy = nextPolicy }
             Log.event("audio.route.changed", level: .info, data: ["event": "oldDeviceUnavailable"])
         case .newDeviceAvailable, .categoryChange, .override, .wakeFromSleep, .noSuitableRoute, .unknown:
             // A route becoming available must not implicitly resume narration.

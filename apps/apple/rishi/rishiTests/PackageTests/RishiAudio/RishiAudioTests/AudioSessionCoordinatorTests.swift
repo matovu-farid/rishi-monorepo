@@ -6,6 +6,51 @@ import Foundation
 @Suite("AudioSessionCoordinator", .serialized)
 struct AudioSessionCoordinatorTests {
 
+    private struct VoiceConfigureFailure: Error {}
+
+    private final class RecoveryCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _count = 0
+        func bump() { lock.withLock { _count += 1 } }
+        var count: Int { lock.withLock { _count } }
+    }
+
+    private final class FailingVoiceConfigurator: AudioSessionConfigurator, @unchecked Sendable {
+        func configure(
+            category: AudioSessionCategory,
+            mode: AudioSessionMode,
+            options: AudioSessionOptions
+        ) throws {
+            if category == .playAndRecord { throw VoiceConfigureFailure() }
+        }
+
+        func setActive(_ active: Bool, notifyOthers: Bool) throws {}
+        func interruptionStream() -> AsyncStream<AudioInterruptionEvent> {
+            AsyncStream { $0.finish() }
+        }
+        func routeChangeStream() -> AsyncStream<AudioRouteChangeEvent> {
+            AsyncStream { $0.finish() }
+        }
+    }
+
+    private final class FailingTTSConfigurator: AudioSessionConfigurator, @unchecked Sendable {
+        func configure(
+            category: AudioSessionCategory,
+            mode: AudioSessionMode,
+            options: AudioSessionOptions
+        ) throws {
+            if category == .playback { throw VoiceConfigureFailure() }
+        }
+
+        func setActive(_ active: Bool, notifyOthers: Bool) throws {}
+        func interruptionStream() -> AsyncStream<AudioInterruptionEvent> {
+            AsyncStream { $0.finish() }
+        }
+        func routeChangeStream() -> AsyncStream<AudioRouteChangeEvent> {
+            AsyncStream { $0.finish() }
+        }
+    }
+
     @Test("Starts in .idle")
     func startsIdle() async {
         let coord = AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator())
@@ -66,6 +111,43 @@ struct AudioSessionCoordinatorTests {
         #expect(voice?.category == .playAndRecord)
         #expect(voice?.mode == .videoChat)
         #expect(voice?.options.contains(.defaultToSpeaker) == true)
+    }
+
+    @Test("voice setup reports failure and rolls policy back when configuration fails")
+    func voiceSetupFailureRollsBackPolicy() async {
+        let coord = AudioSessionCoordinator(configurator: FailingVoiceConfigurator())
+
+        let started = await coord.requestVoiceActiveMode()
+
+        #expect(started == false)
+        #expect(await coord.currentMode == .idle)
+    }
+
+    @Test("failed voice setup after TTS preemption leaves the coordinator idle")
+    func voiceSetupFailureAfterTTSPreemptionLeavesIdle() async {
+        let coord = AudioSessionCoordinator(configurator: FailingVoiceConfigurator())
+        let recovered = RecoveryCounter()
+        await coord.registerPreemption(for: .tts) {
+            await coord.releaseActiveMode(.tts)
+        }
+        await coord.registerRecovery(for: .tts) { recovered.bump() }
+        await coord.requestActiveMode(.tts)
+
+        let started = await coord.requestVoiceActiveMode()
+
+        #expect(started == false)
+        #expect(await coord.currentMode == .tts)
+        #expect(recovered.count == 1)
+    }
+
+    @Test("TTS keeps its pre-existing best-effort startup contract")
+    func ttsSetupFailureDoesNotAbortPlaybackOwnership() async {
+        let coord = AudioSessionCoordinator(configurator: FailingTTSConfigurator())
+
+        let started = await coord.requestActiveMode(.tts)
+
+        #expect(started == true)
+        #expect(await coord.currentMode == .tts)
     }
 
     @Test("releaseActiveMode(.tts) while in .voice is a no-op")
