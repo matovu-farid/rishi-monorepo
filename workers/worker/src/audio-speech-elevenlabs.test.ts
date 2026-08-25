@@ -16,6 +16,11 @@ const { speechAudioBytes, fetchCalls, meterMock } = vi.hoisted(() => ({
   meterMock: vi.fn(async () => undefined),
 }))
 
+const { sentryClient, sentryScope } = vi.hoisted(() => ({
+  sentryClient: { captureException: vi.fn() },
+  sentryScope: { setTag: vi.fn(), setContext: vi.fn() },
+}))
+
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   fetchCalls.push({ url: String(input), init })
   return new Response(speechAudioBytes, {
@@ -28,6 +33,8 @@ vi.stubGlobal("fetch", fetchMock)
 
 vi.mock("@sentry/cloudflare", () => ({
   withSentry: <T>(_options: unknown, handler: T) => handler,
+  getClient: () => sentryClient,
+  withIsolationScope: (callback: (scope: typeof sentryScope) => unknown) => callback(sentryScope),
 }))
 
 vi.mock("./billing/meter", () => ({
@@ -294,9 +301,38 @@ beforeEach(() => {
   cache.get.mockReset()
   cache.put.mockReset().mockResolvedValue({})
   fetchMock.mockClear()
+  sentryClient.captureException.mockReset()
+  sentryScope.setTag.mockReset()
+  sentryScope.setContext.mockReset()
 })
 
 describe("POST /api/audio/speech/elevenlabs", () => {
+  it("reports missing provider configuration without exposing request content", async () => {
+    const originalKey = env.ELEVEN_LABS_API_KEY
+    env.ELEVEN_LABS_API_KEY = ""
+    try {
+      const cache = env.TTS_CACHE as unknown as { get: ReturnType<typeof vi.fn> }
+      cache.get.mockResolvedValue(null)
+      const res = await callSpeech({
+        text: "private narration text",
+        voice: "alloy",
+        model: "eleven_v3",
+      })
+
+      expect(res.status).toBe(503)
+      expect(sentryClient.captureException).toHaveBeenCalledTimes(1)
+      expect(sentryClient.captureException.mock.calls[0]?.[0].message).toBe(
+        "tts.generate failed",
+      )
+      expect(sentryScope.setContext).toHaveBeenCalledWith(
+        "telemetry",
+        expect.objectContaining({ error_code: "provider_configuration_missing" }),
+      )
+    } finally {
+      env.ELEVEN_LABS_API_KEY = originalKey
+    }
+  })
+
   it("missing consent rejects before parsing, cache lookup, metering, or provider work", async () => {
     const res = await app.fetch(
       new Request("https://api.fidexa.org/api/audio/speech/elevenlabs", {
@@ -473,6 +509,7 @@ describe("POST /api/audio/speech/elevenlabs", () => {
       model: "eleven_v3",
       speed: 1.0,
       response_mode: "events",
+      telemetry_id: "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11",
     })
 
     expect(res.status).toBe(200)
@@ -484,12 +521,7 @@ describe("POST /api/audio/speech/elevenlabs", () => {
     const frames = parseEventFrames(await res.text())
     expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
 
-    const requestId = await computeKey(
-      text,
-      "JBFqnCBsd6RMkjVDRZzb",
-      "eleven_v3",
-      1.0,
-    )
+    const requestId = "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11"
     expect(frames[0].id).toBe(`${requestId}#00000000`)
     expect(JSON.parse(frames[0].data!)).toMatchObject({
       request_id: requestId,

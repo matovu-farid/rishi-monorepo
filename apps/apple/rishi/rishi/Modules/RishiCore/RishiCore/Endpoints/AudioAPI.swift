@@ -27,17 +27,20 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
         public let voice: String
         public let speed: Double
         public let responseMode: TTSResponseMode
+        public let telemetryID: String?
 
         public init(
             text: String,
             voice: String,
             speed: Double = 1.0,
-            responseMode: TTSResponseMode = .events
+            responseMode: TTSResponseMode = .events,
+            telemetryID: String? = nil
         ) {
             self.text = text
             self.voice = voice
             self.speed = speed
             self.responseMode = responseMode
+            self.telemetryID = telemetryID
         }
 
         enum CodingKeys: String, CodingKey {
@@ -45,6 +48,7 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
             case voice
             case speed
             case responseMode = "response_mode"
+            case telemetryID = "telemetry_id"
         }
     }
 
@@ -127,19 +131,22 @@ public struct ElevenLabsSpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
         public let model: String
         public let speed: Double
         public let responseMode: TTSResponseMode
+        public let telemetryID: String?
 
         public init(
             text: String,
             voice: String,
             model: String = "eleven_v3",
             speed: Double = 1.0,
-            responseMode: TTSResponseMode = .events
+            responseMode: TTSResponseMode = .events,
+            telemetryID: String? = nil
         ) {
             self.text = text
             self.voice = voice
             self.model = model
             self.speed = speed
             self.responseMode = responseMode
+            self.telemetryID = telemetryID
         }
 
         enum CodingKeys: String, CodingKey {
@@ -148,6 +155,7 @@ public struct ElevenLabsSpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
             case model
             case speed
             case responseMode = "response_mode"
+            case telemetryID = "telemetry_id"
         }
     }
 

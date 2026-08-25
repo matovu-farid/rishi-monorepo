@@ -235,13 +235,31 @@ public actor CachingTTSChunkSource: TTSChunkSource {
             partialURL = try await store.beginWrite(key: key)
         } catch {
             // If we cannot open a partial, fall back to passthrough: don't fail the user.
-            Log.event("tts.cache.beginWrite.failed", level: .error, data: ["error": "\(error)"])
+            Log.error(
+                "tts.cache.beginWrite.failed",
+                error: error,
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.cache",
+                    stage: "cache",
+                    errorCode: "cache_begin_write_failed"
+                )
+            )
             try await passthrough(request: request, key: key)
             return
         }
 
         guard let handle = try? FileHandle(forWritingTo: partialURL) else {
-            Log.event("tts.cache.openWrite.failed", level: .error, data: [:])
+            Log.error(
+                "tts.cache.openWrite.failed",
+                error: NSError(domain: "org.fidexa.rishi.tts", code: 2),
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.cache",
+                    stage: "cache",
+                    errorCode: "cache_open_write_failed"
+                )
+            )
             await store.discard(partial: partialURL)
             try await passthrough(request: request, key: key)
             return
@@ -266,9 +284,16 @@ public actor CachingTTSChunkSource: TTSChunkSource {
             guard wroteBytes > 0 else {
                 await store.discard(partial: partialURL)
                 committed = true // nothing to clean up in the catch blocks
-                Log.event("tts.cache.empty_upstream", level: .error, data: [
-                    "key_prefix": String(key.prefix(8)),
-                ])
+                Log.error(
+                    "tts.cache.empty_upstream",
+                    error: NSError(domain: "org.fidexa.rishi.tts", code: 3),
+                    diagnostic: TelemetryDiagnostic(
+                        feature: "tts",
+                        operation: "tts.cache",
+                        stage: "cache",
+                        errorCode: "empty_upstream"
+                    )
+                )
                 return
             }
             try await store.commit(key: key, partial: partialURL)

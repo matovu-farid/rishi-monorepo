@@ -105,9 +105,16 @@ actor TTSStreamEventParser {
                 let audioBase64 = payload.audioBase64,
                 let audio = Data(base64Encoded: audioBase64)
             else {
-                Log.event("tts.sse.malformed", level: .error, data: [
-                    "reason": "missing index or audio",
-                ])
+                Log.error(
+                    "tts.sse.malformed",
+                    error: NSError(domain: "org.fidexa.rishi.tts", code: 1),
+                    diagnostic: TelemetryDiagnostic(
+                        feature: "tts",
+                        operation: "tts.sse.malformed",
+                        stage: "parse",
+                        errorCode: "missing_audio_fields"
+                    )
+                )
                 return []
             }
             return [
@@ -119,7 +126,16 @@ actor TTSStreamEventParser {
                 )
             ]
         } catch {
-            Log.error("tts.sse.malformed", error: error)
+            Log.error(
+                "tts.sse.malformed",
+                error: error,
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.sse.malformed",
+                    stage: "parse",
+                    errorCode: "invalid_payload"
+                )
+            )
             return []
         }
     }

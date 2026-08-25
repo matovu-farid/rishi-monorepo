@@ -53,6 +53,7 @@ import { authCompatRoutes } from "./routes/auth-compat";
 import { registerBetterAuthRoutes } from "./routes/better-auth";
 import { precreateShareLinks, purgeExpiredShares, sharesRoutes } from "./routes/shares";
 import { retryPendingDeletions } from "./account-deletion";
+import { captureWorkerTelemetryError, sanitizeWorkerTelemetry } from "./ops/error-reporting";
 import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
@@ -233,15 +234,26 @@ function ttsDoneId(requestKey: string): string {
   return `${requestKey}#done`;
 }
 
+const TTS_TELEMETRY_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeTtsTelemetryId(value: unknown): string {
+  return typeof value === "string" && TTS_TELEMETRY_ID_PATTERN.test(value)
+    ? value
+    : crypto.randomUUID();
+}
+
 function buildTtsRawResponse(
   bytes: Uint8Array,
   cacheStatus: "hit" | "miss",
+  requestKey: string,
   entitlementHeader?: string,
 ): Response {
   const headers: Record<string, string> = {
     "Content-Type": "audio/mpeg",
     "Content-Length": bytes.byteLength.toString(),
     "X-TTS-Cache": cacheStatus,
+    "X-TTS-Request-ID": requestKey,
   };
   if (entitlementHeader) {
     headers["X-Entitlement-Remaining"] = entitlementHeader;
@@ -308,6 +320,7 @@ function buildTtsEventResponse(
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache",
     "X-TTS-Cache": cacheStatus,
+    "X-TTS-Request-ID": requestKey,
   };
   if (entitlementHeader) {
     headers["X-Entitlement-Remaining"] = entitlementHeader;
@@ -325,7 +338,7 @@ function respondWithTtsBytes(
   if (mode === "events") {
     return buildTtsEventResponse(bytes, requestKey, cacheStatus, entitlementHeader);
   }
-  return buildTtsRawResponse(bytes, cacheStatus, entitlementHeader);
+  return buildTtsRawResponse(bytes, cacheStatus, requestKey, entitlementHeader);
 }
 
 function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -335,6 +348,44 @@ function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out;
 }
 
+function reportTtsStreamFailures(
+  source: ReadableStream<Uint8Array>,
+  provider: "openai" | "elevenlabs",
+  correlationId: string,
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  return new ReadableStream({
+    async start(controller) {
+      const activeReader = source.getReader();
+      reader = activeReader;
+      try {
+        while (true) {
+          const { done, value } = await activeReader.read();
+          if (done) break;
+          if (value) controller.enqueue(value);
+        }
+        controller.close();
+        activeReader.releaseLock();
+      } catch (streamError) {
+        console.error("tts.stream.failed");
+        captureWorkerTelemetryError(streamError, {
+          feature: "tts",
+          operation: "tts.stream",
+          stage: "provider_stream",
+          error_code: "provider_stream_failed",
+          provider,
+          correlation_id: correlationId,
+        });
+        controller.error(streamError);
+      }
+    },
+    cancel(reason) {
+      const cancellation = reader?.cancel(reason) ?? source.cancel(reason);
+      cancellation.catch(() => undefined);
+    },
+  });
+}
+
 // Streams the provider's raw audio bytes straight through to the client as
 // they arrive — no `Content-Length` because the final size isn't known
 // upfront (design: "immediately streams the provider audio to the app once
@@ -342,11 +393,13 @@ function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
 function buildTtsRawStreamResponse(
   stream: ReadableStream<Uint8Array>,
   cacheStatus: "hit" | "miss",
+  requestKey: string,
   entitlementHeader?: string,
 ): Response {
   const headers: Record<string, string> = {
     "Content-Type": "audio/mpeg",
     "X-TTS-Cache": cacheStatus,
+    "X-TTS-Request-ID": requestKey,
   };
   if (entitlementHeader) {
     headers["X-Entitlement-Remaining"] = entitlementHeader;
@@ -443,6 +496,7 @@ function buildTtsEventStreamResponse(
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache",
     "X-TTS-Cache": cacheStatus,
+    "X-TTS-Request-ID": requestKey,
   };
   if (entitlementHeader) {
     headers["X-Entitlement-Remaining"] = entitlementHeader;
@@ -456,11 +510,13 @@ function respondWithTtsStream(
   cacheStatus: "hit" | "miss",
   mode: TtsResponseMode,
   entitlementHeader?: string,
+  provider: "openai" | "elevenlabs" = "openai",
 ): Response {
+  const observedStream = reportTtsStreamFailures(stream, provider, requestKey);
   if (mode === "events") {
-    return buildTtsEventStreamResponse(stream, requestKey, cacheStatus, entitlementHeader);
+    return buildTtsEventStreamResponse(observedStream, requestKey, cacheStatus, entitlementHeader);
   }
-  return buildTtsRawStreamResponse(stream, cacheStatus, entitlementHeader);
+  return buildTtsRawStreamResponse(observedStream, cacheStatus, requestKey, entitlementHeader);
 }
 
 // Budget for the best-effort entitlement-snapshot read attached to a
@@ -785,6 +841,8 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
   // The catch block below releases it only if it is still set, so a
   // reservation is never released twice and never released after commit.
   let pendingReservationId: string | undefined;
+  let responseModeForTelemetry = "raw";
+  let telemetryID: string = crypto.randomUUID();
 
   try {
     // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
@@ -799,6 +857,7 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
         voice?: string;
         speed?: number;
         response_mode?: string;
+        telemetry_id?: string;
       }>()
       .catch(
         (): {
@@ -806,10 +865,13 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
           voice?: string;
           speed?: number;
           response_mode?: string;
+          telemetry_id?: string;
         } => ({}),
       );
-    const { text, voice, speed, response_mode } = rawBody;
+    const { text, voice, speed, response_mode, telemetry_id } = rawBody;
+    telemetryID = normalizeTtsTelemetryId(telemetry_id);
     const responseMode = resolveTtsResponseMode(response_mode);
+    responseModeForTelemetry = responseMode;
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return c.json({ error: "Missing or empty text" }, 400);
@@ -864,7 +926,7 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
     const cached = await c.env.TTS_CACHE.get(key);
     if (cached !== null) {
       const bytes = await cached.bytes();
-      return respondWithTtsBytes(bytes, key, "hit", responseMode);
+      return respondWithTtsBytes(bytes, telemetryID, "hit", responseMode);
     }
 
     // Cache miss: reserve allowance before calling the provider. The
@@ -922,26 +984,56 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
           );
           await c.env.TTS_CACHE.put(key, sidecarBytes, {
             httpMetadata: { contentType: "audio/mpeg" },
-          }).catch((e) => console.error("tts.cache.put.failed", e));
+          }).catch((e) => {
+            console.error("tts.cache.put.failed");
+            captureWorkerTelemetryError(e, {
+              feature: "tts",
+              operation: "tts.sidecar",
+              stage: "cache",
+              error_code: "cache_write_failed",
+              provider: "openai",
+              correlation_id: telemetryID,
+            });
+          });
           // Commits the reservation's originally estimated amount, not a
           // measured generated duration — see this plan's "Exports for
           // downstream plans" for the flagged precise-duration-parsing gap.
-          await ledger.commitTtsReservation(reservationId).catch((commitErr) =>
-            console.error("tts.reservation.commit.failed", {
-              reservationId,
-              commitErr,
-            }),
-          );
+          await ledger.commitTtsReservation(reservationId).catch((commitErr) => {
+            console.error("tts.reservation.commit.failed");
+            captureWorkerTelemetryError(commitErr, {
+              feature: "tts",
+              operation: "tts.sidecar",
+              stage: "ledger",
+              error_code: "reservation_commit_failed",
+              provider: "openai",
+              correlation_id: telemetryID,
+            });
+          });
         } catch (sidecarErr) {
           // The provider stream itself failed/was cut short after headers
           // were already sent to the client — nothing was actually
           // generated, so release rather than commit.
-          console.error("tts.sidecar.failed", sidecarErr);
+          console.error("tts.sidecar.failed");
+          captureWorkerTelemetryError(sidecarErr, {
+            feature: "tts",
+            operation: "tts.sidecar",
+            stage: "stream",
+            error_code: "sidecar_stream_failed",
+            provider: "openai",
+            correlation_id: telemetryID,
+          });
           await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
-            console.error("tts.reservation.release.failed", {
-              reservationId,
-              releaseErr,
-            }),
+            {
+              console.error("tts.reservation.release.failed");
+              captureWorkerTelemetryError(releaseErr, {
+                feature: "tts",
+                operation: "tts.sidecar",
+                stage: "ledger",
+                error_code: "reservation_release_failed",
+                provider: "openai",
+                correlation_id: telemetryID,
+              });
+            },
           );
         }
       })(),
@@ -954,35 +1046,56 @@ app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
 
     return respondWithTtsStream(
       clientStream,
-      key,
+      telemetryID,
       "miss",
       responseMode,
       entitlementHeader,
+      "openai",
     );
   } catch (error) {
     // Release before responding, not fire-and-forget: a fast client retry
     // must not be blocked by a stale pending reservation.
     if (pendingReservationId) {
       const reservationId = pendingReservationId;
-      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
-        console.error("tts.reservation.release.failed", {
-          reservationId,
-          releaseErr,
-        }),
-      );
+      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) => {
+        console.error("tts.reservation.release.failed");
+        captureWorkerTelemetryError(releaseErr, {
+          feature: "tts",
+          operation: "tts.generate",
+          stage: "ledger",
+          error_code: "reservation_release_failed",
+          provider: "openai",
+          correlation_id: telemetryID,
+        });
+      });
     }
 
     if (APICallError.isInstance(error)) {
-      console.error("OpenAI API error:", error.statusCode, error.message);
+      console.error("OpenAI API error:", error.statusCode);
+      captureWorkerTelemetryError(error, {
+        feature: "tts",
+        operation: "tts.generate",
+        stage: "provider",
+        error_code: `http_${error.statusCode ?? "unknown"}`,
+        provider: "openai",
+        http_status: error.statusCode ?? 0,
+        response_mode: responseModeForTelemetry,
+        correlation_id: telemetryID,
+      });
       return c.json(
         { error: "TTS generation failed" },
         error.statusCode === 429 ? 429 : 502,
       );
     }
-    console.error(
-      "TTS error:",
-      error instanceof Error ? error.message : "unknown",
-    );
+    console.error("TTS error");
+    captureWorkerTelemetryError(error, {
+      feature: "tts",
+      operation: "tts.generate",
+      stage: "internal",
+      error_code: "internal_error",
+      provider: "openai",
+      correlation_id: telemetryID,
+    });
     return c.json({ error: "TTS generation failed" }, 500);
   }
 });
@@ -1019,6 +1132,8 @@ app.post(
   // Same lifecycle contract as the OpenAI route above: set only once
   // reserveTts() succeeds, cleared as soon as the reservation is settled.
   let pendingReservationId: string | undefined;
+  let responseModeForTelemetry = "raw";
+  let telemetryID: string = crypto.randomUUID();
 
   try {
     const rawBody = await c.req
@@ -1028,6 +1143,7 @@ app.post(
         model?: string;
         speed?: number;
         response_mode?: string;
+        telemetry_id?: string;
       }>()
       .catch(
         (): {
@@ -1036,10 +1152,13 @@ app.post(
           model?: string;
           speed?: number;
           response_mode?: string;
+          telemetry_id?: string;
         } => ({}),
       );
-    const { text, voice, model, speed, response_mode } = rawBody;
+    const { text, voice, model, speed, response_mode, telemetry_id } = rawBody;
+    telemetryID = normalizeTtsTelemetryId(telemetry_id);
     const responseMode = resolveTtsResponseMode(response_mode);
+    responseModeForTelemetry = responseMode;
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return c.json({ error: "Missing or empty text" }, 400);
@@ -1075,10 +1194,22 @@ app.post(
     const cached = await c.env.TTS_CACHE.get(key);
     if (cached !== null) {
       const bytes = await cached.bytes();
-      return respondWithTtsBytes(bytes, key, "hit", responseMode);
+      return respondWithTtsBytes(bytes, telemetryID, "hit", responseMode);
     }
 
     if (!c.env.ELEVEN_LABS_API_KEY) {
+      captureWorkerTelemetryError(
+        new Error("ElevenLabs configuration missing"),
+        {
+          feature: "tts",
+          operation: "tts.generate",
+          stage: "configuration",
+          error_code: "provider_configuration_missing",
+          provider: "elevenlabs",
+          response_mode: responseModeForTelemetry,
+          correlation_id: telemetryID,
+        },
+      );
       return c.json({ error: "TTS generation failed" }, 503);
     }
 
@@ -1117,18 +1248,35 @@ app.post(
     });
 
     if (!speech.ok) {
-      const body = await speech.text().catch(() => "");
-      console.error("ElevenLabs API error:", speech.status, body);
+      console.error("ElevenLabs API error:", speech.status);
+      captureWorkerTelemetryError(
+        new Error("ElevenLabs provider request failed"),
+        {
+          feature: "tts",
+          operation: "tts.generate",
+          stage: "provider",
+          error_code: `http_${speech.status}`,
+          provider: "elevenlabs",
+          http_status: speech.status,
+          response_mode: responseModeForTelemetry,
+          correlation_id: telemetryID,
+        },
+      );
       // A non-ok fetch response is a returned failure, not a thrown
       // exception, so the shared catch block below never sees it — release
       // explicitly here, before responding, same contract as the catch
       // block: don't block a fast client retry on a stale reservation.
-      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
-        console.error("tts.reservation.release.failed", {
-          reservationId,
-          releaseErr,
-        }),
-      );
+      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) => {
+        console.error("tts.reservation.release.failed");
+        captureWorkerTelemetryError(releaseErr, {
+          feature: "tts",
+          operation: "tts.generate",
+          stage: "ledger",
+          error_code: "reservation_release_failed",
+          provider: "elevenlabs",
+          correlation_id: telemetryID,
+        });
+      });
       pendingReservationId = undefined;
       return c.json(
         { error: "TTS generation failed" },
@@ -1161,20 +1309,50 @@ app.post(
           );
           await c.env.TTS_CACHE.put(key, sidecarBytes, {
             httpMetadata: { contentType: "audio/mpeg" },
-          }).catch((e) => console.error("tts.cache.put.failed", e));
-          await ledger.commitTtsReservation(reservationId).catch((commitErr) =>
-            console.error("tts.reservation.commit.failed", {
-              reservationId,
-              commitErr,
-            }),
-          );
+          }).catch((e) => {
+            console.error("tts.cache.put.failed");
+            captureWorkerTelemetryError(e, {
+              feature: "tts",
+              operation: "tts.sidecar",
+              stage: "cache",
+              error_code: "cache_write_failed",
+              provider: "elevenlabs",
+              correlation_id: telemetryID,
+            });
+          });
+          await ledger.commitTtsReservation(reservationId).catch((commitErr) => {
+            console.error("tts.reservation.commit.failed");
+            captureWorkerTelemetryError(commitErr, {
+              feature: "tts",
+              operation: "tts.sidecar",
+              stage: "ledger",
+              error_code: "reservation_commit_failed",
+              provider: "elevenlabs",
+              correlation_id: telemetryID,
+            });
+          });
         } catch (sidecarErr) {
-          console.error("tts.sidecar.failed", sidecarErr);
+          console.error("tts.sidecar.failed");
+          captureWorkerTelemetryError(sidecarErr, {
+            feature: "tts",
+            operation: "tts.sidecar",
+            stage: "stream",
+            error_code: "sidecar_stream_failed",
+            provider: "elevenlabs",
+            correlation_id: telemetryID,
+          });
           await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
-            console.error("tts.reservation.release.failed", {
-              reservationId,
-              releaseErr,
-            }),
+            {
+              console.error("tts.reservation.release.failed");
+              captureWorkerTelemetryError(releaseErr, {
+                feature: "tts",
+                operation: "tts.sidecar",
+                stage: "ledger",
+                error_code: "reservation_release_failed",
+                provider: "elevenlabs",
+                correlation_id: telemetryID,
+              });
+            },
           );
         }
       })(),
@@ -1185,25 +1363,39 @@ app.post(
 
     return respondWithTtsStream(
       clientStream,
-      key,
+      telemetryID,
       "miss",
       responseMode,
       entitlementHeader,
+      "elevenlabs",
     );
   } catch (error) {
     if (pendingReservationId) {
       const reservationId = pendingReservationId;
-      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) =>
-        console.error("tts.reservation.release.failed", {
-          reservationId,
-          releaseErr,
-        }),
-      );
+      await ledger.releaseTtsReservation(reservationId).catch((releaseErr) => {
+        console.error("tts.reservation.release.failed");
+        captureWorkerTelemetryError(releaseErr, {
+          feature: "tts",
+          operation: "tts.generate",
+          stage: "ledger",
+          error_code: "reservation_release_failed",
+          provider: "elevenlabs",
+          correlation_id: telemetryID,
+        });
+      });
     }
     console.error(
-      "TTS error:",
-      error instanceof Error ? error.message : "unknown",
+      "TTS error",
     );
+    captureWorkerTelemetryError(error, {
+      feature: "tts",
+      operation: "tts.generate",
+      stage: "internal",
+      error_code: "internal_error",
+      provider: "elevenlabs",
+      response_mode: responseModeForTelemetry,
+      correlation_id: telemetryID,
+    });
     return c.json({ error: "TTS generation failed" }, 500);
   }
   },
@@ -1391,9 +1583,8 @@ app.post("/api/audio/transcribe", requireAuth, requireAiDataConsent, async (c) =
   }
 
   if (!dgResponse.ok) {
-    const errorText = await dgResponse.text();
     clearTimeout(dgTimeout);
-    console.error("Deepgram error:", dgResponse.status, errorText);
+    console.error("Deepgram error:", dgResponse.status);
     return c.json({ error: "Transcription failed" }, 502);
   }
 
@@ -1413,7 +1604,42 @@ const sentryHandler = Sentry.withSentry((env: any) => {
     // Adds request headers and IP for users, for more info visit:
     // https://docs.sentry.io/platforms/javascript/guides/cloudflare/configuration/options/#sendDefaultPii
     sendDefaultPii: false,
-    enableLogs: true,
+    // Console logs may contain provider or request-derived values. Exception
+    // reporting remains enabled, but console-to-Sentry log capture is disabled
+    // so those values cannot become breadcrumbs or log events.
+    enableLogs: false,
+    beforeSend(event) {
+      const safeTags = sanitizeWorkerTelemetry(event.tags ?? {});
+      event.tags = Object.fromEntries(
+        Object.entries(safeTags).map(([key, value]) => [key, String(value)]),
+      );
+      const rawTelemetry = event.contexts?.telemetry;
+      const safeTelemetry =
+        rawTelemetry && typeof rawTelemetry === "object"
+          ? sanitizeWorkerTelemetry(rawTelemetry as Record<string, unknown>)
+          : {};
+      event.contexts = Object.keys(safeTelemetry).length
+        ? { telemetry: safeTelemetry }
+        : undefined;
+      event.request = undefined;
+      event.user = undefined;
+      event.extra = undefined;
+      event.breadcrumbs = undefined;
+      event.message = undefined;
+      event.transaction = undefined;
+      event.exception = event.exception
+        ? {
+            ...event.exception,
+            values: event.exception.values?.map((exception) => ({
+              ...exception,
+              type: "RishiWorkerError",
+              value: "worker.error",
+              mechanism: undefined,
+            })),
+          }
+        : undefined;
+      return event;
+    },
   };
 }, app);
 

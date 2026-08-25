@@ -11,6 +11,11 @@ enum SentryBridge {
     static let breadcrumbMessage = "rishi.event"
     static let genericErrorMessage = "rishi.error"
 
+    struct SanitizedEventFields: Equatable {
+        let tags: [String: String]
+        let context: [String: [String: String]]
+    }
+
     private static let state = LifecycleState()
 
     private final class LifecycleState: @unchecked Sendable {
@@ -144,22 +149,37 @@ enum SentryBridge {
         state.lock.unlock()
         guard isLive else { return }
         let crumb = Breadcrumb()
-        crumb.message = breadcrumbMessage
+        crumb.message = sanitizedEventName(name)
         crumb.level = mapLevel(level)
+        crumb.data = sanitizedBreadcrumbData(data)
         SentrySDK.addBreadcrumb(crumb)
     }
 
-    static func capture(error: Error) {
+    static func capture(error: Error, diagnostic: TelemetryDiagnostic? = nil) {
         state.lock.lock()
         let isLive = state.isLive
         state.lock.unlock()
         guard isLive else { return }
-        let sanitizedError = NSError(
-            domain: "org.fidexa.rishi",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: genericErrorMessage]
+        let payload = diagnostic ?? TelemetryDiagnostic(
+            feature: "app",
+            operation: "log.error",
+            stage: "unknown",
+            errorCode: "unclassified"
         )
-        SentrySDK.capture(error: sanitizedError)
+        let fields = payload.sanitizedFields
+        // Pass the original error so Sentry can attach its native frames. The
+        // beforeSend filter below removes the original message and all
+        // automatic payloads while retaining the stacktrace for diagnosis.
+        SentrySDK.capture(error: error) { scope in
+            let searchableKeys = Set([
+                "feature", "operation", "stage", "error_code", "error_type",
+                "provider", "http_status", "response_mode", "cache_result",
+            ])
+            for (key, value) in fields where searchableKeys.contains(key) {
+                scope.setTag(value: value, key: key)
+            }
+            scope.setContext(value: fields, key: "telemetry")
+        }
     }
 
     static func purgeCachedEnvelopes() {
@@ -167,7 +187,38 @@ enum SentryBridge {
     }
 
     static func sanitizedBreadcrumbData(_ data: [String: String]?) -> [String: String]? {
-        nil
+        let sanitized = TelemetryDiagnostic.sanitize(data)
+        return sanitized.isEmpty ? nil : sanitized
+    }
+
+    static func sanitizedEventName(_ name: String) -> String {
+        guard name.count <= 64,
+              !name.isEmpty,
+              name.unicodeScalars.allSatisfy({ scalar in
+                  scalar.value >= 0x21 && scalar.value <= 0x7E
+              })
+        else { return breadcrumbMessage }
+        return name
+    }
+
+    static func sanitizedEventFields(
+        tags: [String: String]?,
+        context: [String: [String: String]]?
+    ) -> SanitizedEventFields {
+        let safeTags = TelemetryDiagnostic.sanitize(tags)
+        let safeTelemetry = TelemetryDiagnostic.sanitize(context?["telemetry"])
+        return SanitizedEventFields(
+            tags: safeTags,
+            context: safeTelemetry.isEmpty ? [:] : ["telemetry": safeTelemetry]
+        )
+    }
+
+    static func sanitizedError(for _: Error, payload _: TelemetryDiagnostic) -> NSError {
+        NSError(
+            domain: "org.fidexa.rishi",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: genericErrorMessage]
+        )
     }
 
     private static func normalizedDSN(_ dsn: String?) -> String? {
@@ -215,12 +266,24 @@ enum SentryBridge {
                 defer { state.lock.unlock() }
                 guard state.isLive else { return nil }
 
+                let filtered = sanitizedEventFields(
+                    tags: event.tags?.reduce(into: [String: String]()) { result, pair in
+                        if let value = pair.value as? String { result[pair.key] = value }
+                    },
+                    context: event.context?.reduce(into: [String: [String: String]]()) { result, pair in
+                        if let values = pair.value as? [String: Any] {
+                            result[pair.key] = values.reduce(into: [String: String]()) { inner, value in
+                                if let string = value.value as? String { inner[value.key] = string }
+                            }
+                        }
+                    }
+                )
                 event.message = nil
                 event.transaction = nil
-                event.tags = nil
+                event.tags = filtered.tags
                 event.extra = nil
                 event.user = nil
-                event.context = nil
+                event.context = filtered.context
                 event.request = nil
                 event.error = nil
                 event.exceptions = event.exceptions?.map { exception in
@@ -228,11 +291,14 @@ enum SentryBridge {
                     exception.type = "RishiError"
                     exception.module = nil
                     exception.mechanism = nil
+                    // Keep symbolicated frames: the value/message is replaced
+                    // below, but the stack is the diagnostic signal needed to
+                    // distinguish decoder, transport, and playback failures.
                     return exception
                 }
                 event.breadcrumbs = event.breadcrumbs?.map { breadcrumb in
-                    breadcrumb.message = breadcrumbMessage
-                    breadcrumb.data = nil
+                    breadcrumb.message = sanitizedEventName(breadcrumb.message ?? breadcrumbMessage)
+                    breadcrumb.data = sanitizedBreadcrumbData(breadcrumb.data as? [String: String])
                     return breadcrumb
                 }
                 return event

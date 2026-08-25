@@ -202,6 +202,18 @@ struct EndpointCodableTests {
         #expect(!json.contains("\"model\""))
         #expect(json.contains("\"speed\""))
         #expect(json.contains("\"response_mode\""))
+
+        let correlated = SpeechStreamEndpoint(
+            body: .init(
+                text: "hi",
+                voice: "alloy",
+                speed: 1.0,
+                telemetryID: "4E6A1D0F-2C73-4C3B-9B18-0D4F8C2A7E11"
+            )
+        )
+        let correlatedJSON = String(data: try JSONEncoder().encode(correlated.body), encoding: .utf8) ?? ""
+        #expect(correlatedJSON.contains("\"telemetry_id\""))
+        #expect(correlatedJSON.contains("4E6A1D0F-2C73-4C3B-9B18-0D4F8C2A7E11"))
     }
 
     @Test func speechOptionsEndpointShape() throws {

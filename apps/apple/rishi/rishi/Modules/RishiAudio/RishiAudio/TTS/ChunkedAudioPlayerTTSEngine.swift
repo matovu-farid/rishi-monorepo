@@ -27,6 +27,7 @@ import Foundation
         /// Set to `playbackGeneration` when `didStart` fires for that generation.
         private var didStartForGeneration = 0
         private var settledGeneration = 0
+        private var playbackStartedAt: Date?
         private var pendingResult: Result<Void, Error>?
         private var waiter: CheckedContinuation<Void, Error>?
 
@@ -49,8 +50,7 @@ import Foundation
 
             // Always leave `.stopped` before returning, including cache hits.
             // UI status is for controls; speak completion uses waitUntilFinished.
-            let textPrefix = String(request.text.prefix(60))
-                .replacingOccurrences(of: "\n", with: " ")
+            let correlationID = request.requestToken.uuidString
             await MainActor.run {
                 state.activate(tokens: request.tokenSnapshot)
                 if state.typedFailure == nil { state.clearFailure() }
@@ -58,15 +58,18 @@ import Foundation
                 state.update(status: .loading)
             }
             Log.event("tts.player.status", data: [
+                "feature": "tts",
+                "operation": "tts.player",
+                "stage": "loading",
+                "correlation_id": correlationID,
                 "status": "loading",
                 "generation": String(generation),
-                "textPrefix": textPrefix,
-                "textLen": String(request.text.count),
+                "request_chars": String(request.text.count),
             ])
 
             let callbacks = PlaybackCallbacks()
             callbacks.didStart = { [weak self] in
-                Task { await self?.markPlaying(generation: generation, textPrefix: textPrefix) }
+                Task { await self?.markPlaying(generation: generation, correlationID: correlationID) }
             }
             // AudioPlayer calls didFinishPlaying on both success (.completed)
             // AND failure (.failed). Never map a failed finish to `.stopped` —
@@ -76,7 +79,7 @@ import Foundation
                 Task {
                     await self?.handlePlaybackFinished(
                         generation: generation,
-                        textPrefix: textPrefix
+                        correlationID: correlationID
                     )
                 }
             }
@@ -88,23 +91,33 @@ import Foundation
             self.player = player
             let stream = makeAudioStream(request: request, generation: generation)
             player.start(stream, type: kAudioFileMP3Type)
-            monitorForPlaybackFailure(player: player, generation: generation)
+            monitorForPlaybackFailure(player: player, generation: generation, correlationID: correlationID)
         }
 
         public func pause() async {
             player?.pause()
+            Log.event("tts.player.paused", level: .info, data: playbackTelemetry(stage: "pause"))
         }
 
         public func resume() async {
             player?.resume()
+            Log.event("tts.player.resumed", level: .info, data: playbackTelemetry(stage: "resume"))
         }
 
         public func stop() async {
+            Log.event("tts.player.cancelled", level: .warning, data: playbackTelemetry(
+                stage: "stop",
+                extra: ["cancel_reason": "user_stop"]
+            ))
             await stopCurrent(invalidate: true)
         }
 
         public func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot) async {
             guard activeRequestTokens == tokens else { return }
+            Log.event("tts.player.cancelled", level: .warning, data: playbackTelemetry(
+                stage: "stop",
+                extra: ["cancel_reason": "tokened_stop"]
+            ))
             await stopCurrent(invalidate: true)
         }
 
@@ -156,6 +169,7 @@ import Foundation
         private func beginGeneration(_ generation: Int) {
             didStartForGeneration = 0
             pendingResult = nil
+            playbackStartedAt = nil
             if let existing = waiter {
                 waiter = nil
                 existing.resume(throwing: CancellationError())
@@ -215,7 +229,11 @@ import Foundation
             playbackGeneration == generation && activeRequestTokens == tokens
         }
 
-        private func monitorForPlaybackFailure(player: AudioPlayer, generation: Int) {
+        private func monitorForPlaybackFailure(
+            player: AudioPlayer,
+            generation: Int,
+            correlationID: String
+        ) {
             monitorTask?.cancel()
             monitorTask = Task { [weak self, player] in
                 guard let self else { return }
@@ -226,7 +244,8 @@ import Foundation
                     if snapshot.0 == .failed {
                         await self.markFailed(
                             message: snapshot.1?.debugDescription,
-                            generation: generation
+                            generation: generation,
+                            correlationID: correlationID
                         )
                         return
                     }
@@ -235,13 +254,13 @@ import Foundation
             }
         }
 
-        private func handlePlaybackFinished(generation: Int, textPrefix: String) async {
+        private func handlePlaybackFinished(generation: Int, correlationID: String) async {
             guard generation == playbackGeneration else {
                 Log.event("tts.player.status.stale", data: [
                     "ignored": "finish",
                     "generation": String(generation),
                     "current": String(playbackGeneration),
-                    "textPrefix": textPrefix,
+                    "correlation_id": correlationID,
                 ])
                 return
             }
@@ -250,19 +269,19 @@ import Foundation
                 (player.currentState, player.currentError?.debugDescription)
             }
             if snapshot.0 == .failed {
-                await markFailed(message: snapshot.1, generation: generation)
+                await markFailed(message: snapshot.1, generation: generation, correlationID: correlationID)
             } else {
-                await markStopped(generation: generation, textPrefix: textPrefix)
+                await markStopped(generation: generation, correlationID: correlationID)
             }
         }
 
-        private func markPlaying(generation: Int, textPrefix: String) async {
+        private func markPlaying(generation: Int, correlationID: String) async {
             guard generation == playbackGeneration else {
                 Log.event("tts.player.status.stale", data: [
                     "ignored": "playing",
                     "generation": String(generation),
                     "current": String(playbackGeneration),
-                    "textPrefix": textPrefix,
+                    "correlation_id": correlationID,
                 ])
                 return
             }
@@ -275,20 +294,24 @@ import Foundation
             }
             guard generation == playbackGeneration else { return }
             didStartForGeneration = generation
+            playbackStartedAt = Date()
             Log.event("tts.player.status", data: [
+                "feature": "tts",
+                "operation": "tts.player",
+                "stage": "playback",
+                "correlation_id": correlationID,
                 "status": "playing",
                 "generation": String(generation),
-                "textPrefix": textPrefix,
             ])
         }
 
-        private func markStopped(generation: Int, textPrefix: String) async {
+        private func markStopped(generation: Int, correlationID: String) async {
             guard generation == playbackGeneration else {
                 Log.event("tts.player.status.stale", data: [
                     "ignored": "stopped",
                     "generation": String(generation),
                     "current": String(playbackGeneration),
-                    "textPrefix": textPrefix,
+                    "correlation_id": correlationID,
                 ])
                 return
             }
@@ -301,9 +324,15 @@ import Foundation
             }
             guard generation == playbackGeneration else { return }
             Log.event("tts.player.status", data: [
+                "feature": "tts",
+                "operation": "tts.player",
+                "stage": "playback",
+                "correlation_id": correlationID,
                 "status": "stopped",
                 "generation": String(generation),
-                "textPrefix": textPrefix,
+                "duration_ms": playbackStartedAt.map {
+                    String(Int(Date().timeIntervalSince($0) * 1000))
+                } ?? "0",
             ])
             if didStartForGeneration == generation {
                 settle(.success(()), generation: generation)
@@ -315,7 +344,11 @@ import Foundation
             }
         }
 
-        private func markFailed(message: String?, generation: Int) async {
+        private func markFailed(
+            message: String?,
+            generation: Int,
+            correlationID: String
+        ) async {
             guard generation == playbackGeneration else { return }
             guard let tokens = activeRequestTokens else { return }
             bridgeTask?.cancel()
@@ -329,15 +362,47 @@ import Foundation
                 state.recordUserFacingFailure(.audioPlayback)
             }
             guard generation == playbackGeneration else { return }
-            Log.event(
+            Log.error(
                 "tts.player.failed",
-                level: .error,
-                data: ["error": text]
+                error: NSError(domain: "org.fidexa.rishi.tts", code: 4),
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.player",
+                    stage: "playback",
+                    errorCode: "audio_playback_failed",
+                    fields: [
+                        "correlation_id": correlationID,
+                        "duration_ms": playbackStartedAt.map {
+                            String(Int(Date().timeIntervalSince($0) * 1000))
+                        } ?? "0",
+                    ]
+                )
             )
             settle(
                 .failure(TTSEnginePlaybackError.playbackFailed(text)),
                 generation: generation
             )
+        }
+
+        private func playbackTelemetry(
+            stage: String,
+            extra: [String: String] = [:]
+        ) -> [String: String] {
+            var data = [
+                "feature": "tts",
+                "operation": "tts.player",
+                "stage": stage,
+            ]
+            if let tokens = activeRequestTokens {
+                data["correlation_id"] = tokens.requestToken.uuidString
+            }
+            if let playbackStartedAt {
+                data["duration_ms"] = String(
+                    Int(Date().timeIntervalSince(playbackStartedAt) * 1000)
+                )
+            }
+            data.merge(extra) { _, new in new }
+            return data
         }
     }
 

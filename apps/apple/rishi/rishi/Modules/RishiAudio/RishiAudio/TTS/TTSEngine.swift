@@ -315,10 +315,16 @@ import Foundation
                     observable.recordUserFacingFailure(userFacingError)
                 }
             }
-            Log.event(
+            Log.error(
                 "tts.engine.error",
-                level: .error,
-                data: ["error": message]
+                error: error,
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.engine",
+                    stage: "playback",
+                    errorCode: TTSUserFacingError.classify(error)?.rawValue ?? "playback_failed",
+                    fields: ["correlation_id": tokens.requestToken.uuidString]
+                )
             )
             settle(
                 .failure(TTSEnginePlaybackError.playbackFailed(message)),

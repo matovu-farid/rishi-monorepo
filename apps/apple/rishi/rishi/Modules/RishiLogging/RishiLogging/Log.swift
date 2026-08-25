@@ -122,12 +122,13 @@ public enum Log {
     public static func error(
         _ message: String,
         error: Error? = nil,
+        diagnostic: TelemetryDiagnostic? = nil,
         file: StaticString = #fileID,
         line: UInt = #line
     ) {
         Self.app.error("\(message, privacy: .public) [file=\(file, privacy: .public) line=\(line, privacy: .public)] error=\(String(describing: error), privacy: .public)")
         if let error {
-            SentryBridge.capture(error: error)
+            SentryBridge.capture(error: error, diagnostic: diagnostic)
         }
         // Fan out to registered production sinks so the DEBUG simulator dump
         // captures errors alongside structured events.

@@ -158,7 +158,16 @@ public actor MP3StreamDecoder {
                 self.sourceFormat = avFormat
                 self.converter = AVAudioConverter(from: avFormat, to: targetFormat)
                 if self.converter == nil {
-                    Log.event("tts.decoder.converter_init_failed", level: .error, data: [:])
+                    Log.error(
+                        "tts.decoder.converter_init_failed",
+                        error: NSError(domain: "org.fidexa.rishi.tts", code: 7),
+                        diagnostic: TelemetryDiagnostic(
+                            feature: "tts",
+                            operation: "tts.decoder",
+                            stage: "configure",
+                            errorCode: "audio_converter_init_failed"
+                        )
+                    )
                 }
             }
         case kAudioFileStreamProperty_ReadyToProducePackets:
@@ -240,9 +249,16 @@ public actor MP3StreamDecoder {
             }
 
             if status == .error {
-                Log.event("tts.decoder.convert_error", level: .error, data: [
-                    "error": error?.localizedDescription ?? "unknown",
-                ])
+                Log.error(
+                    "tts.decoder.convert_error",
+                    error: error ?? NSError(domain: "org.fidexa.rishi.tts", code: Int(status.rawValue)),
+                    diagnostic: TelemetryDiagnostic(
+                        feature: "tts",
+                        operation: "tts.decoder",
+                        stage: "decode",
+                        errorCode: "audio_conversion_failed"
+                    )
+                )
                 break
             }
 
@@ -317,7 +333,16 @@ public actor MP3StreamDecoder {
             // converter rejects the input ("bytes provided but packet
             // descriptions (0) only account for 0 bytes"). Drop rather than feed
             // a buffer that would stall the converter.
-            Log.event("tts.decoder.no_packet_descriptions", level: .error, data: [:])
+            Log.error(
+                "tts.decoder.no_packet_descriptions",
+                error: NSError(domain: "org.fidexa.rishi.tts", code: 8),
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.decoder",
+                    stage: "decode",
+                    errorCode: "missing_packet_descriptions"
+                )
+            )
             return nil
         }
         packetDescriptions.update(from: batch.descs, count: batch.descs.count)

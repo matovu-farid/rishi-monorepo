@@ -97,8 +97,6 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             // whole Readium paragraph active while its audio is playing.
             onSpeakRange(text.startIndex..<text.endIndex)
 
-            let textPrefix = String(text.prefix(80))
-                .replacingOccurrences(of: "\n", with: " ")
             let startedAt = ContinuousClock.now
             let statusAtSpeakEntry = await MainActor.run { state.status.rawValue }
 
@@ -112,7 +110,6 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             let utteranceToken = UUID()
             Log.event("tts.readaloud.speak.begin", data: [
                 "textLen": String(text.count),
-                "textPrefix": textPrefix,
                 "statusAtEntry": statusAtSpeakEntry,
                 "pieceCount": String(pieces.count),
             ])
@@ -131,12 +128,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                     )
                     activeTokens = request.tokenSnapshot
                     await cancellationStop.setCurrent(request.tokenSnapshot)
-                    let piecePrefix = String(piece.prefix(60))
-                        .replacingOccurrences(of: "\n", with: " ")
                     Log.event("tts.readaloud.speak.piece", data: [
                         "index": String(index),
                         "textLen": String(piece.count),
-                        "textPrefix": piecePrefix,
                     ])
                     let lease = TTSAlwaysValidLease()
                     await player.start(request: request, lease: lease)
@@ -153,7 +147,6 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             let statusAtEnd = await MainActor.run { state.status.rawValue }
             Log.event("tts.readaloud.speak.end", data: [
                 "textLen": String(text.count),
-                "textPrefix": textPrefix,
                 "elapsedMs": String(elapsedMs),
                 "statusAtEnd": statusAtEnd,
                 "result": "success",
@@ -183,11 +176,17 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                     state.recordUserFacingFailure(userFacingError)
                 }
             }
-            let message = String(describing: error)
-            Log.event("tts.readaloud.speak.end", level: .error, data: [
-                "result": "failure",
-                "error": message,
-            ])
+            Log.error(
+                "tts.readaloud.speak.end",
+                error: error,
+                diagnostic: TelemetryDiagnostic(
+                    feature: "tts",
+                    operation: "tts.readaloud.speak",
+                    stage: "playback",
+                    errorCode: TTSUserFacingError.classify(error)?.rawValue ?? "playback_failed",
+                    fields: ["request_chars": String(text.count)]
+                )
+            )
             return .failure(.other(error))
         }
     }

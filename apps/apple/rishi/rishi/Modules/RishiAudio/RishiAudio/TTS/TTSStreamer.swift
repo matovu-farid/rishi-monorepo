@@ -42,14 +42,15 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
                 text: request.text,
                 voice: request.voice,
                 speed: request.speed,
-                responseMode: .events
+                responseMode: .events,
+                telemetryID: request.requestToken.uuidString
             )
         )
         let upstream = await client.stream(endpoint)
         return AsyncThrowingStream { continuation in
             let parser = TTSStreamEventParser()
             let task = Task {
-                var workerRequestKey: String?
+                let expectedRequestID = request.requestToken.uuidString
                 do {
                     for try await bytes in upstream {
                         if Task.isCancelled {
@@ -61,45 +62,75 @@ public struct WorkerTTSChunkSource: TTSChunkSource {
                                 continuation.finish()
                                 return
                             }
-                            workerRequestKey = workerRequestKey ?? frame.requestID
                             let chunk = TTSChunk(
                                 requestKey: frame.requestID,
                                 sequenceIndex: frame.index,
                                 data: frame.audio
                             )
-                            if frame.requestID != workerRequestKey {
-                                Log.event("tts.sse.request_id_mismatch", level: .error, data: [
-                                    "expected": workerRequestKey ?? "unknown",
-                                    "got": frame.requestID,
-                                ])
+                            if frame.requestID != expectedRequestID {
+                                Log.error(
+                                    "tts.sse.request_id_mismatch",
+                                    error: NSError(domain: "org.fidexa.rishi.tts", code: 5),
+                                    diagnostic: TelemetryDiagnostic(
+                                        feature: "tts",
+                                        operation: "tts.sse",
+                                        stage: "validate",
+                                        errorCode: "request_id_mismatch",
+                                        fields: ["correlation_id": expectedRequestID]
+                                    )
+                                )
+                                throw TTSStreamerError.requestIDMismatch
                             }
                             if let chunkID = frame.chunkID, chunkID != chunk.id {
-                                Log.event("tts.sse.chunk_id_mismatch", level: .error, data: [
-                                    "expected": chunk.id,
-                                    "got": chunkID,
-                                ])
+                                Log.error(
+                                    "tts.sse.chunk_id_mismatch",
+                                    error: NSError(domain: "org.fidexa.rishi.tts", code: 6),
+                                    diagnostic: TelemetryDiagnostic(
+                                        feature: "tts",
+                                        operation: "tts.sse",
+                                        stage: "validate",
+                                        errorCode: "chunk_id_mismatch",
+                                        fields: ["correlation_id": expectedRequestID]
+                                    )
+                                )
+                                throw TTSStreamerError.chunkIDMismatch
                             }
                             continuation.yield(chunk)
                         }
                     }
                     for frame in await parser.finalize() {
-                        workerRequestKey = workerRequestKey ?? frame.requestID
                         let chunk = TTSChunk(
                             requestKey: frame.requestID,
                             sequenceIndex: frame.index,
                             data: frame.audio
                         )
-                        if frame.requestID != workerRequestKey {
-                            Log.event("tts.sse.request_id_mismatch", level: .error, data: [
-                                "expected": workerRequestKey ?? "unknown",
-                                "got": frame.requestID,
-                            ])
+                        if frame.requestID != expectedRequestID {
+                            Log.error(
+                                "tts.sse.request_id_mismatch",
+                                error: NSError(domain: "org.fidexa.rishi.tts", code: 5),
+                                diagnostic: TelemetryDiagnostic(
+                                    feature: "tts",
+                                    operation: "tts.sse",
+                                    stage: "validate",
+                                    errorCode: "request_id_mismatch",
+                                    fields: ["correlation_id": expectedRequestID]
+                                )
+                            )
+                            throw TTSStreamerError.requestIDMismatch
                         }
                         if let chunkID = frame.chunkID, chunkID != chunk.id {
-                            Log.event("tts.sse.chunk_id_mismatch", level: .error, data: [
-                                "expected": chunk.id,
-                                "got": chunkID,
-                            ])
+                            Log.error(
+                                "tts.sse.chunk_id_mismatch",
+                                error: NSError(domain: "org.fidexa.rishi.tts", code: 6),
+                                diagnostic: TelemetryDiagnostic(
+                                    feature: "tts",
+                                    operation: "tts.sse",
+                                    stage: "validate",
+                                    errorCode: "chunk_id_mismatch",
+                                    fields: ["correlation_id": expectedRequestID]
+                                )
+                            )
+                            throw TTSStreamerError.chunkIDMismatch
                         }
                         continuation.yield(chunk)
                     }
@@ -178,6 +209,8 @@ public actor FakeTTSChunkSource: TTSChunkSource {
 public enum TTSStreamerError: Error, Equatable {
     case injected
     case emptyResponse
+    case requestIDMismatch
+    case chunkIDMismatch
 }
 
 /// Forwarding actor — adds Log.event breadcrumbs around the underlying source
@@ -202,34 +235,99 @@ public actor TTSStreamer {
             // ordered chunks and emits Log breadcrumbs off the calling actor.
             let task = Task {
                 var byteCount = 0
+                var chunkCount = 0
                 var yieldedChunk = false
+                let startedAt = Date()
+                let correlationID = request.requestToken.uuidString
                 do {
-                    Log.event("tts.stream.start", level: .info, data: [
-                        "voice": request.voice,
-                        "speed": String(format: "%.2f", request.speed),
-                        "textLen": String(request.text.count),
+                    Log.event("tts.stream.started", level: .info, data: [
+                        "feature": "tts",
+                        "operation": "tts.stream",
+                        "stage": "request",
+                        "correlation_id": correlationID,
+                        "request_chars": String(request.text.count),
+                        "response_mode": "events",
                     ])
                     for try await chunk in upstream {
                         if Task.isCancelled {
+                            Log.event("tts.stream.cancelled", level: .warning, data: [
+                                "feature": "tts",
+                                "operation": "tts.stream",
+                                "stage": "stream",
+                                "correlation_id": correlationID,
+                                "cancel_reason": "task_cancelled",
+                            ])
                             continuation.finish()
                             return
                         }
                         byteCount += chunk.count
+                        chunkCount += 1
                         yieldedChunk = true
+                        if chunkCount == 1 {
+                            Log.event("tts.stream.first_chunk", level: .info, data: [
+                                "feature": "tts",
+                                "operation": "tts.stream",
+                                "stage": "stream",
+                                "correlation_id": correlationID,
+                                "first_chunk_ms": String(Int(Date().timeIntervalSince(startedAt) * 1000)),
+                            ])
+                        }
                         continuation.yield(chunk)
                     }
                     guard yieldedChunk else {
-                        Log.event("tts.stream.empty_response", level: .error, data: [
-                            "voice": request.voice,
-                            "textLen": String(request.text.count),
-                        ])
+                        Log.error(
+                            "tts.stream.empty_response",
+                            error: TTSStreamerError.emptyResponse,
+                            diagnostic: TelemetryDiagnostic(
+                                feature: "tts",
+                                operation: "tts.stream",
+                                stage: "provider_stream",
+                                errorCode: "empty_response",
+                                fields: [
+                                    "request_chars": String(request.text.count),
+                                    "correlation_id": correlationID,
+                                ]
+                            )
+                        )
                         continuation.finish(throwing: TTSStreamerError.emptyResponse)
                         return
                     }
-                    Log.event("tts.stream.complete", level: .info, data: ["bytes": String(byteCount)])
+                    Log.event("tts.stream.completed", level: .info, data: [
+                        "feature": "tts",
+                        "operation": "tts.stream",
+                        "stage": "stream",
+                        "correlation_id": correlationID,
+                        "duration_ms": String(Int(Date().timeIntervalSince(startedAt) * 1000)),
+                        "chunk_count": String(chunkCount),
+                        "byte_count": String(byteCount),
+                    ])
                     continuation.finish()
                 } catch {
-                    Log.event("tts.stream.failed", level: .error, data: ["error": String(describing: error)])
+                    if Task.isCancelled || error is CancellationError {
+                        Log.event("tts.stream.cancelled", level: .warning, data: [
+                            "feature": "tts",
+                            "operation": "tts.stream",
+                            "stage": "stream",
+                            "correlation_id": correlationID,
+                            "cancel_reason": "consumer_cancelled",
+                        ])
+                        continuation.finish()
+                        return
+                    }
+                    Log.error(
+                        "tts.stream.failed",
+                        error: error,
+                        diagnostic: TelemetryDiagnostic(
+                            feature: "tts",
+                            operation: "tts.stream",
+                            stage: "provider_stream",
+                            errorCode: "stream_failed",
+                            fields: [
+                                "request_chars": String(request.text.count),
+                                "correlation_id": correlationID,
+                            ]
+                        )
+                    )
                     continuation.finish(throwing: error)
                 }
             }

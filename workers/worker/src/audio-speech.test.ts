@@ -23,10 +23,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  */
 
 // ─── Capture the args passed to openai.audio.speech.create ──────────────────
-const { speechCalls, speechAudioBytes, ledgerState } = vi.hoisted(() => ({
+const { speechCalls, speechAudioBytes, ledgerState, sentryClient, sentryScope } = vi.hoisted(() => ({
   speechCalls: [] as Array<Record<string, unknown>>,
   speechAudioBytes: new Uint8Array([1, 2, 3, 4]),
-  ledgerState: { reserveError: null as unknown },
+  ledgerState: {
+    reserveError: null as unknown,
+    providerError: null as unknown,
+    streamError: null as unknown,
+  },
+  sentryClient: { captureException: vi.fn() },
+  sentryScope: { setTag: vi.fn(), setContext: vi.fn() },
 }))
 
 vi.mock("openai", () => {
@@ -35,8 +41,16 @@ vi.mock("openai", () => {
       speech: {
         create: vi.fn(async (args: Record<string, unknown>) => {
           speechCalls.push(args)
+          if (ledgerState.providerError) throw ledgerState.providerError
+          const body = ledgerState.streamError
+            ? new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.error(ledgerState.streamError)
+                },
+              })
+            : new Response(speechAudioBytes).body
           return {
-            body: new Response(speechAudioBytes).body,
+            body,
             arrayBuffer: async () =>
               speechAudioBytes.buffer.slice(
                 speechAudioBytes.byteOffset,
@@ -65,6 +79,8 @@ vi.mock("@ai-sdk/openai", () => ({
 // ─── Mock Sentry wrapper — we import the bare `app`, not the default export ──
 vi.mock("@sentry/cloudflare", () => ({
   withSentry: <T>(_options: unknown, handler: T) => handler,
+  getClient: () => sentryClient,
+  withIsolationScope: (callback: (scope: typeof sentryScope) => unknown) => callback(sentryScope),
 }))
 
 // ─── Mock the metering side-effect so a missing DB doesn't crash waitUntil ──
@@ -327,6 +343,11 @@ async function computeKey(
 beforeEach(() => {
   speechCalls.length = 0
   ledgerState.reserveError = null
+  ledgerState.providerError = null
+  ledgerState.streamError = null
+  sentryClient.captureException.mockReset()
+  sentryScope.setTag.mockReset()
+  sentryScope.setContext.mockReset()
   setUser("user_alice")
 })
 
@@ -372,6 +393,45 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
     expect(bytes.length).toBe(speechAudioBytes.length)
     expect(speechCalls.length).toBe(1)
   })
+
+  it("reports an unexpected provider failure while preserving the generic response", async () => {
+    ledgerState.providerError = new Error("private provider response body")
+
+    const res = await callSpeech({ text: "private narration", voice: "alloy", speed: 1.0 })
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: "TTS generation failed" })
+    expect(sentryClient.captureException).toHaveBeenCalledTimes(1)
+    expect(sentryClient.captureException.mock.calls[0]?.[0].message).toBe(
+      "tts.generate failed",
+    )
+    expect(sentryScope.setContext).toHaveBeenCalledWith(
+      "telemetry",
+      expect.objectContaining({ error_code: "internal_error", provider: "openai" }),
+    )
+  })
+
+  it.each(["raw", "events"] as const)(
+    "reports provider stream failures in %s response mode",
+    async (responseMode) => {
+      ledgerState.streamError = new Error("private stream failure")
+
+      const res = await callSpeech({
+        text: "hello world",
+        voice: "alloy",
+        speed: 1.0,
+        response_mode: responseMode,
+      })
+
+      expect(res.status).toBe(200)
+      await expect(res.arrayBuffer()).rejects.toThrow()
+      expect(sentryClient.captureException).toHaveBeenCalled()
+      expect(sentryScope.setContext).toHaveBeenCalledWith(
+        "telemetry",
+        expect.objectContaining({ error_code: "provider_stream_failed" }),
+      )
+    },
+  )
 
   it("serialized trial exhaustion becomes a typed 402 allowance response", async () => {
     ledgerState.reserveError = {
@@ -434,6 +494,7 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
       voice: "alloy",
       speed: 1.0,
       response_mode: "events",
+      telemetry_id: "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11",
     })
 
     expect(res.status).toBe(200)
@@ -441,11 +502,14 @@ describe("POST /api/audio/speech — iOS body shape (Phase 17-03)", () => {
       "text/event-stream",
     )
     expect(res.headers.get("X-TTS-Cache")).toBe("miss")
+    expect(res.headers.get("X-TTS-Request-ID")).toBe(
+      "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11",
+    )
 
     const frames = parseEventFrames(await res.text())
     expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
 
-    const requestId = await computeKey(text, "alloy", 1.0)
+    const requestId = "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11"
     const chunkFrame = frames[0]
     const doneFrame = frames[1]
 

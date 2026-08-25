@@ -97,18 +97,32 @@ public actor AudioSessionCoordinator {
                 do {
                     try configurator.configure(category: category, mode: mode, options: options)
                 } catch {
-                    Log.event("audio.session.mode.failed", level: .error, data: [
-                        "error": String(describing: error),
-                    ])
+                    Log.error(
+                        "audio.session.mode.failed",
+                        error: error,
+                        diagnostic: TelemetryDiagnostic(
+                            feature: "tts",
+                            operation: "audio.session",
+                            stage: "configure",
+                            errorCode: "audio_session_configure_failed"
+                        )
+                    )
                     return false
                 }
             case .activate:
                 do {
                     try configurator.setActive(true, notifyOthers: false)
                 } catch {
-                    Log.event("audio.session.activation.failed", level: .error, data: [
-                        "error": String(describing: error),
-                    ])
+                    Log.error(
+                        "audio.session.activation.failed",
+                        error: error,
+                        diagnostic: TelemetryDiagnostic(
+                            feature: "tts",
+                            operation: "audio.session",
+                            stage: "activate",
+                            errorCode: "audio_session_activation_failed"
+                        )
+                    )
                     // A configure effect may already have changed the
                     // underlying session before activation failed. Best-effort
                     // deactivation prevents a partially acquired route from
@@ -120,9 +134,16 @@ public actor AudioSessionCoordinator {
                 do {
                     try configurator.setActive(false, notifyOthers: notifyOthers)
                 } catch {
-                    Log.event("audio.session.deactivation.failed", level: .error, data: [
-                        "error": String(describing: error),
-                    ])
+                    Log.error(
+                        "audio.session.deactivation.failed",
+                        error: error,
+                        diagnostic: TelemetryDiagnostic(
+                            feature: "tts",
+                            operation: "audio.session",
+                            stage: "deactivate",
+                            errorCode: "audio_session_deactivation_failed"
+                        )
+                    )
                     return false
                 }
             }
@@ -186,9 +207,16 @@ public actor AudioSessionCoordinator {
                     do {
                         try configurator.setActive(false, notifyOthers: true)
                     } catch {
-                        Log.event("audio.session.recovery.deactivation.failed", level: .error, data: [
-                            "error": String(describing: error),
-                        ])
+                        Log.error(
+                            "audio.session.recovery.deactivation.failed",
+                            error: error,
+                            diagnostic: TelemetryDiagnostic(
+                                feature: "tts",
+                                operation: "audio.session",
+                                stage: "recover",
+                                errorCode: "audio_session_recovery_failed"
+                            )
+                        )
                         policy = AudioSessionPolicy()
                         return false
                     }
