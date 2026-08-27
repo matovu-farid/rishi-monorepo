@@ -34,6 +34,19 @@ export default function PrivacyPolicy() {
               The information handled by Rishi depends on the features you use.
               It may include:
             </p>
+            <p className="mb-4">
+              <span className="font-medium">Phone numbers and SMS consent:</span>{" "}
+              If you voluntarily provide a phone number or opt in to Fidexa
+              customer-care SMS, we may use that number and your consent status
+              to send account, support, and service-update messages. SMS consent
+              is optional and is not a condition of purchase. We do not sell,
+              rent, or share mobile numbers or SMS consent data with third
+              parties or affiliates for their own marketing or promotional
+              purposes. Message frequency varies based on account activity, and
+              message and data rates may apply. We may share the information
+              with messaging infrastructure providers, such as Twilio, only as
+              needed to deliver requested messages and operate the service.
+            </p>
             <ul className="list-disc pl-6 space-y-2">
               <li>
                 <span className="font-medium">Account information:</span> your
