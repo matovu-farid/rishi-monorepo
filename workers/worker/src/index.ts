@@ -58,6 +58,7 @@ import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
 import { resolveCorsOrigin } from "./cors-origin";
+import { sessionSharesRoutes } from "./routes/session-shares";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -635,6 +636,7 @@ app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/api/user", userRoutes);
 app.route("/api/shares", sharesRoutes);
+app.route("/api/reading-sessions", sessionSharesRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);

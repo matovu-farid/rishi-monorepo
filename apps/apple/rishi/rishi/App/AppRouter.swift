@@ -10,6 +10,7 @@ final class AppRouter {
 
     nonisolated static let shareTokenQueued = Notification.Name("Rishi.shareTokenQueued")
     nonisolated static let shareRedemptionReady = Notification.Name("Rishi.shareRedemptionReady")
+    nonisolated static let sessionTokenQueued = Notification.Name("Rishi.sessionTokenQueued")
 
     var path: NavigationPath = NavigationPath()
 
@@ -47,6 +48,9 @@ final class AppRouter {
 
         case .shareRedeem(let token):
             Self.enqueueShareToken(token)
+
+        case .sessionRedeem(let token):
+            Self.enqueueSessionToken(token)
 
         case .openBook(let bookId):
             guard !recentlyResolvedAccountURLs.contains(url),
@@ -336,6 +340,16 @@ final class AppRouter {
         }
     }
 
+    nonisolated static func enqueueSessionToken(_ token: String) {
+        guard !token.isEmpty else { return }
+        Task {
+            await PendingSessionInviteStore.anonymous.save(token: token)
+            await MainActor.run {
+            NotificationCenter.default.post(name: Self.sessionTokenQueued, object: token)
+            }
+        }
+    }
+
     @discardableResult
     nonisolated static func enqueueShareToken(from url: URL) -> Bool {
         guard case .shareRedeem(let token) = DeepLinkRouter().route(url) else { return false }
@@ -346,6 +360,13 @@ final class AppRouter {
             "path": url.path,
         ])
         enqueueShareToken(token)
+        return true
+    }
+
+    @discardableResult
+    nonisolated static func enqueueSessionToken(from url: URL) -> Bool {
+        guard case .sessionRedeem(let token) = DeepLinkRouter().route(url), !token.isEmpty else { return false }
+        enqueueSessionToken(token)
         return true
     }
 

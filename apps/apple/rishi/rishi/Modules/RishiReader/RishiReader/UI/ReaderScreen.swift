@@ -67,6 +67,7 @@ public struct ReaderScreen: View {
 
     private let readAloudParagraph: String?
     private let readAloudLocator: Locator?
+    private let sharedPositionJSONString: String?
     private let reservedPlayerHeight: CGFloat
     private let pdfViewMode: PDFViewModeSetting
     private let pdfViewModeBinding: Binding<PDFViewModeSetting>?
@@ -154,6 +155,7 @@ public struct ReaderScreen: View {
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
+        sharedPositionJSONString: String? = nil,
         reservedPlayerHeight: CGFloat = 0,
         pdfViewMode: PDFViewModeSetting = .continuous,
         pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
@@ -172,6 +174,7 @@ public struct ReaderScreen: View {
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
+        self.sharedPositionJSONString = sharedPositionJSONString
         self.reservedPlayerHeight = max(0, reservedPlayerHeight)
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
@@ -340,6 +343,11 @@ public struct ReaderScreen: View {
 
                 applyPreferences()
             #endif
+            applySharedPosition()
+        }
+
+        .onChange(of: sharedPositionJSONString) { _, _ in
+            applySharedPosition()
         }
 
         .onReceive(
@@ -894,6 +902,15 @@ public struct ReaderScreen: View {
             return reason
         }
         return nil
+    }
+
+    private func applySharedPosition() {
+        guard let sharedPositionJSONString,
+              let locator = try? Locator(jsonString: sharedPositionJSONString)
+        else { return }
+        Task { @MainActor in
+            _ = await coordinatorRef.coordinator?.go(to: locator)
+        }
     }
 
     #if canImport(UIKit)

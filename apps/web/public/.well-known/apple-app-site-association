@@ -15,6 +15,10 @@
                         "comment": "Book sharing redemption link"
                     },
                     {
+                        "/": "/sharing/session*",
+                        "comment": "Shared reading session link"
+                    },
+                    {
                         "/": "/app/*",
                         "comment": "Generic in-app routing"
                     }

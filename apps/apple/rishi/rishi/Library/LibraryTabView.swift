@@ -21,6 +21,8 @@ struct LibraryTabDependencies {
     let readerDefaults: AppReaderDefaults
     let syncEngine: SyncEngine
     let sharePackageService: SharePackageService
+    let sharedReadingAPI: SharedReadingAPI
+    let sessionBookService: SessionBookService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
     let voicePresenter: VoiceSessionPresenter
@@ -62,6 +64,7 @@ struct LibraryTabView: View {
     @State private var trialReadyAfterDocumentPicker = false
     @State private var pendingSubscriptionConfirmation = false
     @State private var showSubscriptionConfirmation = false
+    @State private var showActiveReadingSessions = false
 
     private var firstBookPromptSeenKey: String {
         "rishi.library.firstBookPrompt.seen.\(user.id.uuidString)"
@@ -154,8 +157,19 @@ struct LibraryTabView: View {
                 onShowSettings: settingsHandler,
                 onImported: handleImported,
                 documentPickerPresented: $showDocumentPicker,
-                sharePackageService: dependencies.sharePackageService
+                sharePackageService: dependencies.sharePackageService,
+                sharedReadingAPI: dependencies.sharedReadingAPI
             )
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showActiveReadingSessions = true
+                    } label: {
+                        Label("Active reading", systemImage: "person.3.fill")
+                    }
+                    .accessibilityHint("View and rejoin open shared reading sessions")
+                }
+            }
             .navigationDestination(for: ReaderRoute.self) { route in
                 ReaderDestinationView(
                     route: route,
@@ -223,6 +237,13 @@ struct LibraryTabView: View {
             }
         }
         .environment(vm)
+        .sheet(isPresented: $showActiveReadingSessions) {
+            ActiveReadingSessionsView(
+                api: dependencies.sharedReadingAPI,
+                bookService: dependencies.sessionBookService,
+                userId: user.id
+            )
+        }
 
         .sheet(isPresented: $showFirstBookPrompt, onDismiss: {
             let shouldPresentPicker = presentDocumentPickerAfterPrompt
