@@ -149,6 +149,8 @@ struct BookUploaderTests {
         #expect(changes.first?["operation_id"] as? String != nil)
         #expect(payload["file_url"] == nil)
         #expect(payload["file_r2_key"] as? String == BookUploader.r2Key(for: book, userId: "001234.abcdef0123456789.1234"))
+        #expect(payload["file_hash"] as? String == "42e3cfce7d573fcbf45639d69ab08edd30db630fadac24c85813f3230ec4978c")
+        #expect(payload["file_size"] as? Int == 10)
 
         // markClean called exactly once with .book kind + remote ETag.
         let calls = await metadata.calls()

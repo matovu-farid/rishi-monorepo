@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 
 
@@ -80,6 +81,9 @@ public final class BookUploader: Sendable {
         } catch {
             throw UploadError.bytesUnreadable(absoluteFileURL)
         }
+        let fileHash = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
 
         // 3. PUT to R2.
         var request = URLRequest(url: putURL)
@@ -108,7 +112,12 @@ public final class BookUploader: Sendable {
         // pulled book downloadable as soon as its D1 row becomes visible.
         let response: SyncPushResponse
         do {
-            let payload = try SyncPayloadCodec.encodeBook(book, r2Key: key)
+            let payload = try SyncPayloadCodec.encodeBook(
+                book,
+                r2Key: key,
+                fileHash: fileHash,
+                fileSize: data.count
+            )
             response = try await workerClient.send(
                 SyncPushEndpoint(body: .init(changes: [SyncChange(
                     kind: SyncEntityKind.book.rawValue,

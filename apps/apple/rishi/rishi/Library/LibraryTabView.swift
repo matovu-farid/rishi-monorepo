@@ -158,7 +158,14 @@ struct LibraryTabView: View {
                 onImported: handleImported,
                 documentPickerPresented: $showDocumentPicker,
                 sharePackageService: dependencies.sharePackageService,
-                sharedReadingAPI: dependencies.sharedReadingAPI
+                sharedReadingAPI: dependencies.sharedReadingAPI,
+                sharedReadingRepair: { bookId in
+                    guard (try? await dependencies.bookStore.book(bookId)) != nil else { return false }
+                    guard await dependencies.syncEngine.markBookDirty(bookId) else { return false }
+                    let wave = await dependencies.syncEngine.runOnce()
+                    return wave.booksUploaded > 0
+                        && !wave.errors.contains(where: { $0.hasPrefix("book.upload:") })
+                }
             )
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

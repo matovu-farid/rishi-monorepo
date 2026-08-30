@@ -220,7 +220,9 @@ enum SyncPayloadCodec {
     public static func encodeBook(
         _ book: Book,
         r2Key: String? = nil,
-        position: Position? = nil
+        position: Position? = nil,
+        fileHash: String? = nil,
+        fileSize: Int? = nil
     ) throws -> SyncOpaqueJSON {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -239,6 +241,8 @@ enum SyncPayloadCodec {
             conversationId: book.conversationId,
             chapterIndexContentVersion: book.chapterIndexContentVersion,
             fileR2Key: r2Key,
+            fileHash: fileHash,
+            fileSize: fileSize,
             currentCfi: position?.locator,
             lastProgressPercent: position?.percentComplete
         )
@@ -318,6 +322,8 @@ enum SyncPayloadCodec {
         let conversationId: ConversationID?
         let chapterIndexContentVersion: String?
         let fileR2Key: String?
+        let fileHash: String?
+        let fileSize: Int?
         let currentCfi: String?
         let lastProgressPercent: Double?
 
@@ -336,6 +342,8 @@ enum SyncPayloadCodec {
             case conversationId = "conversation_id"
             case chapterIndexContentVersion = "chapter_index_content_version"
             case fileR2Key = "file_r2_key"
+            case fileHash = "file_hash"
+            case fileSize = "file_size"
             case currentCfi = "current_cfi"
             case lastProgressPercent = "last_progress_percent"
         }

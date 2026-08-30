@@ -5,10 +5,25 @@ import CoreImage.CIFilterBuiltins
 import UIKit
 #endif
 
+enum SharedReadingSessionCreation {
+    static func create<Response: Sendable>(
+        operation: @escaping @Sendable () async throws -> Response,
+        repair: (@Sendable () async -> Bool)?
+    ) async throws -> Response {
+        do {
+            return try await operation()
+        } catch let error as SharedReadingError where error.code == .bookNotReady {
+            guard let repair, await repair() else { throw error }
+            return try await operation()
+        }
+    }
+}
+
 struct SharedReadingShareComposerView: View {
     let api: SharedReadingAPI
     let bookId: String
     let bookTitle: String
+    let repairBook: (@Sendable () async -> Bool)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var share: SharedReadingCreateResponse?
@@ -16,6 +31,18 @@ struct SharedReadingShareComposerView: View {
     @State private var isBusy = false
     @State private var message: String?
     @State private var isError = false
+
+    init(
+        api: SharedReadingAPI,
+        bookId: String,
+        bookTitle: String,
+        repairBook: (@Sendable () async -> Bool)? = nil
+    ) {
+        self.api = api
+        self.bookId = bookId
+        self.bookTitle = bookTitle
+        self.repairBook = repairBook
+    }
 
     var body: some View {
         NavigationStack {
@@ -96,7 +123,11 @@ struct SharedReadingShareComposerView: View {
         Task {
             defer { isBusy = false }
             do {
-                let result = try await api.create(bookId: bookId, idempotencyKey: UUID().uuidString)
+                let idempotencyKey = UUID().uuidString
+                let result = try await SharedReadingSessionCreation.create(
+                    operation: { try await api.create(bookId: bookId, idempotencyKey: idempotencyKey) },
+                    repair: repairBook
+                )
                 await MainActor.run {
                     share = result
                     // The creator is also the initial sharer/controller. Feed

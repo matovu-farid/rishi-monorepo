@@ -36,6 +36,7 @@ public struct LibraryRootView: View {
 
     public let sharePackageService: SharePackageService?
     let sharedReadingAPI: SharedReadingAPI?
+    let sharedReadingRepair: (@Sendable (BookID) async -> Bool)?
 
     ///
 
@@ -71,7 +72,8 @@ public struct LibraryRootView: View {
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
-        sharedReadingAPI: SharedReadingAPI? = nil
+        sharedReadingAPI: SharedReadingAPI? = nil,
+        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil
     ) {
  
         self.importCoordinator = importCoordinator
@@ -80,6 +82,7 @@ public struct LibraryRootView: View {
         self.onImported = onImported
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
+        self.sharedReadingRepair = sharedReadingRepair
         self.externalPath = nil
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -94,7 +97,8 @@ public struct LibraryRootView: View {
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
-        sharedReadingAPI: SharedReadingAPI? = nil
+        sharedReadingAPI: SharedReadingAPI? = nil,
+        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil
     ) {
        
         self.importCoordinator = importCoordinator
@@ -103,6 +107,7 @@ public struct LibraryRootView: View {
         self.onImported = onImported
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
+        self.sharedReadingRepair = sharedReadingRepair
         self.externalPath = path
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -255,7 +260,10 @@ public struct LibraryRootView: View {
                 SharedReadingShareComposerView(
                     api: sharedReadingAPI,
                     bookId: sharedReadingBook.id.uuidString,
-                    bookTitle: sharedReadingBook.title
+                    bookTitle: sharedReadingBook.title,
+                    repairBook: sharedReadingRepair.map { repair in
+                        { await repair(sharedReadingBook.id) }
+                    }
                 )
             }
         }
