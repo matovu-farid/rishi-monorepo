@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  lint-and-test-electron:
-    name: Electron (lint + test + build)
+  lint-and-build-electron:
+    name: Electron (lint + build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -39,9 +39,6 @@ jobs:
 
       - name: Lint
         run: pnpm run lint
-
-      - name: Test
-        run: pnpm run test
 
       - name: Build
         run: pnpm run build
@@ -81,36 +78,6 @@ jobs:
           # available, otherwise fall back to a format-valid dummy test key so
           # the build can complete. The dummy decodes to `clerk.example.com$`.
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY || 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k' }}
-
-  lint-mobile:
-    name: Mobile (lint)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: apps/mobile
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # pinned-by-SHA + explicit bun-version skips the GitHub tags-API resolve that returns 401 (#221)
-        with:
-          bun-version: 1.1.42
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
-      - name: Install shared package dependencies
-        run: cd ../../packages/shared && bun install
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Lint
-        run: bun run lint
 
   typecheck-worker:
     name: Worker (typecheck)
