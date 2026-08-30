@@ -73,6 +73,18 @@ struct LibraryA11yLabelsTests {
         #expect(s.contains(".accessibilityHidden(true)"))
     }
 
+    @Test("Catalyst books describe their secondary-click action")
+    func catalystBooksDescribeTheirSecondaryClickAction() throws {
+        let url = try Self.librarySources().first { $0.lastPathComponent == "LibraryGrid.swift" }
+        try #require(url != nil)
+        let s = try String(contentsOf: url!, encoding: .utf8)
+
+        #expect(s.contains("#if targetEnvironment(macCatalyst)"))
+        #expect(s.contains("Single tap to open."))
+        #expect(s.contains("Two-finger click for actions."))
+        #expect(s.contains("Long-press for actions."))
+    }
+
     @Test("LibraryEmptyStateView uses RishiTypography, not fixed sizes")
     func emptyStateUsesTypography() throws {
         let url = try Self.librarySources().first { $0.lastPathComponent == "LibraryEmptyStateView.swift" }

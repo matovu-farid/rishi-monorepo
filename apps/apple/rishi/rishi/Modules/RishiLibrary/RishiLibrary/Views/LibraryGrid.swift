@@ -116,7 +116,11 @@ struct LibraryGrid: View {
 
         .accessibilityIdentifier("library-book-cell")
         .accessibilityLabel(accessibilityText(for: book))
-        .accessibilityHint(selectionMode ? "Double-tap to select." : "Double-tap to open. Long-press for actions.")
+        .accessibilityHint(
+            selectionMode
+                ? "Double-tap to select."
+                : bookActionHint
+        )
         .contextMenu {
             Button {
                 onShareSingle(book)
@@ -143,6 +147,14 @@ struct LibraryGrid: View {
 
             .accessibilityLabel("Delete \(book.title)")
         }
+    }
+
+    private var bookActionHint: String {
+        #if targetEnvironment(macCatalyst)
+            return "Single tap to open. Two-finger click for actions."
+        #else
+            return "Double-tap to open. Long-press for actions."
+        #endif
     }
 
     private func accessibilityText(for book: Book) -> String {
