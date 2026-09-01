@@ -57,3 +57,12 @@ the main thread clean and coherent over long sessions.
 
 - In `workers/worker`, always use Bun for dependency installation and project commands: `bun install`, `bun run <script>`, and `bunx <tool>`.
 - Do not use Yarn, npm, pnpm, or npx for worker installs or command execution.
+
+## API compatibility and Apple Worker development
+
+- Follow [`docs/superpowers/specs/2026-09-01-api-versioning-and-apple-worker-development-policy-design.md`](docs/superpowers/specs/2026-09-01-api-versioning-and-apple-worker-development-policy-design.md) for all Worker-backed Apple work.
+- Treat released unversioned `/api/...` routes as frozen legacy contracts. New API families use `/api/v1/...`; bump the version only for a breaking change to an existing contract, and keep the previous version available for installed clients.
+- Before testing the Apple app, start the repository-managed local primary and sharing Workers with isolated bindings. Do not point local development at production D1, R2, KV, Durable Object, or custom-domain resources.
+- Use `wrangler dev --remote` only with explicitly configured non-production resources. Never use the production Wrangler configuration as a shortcut for remote development.
+- Configure Apple Debug builds to use the managed local Worker endpoints and Release/TestFlight builds to use production. Keep the HTTP API URL and sharing WebSocket URL centralized; do not add feature-specific production fallbacks.
+- Check for existing managed Worker and app processes before launching, avoid duplicate instances, record health/version information, and stop processes started for the test when finished.
