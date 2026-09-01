@@ -82,6 +82,17 @@ struct WorkerClientTests {
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer session-abc")
     }
 
+    @Test func requestCarriesVersionAndCorrelationMetadata() async throws {
+        let (client, _) = makeClient()
+        MockURLProtocol.setHandler { _ in (self.ok(), Data(#"{"ok":true}"#.utf8)) }
+        _ = try await client.send(PingEndpoint())
+        let req = try #require(MockURLProtocol.recordedRequests.first)
+        #expect(req.value(forHTTPHeaderField: "X-Rishi-API-Version") == "legacy")
+        let requestID = try #require(req.value(forHTTPHeaderField: "X-Rishi-Request-ID"))
+        #expect(UUID(uuidString: requestID) != nil)
+        #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer test-token")
+    }
+
     @Test func nilTokenOmitsAuthorizationHeader() async throws {
         let (client, _) = makeClient(token: nil)
         MockURLProtocol.setHandler { _ in (self.ok(), Data(#"{"ok":true}"#.utf8)) }

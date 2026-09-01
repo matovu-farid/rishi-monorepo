@@ -3,6 +3,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "dev:local": "wrangler dev --config wrangler.dev.jsonc --port 8787",
     "deploy": "bun run verify:migrations && wrangler deploy --minify",
     "generate-types": "wrangler types",
     "type-check": "bun generate-types && tsc",

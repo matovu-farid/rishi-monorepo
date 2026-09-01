@@ -160,11 +160,18 @@ struct LibraryTabView: View {
                 sharePackageService: dependencies.sharePackageService,
                 sharedReadingAPI: dependencies.sharedReadingAPI,
                 sharedReadingRepair: { bookId in
-                    guard (try? await dependencies.bookStore.book(bookId)) != nil else { return false }
-                    guard await dependencies.syncEngine.markBookDirty(bookId) else { return false }
-                    let wave = await dependencies.syncEngine.runOnce()
-                    return wave.booksUploaded > 0
-                        && !wave.errors.contains(where: { $0.hasPrefix("book.upload:") })
+                    Log.event("sharing.book.repair.started", data: [
+                        "book_id": bookId.uuidString,
+                    ])
+                    let succeeded = await dependencies.syncEngine.repairBook(bookId)
+                    Log.event(
+                        succeeded ? "sharing.book.repair.completed" : "sharing.book.repair.failed",
+                        level: succeeded ? .info : .error,
+                        data: [
+                            "book_id": bookId.uuidString,
+                        ]
+                    )
+                    return succeeded
                 }
             )
             .toolbar {
@@ -204,7 +211,8 @@ struct LibraryTabView: View {
                         
                         continue
                     }
-                    let _ = try? await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
+                    let _ = try? await VerifyEndPont(body: .init(transactionId: transaction.id))
+                        .send(using: dependencies.settings.workerClient)
                     
                     
                     

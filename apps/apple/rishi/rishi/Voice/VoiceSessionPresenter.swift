@@ -179,7 +179,7 @@ final class VoiceSessionPresenter {
         // read by `controlSocketFactory`'s closure, which itself is a
         // no-op when `Self.isTrialVoiceSessionFlowEnabled` is false unless a
         // caller also overrides `controlSocketFactory`.
-        baseURL: URL = URL(string: "https://api.fidexa.org")!,
+        baseURL: URL,
         tokenProvider: any TokenProvider = StaticTokenProvider(nil),
         dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
         messageStore: any MessageStore,

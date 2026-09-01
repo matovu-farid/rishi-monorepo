@@ -116,6 +116,7 @@ struct ReaderVoiceEntryLanguageTests {
                 baseURL: URL(string: "https://example.invalid")!,
                 tokenProvider: StubTokenProvider()
             ),
+            baseURL: URL(string: "https://example.invalid")!,
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: StubConversationStore()),
             userIdProvider: { userId },

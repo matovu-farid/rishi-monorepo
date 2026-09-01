@@ -646,6 +646,8 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.1.5;
+				RISHI_API_BASE_URL = "http://127.0.0.1:8787";
+				RISHI_SHARING_WEBSOCKET_URL = "ws://127.0.0.1:8788";
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SENTRY_DSN = "";
@@ -704,6 +706,8 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.1.5;
+				RISHI_API_BASE_URL = "https://api.fidexa.org";
+				RISHI_SHARING_WEBSOCKET_URL = "wss://sharing.fidexa.org";
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SENTRY_DSN = "";

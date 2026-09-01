@@ -59,6 +59,8 @@ import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
 import { resolveCorsOrigin } from "./cors-origin";
 import { sessionSharesRoutes } from "./routes/session-shares";
+import { sharedReadingRoutePrefix } from "./api-version";
+import { workerMetadataHeaders } from "./health";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -636,7 +638,7 @@ app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/api/user", userRoutes);
 app.route("/api/shares", sharesRoutes);
-app.route("/api/reading-sessions", sessionSharesRoutes);
+app.route(sharedReadingRoutePrefix, sessionSharesRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);
@@ -824,11 +826,15 @@ app.post("/api/billing/realtime-usage", requireAuth, async (c) => {
 
 // // Health check endpoint
 app.get("/health", (c) => {
-  return c.json({
+  const response = c.json({
     status: "healthy",
     timestamp: new Date().toISOString(),
     service: "openai-tts-proxy",
   });
+  for (const [name, value] of Object.entries(workerMetadataHeaders(c.env, "rishi-worker"))) {
+    response.headers.set(name, value);
+  }
+  return response;
 });
 
 app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {

@@ -113,7 +113,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         self.productFetcher = productFetcher
         self.verifier = verifier
         self.reconciler = reconciler
-        self.entitlementSyncClient = entitlementSyncClient ?? Self.defaultEntitlementSyncClient()
+        self.entitlementSyncClient = entitlementSyncClient ?? UnconfiguredEntitlementSyncClient()
         self.onEntitlementSynced = onEntitlementSynced
         self.purchaseClosure = purchaseClosure ?? { product in
             let options = try await AppAccountToken.currentPurchaseOptions()
@@ -121,17 +121,10 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         }
     }
 
-    /// Built the same way `WorkerEndpoint.send()` builds its own client:
-    /// `RISHI_API_URL` env var (falling back to the production API host) +
-    /// `KeychainSessionStore`-backed `RishiAuthTokenProvider`. Only used
-    /// when the caller does not inject a stub (tests always inject one via
-    /// `entitlementSyncClient:`).
-    private static func defaultEntitlementSyncClient() -> any EntitlementSyncing {
-        let baseURLString = ProcessInfo.processInfo.environment["RISHI_API_URL"]
-            ?? "https://api.fidexa.org"
-        let baseURL = URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
-        let tokenProvider = RishiAuthTokenProvider(keychain: KeychainSessionStore())
-        return EntitlementSyncClient(client: WorkerClient(baseURL: baseURL, tokenProvider: tokenProvider))
+    private struct UnconfiguredEntitlementSyncClient: EntitlementSyncing {
+        func sync(transactionJWS: String) async throws -> EntitlementSyncResult {
+            throw EntitlementSyncConfigurationError.workerClientUnavailable
+        }
     }
 
     // MARK: - Purchase entry point

@@ -3,6 +3,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "dev:local": "wrangler dev --config wrangler.dev.jsonc --port 8788",
     "deploy": "wrangler deploy --minify",
     "test": "vitest run",
     "test:watch": "vitest",

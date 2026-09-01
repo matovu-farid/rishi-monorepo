@@ -6,20 +6,26 @@ See `docs/superpowers/specs/2026-05-30-shared-reading-electron-design.md` for th
 
 ## Local dev
 
-    pnpm install
-    pnpm dev
-    pnpm test
+    bun install
+    bun run dev:local
+    bun test
+
+For Apple development, use the repository-root launcher. It starts this
+Worker together with the primary Worker, verifies both health endpoints, and
+stops only the processes it owns:
+
+    scripts/start-rishi-workers-dev.sh
 
 ## Secrets
 
 Generate a 48-byte secret and set it for the production environment:
 
-    openssl rand -base64 48 | pnpm exec wrangler secret put WORKER_HMAC_SECRET --env production
+    openssl rand -base64 48 | bunx wrangler secret put WORKER_HMAC_SECRET --env production
 
 ## Deploy
 
-    pnpm exec wrangler login                                 # one-time, interactive
-    pnpm exec wrangler deploy --env production --minify
+    bunx wrangler login                                 # one-time, interactive
+    bunx wrangler deploy --env production --minify
 
 The output prints the workers.dev URL (e.g. `https://rishi-sharing-worker.<account>.workers.dev`).
 
@@ -30,7 +36,7 @@ The output prints the workers.dev URL (e.g. `https://rishi-sharing-worker.<accou
 
 ## Tail logs
 
-    pnpm exec wrangler tail --env production
+    bunx wrangler tail --env production
 
 ## Domain
 

@@ -68,6 +68,10 @@
 		<key>SWIFT_IS_CURRENT_EXECUTOR_LEGACY_MODE_OVERRIDE</key>
 		<string>legacy</string>
 	</dict>
+	<key>RishiAPIBaseURL</key>
+	<string>$(RISHI_API_BASE_URL)</string>
+	<key>RishiSharingWebSocketURL</key>
+	<string>$(RISHI_SHARING_WEBSOCKET_URL)</string>
 	<key>SentryDSN</key>
 	<string>$(SENTRY_DSN)</string>
 	<key>SentryEnvironment</key>

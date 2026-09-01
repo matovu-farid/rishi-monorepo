@@ -5,6 +5,7 @@ import { verifyAuth, resolveTestGlobalAuth } from "./auth";
 import { GlobalLimiter } from "./perIpLimit";
 import { UserSearchBody, searchUsers } from "./userSearch";
 import { verify } from "./hmac";
+import { workerMetadataHeaders } from "./health";
 
 const createSessionLimiter = new GlobalLimiter({ capacity: 10, windowMs: 60 * 60_000 });
 const redeemLimiter = new GlobalLimiter({ capacity: 5, windowMs: 60_000 });
@@ -20,7 +21,13 @@ type Env = {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.get("/health", (c) => c.text("ok"));
+app.get("/health", (c) => {
+  const response = c.text("ok");
+  for (const [name, value] of Object.entries(workerMetadataHeaders(c.env, "rishi-sharing-worker"))) {
+    response.headers.set(name, value);
+  }
+  return response;
+});
 
 const INTERNAL_ACTIONS = {
   createRoom: "createRoom",

@@ -35,11 +35,18 @@ enum ServiceGraphFactory {
         userIdBox: UserIdBox
     ) async -> BootstrappedServices {
 
-        let baseURLString =
-            ProcessInfo.processInfo.environment["RISHI_API_URL"]
-            ?? "https://api.fidexa.org"
-        let baseURL =
-            URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
+        guard let apiEnvironment = RishiAPIEnvironment.load() else {
+            fatalError("Rishi API endpoint configuration is missing or invalid")
+        }
+        let baseURL = apiEnvironment.httpBaseURL
+        Log.event(
+            "api.environment.selected",
+            data: [
+                "mode": apiEnvironment.mode.rawValue,
+                "httpHost": baseURL.host ?? "unknown",
+                "sharingWebSocketHost": apiEnvironment.sharingWebSocketURL.host ?? "unknown"
+            ]
+        )
 
         let keychain = KeychainSessionStore()
 
@@ -81,7 +88,7 @@ enum ServiceGraphFactory {
             )
         }
 
-        let groupID = try? await GroupIDEndpoint().send()
+        let groupID = try? await GroupIDEndpoint().send(using: workerClient)
 
         let documentsURL = FileManager.default.urls(
             for: .documentDirectory,
@@ -493,6 +500,7 @@ enum ServiceGraphFactory {
         EntitlementSyncHooks.onSynced = { [entitlementRefreshCoordinator] in
             await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
         }
+        EntitlementSyncHooks.workerClient = workerClient
         signposter.endInterval("storekit.ready", storekitState)
 
         let telemetryStore = await MainActor.run {
@@ -522,7 +530,11 @@ enum ServiceGraphFactory {
 
         return BootstrappedServices(
             workerClient: workerClient,
-            sharedReadingAPI: SharedReadingAPI(tokenProvider: tokenProvider),
+            sharedReadingAPI: SharedReadingAPI(
+                baseURL: baseURL,
+                tokenProvider: tokenProvider,
+                refreshAuthentication: { try await workerClient.refreshAuthentication() }
+            ),
             dataUseConsentStore: dataUseConsentStore,
             library: LibraryRuntime(
                 dbStore: dbStore,

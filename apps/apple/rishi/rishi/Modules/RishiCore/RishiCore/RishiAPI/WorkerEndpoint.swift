@@ -63,24 +63,13 @@ extension WorkerEndpoint {
 }
 
 extension WorkerEndpoint {
-    public func send() async throws -> Response {
-        let baseURLString =
-        ProcessInfo.processInfo.environment["RISHI_API_URL"]
-        ?? "https://api.fidexa.org"
-        let baseURL =
-        URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
-        
-        let keychain = KeychainSessionStore()
-        
-        let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
-        
-        let workerClient = WorkerClient(
-            baseURL: baseURL,
-            tokenProvider: tokenProvider,
-            
-        )
-        return try await workerClient.send(self)
+    /// Sends through the already-bootstrapped application client. Production
+    /// callers should use this overload so endpoint selection, auth refresh,
+    /// diagnostics, and retry policy stay centralized.
+    public func send(using workerClient: WorkerClient) async throws -> Response {
+        try await workerClient.send(self)
     }
+
 }
 
 // MARK: - Endpoints WITH a request body (POST/PUT/PATCH)

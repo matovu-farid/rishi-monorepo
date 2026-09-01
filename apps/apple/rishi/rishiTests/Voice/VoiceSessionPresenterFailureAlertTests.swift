@@ -89,6 +89,7 @@ struct VoiceSessionPresenterFailureAlertTests {
         return VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: worker,
+            baseURL: URL(string: "https://example.invalid")!,
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: EmptyConversationStore()),
             userIdProvider: { userId },
@@ -118,6 +119,7 @@ struct VoiceSessionPresenterFailureAlertTests {
         let presenter = VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: worker,
+            baseURL: URL(string: "https://example.invalid")!,
             dataUseConsentProvider: NoWorkerDataUseConsentProvider(),
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: EmptyConversationStore()),
@@ -158,6 +160,7 @@ struct VoiceSessionPresenterFailureAlertTests {
         let presenter = VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: worker,
+            baseURL: URL(string: "https://example.invalid")!,
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: EmptyConversationStore()),
             userIdProvider: { userId },
