@@ -4,7 +4,7 @@
 
 **Goal:** Make the Apple app use an explicit local or production Worker environment, version the unreleased shared-reading API without changing released contracts, and provide one safe command that starts the local Worker topology for testing.
 
-**Architecture:** The Worker keeps legacy `/api/...` routes frozen and mounts shared reading at `/api/v1/reading-sessions`. A checked-in local Wrangler configuration starts isolated primary and sharing Workers on deterministic ports. Apple resolves one injected environment containing HTTP and WebSocket endpoints at the composition root; Debug selects the local Worker and Release selects production.
+**Architecture:** The single canonical API Worker keeps legacy `/api/...` routes frozen and mounts shared reading at `/api/v1/reading-sessions`. Its internal sharing Worker remains a transport service, not a separate public API or dev/prod contract. Checked-in Wrangler configurations start the required local topology on deterministic ports; `wrangler dev --remote` is an opt-in non-production execution mode. Apple resolves one injected environment containing HTTP and WebSocket endpoints at the composition root; Debug selects Wrangler and Release selects production.
 
 **Tech Stack:** Hono, Cloudflare Workers/Wrangler, Bun, Swift/SwiftUI, Xcode project build settings, URLSession, Vitest, XCTest.
 

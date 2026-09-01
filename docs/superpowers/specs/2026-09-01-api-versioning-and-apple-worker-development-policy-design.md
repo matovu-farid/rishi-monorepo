@@ -1,6 +1,6 @@
 # API Versioning and Apple Worker Development Policy
 
-> **Status:** Draft — awaiting user review before implementation
+> **Status:** Accepted — one versioned public API Worker; local Wrangler is the development path
 
 ## Problem
 
@@ -39,10 +39,14 @@ backend used by a test explicit and observable.
   must use the same versioned path. A route is not considered released until
   its Worker deployment and client build are verified together.
 
-### 2. Production has one canonical Worker
+### 2. Production has one canonical API Worker
 
 - `rishi-worker` remains the production API Worker and `rishi-sharing-worker`
-  remains its production service-bound sharing Worker.
+  remains its production service-bound sharing Worker. The sharing Worker is an
+  internal transport service, not a second public API or a dev/prod API split.
+- There is no permanent separate development API Worker. The same versioned
+  Worker code and API contract are used in production and in development;
+  development changes are exercised through Wrangler.
 - Production deployments are the only place where production custom domains,
   production D1, production R2, production KV, and production Durable Objects
   may be selected.
@@ -59,6 +63,10 @@ backend used by a test explicit and observable.
 
 - Apple development starts the primary Worker and sharing Worker locally with
   Wrangler before launching the Apple app.
+- For rapid development, Wrangler may use `--remote`, but only with an
+  explicitly selected non-production configuration. This runs the same Worker
+  code against clearly identified non-production Cloudflare resources; it does
+  not create or imply a separate development API contract.
 - The normal mode is local execution with local simulated bindings. This keeps
   D1, R2, KV, and Durable Object state isolated from production.
 - The launcher owns both child processes, waits for both `/health` endpoints,
@@ -84,7 +92,8 @@ backend used by a test explicit and observable.
 ### 4. `--remote` is opt-in and must be safe
 
 - `wrangler dev --remote` is allowed only when a checked-in or explicitly
-  supplied development configuration selects non-production resources.
+  supplied development configuration selects non-production resources. The
+  default remains local simulated bindings.
 - `--remote` must never be run against the production config merely to make a
   local Apple test work. Remote Worker execution means the Worker code and its
   bindings execute on Cloudflare infrastructure; it is not equivalent to a
@@ -159,7 +168,7 @@ The implementation should be limited to these areas:
 | Area | Proposed change |
 |---|---|
 | Worker route registration | Add a versioned `/api/v1` route group for shared reading and preserve existing legacy routes. |
-| Worker configuration | Add isolated local development config for both Workers; remove production remote bindings from the local path; configure local service binding and WebSocket URL. |
+| Worker configuration | Add isolated local development config for the canonical API Worker and its internal sharing service; remove production remote bindings from the local path; configure the local service binding and WebSocket URL. |
 | Worker scripts/docs | Add one managed startup command for both Workers, health checks, duplicate-process detection, cleanup, and Bun-only instructions. |
 | Apple configuration | Add a single Debug/Release endpoint configuration containing the primary HTTP URL and sharing WebSocket URL; inject it through `ServiceGraphFactory`. |
 | Apple networking | Remove hard-coded defaults and duplicated environment reads from `WorkerEndpoint`, billing, voice, and shared reading; make direct endpoint helpers use the same configuration. |
@@ -184,7 +193,8 @@ The implementation should be limited to these areas:
 - A Release build always uses the production endpoint.
 - Shared reading and all other Worker-backed Apple features use the same chosen
   endpoint configuration.
-- The local startup command starts both Workers exactly once, verifies health,
+- The local startup command starts the canonical API Worker and its internal
+  sharing service exactly once, verifies health,
   isolates bindings, and cleans up its children.
 - The shared-reading API is versioned before release, while legacy routes remain
   unchanged and covered by compatibility tests.
