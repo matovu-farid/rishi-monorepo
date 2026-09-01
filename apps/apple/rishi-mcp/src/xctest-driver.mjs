@@ -27,14 +27,22 @@ async function waitForExit(child, timeoutMs) {
   });
 }
 
+export function selectIPhone17DeviceIds(devices) {
+  const available = Object.values(devices?.devices ?? {}).flat();
+  return available
+    .filter((device) => device.name === "iPhone 17 Pro")
+    .sort((left, right) => Number(right.state === "Booted") - Number(left.state === "Booted"))
+    .map((device) => device.udid.toLowerCase());
+}
+
 async function iphone17DeviceIds(env = process.env) {
   // Preserve an explicitly selected simulator UUID exactly as supplied. Xcode
   // accepts the canonical UUID here, but can reject a lowercased destination
   // even though `simctl` reports the device as available.
-  if (process.env.RISHI_MCP_IPHONE_DEVICE) return [process.env.RISHI_MCP_IPHONE_DEVICE];
+  if (env.RISHI_MCP_IPHONE_DEVICE) return [env.RISHI_MCP_IPHONE_DEVICE];
   try {
     const devices = JSON.parse(await command("xcrun", ["simctl", "list", "devices", "available", "-j"], env));
-    return Object.values(devices.devices ?? {}).flat().filter((device) => device.name === "iPhone 17").map((device) => device.udid.toLowerCase());
+    return selectIPhone17DeviceIds(devices);
   } catch { return []; }
 }
 
