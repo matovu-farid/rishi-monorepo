@@ -167,6 +167,10 @@ import Foundation
             engine.resume()
         }
 
+        public func setVolume(_ volume: Float) async {
+            engine.setOutputVolume(volume)
+        }
+
         public func stop() async {
             // The ONLY place the long-lived engine is torn down + session released.
             let stoppedGeneration = playbackGeneration

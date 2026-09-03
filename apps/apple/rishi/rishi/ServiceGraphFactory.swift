@@ -166,6 +166,10 @@ enum ServiceGraphFactory {
                 (try? await syncMetadataStore.isTombstone(entityId: bookId, kind: .book)) ?? false
             }
         )
+        let sessionBookService = SessionBookService(
+            fileStorage: bookFileStorage,
+            userIdProvider: { await userIdBox.value }
+        )
         let syncQueue = SyncQueue(metadataStore: syncMetadataStore)
         let syncStatus = SyncStatus()
 
@@ -518,6 +522,7 @@ enum ServiceGraphFactory {
 
         return BootstrappedServices(
             workerClient: workerClient,
+            sharedReadingAPI: SharedReadingAPI(tokenProvider: tokenProvider),
             dataUseConsentStore: dataUseConsentStore,
             library: LibraryRuntime(
                 dbStore: dbStore,
@@ -532,7 +537,8 @@ enum ServiceGraphFactory {
                 readerSettingsStore: readerSettingsStore,
                 bookSearch: bookSearch,
                 indexingHook: indexingHook,
-                sharePackageService: sharePackageService
+                sharePackageService: sharePackageService,
+                sessionBookService: sessionBookService
             ),
             audio: AudioRuntime(
                 coordinator: audioStack.coordinator,

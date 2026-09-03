@@ -4,6 +4,7 @@ import { issueJoinToken, verifyJoinToken } from "./tokens";
 import { verifyAuth, resolveTestGlobalAuth } from "./auth";
 import { GlobalLimiter } from "./perIpLimit";
 import { UserSearchBody, searchUsers } from "./userSearch";
+import { verify } from "./hmac";
 
 const createSessionLimiter = new GlobalLimiter({ capacity: 10, windowMs: 60 * 60_000 });
 const redeemLimiter = new GlobalLimiter({ capacity: 5, windowMs: 60_000 });
@@ -20,6 +21,65 @@ type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/health", (c) => c.text("ok"));
+
+const INTERNAL_ACTIONS = {
+  createRoom: "createRoom",
+  getRoomStatus: "getRoomStatus",
+  getRedeemInfo: "getAppleRedeemInfo",
+  issueAdmissionTicket: "markBookReadyAndIssueAdmissionTicket",
+  startRoom: "startRoom",
+  leaveRoom: "leaveRoom",
+  transferController: "transferController",
+  removeParticipant: "removeAppleParticipant",
+  restoreParticipant: "restoreAppleParticipant",
+  endRoom: "endRoom",
+} as const;
+
+type InternalClaims = { method: string; path: string; body: unknown; exp: number };
+
+/** Primary Worker → sharing Worker command surface. The signed claims bind the
+ * action to the exact path and JSON body so a bearer cannot be replayed for a
+ * different room or mutation. */
+app.post("/internal/rooms/:id", async (c) => {
+  const token = c.req.header("x-rishi-internal-token");
+  if (!token) return c.json({ code: "SERVICE_UNAVAILABLE", error: "missing internal authorization" }, 401);
+  const body = await c.req.json().catch(() => null) as { action?: string; payload?: unknown } | null;
+  if (!body || typeof body.action !== "string" || !(body.action in INTERNAL_ACTIONS)) return c.json({ code: "INVALID_COMMAND" }, 400);
+  let claims: InternalClaims;
+  try { claims = await verify<InternalClaims>(token, c.env.WORKER_HMAC_SECRET); }
+  catch { return c.json({ code: "SERVICE_UNAVAILABLE", error: "invalid internal authorization" }, 401); }
+  if (claims.exp <= Date.now() || claims.method !== "POST" || claims.path !== c.req.path || JSON.stringify(claims.body) !== JSON.stringify(body)) {
+    return c.json({ code: "SERVICE_UNAVAILABLE", error: "invalid internal authorization" }, 401);
+  }
+  const id = c.req.param("id");
+  const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(id));
+  try {
+    const method = INTERNAL_ACTIONS[body.action as keyof typeof INTERNAL_ACTIONS];
+    // @ts-expect-error Durable Object RPC method is selected from a fixed allowlist.
+    const result = await stub[method](body.payload ?? {});
+    return c.json(result ?? { ok: true });
+  } catch (e) {
+    const error = e as { code?: string; message?: string };
+    const code = error.code ?? "SERVICE_UNAVAILABLE";
+    const status = code === "ROOM_FULL" ? 409 : code === "FORBIDDEN" ? 403 : code === "SESSION_NOT_FOUND" ? 404 : 400;
+    return c.json({ code, error: error.message ?? code }, status as 400 | 401 | 403 | 404 | 409);
+  }
+});
+
+app.get("/v1/sessions/:id/turn", async (c) => {
+  let user;
+  try { user = await getUser(c.req.raw, c.env); }
+  catch (e) { return c.json({ code: "AUTH_REQUIRED", error: (e as Error).message }, 401); }
+  const sessionId = c.req.param("id");
+  const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(sessionId));
+  try {
+    // @ts-expect-error RPC on the Durable Object stub.
+    return c.json(await stub.getTurnCredentials({ userId: user.userId, ttlSeconds: Number(c.req.query("ttl") ?? 3600) }));
+  } catch (e) {
+    const error = e as { code?: string; message?: string };
+    return c.json({ code: error.code ?? "TURN_UNAVAILABLE", error: error.message ?? "TURN credentials unavailable" }, error.code === "FORBIDDEN" ? 403 : 503);
+  }
+});
 
 app.post("/v1/sessions", async (c) => {
   let user;

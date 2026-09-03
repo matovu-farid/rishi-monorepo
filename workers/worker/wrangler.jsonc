@@ -10,13 +10,19 @@
 	"version_metadata": {
 		"binding": "CF_VERSION_METADATA"
 	},
+	"services": [
+		{
+			"binding": "SHARING_WORKER",
+			"service": "rishi-sharing-worker"
+		}
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "rishi",
 			"database_id": "970159b7-ca91-49c1-bae8-feb43b24a7e6",
 			"migrations_dir": "drizzle/migrations",
-			"migrations_pattern": "drizzle/migrations/{*.sql,20260803145911_classy_sleepwalker/migration.sql,20260808181936_book_sharing/migration.sql,20260812135706_book_sharing_access/migration.sql,20260813110000_pregenerated_share_links/migration.sql}"
+			"migrations_pattern": "drizzle/migrations/{*.sql,20260803145911_classy_sleepwalker/migration.sql,20260808181936_book_sharing/migration.sql,20260812135706_book_sharing_access/migration.sql,20260813110000_pregenerated_share_links/migration.sql,20260820112725_session_invites_from_prod_session_only/migration.sql,20260820121338_session_invites_idempotency/migration.sql}"
 		}
 	],
 	"r2_buckets": [
@@ -90,6 +96,7 @@
 	"vars": {
 		"PUBLIC_API_URL": "https://api.fidexa.org",
 		"PUBLIC_WEB_URL": "https://rishi.fidexa.org",
+		"SHARING_WORKER_WS_URL": "wss://sharing.fidexa.org",
 		// ─── /api/sync/upload-url storage caps ───────────────────────────────
 		// wrangler passes numeric vars as strings; defaults in upload.ts kick in
 		// if these are unset. Override per-environment as needed.
@@ -105,6 +112,9 @@
 		// ENABLE_OPS_ADMIN + OPS_ADMIN_SECRET (src/routes/ops-flags.ts) follow the
 		// exact same rule: set ONLY in non-prod via `wrangler secret put`.
 	},
+	// Secrets set out-of-band for the primary Worker:
+	//   SHARING_INTERNAL_SECRET - shared HMAC secret for the sharing-worker binding
+	//   RESEND_API_KEY           - Resend API key for share@fidexa.org delivery
 	"routes": [
 		{
 			"pattern": "api.fidexa.org",

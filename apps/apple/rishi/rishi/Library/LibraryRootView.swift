@@ -35,6 +35,7 @@ public struct LibraryRootView: View {
         (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)?
 
     public let sharePackageService: SharePackageService?
+    let sharedReadingAPI: SharedReadingAPI?
 
     ///
 
@@ -46,6 +47,8 @@ public struct LibraryRootView: View {
     @State private var showShareComposer = false
     @State private var shareKind: ShareKind = .selection
     @State private var shareBookIDs: [BookID] = []
+    @State private var showSharedReadingComposer = false
+    @State private var sharedReadingBook: Book?
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -59,7 +62,7 @@ public struct LibraryRootView: View {
         Task { await sharePackageService.prewarm(bookIDs: bookIDs) }
     }
 
-    public init(
+    init(
       
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
@@ -67,7 +70,8 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
-        sharePackageService: SharePackageService? = nil
+        sharePackageService: SharePackageService? = nil,
+        sharedReadingAPI: SharedReadingAPI? = nil
     ) {
  
         self.importCoordinator = importCoordinator
@@ -75,11 +79,12 @@ public struct LibraryRootView: View {
         self.onShowSettings = onShowSettings
         self.onImported = onImported
         self.sharePackageService = sharePackageService
+        self.sharedReadingAPI = sharedReadingAPI
         self.externalPath = nil
         self.externalDocumentPickerPresented = documentPickerPresented
     }
 
-    public init(
+    init(
      
         path: Binding<NavigationPath>,
         importCoordinator: ImportCoordinator,
@@ -88,7 +93,8 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
-        sharePackageService: SharePackageService? = nil
+        sharePackageService: SharePackageService? = nil,
+        sharedReadingAPI: SharedReadingAPI? = nil
     ) {
        
         self.importCoordinator = importCoordinator
@@ -96,6 +102,7 @@ public struct LibraryRootView: View {
         self.onShowSettings = onShowSettings
         self.onImported = onImported
         self.sharePackageService = sharePackageService
+        self.sharedReadingAPI = sharedReadingAPI
         self.externalPath = path
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -243,6 +250,15 @@ public struct LibraryRootView: View {
         .sheet(isPresented: $showShareComposer) {
             shareComposerContent()
         }
+        .sheet(isPresented: $showSharedReadingComposer) {
+            if let sharedReadingAPI, let sharedReadingBook {
+                SharedReadingShareComposerView(
+                    api: sharedReadingAPI,
+                    bookId: sharedReadingBook.id.uuidString,
+                    bookTitle: sharedReadingBook.title
+                )
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -270,6 +286,12 @@ public struct LibraryRootView: View {
                     selectedBookIDs.removeAll()
                 }
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Start reading") {
+                    beginSharedReading(ids: Array(selectedBookIDs), books: vm.books)
+                }
+                .disabled(selectedBookIDs.count != 1 || sharedReadingAPI == nil)
+            }
         }
     }
 
@@ -293,6 +315,12 @@ public struct LibraryRootView: View {
         shareBookIDs = ids
         shareKind = kind
         showShareComposer = true
+    }
+
+    private func beginSharedReading(ids: [BookID], books: [Book]) {
+        guard ids.count == 1, let id = ids.first, let book = books.first(where: { $0.id == id }), sharedReadingAPI != nil else { return }
+        sharedReadingBook = book
+        showSharedReadingComposer = true
     }
 
 }

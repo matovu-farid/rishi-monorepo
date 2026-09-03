@@ -15,6 +15,10 @@ struct RootView: View {
 
     @State private var showOnboarding = false
     @State private var pendingShareMessage: String?
+    @State private var pendingSessionToken: String?
+    @State private var pendingSessionJoin: SharedReadingJoin?
+    @State private var pendingSessionCoordinator: SharedReadingSessionCoordinator?
+    @State private var pendingSessionTransport: SharedReadingSignalingClient?
     @State private var showNoCardTrialIntro = false
     @State private var noCardTrialIntroCheckInFlight = false
     #if targetEnvironment(macCatalyst)
@@ -205,13 +209,35 @@ struct RootView: View {
             // it in an unstructured task instead of allowing a view rebuild to
             // cancel the network request halfway through.
             guard signedInUserID != nil else { return }
+            if let token = await PendingSessionInviteStore.anonymous.load() {
+                await MainActor.run { pendingSessionToken = token }
+            }
             Task { await redeemPendingSharesIfEligible(deps: deps) }
+            Task { await redeemPendingSessionIfEligible(deps: deps) }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareRedemptionReady)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppRouter.sessionTokenQueued)) { notification in
+            guard let token = notification.object as? String, !token.isEmpty else { return }
+            pendingSessionToken = token
+            Task { await redeemPendingSessionIfEligible(deps: deps) }
+        }
+        .sheet(item: $pendingSessionJoin) { join in
+            if let coordinator = pendingSessionCoordinator, let transport = pendingSessionTransport {
+                SharedReadingSessionView(
+                    api: deps.services!.sharedReadingAPI,
+                    coordinator: coordinator,
+                    transport: transport,
+                    join: join,
+                    localParticipantUserId: signedInUserID?.uuidString ?? ""
+                )
+            } else {
+                ProgressView("Preparing reading session…")
+            }
         }
         .alert(
             "Shared books",
@@ -231,6 +257,7 @@ struct RootView: View {
                     readerDefaults: deps.services!.settings.readerDefaults,
                     onCompleted: {
                         showOnboarding = false
+                        Task { await redeemPendingSessionIfEligible(deps: deps) }
                     }
                 )
             }
@@ -241,6 +268,7 @@ struct RootView: View {
                     readerDefaults: deps.services!.settings.readerDefaults,
                     onCompleted: {
                         showOnboarding = false
+                        Task { await redeemPendingSessionIfEligible(deps: deps) }
                     }
                 )
             }
@@ -290,6 +318,50 @@ struct RootView: View {
                     ? "One shared link is expired or no longer available."
                     : "\(result.discardedCount) shared links are expired or no longer available."
             }
+        }
+    }
+
+    private func redeemPendingSessionIfEligible(deps: AppDependencies) async {
+        guard currentUserBox.isSigned, !showOnboarding, let token = pendingSessionToken else { return }
+        guard let sessionAPI = deps.services?.sharedReadingAPI else { return }
+        do {
+            let response = try await sessionAPI.redeem(token: token)
+            guard let userID = signedInUserID else { return }
+            let transport = SharedReadingSignalingClient()
+            let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
+                try await sessionAPI.markBookReady(sessionId: response.sessionId, token: token, contentHash: response.book.contentHash)
+            }
+            let coordinator = SharedReadingSessionCoordinator(
+                transport: transport,
+                localParticipantUserId: userID.uuidString,
+                refreshAdmission: refreshAdmission
+            )
+            let importedHash = try await deps.services!.library.sessionBookService.prepare(book: response.book, ownerId: userID)
+            guard importedHash.caseInsensitiveCompare(response.book.contentHash) == .orderedSame else {
+                throw SharedReadingError.from(code: .bookHashMismatch)
+            }
+            let admission = try await sessionAPI.markBookReady(
+                sessionId: response.sessionId,
+                token: token,
+                contentHash: importedHash
+            )
+            await MainActor.run {
+                pendingSessionToken = nil
+                Task { await PendingSessionInviteStore.anonymous.clear() }
+                pendingSessionCoordinator = coordinator
+                pendingSessionTransport = transport
+                pendingSessionJoin = SharedReadingJoin(response: response, admission: admission)
+            }
+        } catch let error as SharedReadingError {
+            await MainActor.run {
+                if !error.retryable {
+                    pendingSessionToken = nil
+                    Task { await PendingSessionInviteStore.anonymous.clear() }
+                }
+                pendingShareMessage = error.message
+            }
+        } catch {
+            await MainActor.run { pendingShareMessage = "Rishi could not open this reading session. Please try again." }
         }
     }
 

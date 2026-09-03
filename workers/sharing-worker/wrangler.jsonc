@@ -16,6 +16,9 @@
   "vars": {
     "AUTH_BASE_URL": "https://rishi.fidexa.org"
   },
+  "routes": [
+    { "pattern": "sharing.fidexa.org", "custom_domain": true }
+  ],
   "env": {
     "production": {
       "name": "rishi-sharing-worker",
@@ -26,7 +29,12 @@
       // Production also DELIBERATELY omits the `TEST_AUTH_ALLOWED` var so
       // the `userId--DisplayName` E2E bearer shortcut and the
       // `data.channel.relay` test path are both rejected by the DO.
-      "vars": { "AUTH_BASE_URL": "https://rishi.fidexa.org" },
+      "vars": {
+        "AUTH_BASE_URL": "https://rishi.fidexa.org"
+      },
+      "routes": [
+        { "pattern": "sharing.fidexa.org", "custom_domain": true }
+      ],
       "durable_objects": {
         "bindings": [
           { "name": "SESSION_ROOM", "class_name": "SessionRoom" }
@@ -39,4 +47,6 @@
   }
   // Secrets set via `wrangler secret put`:
   //   WORKER_HMAC_SECRET  - signs joinToken + reconnectToken
+  //   TURN_KEY_ID         - Cloudflare Realtime TURN key identifier
+  //   TURN_API_TOKEN      - Cloudflare Realtime TURN API token
 }

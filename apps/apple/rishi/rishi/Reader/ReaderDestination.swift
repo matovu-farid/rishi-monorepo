@@ -88,6 +88,9 @@ struct ReaderDestination: View {
     let startReaderTour: Bool
     let pdfViewMode: Binding<PDFViewModeSetting>?
     let readerWindowCloseHandle: ReaderWindowCloseHandle?
+    let sharedReadingCoordinator: SharedReadingSessionCoordinator?
+    let sharedReadingJoin: SharedReadingJoin?
+    let sharedReadingPeerMesh: SharedReadingPeerMesh?
 
     @State private var readAloudStartTask: Task<Void, Never>?
     @State private var readAloudStartRequest = UUID()
@@ -99,6 +102,10 @@ struct ReaderDestination: View {
     @State private var pendingNarrationUpgradeSessionToken: UUID?
     @State private var paywallRequestHandoff = ReaderPaywallRequestHandoff()
     @State private var didScheduleReaderIndexBackfill = false
+    @State private var sharedPositionJSONString: String?
+    @State private var sharedSequence: Int64 = 0
+    @State private var sharedMicrophonePolicy = SharedReadingMicrophonePolicyState()
+    @State private var sharedTTSIsPlaying = false
 
     @State private var voiceEntry: ReaderVoiceEntry
     @State private var readerTour: ReaderOnboardingTourCoordinator?
@@ -115,7 +122,10 @@ struct ReaderDestination: View {
         onRequestPaywall: @escaping (String) -> Void,
         startReaderTour: Bool = false,
         pdfViewMode: Binding<PDFViewModeSetting>? = nil,
-        readerWindowCloseHandle: ReaderWindowCloseHandle? = nil
+        readerWindowCloseHandle: ReaderWindowCloseHandle? = nil,
+        sharedReadingCoordinator: SharedReadingSessionCoordinator? = nil,
+        sharedReadingJoin: SharedReadingJoin? = nil,
+        sharedReadingPeerMesh: SharedReadingPeerMesh? = nil
     ) {
         let peeked = dependencies.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? dependencies.readerDefaults.theme
@@ -128,6 +138,9 @@ struct ReaderDestination: View {
         self.startReaderTour = startReaderTour
         self.pdfViewMode = pdfViewMode
         self.readerWindowCloseHandle = readerWindowCloseHandle
+        self.sharedReadingCoordinator = sharedReadingCoordinator
+        self.sharedReadingJoin = sharedReadingJoin
+        self.sharedReadingPeerMesh = sharedReadingPeerMesh
         let tour = startReaderTour ? ReaderOnboardingTourCoordinator() : nil
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: dependencies.voicePresenter,
@@ -159,6 +172,7 @@ struct ReaderDestination: View {
             voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph,
             readAloudLocator: readAloud?.currentLocator,
+            sharedPositionJSONString: sharedPositionJSONString,
             reservedPlayerHeight: reservedPlayerHeight,
             pdfViewMode: pdfViewMode?.wrappedValue ?? dependencies.readerDefaults.pdfViewMode,
             pdfViewModeBinding: pdfViewMode,
@@ -199,6 +213,8 @@ struct ReaderDestination: View {
             if vm.book.formatType == .pdf {
                 await scheduleReaderIndexBackfillIfNeeded()
             }
+
+            await runSharedReadingIntegration()
 
 
             vm.onUserNavigation = { locator in
@@ -262,6 +278,9 @@ struct ReaderDestination: View {
 #endif
                 await viewModel.flush()
 #if !targetEnvironment(macCatalyst)
+                if sharedReadingCoordinator != nil {
+                    await dependencies.playbackOwner.setVolume(1)
+                }
                 await dependencies.playbackOwner.release(host: readAloudHost)
 #endif
                 readAloud = nil
@@ -275,6 +294,13 @@ struct ReaderDestination: View {
                 )
                 .padding(.trailing, RishiSpacing.m)
                 .padding(.bottom, RishiSpacing.s)
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if sharedReadingCoordinator != nil, sharedReadingPeerMesh != nil {
+                sharedReadingMicrophoneControls
+                    .padding(.leading, RishiSpacing.m)
+                    .padding(.bottom, RishiSpacing.s)
             }
         }
         .overlay {
@@ -426,6 +452,130 @@ struct ReaderDestination: View {
 
     private var reservedPlayerHeight: CGFloat {
         vm.book.formatType == .epub ? Self.playerReservationHeight : 0
+    }
+
+    @MainActor
+    private func runSharedReadingIntegration() async {
+        guard let sharedReadingCoordinator, let sharedReadingJoin else { return }
+        var lastRemoteSequence: Int64 = -1
+        var lastSentPosition: String?
+        var lastSentPlaying: Bool?
+        let settings = await dependencies.ttsSettingsStore.load(userId: userId)
+        while !Task.isCancelled {
+            let snapshot = await sharedReadingCoordinator.snapshot()
+            let isTTSPlaying = readAloud?.isActivelySpeaking == true || dependencies.ttsState.status == .playing
+            sharedTTSIsPlaying = isTTSPlaying
+            await dependencies.playbackOwner.setVolume(
+                SharedReadingAudioDucking.ttsVolume(
+                    isTTSPlaying: isTTSPlaying,
+                    speakerUserId: snapshot.speakerUserId
+                )
+            )
+            let floorGranted = snapshot.speakerUserId == userId.uuidString
+            sharedMicrophonePolicy = SharedReadingMicrophonePolicy.setSpeakerFloorGranted(floorGranted, in: sharedMicrophonePolicy)
+            if !isTTSPlaying, floorGranted {
+                try? await sharedReadingCoordinator.releaseSpeaker()
+            }
+            await sharedReadingPeerMesh?.setMicrophoneEnabled(
+                sharedMicrophonePolicy.microphoneEnabled(isTTSPlaying: isTTSPlaying)
+            )
+            if snapshot.currentParticipantUserId != userId.uuidString,
+               let progress = snapshot.latestProgress,
+               progress.sequence > lastRemoteSequence,
+               progress.bookId == sharedReadingJoin.response.book.bookId,
+               progress.contentHash == sharedReadingJoin.response.book.contentHash {
+                lastRemoteSequence = progress.sequence
+                sharedPositionJSONString = progress.position
+                if progress.isPlaying, let locator = try? Locator(jsonString: progress.position) {
+                    startReadAloud(from: locator)
+                } else if !progress.isPlaying {
+                    await readAloud?.pause()
+                }
+            }
+
+            if snapshot.status == .active,
+               snapshot.currentParticipantUserId == userId.uuidString,
+               let locator = vm.latestLocator,
+               let position = try? ReaderPositionLocator(locator: locator).encodedJSONString() {
+                let isPlaying = isTTSPlaying
+                if position != lastSentPosition || isPlaying != lastSentPlaying {
+                    sharedSequence &+= 1
+                    let progress = SharedReadingProgress(
+                        sessionId: sharedReadingJoin.response.sessionId,
+                        bookId: sharedReadingJoin.response.book.bookId,
+                        contentHash: sharedReadingJoin.response.book.contentHash,
+                        format: sharedReadingJoin.response.book.format,
+                        sequence: sharedSequence,
+                        position: position,
+                        isPlaying: isPlaying,
+                        ttsRate: settings.speed,
+                        updatedAt: Date()
+                    )
+                    do {
+                        try await sharedReadingCoordinator.sendControllerSyncFrame(progress)
+                        lastSentPosition = position
+                        lastSentPlaying = isPlaying
+                    } catch {
+                        // Keep the position dirty so the next reconnect or
+                        // coordinator tick retries the authoritative frame.
+                    }
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    @ViewBuilder
+    private var sharedReadingMicrophoneControls: some View {
+        HStack(spacing: 8) {
+            Button {
+                sharedMicrophonePolicy = SharedReadingMicrophonePolicy.setMuted(
+                    !sharedMicrophonePolicy.userMuted,
+                    in: sharedMicrophonePolicy
+                )
+                applySharedMicrophonePolicy()
+            } label: {
+                Label(
+                    sharedMicrophonePolicy.userMuted ? "Unmute" : "Mute",
+                    systemImage: sharedMicrophonePolicy.userMuted ? "mic.slash.fill" : "mic.fill"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+
+            if sharedTTSIsPlaying {
+                Text("Hold to speak")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { _ in setSharedHoldToTalk(true) }
+                            .onEnded { _ in setSharedHoldToTalk(false) }
+                    )
+            }
+        }
+        .padding(8)
+        .background(.regularMaterial, in: Capsule())
+    }
+
+    private func setSharedHoldToTalk(_ holding: Bool) {
+        guard sharedTTSIsPlaying else { return }
+        sharedMicrophonePolicy = SharedReadingMicrophonePolicy.setHoldToTalk(holding, in: sharedMicrophonePolicy)
+        if let sharedReadingCoordinator {
+            Task {
+                if holding {
+                    try? await sharedReadingCoordinator.requestSpeaker()
+                } else {
+                    try? await sharedReadingCoordinator.releaseSpeaker()
+                }
+            }
+        }
+        applySharedMicrophonePolicy()
+    }
+
+    private func applySharedMicrophonePolicy() {
+        guard let sharedReadingPeerMesh else { return }
+        let enabled = sharedMicrophonePolicy.microphoneEnabled(isTTSPlaying: sharedTTSIsPlaying)
+        Task { await sharedReadingPeerMesh.setMicrophoneEnabled(enabled) }
     }
 
     @MainActor

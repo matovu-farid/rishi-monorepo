@@ -48,6 +48,8 @@ struct SignedInContentDependencies {
                 readerDefaults: services.settings.readerDefaults,
                 syncEngine: services.sync.engine,
                 sharePackageService: services.library.sharePackageService,
+                sharedReadingAPI: services.sharedReadingAPI,
+                sessionBookService: services.library.sessionBookService,
                 entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
                 entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
                 voicePresenter: services.voice.presenter,
