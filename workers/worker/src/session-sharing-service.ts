@@ -49,6 +49,8 @@ export interface SessionSharingServiceBinding {
 export interface SessionSharingServiceOptions {
   internalTokenSecret: string;
   baseUrl?: string;
+  /** Versioned internal route prefix. Legacy callers keep `/internal`. */
+  internalPathPrefix?: string;
   tokenTtlMs?: number;
   now?: () => number;
 }
@@ -309,12 +311,13 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
-function roomUrl(baseUrl: string, sessionId: string): URL {
-  return new URL(`/internal/rooms/${encodeURIComponent(sessionId)}`, baseUrl);
+function roomUrl(baseUrl: string, internalPathPrefix: string, sessionId: string): URL {
+  return new URL(`${internalPathPrefix}/rooms/${encodeURIComponent(sessionId)}`, baseUrl);
 }
 
 export class SessionSharingService {
   private readonly baseUrl: string;
+  private readonly internalPathPrefix: string;
   private readonly tokenTtlMs: number;
   private readonly now: () => number;
 
@@ -323,6 +326,7 @@ export class SessionSharingService {
     private readonly options: SessionSharingServiceOptions,
   ) {
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+    this.internalPathPrefix = `/${(options.internalPathPrefix ?? "/internal").replace(/^\/+|\/+$/g, "")}`;
     this.tokenTtlMs = options.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
     this.now = options.now ?? Date.now;
   }
@@ -407,7 +411,7 @@ export class SessionSharingService {
     action: string,
     payload: Record<string, unknown>,
   ): Promise<TResponse> {
-    const path = `/internal/rooms/${encodeURIComponent(sessionId)}`;
+    const path = `${this.internalPathPrefix}/rooms/${encodeURIComponent(sessionId)}`;
     const body = { action, payload };
     const token = await signInternalToken(this.options.internalTokenSecret, {
       method: "POST",
@@ -418,7 +422,7 @@ export class SessionSharingService {
 
     let response: Response;
     try {
-      response = await this.binding.fetch(roomUrl(this.baseUrl, sessionId), {
+      response = await this.binding.fetch(roomUrl(this.baseUrl, this.internalPathPrefix, sessionId), {
         method: "POST",
         headers: {
           "content-type": "application/json",

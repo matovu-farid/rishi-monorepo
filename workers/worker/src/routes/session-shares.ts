@@ -18,7 +18,10 @@ const routes = new Hono<SessionContext>();
 routes.use("*", requireAuth as never);
 
 function service(c: any) {
-  return new SessionSharingService(c.env.SHARING_WORKER, { internalTokenSecret: c.env.SHARING_INTERNAL_SECRET });
+  return new SessionSharingService(c.env.SHARING_WORKER, {
+    internalTokenSecret: c.env.SHARING_INTERNAL_SECRET,
+    internalPathPrefix: "/v2/internal",
+  });
 }
 
 function sessionToken(c: any, ownerUserId: string, idempotencyKey: string): Promise<string> {
@@ -141,7 +144,7 @@ routes.get("/:id/turn", async (c) => {
   const sessionId = c.req.param("id");
   const authorization = c.req.header("authorization");
   if (!authorization) return c.json({ code: "AUTH_REQUIRED", error: "Sign in to use session audio" }, 401);
-  const target = new URL(`https://sharing-worker.internal/v1/sessions/${encodeURIComponent(sessionId)}/turn`);
+  const target = new URL(`https://sharing-worker.internal/v2/sessions/${encodeURIComponent(sessionId)}/turn`);
   try {
     const response = await c.env.SHARING_WORKER.fetch(new Request(target, { method: "GET", headers: { authorization } }));
     return new Response(response.body, { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } });
@@ -165,7 +168,7 @@ routes.post("/:id/book-ready", async (c) => {
     const ticket = await service(c).issueAdmissionTicket({ sessionId, inviteId: invite.id, userId, contentHash: body.contentHash, profile: await participantProfile(c, userId) });
     await db.update(sessionInviteRedemptions).set({ bookStatus: "ready", membershipStatus: "admitted", lastAdmissionTicketId: ticket.claims.ticketId, updatedAt: new Date() }).where(eq(sessionInviteRedemptions.id, redemption.id)).run();
     const wsBase = c.env.SHARING_WORKER_WS_URL ?? "wss://sharing.fidexa.org";
-    return c.json({ admissionTicket: ticket.admissionTicket, wsUrl: `${wsBase}/v1/sessions/${sessionId}/wss`, status: ticket.status, roomEpoch: ticket.roomEpoch, connectionGeneration: ticket.claims.connectionGeneration });
+    return c.json({ admissionTicket: ticket.admissionTicket, wsUrl: `${wsBase}/v2/sessions/${sessionId}/wss`, status: ticket.status, roomEpoch: ticket.roomEpoch, connectionGeneration: ticket.claims.connectionGeneration });
   } catch (error) { return errorResponse(c, error); }
 });
 
@@ -188,7 +191,7 @@ routes.post("/:id/rejoin", async (c) => {
     const ticket = await service(c).issueAdmissionTicket({ sessionId, inviteId: invite.id, userId, contentHash: body.contentHash, profile: await participantProfile(c, userId) });
     await db.update(sessionInviteRedemptions).set({ bookStatus: "ready", membershipStatus: "admitted", lastAdmissionTicketId: ticket.claims.ticketId, updatedAt: new Date() }).where(eq(sessionInviteRedemptions.id, redemption.id)).run();
     const wsBase = c.env.SHARING_WORKER_WS_URL ?? "wss://sharing.fidexa.org";
-    return c.json({ admissionTicket: ticket.admissionTicket, wsUrl: `${wsBase}/v1/sessions/${sessionId}/wss`, status: ticket.status, roomEpoch: ticket.roomEpoch, connectionGeneration: ticket.claims.connectionGeneration });
+    return c.json({ admissionTicket: ticket.admissionTicket, wsUrl: `${wsBase}/v2/sessions/${sessionId}/wss`, status: ticket.status, roomEpoch: ticket.roomEpoch, connectionGeneration: ticket.claims.connectionGeneration });
   } catch (error) { return errorResponse(c, error); }
 });
 

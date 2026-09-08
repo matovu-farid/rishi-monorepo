@@ -5,7 +5,6 @@ import { verifyAuth, resolveTestGlobalAuth } from "./auth";
 import { GlobalLimiter } from "./perIpLimit";
 import { UserSearchBody, searchUsers } from "./userSearch";
 import { verify } from "./hmac";
-import { workerMetadataHeaders } from "./health";
 
 const createSessionLimiter = new GlobalLimiter({ capacity: 10, windowMs: 60 * 60_000 });
 const redeemLimiter = new GlobalLimiter({ capacity: 5, windowMs: 60_000 });
@@ -13,6 +12,7 @@ const userSearchLimiter = new GlobalLimiter({ capacity: 30, windowMs: 60_000 });
 
 type Env = {
   SESSION_ROOM: DurableObjectNamespace;
+  APPLE_SESSION_ROOM: DurableObjectNamespace;
   WORKER_HMAC_SECRET: string;
   AUTH_BASE_URL: string;
   /** "1" enables the `userId--DisplayName` bearer shortcut in verifyAuth. E2E only. */
@@ -21,13 +21,7 @@ type Env = {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.get("/health", (c) => {
-  const response = c.text("ok");
-  for (const [name, value] of Object.entries(workerMetadataHeaders(c.env, "rishi-sharing-worker"))) {
-    response.headers.set(name, value);
-  }
-  return response;
-});
+app.get("/health", (c) => c.text("ok"));
 
 const INTERNAL_ACTIONS = {
   createRoom: "createRoom",
@@ -47,7 +41,7 @@ type InternalClaims = { method: string; path: string; body: unknown; exp: number
 /** Primary Worker → sharing Worker command surface. The signed claims bind the
  * action to the exact path and JSON body so a bearer cannot be replayed for a
  * different room or mutation. */
-app.post("/internal/rooms/:id", async (c) => {
+app.post("/v2/internal/rooms/:id", async (c) => {
   const token = c.req.header("x-rishi-internal-token");
   if (!token) return c.json({ code: "SERVICE_UNAVAILABLE", error: "missing internal authorization" }, 401);
   const body = await c.req.json().catch(() => null) as { action?: string; payload?: unknown } | null;
@@ -59,7 +53,7 @@ app.post("/internal/rooms/:id", async (c) => {
     return c.json({ code: "SERVICE_UNAVAILABLE", error: "invalid internal authorization" }, 401);
   }
   const id = c.req.param("id");
-  const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(id));
+  const stub = c.env.APPLE_SESSION_ROOM.get(c.env.APPLE_SESSION_ROOM.idFromName(id));
   try {
     const method = INTERNAL_ACTIONS[body.action as keyof typeof INTERNAL_ACTIONS];
     // @ts-expect-error Durable Object RPC method is selected from a fixed allowlist.
@@ -73,12 +67,12 @@ app.post("/internal/rooms/:id", async (c) => {
   }
 });
 
-app.get("/v1/sessions/:id/turn", async (c) => {
+app.get("/v2/sessions/:id/turn", async (c) => {
   let user;
   try { user = await getUser(c.req.raw, c.env); }
   catch (e) { return c.json({ code: "AUTH_REQUIRED", error: (e as Error).message }, 401); }
   const sessionId = c.req.param("id");
-  const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(sessionId));
+  const stub = c.env.APPLE_SESSION_ROOM.get(c.env.APPLE_SESSION_ROOM.idFromName(sessionId));
   try {
     // @ts-expect-error RPC on the Durable Object stub.
     return c.json(await stub.getTurnCredentials({ userId: user.userId, ttlSeconds: Number(c.req.query("ttl") ?? 3600) }));
@@ -199,5 +193,18 @@ app.get("/v1/sessions/:id/wss", async (c) => {
   return stub.fetch(c.req.raw);
 });
 
+app.get("/v2/sessions/:id/wss", async (c) => {
+  if (c.req.header("upgrade") !== "websocket") {
+    return c.text("Expected websocket", 426);
+  }
+  const creds = (await import("./wsCreds")).parseSubprotocols(c.req.header("sec-websocket-protocol") ?? null);
+  if (!creds.valid) return c.text(creds.reason, 400);
+
+  const sessionId = c.req.param("id");
+  const stub = c.env.APPLE_SESSION_ROOM.get(c.env.APPLE_SESSION_ROOM.idFromName(sessionId));
+  return stub.fetch(c.req.raw);
+});
+
 export default app;
 export { SessionRoom } from "./SessionRoom";
+export { AppleSessionRoom } from "./AppleSessionRoom";

@@ -85,6 +85,32 @@ describe("session-sharing-service", () => {
     expect(header?.["x-rishi-internal-token"]).toBeTypeOf("string");
   });
 
+  it("supports a separately versioned internal route without changing the legacy default", async () => {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://sharing-worker.internal/v2/internal/rooms/session-123");
+      return new Response(JSON.stringify({ sessionId: "session-123", roomEpoch: 1, controllerGeneration: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const service = new SessionSharingService(
+      { fetch: fetchSpy },
+      {
+        internalTokenSecret: "shared-secret",
+        internalPathPrefix: "/v2/internal",
+        now: () => 1_000,
+      },
+    );
+
+    await expect(service.createRoom({
+      sessionId: "session-123",
+      initialSharerUserId: "user-1",
+      bookContext: { contentHash: "hash-1", format: "epub" },
+    })).resolves.toEqual({ sessionId: "session-123", roomEpoch: 1, controllerGeneration: 1 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("exposes a stable error class for local transport failures", async () => {
     const service = new SessionSharingService(
       {
