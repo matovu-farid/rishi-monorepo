@@ -24,7 +24,7 @@ public final class BookUploader: Sendable {
         case bytesUnreadable(URL)
         case presignedRequestFailed(String)
         case uploadFailed(status: Int)
-        case serverRejected
+        case serverRejected(reason: String)
     }
 
     private let workerClient: WorkerClient
@@ -129,11 +129,15 @@ public final class BookUploader: Sendable {
                 )]))
             )
             guard response.accepted != false else {
+                let outcome = response.outcomes.first
+                let reason = outcome.map {
+                    "status=\($0.status), operation_id=\($0.operationId)"
+                } ?? "server_lww_or_closed_book_identity"
                 Log.event("sync.book.metadata.push.rejected", level: .error, data: [
                     "book_id": book.id.uuidString,
-                    "reason": "stale",
+                    "reason": reason,
                 ])
-                throw UploadError.serverRejected
+                throw UploadError.serverRejected(reason: reason)
             }
         } catch {
             if case UploadError.serverRejected = error { throw error }
@@ -174,7 +178,13 @@ public final class BookUploader: Sendable {
                 deleted: true
             )]))
         )
-        guard response.accepted != false else { throw UploadError.serverRejected }
+        guard response.accepted != false else {
+            let outcome = response.outcomes.first
+            let reason = outcome.map {
+                "status=\($0.status), operation_id=\($0.operationId)"
+            } ?? "server_lww_or_closed_book_identity"
+            throw UploadError.serverRejected(reason: reason)
+        }
         guard try await metadataStore.acknowledgeTombstoneIfCurrent(
             entityId: id,
             kind: .book,

@@ -283,7 +283,7 @@ struct WorkerClientTests {
     }
 
     @Test func endpointPathQueryBecomesRealQueryNotPercentEncoded() async throws {
-        let (client, _) = makeClient()
+        let (client, _) = makeClient(consented: true)
         MockURLProtocol.setHandler { _ in (self.ok(), Data(#"{"changes":[]}"#.utf8)) }
         let since = Date(timeIntervalSince1970: 1_700_000_000)
         _ = try await client.send(SyncChangesEndpoint(since: since))

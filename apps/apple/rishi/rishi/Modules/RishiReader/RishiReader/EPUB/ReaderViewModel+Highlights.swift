@@ -40,26 +40,26 @@ extension ReaderViewModel {
     // MARK: - Cache plumbing
 
     fileprivate final class HighlightCacheBox: @unchecked Sendable {
-        private var storage: [ObjectIdentifier: [Highlight]] = [:]
+        private var storage: [UUID: [Highlight]] = [:]
         private let lock = NSLock()
 
         func read(_ owner: ReaderViewModel) -> [Highlight] {
             lock.lock(); defer { lock.unlock() }
-            return storage[ObjectIdentifier(owner)] ?? []
+            return storage[owner.highlightCacheToken] ?? []
         }
         func write(_ owner: ReaderViewModel, _ value: [Highlight]) {
             lock.lock(); defer { lock.unlock() }
-            storage[ObjectIdentifier(owner)] = value
+            storage[owner.highlightCacheToken] = value
         }
         func mutate(_ owner: ReaderViewModel, _ body: (inout [Highlight]) -> Void) {
             lock.lock(); defer { lock.unlock() }
-            var value = storage[ObjectIdentifier(owner)] ?? []
+            var value = storage[owner.highlightCacheToken] ?? []
             body(&value)
-            storage[ObjectIdentifier(owner)] = value
+            storage[owner.highlightCacheToken] = value
         }
         func clear(_ owner: ReaderViewModel) {
             lock.lock(); defer { lock.unlock() }
-            storage.removeValue(forKey: ObjectIdentifier(owner))
+            storage.removeValue(forKey: owner.highlightCacheToken)
         }
     }
     fileprivate static let cache = HighlightCacheBox()

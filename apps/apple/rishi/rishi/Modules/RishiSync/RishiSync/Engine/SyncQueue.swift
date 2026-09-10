@@ -50,6 +50,13 @@ public actor SyncQueue {
 
     public func pendingCount() -> Int { items.count }
 
+    /// Removes queued work completed by a targeted operation. Durable sync
+    /// metadata remains authoritative; this only avoids repeating a
+    /// successful targeted upload in the next full wave.
+    public func remove(entityId: UUID, kind: SyncEntityKind) {
+        items.removeAll { $0.entityId == entityId && $0.kind == kind }
+    }
+
     public func isLoaded() -> Bool { loaded }
 
     public func clear() {

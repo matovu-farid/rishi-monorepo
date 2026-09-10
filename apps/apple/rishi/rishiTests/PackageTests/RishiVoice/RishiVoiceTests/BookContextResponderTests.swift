@@ -164,7 +164,7 @@ struct BookContextResponderTests {
         let responder = BookContextResponder(client: fake, bookId: bookID, chapterIndexCoordinator: coordinator, chapterIndexContentVersion: "v1")
         let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
         fake.inject(toolCall: RealtimeToolCallEvent(callId: "chapter-failed", name: "chapterIndex", argumentsJSON: "{}"))
-        try await Task.sleep(nanoseconds: 500_000_000)
+        await fake.waitForToolResult(callId: "chapter-failed")
         consumeTask.cancel()
 
         let sent = fake.sentToolResultsSnapshot()

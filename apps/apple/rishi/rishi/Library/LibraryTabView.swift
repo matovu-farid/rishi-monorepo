@@ -65,6 +65,7 @@ struct LibraryTabView: View {
     @State private var pendingSubscriptionConfirmation = false
     @State private var showSubscriptionConfirmation = false
     @State private var showActiveReadingSessions = false
+    @State private var showConversations = false
 
     private var firstBookPromptSeenKey: String {
         "rishi.library.firstBookPrompt.seen.\(user.id.uuidString)"
@@ -172,7 +173,8 @@ struct LibraryTabView: View {
                         ]
                     )
                     return succeeded
-                }
+                },
+                onShowChats: { showConversations = true }
             )
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -204,6 +206,16 @@ struct LibraryTabView: View {
                     onSelect: { convo in model.present(conversation: convo) }
                 )
             }
+            .navigationDestination(isPresented: $showConversations) {
+                ConversationsListHost(
+                    vm: ConversationsListViewModel.make(
+                        conversationStore: dependencies.conversationStore,
+                        messageStore: dependencies.messageStore
+                    ),
+                    userId: user.id,
+                    onSelect: { convo in model.present(conversation: convo) }
+                )
+            }
             .task {
          
                 for await result in Transaction.currentEntitlements {
@@ -222,6 +234,14 @@ struct LibraryTabView: View {
             
             .task(id: "\(user.id.uuidString)-\(dataUseConsentGranted)") {
                 hasSeenFirstBookPrompt = UserDefaults.standard.bool(forKey: firstBookPromptSeenKey)
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                    _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                    _ = await dependencies.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                    await vm.refresh()
+                    markFirstBookPromptSeen()
+                }
+                #endif
                 await model.performInitialLibrarySyncIfConsented(
                     consentGranted: dataUseConsentGranted,
                     refresh: { await vm.refresh() },

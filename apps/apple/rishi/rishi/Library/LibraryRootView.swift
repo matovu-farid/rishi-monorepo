@@ -28,6 +28,7 @@ public struct LibraryRootView: View {
     public let onOpenBook: (Book) -> Void
 
     public let onShowSettings: (() -> Void)
+    public let onShowChats: (() -> Void)?
     
     private var importTip = ImportBooksTip()
 
@@ -50,6 +51,7 @@ public struct LibraryRootView: View {
     @State private var shareBookIDs: [BookID] = []
     @State private var showSharedReadingComposer = false
     @State private var sharedReadingBook: Book?
+    @State private var pendingSharedReadingToken: String?
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -73,12 +75,14 @@ public struct LibraryRootView: View {
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
-        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil
+        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
+        onShowChats: (() -> Void)? = nil
     ) {
  
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onShowChats = onShowChats
         self.onImported = onImported
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
@@ -98,12 +102,14 @@ public struct LibraryRootView: View {
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
-        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil
+        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
+        onShowChats: (() -> Void)? = nil
     ) {
        
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onShowChats = onShowChats
         self.onImported = onImported
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
@@ -217,6 +223,9 @@ public struct LibraryRootView: View {
             },
             onShareSingle: { book in
                 beginShare(ids: [book.id], kind: .single)
+            },
+            onStartSharedReading: { book in
+                beginSharedReading(ids: [book.id], books: [book])
             }
         )
 
@@ -228,19 +237,36 @@ public struct LibraryRootView: View {
             sharingToolbar(vm: vm)
 
 
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        documentPickerPresented.wrappedValue = true
-                    } label: {
-                        Label("Import", systemImage: "plus")
+            ToolbarItem(placement: .primaryAction) {
+                    if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                        Button {
+                            documentPickerPresented.wrappedValue = true
+                        } label: {
+                            Label("Import", systemImage: "plus")
+                        }
+                    } else {
+                        Button {
+                            documentPickerPresented.wrappedValue = true
+                        } label: {
+                            Label("Import", systemImage: "plus")
+                        }
+                        .popoverTip(importTip)
                     }
-                    .popoverTip(importTip)
 
 
 
-                }
+            }
 
             #if os(iOS) && !targetEnvironment(macCatalyst)
+
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onShowChats?()
+                    } label: {
+                        Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityIdentifier("library.toolbar.chats")
+                }
 
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -255,7 +281,14 @@ public struct LibraryRootView: View {
         .sheet(isPresented: $showShareComposer) {
             shareComposerContent()
         }
-        .sheet(isPresented: $showSharedReadingComposer) {
+        .sheet(isPresented: $showSharedReadingComposer, onDismiss: {
+            guard let token = pendingSharedReadingToken else { return }
+            pendingSharedReadingToken = nil
+            // The share composer is itself a sheet. Queue the creator's join
+            // only after it has gone away so SwiftUI never presents two
+            // sheets at the same time.
+            AppRouter.enqueueSessionToken(token)
+        }) {
             if let sharedReadingAPI, let sharedReadingBook {
                 SharedReadingShareComposerView(
                     api: sharedReadingAPI,
@@ -263,6 +296,9 @@ public struct LibraryRootView: View {
                     bookTitle: sharedReadingBook.title,
                     repairBook: sharedReadingRepair.map { repair in
                         { await repair(sharedReadingBook.id) }
+                    },
+                    onCreated: { token in
+                        pendingSharedReadingToken = token
                     }
                 )
             }

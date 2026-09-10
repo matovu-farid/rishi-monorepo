@@ -14,6 +14,7 @@ public actor TTSPassageTracker {
     private var observationTask: Task<Void, Never>?
     private var lastEmitted: String?
     private var continuation: AsyncStream<String>.Continuation?
+    private var continuationID: UUID?
 
     public init() {}
 
@@ -46,23 +47,29 @@ public actor TTSPassageTracker {
         observationTask = nil
         continuation?.finish()
         continuation = nil
+        continuationID = nil
+        lastEmitted = nil
     }
 
     /// AsyncStream of distinct, non-nil passage ids. Plan 08-06's reader
     /// VM extension `for await`s this to apply the in-text highlight.
     public func passageStream() -> AsyncStream<String> {
-        AsyncStream { continuation in
+        let streamID = UUID()
+        return AsyncStream { continuation in
             self.continuation = continuation
+            self.continuationID = streamID
             continuation.onTermination = { [weak self] _ in
                 // KEEP: AsyncStream termination callback; Task hops back into
                 // the actor to clear the stored continuation. No main work.
-                Task { await self?.clearContinuation() }
+                Task { await self?.clearContinuation(id: streamID) }
             }
         }
     }
 
-    private func clearContinuation() {
+    private func clearContinuation(id: UUID) {
+        guard continuationID == id else { return }
         continuation = nil
+        continuationID = nil
     }
 
     private func handle(_ passageId: String?) {

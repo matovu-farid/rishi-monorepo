@@ -382,6 +382,18 @@ final class VoiceSessionPresenter {
         let startCancellationToken = UUID()
         self.startCancellationToken = startCancellationToken
 
+        // Keep the caller's complete reader context as retry state even when
+        // startup is rejected before a realtime session is created. The
+        // transport receives a metadata-only projection below, but retry and
+        // the presentation layer must retain the original quote and page
+        // context.
+        currentBookId = bookId
+        pendingInitialQuote = initialQuote
+        currentBookContext = bookContext
+        currentLanguage = language
+        self.currentPageProvider = currentPageProvider
+        self.currentReaderSessionIdentity = readerSessionIdentity
+
         // A library transition starts cleanup in the background. Join it only
         // when voice is requested, preserving fast book navigation while
         // keeping the Worker admission check behind the cleanup barrier.
@@ -494,13 +506,7 @@ final class VoiceSessionPresenter {
 
         failure = nil
         pendingFailure = nil
-        currentBookId = bookId
-        pendingInitialQuote = initialQuote
         let metadataContext = Self.metadataOnly(bookContext)
-        currentBookContext = metadataContext
-        currentLanguage = language
-        self.currentPageProvider = currentPageProvider
-        self.currentReaderSessionIdentity = readerSessionIdentity
         let sessionToken = UUID()
         activeSessionToken = sessionToken
 
@@ -721,7 +727,11 @@ final class VoiceSessionPresenter {
             // Session setup and conversation lookup run concurrently. This
             // keeps the WebRTC handshake on the critical path, not the local
             // conversation-store scan/upsert.
-            conversation = try await conversationTask.value
+            conversation = try await withTaskCancellationHandler {
+                try await conversationTask.value
+            } onCancel: {
+                conversationTask.cancel()
+            }
             startupTrace.mark("conversation_ready")
             guard !Task.isCancelled else {
                 await closeAbandonedSession(session)
@@ -888,10 +898,10 @@ final class VoiceSessionPresenter {
         isPresenting = true
         failure = nil
         pendingFailure = nil
+        let metadataContext = Self.metadataOnly(bookContext)
         currentBookId = bookId
         pendingInitialQuote = initialQuote
-        let metadataContext = Self.metadataOnly(bookContext)
-        currentBookContext = metadataContext
+        currentBookContext = bookContext
         currentLanguage = language
         self.currentPageProvider = currentPageProvider
         self.currentReaderSessionIdentity = readerSessionIdentity
@@ -1149,7 +1159,7 @@ final class VoiceSessionPresenter {
         let language = currentLanguage
         let pageProvider = currentPageProvider
         let readerIdentity = currentReaderSessionIdentity
-        clearFailure()
+        clearFailure(preservingContext: true)
         await endStaleServerSessionIfNeeded()
         await start(
             bookId: bookId,
@@ -1171,7 +1181,7 @@ final class VoiceSessionPresenter {
     }
     
 
-    func clearFailure() {
+    func clearFailure(preservingContext: Bool = false) {
         let sessionToCapture = session
         restoreStaleSessionIdFromPersistenceOrSession()
         if let sessionToCapture {
@@ -1189,10 +1199,12 @@ final class VoiceSessionPresenter {
         session = nil
         isPresenting = false
         isRequestingEnd = false
-        currentBookId = nil
-        pendingInitialQuote = nil
-        currentBookContext = nil
-        currentLanguage = "en"
+        if !preservingContext {
+            currentBookId = nil
+            pendingInitialQuote = nil
+            currentBookContext = nil
+            currentLanguage = "en"
+        }
         state.reset()
     }
 

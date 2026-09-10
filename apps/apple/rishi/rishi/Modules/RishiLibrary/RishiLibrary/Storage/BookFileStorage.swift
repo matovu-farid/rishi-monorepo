@@ -53,8 +53,11 @@ public struct BookFileStorage:Sendable {
         }
     }
 
-    public func importBook(from sourceURL: URL, ownerId: UserID) async throws
-        -> Book
+    public func importBook(
+        from sourceURL: URL,
+        ownerId: UserID,
+        expectedContentHash: String? = nil
+    ) async throws -> Book
     {
         let importer = BookImporter(
             rootURL: rootURL,
@@ -65,7 +68,11 @@ public struct BookFileStorage:Sendable {
             bookIndexingHook: bookIndexingHook,
             isTombstoned: isTombstoned
         )
-        return try await importer.importBook(from: sourceURL, ownerId: ownerId)
+        return try await importer.importBook(
+            from: sourceURL,
+            ownerId: ownerId,
+            expectedContentHash: expectedContentHash
+        )
     }
    
 

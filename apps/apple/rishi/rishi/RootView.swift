@@ -8,6 +8,14 @@ import SwiftUI
 
 struct RootView: View {
 
+    private struct PendingSessionPresentation: Identifiable {
+        let join: SharedReadingJoin
+        let coordinator: SharedReadingSessionCoordinator
+        let transport: SharedReadingSignalingClient
+
+        var id: String { join.id }
+    }
+
     @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var deps
 
@@ -16,9 +24,7 @@ struct RootView: View {
     @State private var showOnboarding = false
     @State private var pendingShareMessage: String?
     @State private var pendingSessionToken: String?
-    @State private var pendingSessionJoin: SharedReadingJoin?
-    @State private var pendingSessionCoordinator: SharedReadingSessionCoordinator?
-    @State private var pendingSessionTransport: SharedReadingSignalingClient?
+    @State private var pendingSessionPresentation: PendingSessionPresentation?
     @State private var showNoCardTrialIntro = false
     @State private var noCardTrialIntroCheckInFlight = false
     #if targetEnvironment(macCatalyst)
@@ -226,18 +232,14 @@ struct RootView: View {
             pendingSessionToken = token
             Task { await redeemPendingSessionIfEligible(deps: deps) }
         }
-        .sheet(item: $pendingSessionJoin) { join in
-            if let coordinator = pendingSessionCoordinator, let transport = pendingSessionTransport {
-                SharedReadingSessionView(
-                    api: deps.services!.sharedReadingAPI,
-                    coordinator: coordinator,
-                    transport: transport,
-                    join: join,
-                    localParticipantUserId: signedInUserID?.uuidString ?? ""
-                )
-            } else {
-                ProgressView("Preparing reading session…")
-            }
+        .sheet(item: $pendingSessionPresentation) { presentation in
+            SharedReadingSessionView(
+                api: deps.services!.sharedReadingAPI,
+                coordinator: presentation.coordinator,
+                transport: presentation.transport,
+                join: presentation.join,
+                localParticipantUserId: signedInUserID?.uuidString ?? ""
+            )
         }
         .alert(
             "Shared books",
@@ -324,8 +326,11 @@ struct RootView: View {
     private func redeemPendingSessionIfEligible(deps: AppDependencies) async {
         guard currentUserBox.isSigned, !showOnboarding, let token = pendingSessionToken else { return }
         guard let sessionAPI = deps.services?.sharedReadingAPI else { return }
+        var stage = "redeem"
         do {
+            Log.event("sharing.session.redeem.started")
             let response = try await sessionAPI.redeem(token: token)
+            Log.event("sharing.session.redeem.completed", data: ["session_id": response.sessionId])
             guard let userID = signedInUserID else { return }
             let transport = SharedReadingSignalingClient()
             let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
@@ -334,34 +339,57 @@ struct RootView: View {
             let coordinator = SharedReadingSessionCoordinator(
                 transport: transport,
                 localParticipantUserId: userID.uuidString,
-                refreshAdmission: refreshAdmission
+                refreshAdmission: refreshAdmission,
+                refreshBearerToken: { try await sessionAPI.refreshBearerToken() }
             )
-            let importedHash = try await deps.services!.library.sessionBookService.prepare(book: response.book, ownerId: userID)
+            stage = "prepare"
+            Log.event("sharing.session.prepare.started", data: ["session_id": response.sessionId])
+            let preparedBook = try await deps.services!.library.sessionBookService.prepare(book: response.book, ownerId: userID)
+            let importedHash = preparedBook.contentHash
+            Log.event("sharing.session.prepare.completed", data: ["session_id": response.sessionId])
             guard importedHash.caseInsensitiveCompare(response.book.contentHash) == .orderedSame else {
                 throw SharedReadingError.from(code: .bookHashMismatch)
             }
+            stage = "admission"
+            Log.event("sharing.session.admission.started", data: ["session_id": response.sessionId])
             let admission = try await sessionAPI.markBookReady(
                 sessionId: response.sessionId,
                 token: token,
                 contentHash: importedHash
             )
+            Log.event("sharing.session.admission.completed", data: ["session_id": response.sessionId])
             await MainActor.run {
                 pendingSessionToken = nil
                 Task { await PendingSessionInviteStore.anonymous.clear() }
-                pendingSessionCoordinator = coordinator
-                pendingSessionTransport = transport
-                pendingSessionJoin = SharedReadingJoin(response: response, admission: admission)
+                pendingSessionPresentation = PendingSessionPresentation(
+                    join: SharedReadingJoin(
+                        response: response,
+                        admission: admission,
+                        localBookId: preparedBook.book.id
+                    ),
+                    coordinator: coordinator,
+                    transport: transport
+                )
             }
         } catch let error as SharedReadingError {
+            Log.error("sharing.session.\(stage).failed", error: error)
             await MainActor.run {
                 if !error.retryable {
                     pendingSessionToken = nil
                     Task { await PendingSessionInviteStore.anonymous.clear() }
                 }
+                #if DEBUG
+                pendingShareMessage = "Reading session failed during \(stage): \(error.code.rawValue) — \(error.message)"
+                #else
                 pendingShareMessage = error.message
+                #endif
             }
         } catch {
+            Log.error("sharing.session.\(stage).failed", error: error)
             await MainActor.run { pendingShareMessage = "Rishi could not open this reading session. Please try again." }
+            #if DEBUG
+            await MainActor.run { pendingShareMessage = "Reading session failed during \(stage): \(String(describing: error))" }
+            #endif
         }
     }
 

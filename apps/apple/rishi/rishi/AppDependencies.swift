@@ -201,6 +201,13 @@ final class AppDependencies {
             )
             let built = await Self.makeServices(userIdBox: self.userIdBox)
             self.services = built
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
+               let userID = self.userIdBox.value {
+                await built.onboarding.state.setHasCompletedOnboarding(true)
+                await built.dataUseConsentStore.grant(for: userID.uuidString)
+            }
+            #endif
             await built.voice.sessionRegistry.recoverPersistedSession()
             Self.signposter.endInterval("cold-launch.bootstrap", state)
         }

@@ -13,6 +13,32 @@ struct DeterministicBookIDTests {
         #expect(a == b)
     }
 
+    @Test func ownerScopedIdsConvergeWithinAnAccountButNotAcrossAccounts() {
+        let firstOwner = UUID()
+        let secondOwner = UUID()
+        let firstDevice = DeterministicBookID.make(
+            title: "Alice in Wonderland",
+            author: "Lewis Carroll",
+            format: .epub,
+            ownerId: firstOwner
+        )
+        let sameAccount = DeterministicBookID.make(
+            title: "  ALICE   in   Wonderland ",
+            author: "  lewis   CARROLL ",
+            format: .epub,
+            ownerId: firstOwner
+        )
+        let differentAccount = DeterministicBookID.make(
+            title: "Alice in Wonderland",
+            author: "Lewis Carroll",
+            format: .epub,
+            ownerId: secondOwner
+        )
+
+        #expect(firstDevice == sameAccount)
+        #expect(firstDevice != differentAccount)
+    }
+
     @Test func caseAndWhitespaceDifferencesCollapseToSameId() {
         let canonical = DeterministicBookID.make(title: "Alice in Wonderland", author: "Lewis Carroll", format: .epub)
         let noisyTitle = DeterministicBookID.make(title: "  ALICE   in   Wonderland ", author: "Lewis Carroll", format: .epub)

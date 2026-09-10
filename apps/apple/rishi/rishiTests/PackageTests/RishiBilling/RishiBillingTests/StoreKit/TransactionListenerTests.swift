@@ -68,7 +68,7 @@ struct TransactionListenerTests {
         func accepts(_ forwarder: any PurchaseUpdateForwarder) {}
         let fetcher = NoopProductFetcher()
         let verifier = StubReceiptVerifier()
-        let reconciler = await MainActor.run { EntitlementReconciler(initial: .free) }
+        let reconciler = await MainActor.run { EntitlementReconciler(initial: .unsubscribed) }
         let service = PurchaseService(productFetcher: fetcher, verifier: verifier, reconciler: reconciler)
         accepts(service)
     }

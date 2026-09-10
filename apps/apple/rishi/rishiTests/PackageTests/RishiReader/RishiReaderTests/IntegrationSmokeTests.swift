@@ -12,7 +12,9 @@ struct IntegrationSmokeTests {
 
     @Test("Bundled sample.pdf exists in package resources")
     func bundledSampleExists() throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try #require(PackageTestResourceBundle.url(
+            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
+        ))
         let data = try Data(contentsOf: url)
         #expect(data.count > 0)
         #expect(data.count < 200_000)
@@ -20,14 +22,18 @@ struct IntegrationSmokeTests {
 
     @Test("Bundled sample.pdf has 3 pages")
     func bundledSampleHasThreePages() throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try #require(PackageTestResourceBundle.url(
+            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
+        ))
         let doc = try #require(PDFDocument(url: url))
         #expect(doc.pageCount == 3)
     }
 
     @Test("Bundled sample.pdf has TOC with 3 entries")
     func bundledSampleHasTOC() throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try #require(PackageTestResourceBundle.url(
+            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
+        ))
         let doc = try #require(PDFDocument(url: url))
         let nodes = PDFOutlineExtractor.extract(from: doc)
         #expect(nodes.count == 3)
@@ -35,7 +41,9 @@ struct IntegrationSmokeTests {
 
     @Test("VM round-trip: open sample, seek, flush, re-open, position restored")
     func roundTripPositionRestore() async throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try #require(PackageTestResourceBundle.url(
+            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
+        ))
         let store = InMemoryPositionStore()
         let userId = UUID()
         let book = Book(userId: userId, title: "Sample", formatType: .pdf, fileURL: "x")

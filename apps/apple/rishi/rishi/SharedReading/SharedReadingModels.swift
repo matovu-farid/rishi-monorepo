@@ -207,6 +207,18 @@ struct SharedReadingRedeemResponse: Codable, Sendable, Equatable {
 struct SharedReadingJoin: Sendable, Equatable, Identifiable {
     let response: SharedReadingRedeemResponse
     let admission: SharedReadingAdmission
+    let localBookId: BookID?
+
+    init(
+        response: SharedReadingRedeemResponse,
+        admission: SharedReadingAdmission,
+        localBookId: BookID? = nil
+    ) {
+        self.response = response
+        self.admission = admission
+        self.localBookId = localBookId
+    }
+
     var id: String { response.sessionId }
 }
 

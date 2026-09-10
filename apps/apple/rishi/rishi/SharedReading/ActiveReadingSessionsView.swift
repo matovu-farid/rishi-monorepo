@@ -116,7 +116,8 @@ struct ActiveReadingSessionsView: View {
         Task { @MainActor in
             defer { busySessionId = nil }
             do {
-                let importedHash = try await bookService.prepare(book: session.book, ownerId: userId)
+                let preparedBook = try await bookService.prepare(book: session.book, ownerId: userId)
+                let importedHash = preparedBook.contentHash
                 guard importedHash.caseInsensitiveCompare(session.book.contentHash) == .orderedSame else {
                     throw SharedReadingError.from(code: .bookHashMismatch)
                 }
@@ -128,7 +129,8 @@ struct ActiveReadingSessionsView: View {
                 let coordinator = SharedReadingSessionCoordinator(
                     transport: transport,
                     localParticipantUserId: userId.uuidString,
-                    refreshAdmission: refreshAdmission
+                    refreshAdmission: refreshAdmission,
+                    refreshBearerToken: { try await api.refreshBearerToken() }
                 )
                 let response = SharedReadingRedeemResponse(
                     inviteId: "active-session",
@@ -140,7 +142,11 @@ struct ActiveReadingSessionsView: View {
                 await MainActor.run {
                     activeTransport = transport
                     activeCoordinator = coordinator
-                    activeJoin = SharedReadingJoin(response: response, admission: admission)
+                    activeJoin = SharedReadingJoin(
+                        response: response,
+                        admission: admission,
+                        localBookId: preparedBook.book.id
+                    )
                 }
             } catch let sharedError as SharedReadingError {
                 error = sharedError

@@ -39,7 +39,7 @@ struct OSSignpostInstrumentationTests {
     private static func appsAppleRoot() -> URL {
         var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         while dir.path != "/" {
-            let candidate = dir.appendingPathComponent("Packages", isDirectory: true)
+            let candidate = dir.appendingPathComponent("rishi.xcodeproj", isDirectory: true)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return dir
             }
@@ -58,7 +58,7 @@ struct OSSignpostInstrumentationTests {
 
     @Test("AppDependencies.bootstrap carries OSSignposter and emits cold-launch.bootstrap interval")
     func test_appDependenciesBootstrapSignpost() throws {
-        let src = try Self.read("rishi/rishi/AppDependencies.swift")
+        let src = try Self.read("rishi/AppDependencies.swift")
         #expect(src.contains("OSSignposter("))
         #expect(src.contains("subsystem: \"org.fidexa.rishi\""))
         #expect(src.contains("cold-launch.bootstrap"))
@@ -155,7 +155,7 @@ struct OSSignpostInstrumentationTests {
     @Test("All five hot-path interval names are present across the instrumented files")
     func test_intervalNamesAreStable() throws {
         let expectedIntervalNames: [(file: String, interval: String)] = [
-            ("rishi/rishi/AppDependencies.swift",
+            ("rishi/AppDependencies.swift",
              "cold-launch.bootstrap"),
             ("rishi/Library/LibraryRootView.swift",
              "library.first-paint"),

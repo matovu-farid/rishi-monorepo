@@ -476,7 +476,7 @@ struct ChangeApplierConflictTests {
         #expect(stored.first?.color == .green)
     }
 
-    @Test("Highlight: deleted=true → highlightStore.delete + metadata.forget")
+    @Test("Highlight: deleted=true → highlightStore.delete + retained metadata tombstone")
     func highlightTombstoneDeletes() async throws {
         let highlightStore = StubHighlightStore()
         let local = Highlight(
@@ -501,10 +501,11 @@ struct ChangeApplierConflictTests {
         #expect(result.applied == 1)
         let stored = await highlightStore.snapshot()
         #expect(stored.isEmpty)
-        let forgotten = await metadata.forgotten()
-        #expect(forgotten.count == 1)
-        #expect(forgotten[0].0 == local.id)
-        #expect(forgotten[0].1 == .highlight)
+        let acknowledged = await metadata.acknowledgedTombstones()
+        #expect(acknowledged.count == 1)
+        #expect(acknowledged[0].0 == local.id)
+        #expect(acknowledged[0].1 == .highlight)
+        #expect((await metadata.forgotten()).isEmpty)
     }
 
     @Test("Book: deleted=true tombstone → bookStore.delete + retained metadata barrier")

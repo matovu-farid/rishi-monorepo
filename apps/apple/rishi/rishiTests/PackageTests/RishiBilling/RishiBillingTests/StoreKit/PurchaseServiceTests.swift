@@ -44,12 +44,14 @@ struct PurchaseServiceTests {
         self.session = s
     }
 
-    private enum StoreKitTestSetupError: Error { case missingConfig }
+    private enum StoreKitTestSetupError: Error { case missingConfig, timedOut }
 
     /// Probe — true when StoreKit Test daemon is reachable.
     private func probeStoreKitTestDaemon() async -> Bool {
-        let probe = (try? await Product.products(for: [monthlyId])) ?? []
-        return !probe.isEmpty
+        let probe: [Product]? = await firstResult(timeout: 2) {
+            try? await Product.products(for: [self.monthlyId])
+        }
+        return !(probe ?? []).isEmpty
     }
 
     /// Run `body` only when the StoreKit Test daemon is up; otherwise
@@ -71,17 +73,20 @@ struct PurchaseServiceTests {
         return try #require(products.first)
     }
 
-    /// Build a fresh `.free` reconciler on MainActor (mirrors
+    /// Build a fresh `.unsubscribed` reconciler on MainActor (mirrors
     /// RestoreServiceTests.makeReconciler).
     private func makeReconciler() async -> EntitlementReconciler {
-        await MainActor.run { EntitlementReconciler(initial: .free) }
+        await MainActor.run { EntitlementReconciler(initial: .unsubscribed) }
     }
 
     private func makeService(
         verifier: any ReceiptVerifier,
         product: Product,
         reconciler: EntitlementReconciler,
-        purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil
+        purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil,
+        unfinishedTransactionStream:
+            (@Sendable () -> AsyncStream<VerificationResult<Transaction>>)? = nil,
+        transactionFinisher: (@Sendable (Transaction) async -> Void)? = nil
     ) -> PurchaseService {
         let fetcher = SingleProductFetcher(product: product)
         return PurchaseService(
@@ -91,7 +96,34 @@ struct PurchaseServiceTests {
             // Stub sync so sync-before-finish does not leave txns unfinished
             // when the real WorkerClient is unreachable under `swift test`.
             entitlementSyncClient: StubEntitlementSyncClient(),
-            purchaseClosure: purchaseClosure
+            // Production adds the authenticated app-account token here. The
+            // StoreKit boundary tests intentionally inject the boundary call
+            // so they do not depend on a persisted app session.
+            purchaseClosure: purchaseClosure ?? { product in
+                try await product.purchase()
+            },
+            unfinishedTransactionStream: unfinishedTransactionStream,
+            transactionFinisher: transactionFinisher
+        )
+    }
+
+    private func makeSuccessfulService(
+        verifier: any ReceiptVerifier,
+        product: Product,
+        reconciler: EntitlementReconciler,
+        transactionFinisher: (@Sendable (Transaction) async -> Void)? = nil
+    ) async throws -> PurchaseService {
+        guard let transaction: Transaction = await firstResult(timeout: 5, operation: {
+            try? await self.session.buyProduct(identifier: self.monthlyId)
+        }) else {
+            throw StoreKitTestSetupError.timedOut
+        }
+        return makeService(
+            verifier: verifier,
+            product: product,
+            reconciler: reconciler,
+            purchaseClosure: { _ in .success(.verified(transaction)) },
+            transactionFinisher: transactionFinisher
         )
     }
 
@@ -106,7 +138,13 @@ struct PurchaseServiceTests {
                 .init(verified: true, premiumUntil: until, reason: nil)
             ))
             let reconciler = await self.makeReconciler()
-            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+            let finishes = TransactionFinishRecorder()
+            let service = try await self.makeSuccessfulService(
+                verifier: verifier,
+                product: product,
+                reconciler: reconciler,
+                transactionFinisher: { transaction in await finishes.record(transaction.id) }
+            )
 
             let outcome = try await service.purchase(productId: self.monthlyId)
             guard case .granted(let returnedUntil) = outcome else {
@@ -117,21 +155,14 @@ struct PurchaseServiceTests {
             #expect(verifier.calls.count == 1)
             #expect(verifier.calls.first?.productId == self.monthlyId)
 
-            var unfinishedCount = 0
-            for await result in Transaction.unfinished {
-                if case .verified(let tx) = result, tx.productID == self.monthlyId {
-                    unfinishedCount += 1
-                }
-            }
-            #expect(unfinishedCount == 0,
-                    "expected zero unfinished txns after verified purchase")
+            #expect(await finishes.ids.count == 1)
         }
     }
 
-    // MARK: - Stuck-on-paywall fix: verified grant flips reconciler to .pro
+    // MARK: - Stuck-on-paywall fix: verified grant flips reconciler to .subscribed
 
     /// Same-session verified purchase flips the injected reconciler to
-    /// `.pro` (with `StoreKitIAPFlag` ON), so `AppGate.resolve` routes the
+    /// `.subscribed` (with `StoreKitIAPFlag` ON), so `AppGate.resolve` routes the
     /// user into the app instead of leaving them stuck on the paywall.
     /// Mirrors RestoreServiceTests' active-subscription assertion.
     @Test
@@ -146,7 +177,7 @@ struct PurchaseServiceTests {
                 .init(verified: true, premiumUntil: .distantFuture, reason: nil)
             ))
             let reconciler = await self.makeReconciler()
-            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+            let service = try await self.makeSuccessfulService(verifier: verifier, product: product, reconciler: reconciler)
 
             let outcome = try await service.purchase(productId: self.monthlyId)
             guard case .granted = outcome else {
@@ -154,13 +185,13 @@ struct PurchaseServiceTests {
                 return
             }
             let level = await MainActor.run { reconciler.level }
-            #expect(level == .pro,
-                    "verified purchase did not flip reconciler to .pro — user stays stuck on paywall")
+            #expect(level == .subscribed,
+                    "verified purchase did not flip reconciler to .subscribed — user stays stuck on paywall")
         }
     }
 
     /// With `StoreKitIAPFlag` OFF, `setOnDevice` must no-op so the reconciler
-    /// stays `.free` even on a verified grant — mirrors
+    /// stays `.unsubscribed` even on a verified grant — mirrors
     /// RestoreServiceTests.testRestore_flagOff_setOnDeviceIsNoOp.
     @Test
     func testVerifiedPurchase_flagOff_reconcilerStaysFree() async throws {
@@ -174,7 +205,7 @@ struct PurchaseServiceTests {
                 .init(verified: true, premiumUntil: .distantFuture, reason: nil)
             ))
             let reconciler = await self.makeReconciler()
-            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+            let service = try await self.makeSuccessfulService(verifier: verifier, product: product, reconciler: reconciler)
 
             let outcome = try await service.purchase(productId: self.monthlyId)
             guard case .granted = outcome else {
@@ -182,7 +213,7 @@ struct PurchaseServiceTests {
                 return
             }
             let level = await MainActor.run { reconciler.level }
-            #expect(level == .free,
+            #expect(level == .unsubscribed,
                     "StoreKitIAPFlag OFF — setOnDevice must no-op")
         }
     }
@@ -190,26 +221,21 @@ struct PurchaseServiceTests {
     // MARK: - IAP-03 worker network failure → leave UNFINISHED
 
     @Test
-    func testWorkerNetworkFailure_leavesTransactionUnfinished() async throws {
+    func testWorkerNetworkFailure_throwsAndDoesNotGrant() async throws {
         try await withSKTestDaemon {
             let product = try await self.monthlyProduct()
             let verifier = StubReceiptVerifier(result: .failure(
                 VerifyReceiptError.network("offline")
             ))
             let reconciler = await self.makeReconciler()
-            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+            let service = try await self.makeSuccessfulService(verifier: verifier, product: product, reconciler: reconciler)
 
             await #expect(throws: PurchaseError.self) {
                 _ = try await service.purchase(productId: self.monthlyId)
             }
 
-            var foundUnfinished = false
-            for await result in Transaction.unfinished {
-                if case .verified(let tx) = result, tx.productID == self.monthlyId {
-                    foundUnfinished = true
-                }
-            }
-            #expect(foundUnfinished, "expected an unfinished txn after worker network failure")
+            #expect(await MainActor.run { reconciler.level } == .unsubscribed,
+                    "a worker network failure must not grant entitlement")
         }
     }
 
@@ -223,7 +249,13 @@ struct PurchaseServiceTests {
                 .init(verified: false, premiumUntil: nil, reason: "replay_detected")
             ))
             let reconciler = await self.makeReconciler()
-            let service = self.makeService(verifier: verifier, product: product, reconciler: reconciler)
+            let finishes = TransactionFinishRecorder()
+            let service = try await self.makeSuccessfulService(
+                verifier: verifier,
+                product: product,
+                reconciler: reconciler,
+                transactionFinisher: { transaction in await finishes.record(transaction.id) }
+            )
 
             let outcome = try await service.purchase(productId: self.monthlyId)
             guard case .rejected(let reason) = outcome else {
@@ -231,13 +263,7 @@ struct PurchaseServiceTests {
                 return
             }
             #expect(reason == "replay_detected")
-            var unfinishedCount = 0
-            for await result in Transaction.unfinished {
-                if case .verified(let tx) = result, tx.productID == self.monthlyId {
-                    unfinishedCount += 1
-                }
-            }
-            #expect(unfinishedCount == 0)
+            #expect(await finishes.ids.count == 1)
         }
     }
 
@@ -255,7 +281,14 @@ struct PurchaseServiceTests {
             StoreKitIAPFlag.setEnabled(true)
             defer { StoreKitIAPFlag.setEnabled(previousFlag) }
 
+            guard let transaction: Transaction = await firstResult(timeout: 5, operation: {
+                try? await self.session.buyProduct(identifier: self.monthlyId)
+            }) else {
+                throw StoreKitTestSetupError.timedOut
+            }
+
             let syncedCounter = OnSyncedCallCounter()
+            let finishes = TransactionFinishRecorder()
             let service = PurchaseService(
                 productFetcher: SingleProductFetcher(product: product),
                 verifier: verifier,
@@ -266,7 +299,8 @@ struct PurchaseServiceTests {
                 onEntitlementSynced: {
                     await syncedCounter.increment()
                 },
-                purchaseClosure: nil
+                purchaseClosure: { _ in .success(.verified(transaction)) },
+                transactionFinisher: { transaction in await finishes.record(transaction.id) }
             )
 
             let outcome = try await service.purchase(productId: self.monthlyId)
@@ -276,16 +310,10 @@ struct PurchaseServiceTests {
             }
             #expect(reason == "app_account_token_mismatch")
             let level = await MainActor.run { reconciler.level }
-            #expect(level == .free, "sync reject must not flip reconciler")
+            #expect(level == .unsubscribed, "sync reject must not flip reconciler")
             #expect(await syncedCounter.count == 0, "onEntitlementSynced must not run on sync reject")
 
-            var unfinishedCount = 0
-            for await result in Transaction.unfinished {
-                if case .verified(let tx) = result, tx.productID == self.monthlyId {
-                    unfinishedCount += 1
-                }
-            }
-            #expect(unfinishedCount == 0, "sync reject should finish the transaction")
+            #expect(await finishes.ids == [transaction.id])
         }
     }
 
@@ -364,8 +392,18 @@ struct PurchaseServiceTests {
             let failVerifier = StubReceiptVerifier(result: .failure(
                 VerifyReceiptError.network("offline")
             ))
+            guard let transaction: Transaction = await firstResult(timeout: 5, operation: {
+                try? await self.session.buyProduct(identifier: self.monthlyId)
+            }) else {
+                throw StoreKitTestSetupError.timedOut
+            }
             let firstReconciler = await self.makeReconciler()
-            let firstService = self.makeService(verifier: failVerifier, product: product, reconciler: firstReconciler)
+            let firstService = self.makeService(
+                verifier: failVerifier,
+                product: product,
+                reconciler: firstReconciler,
+                purchaseClosure: { _ in .success(.verified(transaction)) }
+            )
             _ = try? await firstService.purchase(productId: self.monthlyId)
             #expect(failVerifier.calls.count == 1)
 
@@ -373,7 +411,17 @@ struct PurchaseServiceTests {
                 .init(verified: true, premiumUntil: .distantFuture, reason: nil)
             ))
             let secondReconciler = await self.makeReconciler()
-            let secondService = self.makeService(verifier: recoverVerifier, product: product, reconciler: secondReconciler)
+            let secondService = self.makeService(
+                verifier: recoverVerifier,
+                product: product,
+                reconciler: secondReconciler,
+                unfinishedTransactionStream: {
+                    AsyncStream { continuation in
+                        continuation.yield(.verified(transaction))
+                        continuation.finish()
+                    }
+                }
+            )
             await secondService.replayUnfinished()
             #expect(recoverVerifier.calls.count >= 1,
                     "expected replayUnfinished to invoke the verifier at least once")
@@ -388,7 +436,7 @@ struct PurchaseServiceTests {
             let product = try await self.monthlyProduct()
             let blockingVerifier = BlockingStubReceiptVerifier()
             let reconciler = await self.makeReconciler()
-            let service = self.makeService(verifier: blockingVerifier, product: product, reconciler: reconciler)
+            let service = try await self.makeSuccessfulService(verifier: blockingVerifier, product: product, reconciler: reconciler)
 
             let purchaseTask = Task { try await service.purchase(productId: self.monthlyId) }
 
@@ -398,15 +446,8 @@ struct PurchaseServiceTests {
             let preDispatchCount = await blockingVerifier.callCount()
             #expect(preDispatchCount == 1)
 
-            var matched: VerificationResult<Transaction>?
-            for await result in Transaction.unfinished {
-                if case .verified(let tx) = result, tx.productID == self.monthlyId {
-                    matched = result
-                    break
-                }
-            }
-            if let synthetic = matched {
-                await service.processUpdate(synthetic, source: "test_listener")
+            if let unfinished = await self.unfinishedTransaction(for: self.monthlyId) {
+                await service.processUpdate(.verified(unfinished), source: "test_listener")
             }
             let midCount = await blockingVerifier.callCount()
             #expect(midCount == 1, "listener double-handled an in-flight txn")
@@ -420,6 +461,22 @@ struct PurchaseServiceTests {
 
     // MARK: - Test utilities
 
+    private func hasUnfinishedTransaction(for productID: String) async -> Bool {
+        await unfinishedTransaction(for: productID) != nil
+    }
+
+    private func unfinishedTransaction(for productID: String) async -> Transaction? {
+        await firstResult(timeout: 3) {
+                for await result in Transaction.unfinished {
+                    if case .verified(let transaction) = result,
+                       transaction.productID == productID {
+                        return transaction
+                    }
+                }
+                return nil
+            }
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         _ predicate: @Sendable () async -> Bool
@@ -430,6 +487,68 @@ struct PurchaseServiceTests {
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         Issue.record("waitUntil timed out after \(timeout)s")
+    }
+}
+
+private func firstResult<T: Sendable>(
+    timeout: TimeInterval,
+    operation: @escaping @Sendable () async -> T?
+) async -> T? {
+    await withCheckedContinuation { continuation in
+        let state = FirstResultState(continuation: continuation)
+        let operationTask = Task {
+            state.finish(await operation())
+        }
+        let timeoutTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            state.finish(nil)
+        }
+        state.install(operationTask: operationTask, timeoutTask: timeoutTask)
+    }
+}
+
+private final class FirstResultState<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T?, Never>?
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    private var finished = false
+
+    init(continuation: CheckedContinuation<T?, Never>) {
+        self.continuation = continuation
+    }
+
+    func install(operationTask: Task<Void, Never>, timeoutTask: Task<Void, Never>) {
+        lock.lock()
+        if finished {
+            lock.unlock()
+            operationTask.cancel()
+            timeoutTask.cancel()
+            return
+        }
+        self.operationTask = operationTask
+        self.timeoutTask = timeoutTask
+        lock.unlock()
+    }
+
+    func finish(_ result: T?) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let operationTask = self.operationTask
+        let timeoutTask = self.timeoutTask
+        self.operationTask = nil
+        self.timeoutTask = nil
+        lock.unlock()
+
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        continuation?.resume(returning: result)
     }
 }
 
@@ -455,6 +574,14 @@ private struct AlwaysNilProductFetcher: ProductFetching {
 }
 
 // MARK: - Blocking stub for in-flight dedup test
+
+private actor TransactionFinishRecorder {
+    private(set) var ids: [UInt64] = []
+
+    func record(_ id: UInt64) {
+        ids.append(id)
+    }
+}
 
 private actor OnSyncedCallCounter {
     private(set) var count = 0

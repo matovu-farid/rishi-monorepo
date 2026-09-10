@@ -30,6 +30,8 @@ public actor RishiChatService: ChatService {
     private let messageStore: any MessageStore
     private let dirtyHook: (any ChatDirtyHook)?
     private let clock: @Sendable () -> Date
+    private let streamProvider:
+        (@Sendable () async -> AsyncThrowingStream<Data, Error>)?
 
     public init(
         userIdProvider: @escaping @Sendable () async -> UserID?,
@@ -38,7 +40,9 @@ public actor RishiChatService: ChatService {
         conversationLookup: ConversationLookup,
         messageStore: any MessageStore,
         dirtyHook: (any ChatDirtyHook)? = nil,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        streamProvider:
+            (@Sendable () async -> AsyncThrowingStream<Data, Error>)? = nil
     ) {
         self.userIdProvider = userIdProvider
         self.workerClient = workerClient
@@ -48,6 +52,7 @@ public actor RishiChatService: ChatService {
         self.messageStore = messageStore
         self.dirtyHook = dirtyHook
         self.clock = clock
+        self.streamProvider = streamProvider
     }
 
     @available(*, deprecated, message: "Use the initializer without conversationStore; ConversationLookup is now the canonical persistence seam.")
@@ -59,7 +64,9 @@ public actor RishiChatService: ChatService {
         conversationStore: any ConversationStore,
         messageStore: any MessageStore,
         dirtyHook: (any ChatDirtyHook)? = nil,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        streamProvider:
+            (@Sendable () async -> AsyncThrowingStream<Data, Error>)? = nil
     ) {
         self.userIdProvider = userIdProvider
         self.workerClient = workerClient
@@ -69,6 +76,7 @@ public actor RishiChatService: ChatService {
         self.messageStore = messageStore
         self.dirtyHook = dirtyHook
         self.clock = clock
+        self.streamProvider = streamProvider
     }
 
     public nonisolated func stream(
@@ -152,7 +160,12 @@ public actor RishiChatService: ChatService {
         let accumulator = AssistantAccumulator()
         var finalized = false
 
-        let byteStream = await workerClient.stream(endpoint)
+        let byteStream: AsyncThrowingStream<Data, Error>
+        if let streamProvider {
+            byteStream = await streamProvider()
+        } else {
+            byteStream = await workerClient.stream(endpoint)
+        }
         let yieldChannel = AsyncStream<ChatEvent>.makeStream(bufferingPolicy: .unbounded)
 
         // KEEP: child consumer Task inside the actor; reads WorkerClient bytes

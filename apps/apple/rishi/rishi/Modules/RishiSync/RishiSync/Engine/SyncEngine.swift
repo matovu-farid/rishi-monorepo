@@ -326,6 +326,44 @@ public actor SyncEngine {
         return false
     }
 
+    /// Repairs one local book without waiting behind unrelated sync work.
+    /// Shared reading requires the book's R2 key, hash, and size to exist
+    /// server-side before a room can be created. A full sync wave can stop
+    /// before outbound work because another pending entity failed, so this
+    /// path uploads the selected book directly and leaves other queue items
+    /// untouched.
+    public func repairBook(_ bookId: BookID) async -> Bool {
+        guard !resetInProgress, !Task.isCancelled else { return false }
+
+        guard let book = try? await bookStore.book(bookId) else {
+            Log.event("sync.book.repair.failed", level: .error, data: [
+                "book_id": bookId.uuidString,
+                "reason": "local_book_missing",
+            ])
+            return false
+        }
+        guard await markBookDirty(bookId) else {
+            Log.event("sync.book.repair.failed", level: .error, data: [
+                "book_id": bookId.uuidString,
+                "reason": "could_not_mark_dirty",
+            ])
+            return false
+        }
+
+        do {
+            try await bookUploader.upload(book)
+            await queue.remove(entityId: bookId, kind: .book)
+            await statusReporter.refreshPendingCount(on: status)
+            Log.event("sync.book.repair.completed", data: [
+                "book_id": bookId.uuidString,
+            ])
+            return true
+        } catch {
+            Log.error("sync.book.repair.upload_failed", error: error)
+            return false
+        }
+    }
+
     /// Persists a book deletion before its local row/file is removed. The
     /// caller must not destroy local material until this succeeds: the
     /// metadata tombstone is the durable hand-off to the outbound queue.
@@ -607,7 +645,14 @@ public actor SyncEngine {
     /// this before reporting success so a relaunch cannot restore the
     /// pre-import server projection over a newly downloaded book.
     public func requestSyncAndWait() async {
-        requestSync()
+        // A caller such as markBookDeleted may have already queued the
+        // request before it asks to await it. Re-queuing here would create an
+        // unnecessary second wave; when a scheduled drain exists, joining it
+        // is sufficient. If a manual runOnce is active without a scheduler,
+        // requestSync() still creates the required follow-up wave.
+        if scheduledSyncTask == nil {
+            requestSync()
+        }
         while let task = scheduledSyncTask {
             await task.value
             if scheduledSyncTask == nil, !syncRequestPending { return }
@@ -679,7 +724,11 @@ public actor SyncEngine {
             }
             inboundReadyForOutbound = eventResult.readyForOutbound
         } catch {
-            wave.errors.append("events: \(error)")
+            // The append-only event stream is an additive optimization and
+            // is unavailable during rolling deploys or on older Workers.
+            // The projection/recovery pass below is the compatibility path,
+            // so an unavailable event endpoint must not make an otherwise
+            // successful sync wave appear failed.
             Log.event("sync.events.unavailable", level: .warning, data: [
                 "error": String(describing: error),
             ])

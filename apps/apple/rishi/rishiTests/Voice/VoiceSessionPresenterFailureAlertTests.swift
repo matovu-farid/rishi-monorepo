@@ -33,6 +33,7 @@ struct VoiceSessionPresenterFailureAlertTests {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent("rishi/Voice/VoiceSessionPresenter.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 

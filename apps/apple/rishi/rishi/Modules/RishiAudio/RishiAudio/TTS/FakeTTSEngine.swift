@@ -52,6 +52,11 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
         /// Used to test user-driven next()/previous() navigation deterministically
         /// (no auto-advance race).
         case holds
+        /// `.loading` -> `.playing`, waits for the supplied duration, then
+        /// finishes the utterance. This keeps the playing state observable in
+        /// UI tests while still exercising Readium's automatic paragraph/page
+        /// advance path without an audio render cycle.
+        case timed(Duration)
     }
 
     private let state: TTSPlaybackState
@@ -109,6 +114,9 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
 
         let observable = state
         let passageId = request.passageId
+        await MainActor.run {
+            observable.activate(tokens: request.tokenSnapshot)
+        }
         switch script(for: passageId) {
         case .normal:
             await MainActor.run {
@@ -153,6 +161,25 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
                 // watcher waits, so only explicit next()/previous() move the head.
             }
             // Do not settle until stop().
+        case .timed(let duration):
+            await MainActor.run {
+                observable.update(status: .loading)
+                observable.error = nil
+            }
+            await MainActor.run {
+                observable.update(status: .playing)
+                observable.currentPassageId = passageId
+            }
+            do {
+                try await Task.sleep(for: duration)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    observable.update(status: .stopped)
+                }
+                settle(.success(()))
+            } catch {
+                settle(.failure(error))
+            }
         }
     }
 

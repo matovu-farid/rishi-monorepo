@@ -3,7 +3,12 @@ import Foundation
 protocol SharedReadingSignalingTransport: Sendable {
     var events: AsyncStream<SharedReadingSignalingEvent> { get }
 
-    func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?) async throws
+    func connect(
+        admission: SharedReadingAdmission,
+        bearerToken: String,
+        refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?,
+        refreshBearerToken: (@Sendable () async throws -> String)?
+    ) async throws
     func disconnect() async
     func send(_ message: SharedReadingSignalingOutgoingMessage) async throws
 }
@@ -535,6 +540,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     private var isDisconnecting = false
     private var isTerminal = false
     private var refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?
+    private var refreshBearerToken: (@Sendable () async throws -> String)?
 
     init(
         urlSession: URLSession = .shared,
@@ -545,7 +551,12 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
 
     }
 
-    func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)? = nil) async throws {
+    func connect(
+        admission: SharedReadingAdmission,
+        bearerToken: String,
+        refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)? = nil,
+        refreshBearerToken: (@Sendable () async throws -> String)? = nil
+    ) async throws {
         guard !bearerToken.isEmpty else {
             throw SharedReadingError.from(code: .authRequired)
         }
@@ -556,6 +567,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         currentAdmission = admission
         self.bearerToken = bearerToken
         self.refreshAdmission = refreshAdmission
+        self.refreshBearerToken = refreshBearerToken
         isDisconnecting = false
         reconnectAttempt = 0
 
@@ -766,10 +778,26 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                 catch let error as SharedReadingError { self.eventHub.yield(.error(error)); return }
                 catch { self.eventHub.yield(.error(.from(code: .serviceUnavailable))); return }
             }
+            if let self, let refresh = await self.refreshBearerToken {
+                do {
+                    Log.event("sharing.signaling.auth.refresh_started", data: ["attempt": String(attempt)])
+                    await self.setBearerToken(try await refresh())
+                    Log.event("sharing.signaling.auth.refresh_completed", data: ["attempt": String(attempt)])
+                } catch let error as SharedReadingError {
+                    Log.error("sharing.signaling.auth.refresh_failed", error: error)
+                    self.eventHub.yield(.error(error))
+                    return
+                } catch {
+                    Log.error("sharing.signaling.auth.refresh_failed", error: error)
+                    self.eventHub.yield(.error(.from(code: .authRequired)))
+                    return
+                }
+            }
             await self?.open()
         }
     }
 
     private func setAdmission(_ admission: SharedReadingAdmission) { currentAdmission = admission }
+    private func setBearerToken(_ token: String) { bearerToken = token }
 
 }

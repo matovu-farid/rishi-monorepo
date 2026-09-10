@@ -26,6 +26,9 @@ public final class PDFReaderViewModel {
     }
 
     public let book: Book
+    // Stable cache identity; ObjectIdentifier can be reused after an older
+    // view-model is deallocated, which would leak highlights into a new reader.
+    internal let highlightCacheToken = UUID()
     public private(set) var document: PDFDocument?
     public private(set) var totalPages: Int = 0
     public private(set) var pageIndex: Int = 0

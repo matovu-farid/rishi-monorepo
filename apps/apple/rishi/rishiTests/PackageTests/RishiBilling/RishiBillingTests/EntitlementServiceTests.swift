@@ -254,8 +254,14 @@ struct EntitlementServiceTests {
             return
         }
         #expect(hydratedB == snapshotB)
-        #expect(defaults.data(forKey: cacheKey(for: "user-a")) == dataA)
-        #expect(defaults.data(forKey: cacheKey(for: "user-b")) == dataB)
+        let persistedA = defaults.data(forKey: cacheKey(for: "user-a"))
+            .flatMap { try? JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: $0) }
+        let persistedB = defaults.data(forKey: cacheKey(for: "user-b"))
+            .flatMap { try? JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: $0) }
+        let expectedA = try? JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: dataA)
+        let expectedB = try? JSONDecoder().decode(CachedEntitlementSnapshotPayloadForTests.self, from: dataB)
+        #expect(persistedA == expectedA)
+        #expect(persistedB == expectedB)
     }
 
     private func makeWorkerClient(
@@ -276,7 +282,7 @@ struct EntitlementServiceTests {
     }
 }
 
-private struct CachedEntitlementSnapshotPayloadForTests: Codable {
+private struct CachedEntitlementSnapshotPayloadForTests: Codable, Equatable {
     let cachedAt: Date
     let snapshot: EntitlementSnapshot
 }

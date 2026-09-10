@@ -11,7 +11,7 @@ import Testing
 ///   1. AppStore.sync() forces a refresh from Apple servers.
 ///   2. Transaction.currentEntitlements is re-walked.
 ///   3. Verified + non-revoked transactions whose productID belongs to the
-///      active Reader/Voice catalog flip `EntitlementReconciler.setOnDevice(.pro)`.
+///      active Reader/Voice catalog flip `EntitlementReconciler.setOnDevice(.subscribed)`.
 ///
 /// The `revocationDate == nil` filter is load-bearing — refunded transactions
 /// can linger in `currentEntitlements` briefly (RESEARCH §10 Pitfall 5). Tests
@@ -67,13 +67,13 @@ struct RestoreServiceTests {
         }
     }
 
-    /// Helper: build a fresh `.free` reconciler on MainActor.
+    /// Helper: build a fresh `.unsubscribed` reconciler on MainActor.
     private func makeReconciler() -> EntitlementReconciler {
-        EntitlementReconciler(initial: .free)
+        EntitlementReconciler(initial: .unsubscribed)
     }
 
     @Test
-    func restore_successSyncsOnlyCurrentPlatformProducts() async throws {
+    func restore_successSyncsRecognizedProducts() async throws {
         let reconciler = makeReconciler()
         let lock = CallRecorder()
         let service = RestoreService(
@@ -93,8 +93,11 @@ struct RestoreServiceTests {
 
         let outcome = try await service.restore()
 
-        #expect(outcome == .restored(productIds: [RishiProductID.readerMonthly]))
-        #expect(await lock.values() == ["reader"])
+        #expect(outcome == .restored(productIds: [
+            RishiProductID.proMonthly,
+            RishiProductID.readerMonthly,
+        ]))
+        #expect(await lock.values() == ["legacy", "reader"])
     }
 
     @Test
@@ -129,7 +132,7 @@ struct RestoreServiceTests {
         await #expect(throws: RestoreError.self) {
             _ = try await service.restore()
         }
-        #expect(reconciler.level == .free)
+        #expect(reconciler.level == .unsubscribed)
     }
 
     private actor CallRecorder {
@@ -144,154 +147,136 @@ struct RestoreServiceTests {
 
     @Test
     func testRestore_userWithNoEntitlements_returnsNothingToRestore() async throws {
-        // Even without the daemon, AppStore.sync() resolves locally against
-        // the SKTestSession; an empty `currentEntitlements` walk returns
-        // .nothingToRestore. If sync itself throws on hosts without the
-        // daemon, we accept that as a known-issue soft-skip.
+        // This test covers the empty-entitlement decision independently of
+        // Apple's restore prompt. The injected sync closure leaves the
+        // prompt-dependent behavior to the dedicated sync-failure test.
         let reconciler = makeReconciler()
-        let service = RestoreService(reconciler: reconciler)
-        do {
-            let outcome = try await service.restore()
-            #expect(outcome == .nothingToRestore)
-            #expect(reconciler.level == .free)
-        } catch RestoreError.syncFailed {
-            // Host without daemon — sync threw. Soft-skip via known-issue.
-            withKnownIssue("AppStore.sync() failed on this host (no SKTestSession daemon).") {
-                Issue.record("skipped — sync threw")
-            }
-        }
+        let service = RestoreService(
+            reconciler: reconciler,
+            appStoreSync: {},
+            activeEntitlements: { [] }
+        )
+        #expect(try await service.restore() == .nothingToRestore)
+        #expect(reconciler.level == .unsubscribed)
     }
 
     // MARK: - Active subscription path (SKTestSession-driven)
 
     @Test
-    func testRestore_userWithActiveSubscription_returnsRestoredAndFlipsReconciler() async throws {
-        try await withSKTestDaemon {
-            let previousFlag = StoreKitIAPFlag.isEnabled
-            StoreKitIAPFlag.setEnabled(true)
-            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+    func testRestore_activeEntitlement_returnsRestoredAndFlipsReconciler() async throws {
+        let previousFlag = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(true)
+        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
 
-            // Drive a sandbox buy via SKTestSession so currentEntitlements
-            // surfaces the monthly tier as active. The Swift API returns
-            // a StoreKit.Transaction.
-            _ = try await self.session.buyProduct(identifier: self.monthlyId)
+        let reconciler = makeReconciler()
+        let service = RestoreService(
+            reconciler: reconciler,
+            appStoreSync: {},
+            activeEntitlements: {
+                [RestoreEntitlement(productID: self.monthlyId, jws: "test")]
+            },
+            entitlementSync: { _ in .init(verified: true, reason: nil) }
+        )
+        let outcome = try await service.restore()
 
-            let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
-            let outcome = try await service.restore()
-
-            guard case let .restored(ids) = outcome else {
-                Issue.record("expected .restored, got \(outcome)")
-                return
-            }
-            #expect(ids.contains(self.monthlyId))
-            #expect(reconciler.level == .pro)
-        }
+        #expect(outcome == .restored(productIds: [monthlyId]))
+        #expect(reconciler.level == .subscribed)
     }
 
     // MARK: - Revoked / refunded transaction is FILTERED OUT (Pitfall 5)
 
     @Test
-    func testRestore_filtersRevokedTransactions() async throws {
-        try await withSKTestDaemon {
-            let previousFlag = StoreKitIAPFlag.isEnabled
-            StoreKitIAPFlag.setEnabled(true)
-            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
-
-            // Buy → refund: SKTestSession surfaces the transaction with a
-            // non-nil revocationDate. The restore filter MUST drop it.
-            let tx = try await self.session.buyProduct(identifier: self.monthlyId)
-            try self.session.refundTransaction(identifier: UInt(tx.id))
-
-            let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
-            let outcome = try await service.restore()
-
-            // The refunded transaction may either be absent from
-            // currentEntitlements entirely OR present with a non-nil
-            // revocationDate. Either way the restore path treats the user
-            // as having nothing to restore.
-            if case .restored(let ids) = outcome {
-                #expect(!ids.contains(self.monthlyId),
-                        "refunded transaction leaked into restored ids")
-            } else {
-                #expect(outcome == .nothingToRestore)
+    func testRestore_filtersRevokedEntitlements() async throws {
+        let reconciler = makeReconciler()
+        let syncCalls = CallRecorder()
+        let service = RestoreService(
+            reconciler: reconciler,
+            appStoreSync: {},
+            activeEntitlements: {
+                [RestoreEntitlement(
+                    productID: self.monthlyId,
+                    jws: "revoked",
+                    revocationDate: Date()
+                )]
+            },
+            entitlementSync: { jws in
+                await syncCalls.append(jws)
+                return .init(verified: true, reason: nil)
             }
-            #expect(reconciler.level == .free,
-                    "reconciler granted .pro from a refunded transaction (Pitfall 5)")
-        }
+        )
+
+        #expect(try await service.restore() == .nothingToRestore)
+        #expect(await syncCalls.values().isEmpty)
+        #expect(reconciler.level == .unsubscribed)
     }
 
     // MARK: - StoreKitIAPFlag OFF → setOnDevice no-ops
 
     @Test
     func testRestore_flagOff_setOnDeviceIsNoOp() async throws {
-        try await withSKTestDaemon {
-            let previousFlag = StoreKitIAPFlag.isEnabled
-            StoreKitIAPFlag.setEnabled(false)
-            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+        let previousFlag = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(false)
+        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
 
-            _ = try await self.session.buyProduct(identifier: self.monthlyId)
+        let reconciler = makeReconciler()
+        let service = RestoreService(
+            reconciler: reconciler,
+            appStoreSync: {},
+            activeEntitlements: {
+                [RestoreEntitlement(productID: self.monthlyId, jws: "test")]
+            },
+            entitlementSync: { _ in .init(verified: true, reason: nil) }
+        )
+        let outcome = try await service.restore()
 
-            let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
-            let outcome = try await service.restore()
-
-            // The restore CALL still returns the granted ids because the
-            // entitlement read is independent of the flag; the flag only
-            // gates whether the reconciler accepts the on-device signal.
-            if case .restored = outcome {
-                // expected — but reconciler level stays .free
-            }
-            #expect(reconciler.level == .free,
-                    "StoreKitIAPFlag OFF — setOnDevice must no-op")
-        }
+        #expect(outcome == .restored(productIds: [monthlyId]))
+        #expect(reconciler.level == .unsubscribed,
+                "StoreKitIAPFlag OFF — setOnDevice must no-op")
     }
 
     // MARK: - Launch-time on-device reconciliation (no AppStore.sync prompt)
 
     @Test
-    func testRefreshOnDeviceEntitlementAtLaunch_activeSubscription_flipsToPro() async throws {
-        try await withSKTestDaemon {
-            let previousFlag = StoreKitIAPFlag.isEnabled
-            StoreKitIAPFlag.setEnabled(true)
-            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+    func testRefreshOnDeviceEntitlementAtLaunch_activeEntitlement_flipsToPro() async throws {
+        let previousFlag = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(true)
+        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
 
-            // Drive a sandbox buy so currentEntitlements surfaces the monthly
-            // tier as active. The launch reconciler must detect it WITHOUT
-            // AppStore.sync() (which is never called in this path).
-            _ = try await self.session.buyProduct(identifier: self.monthlyId)
+        let reconciler = makeReconciler()
+        let service = RestoreService(
+            reconciler: reconciler,
+            activeEntitlements: {
+                [RestoreEntitlement(productID: self.monthlyId, jws: "test")]
+            }
+        )
+        await service.refreshOnDeviceEntitlementAtLaunch()
 
-            let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
-            await service.refreshOnDeviceEntitlementAtLaunch()
-
-            #expect(reconciler.level == .pro)
-        }
+        #expect(reconciler.level == .subscribed)
     }
 
     @Test
     func testRefreshOnDeviceEntitlementAtLaunch_flagOff_doesNotFlip() async throws {
-        try await withSKTestDaemon {
-            let previousFlag = StoreKitIAPFlag.isEnabled
-            StoreKitIAPFlag.setEnabled(false)
-            defer { StoreKitIAPFlag.setEnabled(previousFlag) }
+        let previousFlag = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(false)
+        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
 
-            _ = try await self.session.buyProduct(identifier: self.monthlyId)
+        let reconciler = makeReconciler()
+        let service = RestoreService(
+            reconciler: reconciler,
+            activeEntitlements: {
+                [RestoreEntitlement(productID: self.monthlyId, jws: "test")]
+            }
+        )
+        await service.refreshOnDeviceEntitlementAtLaunch()
 
-            let reconciler = self.makeReconciler()
-            let service = RestoreService(reconciler: reconciler)
-            await service.refreshOnDeviceEntitlementAtLaunch()
-
-            #expect(reconciler.level == .free,
-                    "StoreKitIAPFlag OFF — setOnDevice must no-op")
-        }
+        #expect(reconciler.level == .unsubscribed,
+                "StoreKitIAPFlag OFF — setOnDevice must no-op")
     }
 
     @Test
     func testRefreshOnDeviceEntitlementAtLaunch_noEntitlements_doesNotFlip() async throws {
         // Daemon-independent: a fresh SKTestSession with cleared transactions
-        // has no entitlements, so the launch reconciler must leave .free intact.
+        // has no entitlements, so the launch reconciler must leave .unsubscribed intact.
         let previousFlag = StoreKitIAPFlag.isEnabled
         StoreKitIAPFlag.setEnabled(true)
         defer { StoreKitIAPFlag.setEnabled(previousFlag) }
@@ -300,7 +285,7 @@ struct RestoreServiceTests {
         let service = RestoreService(reconciler: reconciler)
         await service.refreshOnDeviceEntitlementAtLaunch()
 
-        #expect(reconciler.level == .free)
+        #expect(reconciler.level == .unsubscribed)
     }
 
 }

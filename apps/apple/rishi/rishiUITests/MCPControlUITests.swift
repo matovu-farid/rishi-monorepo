@@ -4,31 +4,62 @@ import XCTest
 #if canImport(Darwin)
 import Darwin
 #endif
+#if targetEnvironment(macCatalyst)
+import CoreGraphics
+#endif
 
 final class MCPControlUITests: XCTestCase {
+    private static let applicationBundleIdentifier = "org.fidexa.rishi"
+    private static var bridgeTarget: String {
+        #if targetEnvironment(macCatalyst)
+        return "catalyst"
+        #else
+        return "iphone17"
+        #endif
+    }
+
+    private static var bridgeConfigPath: String {
+        URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("rishi-mcp-\(bridgeTarget)-bridge.json")
+            .path
+    }
+
     @MainActor
     func testServer() throws {
-        let socketPath = ProcessInfo.processInfo.environment["RISHI_MCP_SOCKET"] ?? "/tmp/rishi-mcp.sock"
-        let app = XCUIApplication()
+        print("[MCP] bridge test starting")
+        guard FileManager.default.fileExists(atPath: Self.bridgeConfigPath) else {
+            throw XCTSkip("MCP bridge configuration is created by the external MCP driver.")
+        }
+        let configData = try Data(contentsOf: URL(fileURLWithPath: Self.bridgeConfigPath))
+        guard let config = try JSONSerialization.jsonObject(with: configData) as? [String: Any],
+              let portNumber = config["port"] as? NSNumber else {
+            throw BridgeError.message("Invalid MCP bridge configuration.")
+        }
+        let port = portNumber.uint16Value
+        let launchApp = config["launchApp"] as? Bool ?? true
+        print("[MCP] bridge config loaded: port=\(port), launchApp=\(launchApp)")
+        // Use an explicit proxy because the app is started by simctl/open
+        // before this XCTest bridge attaches. The default proxy can remain an
+        // unresolved target in that arrangement even while the app is visible.
+        let app = XCUIApplication(bundleIdentifier: Self.applicationBundleIdentifier)
+        print("[MCP] application handle created")
         app.launchEnvironment["RISHI_UITEST"] = "1"
-        app.launch()
+        if launchApp {
+            throw BridgeError.message("The MCP driver must launch the app externally; launchApp=true is unsupported because XCTest launch waits for UI quiescence.")
+        }
+        print("[MCP] entering bridge loop")
 
         #if canImport(Darwin)
-        let listener = try makeListener(at: socketPath)
-        defer {
-            close(listener)
-            unlink(socketPath)
-        }
-
         while true {
-            let client = accept(listener, nil, nil)
-            guard client >= 0 else { continue }
+            print("[MCP] connecting to bridge")
+            let client = try connectToBridge(port: port)
+            print("[MCP] bridge connected")
             defer { close(client) }
 
             do {
                 try configureClient(client)
                 let request = try readRequest(from: client)
-                let response = try handle(request, app: app, socketPath: socketPath)
+                let response = try handle(request, app: app)
                 try write(response, to: client)
                 if request["op"] as? String == "stop" {
                     return
@@ -47,28 +78,23 @@ final class MCPControlUITests: XCTestCase {
     }
 
     #if canImport(Darwin)
-    private func makeListener(at path: String) throws -> Int32 {
-        unlink(path)
-        let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socketFD >= 0 else { throw BridgeError.message("Could not create bridge socket.") }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(path.utf8) + [UInt8(0)]
-        let maxLength = MemoryLayout.size(ofValue: address.sun_path)
-        guard pathBytes.count <= maxLength else { throw BridgeError.message("Bridge socket path is too long.") }
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.copyBytes(from: pathBytes)
-        }
+    private func connectToBridge(port: UInt16) throws -> Int32 {
+        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketFD >= 0 else { throw BridgeError.message("Could not create MCP bridge socket.") }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(socketFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                Darwin.connect(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard result == 0, listen(socketFD, 1) == 0 else {
+        guard result == 0 else {
             close(socketFD)
-            throw BridgeError.message("Could not bind MCP bridge socket.")
+            throw BridgeError.message("Could not connect to MCP bridge (errno \(errno)).")
         }
-        _ = path.withCString { Darwin.chmod($0, mode_t(0o600)) }
         return socketFD
     }
 
@@ -121,37 +147,89 @@ final class MCPControlUITests: XCTestCase {
     }
 
     @MainActor
-    private func handle(_ request: [String: Any], app: XCUIApplication, socketPath: String) throws -> [String: Any] {
+    private func handle(_ request: [String: Any], app: XCUIApplication) throws -> [String: Any] {
         guard let operation = request["op"] as? String else { throw BridgeError.message("Missing bridge operation.") }
         switch operation {
+        case "ping":
+            return ["ok": true, "application": Self.bridgeTarget]
         case "snapshot":
-            var response: [String: Any] = ["ok": true, "debugDescription": app.debugDescription]
-            if request["screenshot"] as? Bool == true {
-                let bridgeDirectory = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
-                let path = bridgeDirectory.appendingPathComponent("screenshot-\(UUID().uuidString).png")
-                try app.screenshot().pngRepresentation.write(to: path)
-                response["screenshotPath"] = path.path
-            }
-            return response
+            // Screenshots are captured by the MCP driver with simctl or
+            // screencapture. XCTest only provides the accessibility tree here;
+            // externally launched apps are not valid XCUIApplication screenshot
+            // targets and asking XCTest to capture one terminates the bridge.
+            return ["ok": true, "debugDescription": app.debugDescription]
         case "tap":
-            guard let identifier = request["identifier"] as? String else { throw BridgeError.message("Missing element identifier.") }
+            guard let requestedIdentifier = request["identifier"] as? String else { throw BridgeError.message("Missing element identifier.") }
+            let components = requestedIdentifier.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            let identifier = String(components[0])
+            let index: Int?
+            if components.count == 1 {
+                index = nil
+            } else if let parsed = Int(components[1]), parsed >= 0 {
+                index = parsed
+            } else {
+                throw BridgeError.message("Invalid element index in identifier \(requestedIdentifier).")
+            }
             let matches = app.descendants(matching: .any).matching(identifier: identifier)
-            guard matches.count == 1 else { throw BridgeError.message("Expected one element for identifier \(identifier), found \(matches.count).") }
+            let identifierPredicate = NSPredicate(format: "identifier == %@", identifier)
+            let buttonMatches = app.buttons.matching(identifierPredicate)
+            let matchCount = max(matches.count, buttonMatches.count)
+            guard let index else {
+                guard matchCount == 1 else { throw BridgeError.message("Expected one element for identifier \(identifier), found \(matchCount).") }
+                let target = matches.count == 1 ? matches.firstMatch : buttonMatches.firstMatch
+                if request["action"] as? String == "context_menu" {
+                    performContextClick(target)
+                } else { target.tap() }
+                return ["ok": true, "identifier": requestedIdentifier]
+            }
+            guard index < matchCount else { throw BridgeError.message("Element index \(index) is out of range for identifier \(identifier), found \(matchCount).") }
+            let target = buttonMatches.count > index ? buttonMatches.element(boundBy: index) : matches.element(boundBy: index)
             if request["action"] as? String == "context_menu" {
-                #if targetEnvironment(macCatalyst)
-                    matches.firstMatch.rightClick()
-                #else
-                    matches.firstMatch.press(forDuration: 0.8)
-                #endif
-            } else { matches.firstMatch.tap() }
-            return ["ok": true, "identifier": identifier]
+                performContextClick(target)
+            } else { target.tap() }
+            return ["ok": true, "identifier": requestedIdentifier]
         case "tapText":
             guard let text = request["text"] as? String else { throw BridgeError.message("Missing visible text.") }
+            let requestedIndex = request["index"] as? Int
             let predicate = NSPredicate(format: "label CONTAINS[c] %@ OR title CONTAINS[c] %@", text, text)
-            let matches = app.descendants(matching: .any).matching(predicate)
-            guard matches.count == 1 else { throw BridgeError.message("Expected one visible element containing \(text), found \(matches.count).") }
-            matches.firstMatch.tap()
-            return ["ok": true, "text": text]
+            let exactMenuPredicate = NSPredicate(format: "title == %@ OR label == %@", text, text)
+            let exactButtonPredicate = NSPredicate(format: "label == %@ OR title == %@", text, text)
+            var matches = app.descendants(matching: .any).matching(predicate)
+            var menuMatches = app.menuItems.matching(exactMenuPredicate)
+            var buttonMatches = app.buttons.matching(exactButtonPredicate)
+            if let requestedIndex {
+                let count = buttonMatches.count > 0 ? buttonMatches.count : matches.count
+                guard requestedIndex >= 0 && requestedIndex < count else {
+                    throw BridgeError.message("Element index is out of range for visible text.")
+                }
+                if buttonMatches.count > 0 {
+                    buttonMatches.element(boundBy: requestedIndex).tap()
+                } else {
+                    matches.element(boundBy: requestedIndex).tap()
+                }
+                return ["ok": true, "text": text, "index": requestedIndex, "application": Self.bridgeTarget]
+            }
+            if buttonMatches.count == 1 || menuMatches.count == 1 || matches.count == 1 {
+                let target = menuMatches.count == 1 ? menuMatches.firstMatch : buttonMatches.count == 1 ? buttonMatches.firstMatch : matches.firstMatch
+                target.tap()
+                return ["ok": true, "text": text, "application": Self.bridgeTarget]
+            }
+
+            // Universal-link confirmation alerts are owned by SpringBoard, not by
+            // rishi. Keep the normal app lookup first, then allow the MCP bridge
+            // to acknowledge a uniquely matching system alert in the simulator.
+            #if targetEnvironment(macCatalyst)
+            throw BridgeError.message("Expected one visible element containing \(text) in rishi, found \(matches.count) app matches and \(menuMatches.count) menu matches.")
+            #else
+            let springBoard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            let exactSystemPredicate = NSPredicate(format: "label == %@ OR title == %@", text, text)
+            let systemMatches = springBoard.descendants(matching: .any).matching(exactSystemPredicate)
+            guard systemMatches.count == 1 else {
+                throw BridgeError.message("Expected one visible element containing \(text) in rishi or SpringBoard, found \(matches.count) in rishi and \(systemMatches.count) in SpringBoard.")
+            }
+            systemMatches.firstMatch.tap()
+            return ["ok": true, "text": text, "application": "com.apple.springboard"]
+            #endif
         case "type":
             guard let text = request["text"] as? String else { throw BridgeError.message("Missing text.") }
             let field = app.textFields.firstMatch.exists ? app.textFields.firstMatch : app.textViews.firstMatch
@@ -179,6 +257,34 @@ final class MCPControlUITests: XCTestCase {
             throw BridgeError.message("Unsupported bridge operation \(operation).")
         }
     }
+
+    @MainActor
+    private func performContextClick(_ target: XCUIElement) {
+        #if targetEnvironment(macCatalyst)
+        // SwiftUI's Catalyst contextMenu responds to the native two-finger /
+        // right-button event, while XCUIElement.rightClick() is not dispatched
+        // as that event for this view hierarchy. The element is still resolved
+        // semantically; only the final platform gesture is emitted here.
+        let frame = target.frame
+        let display = CGMainDisplayID()
+        let bounds = CGDisplayBounds(display)
+        let scaleX = CGFloat(CGDisplayPixelsWide(display)) / max(bounds.width, 1)
+        let scaleY = CGFloat(CGDisplayPixelsHigh(display)) / max(bounds.height, 1)
+        // XCUIElement frames are expressed in logical points; CGEvent mouse
+        // locations are expressed in backing pixels on a Retina Catalyst host.
+        let point = CGPoint(x: frame.midX * scaleX, y: frame.midY * scaleY)
+        usleep(500_000)
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let down = CGEvent(mouseEventSource: source, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right)
+        let up = CGEvent(mouseEventSource: source, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right)
+        down?.post(tap: .cghidEventTap)
+        usleep(100_000)
+        up?.post(tap: .cghidEventTap)
+        #else
+        target.press(forDuration: 0.8)
+        #endif
+    }
+
     #endif
 }
 

@@ -18,6 +18,7 @@ struct AASASchemaTests {
             "components": [
               { "/": "/auth/callback*", "comment": "SIWA + Google OAuth callback after web sign-in" },
               { "/": "/sharing/join*",  "comment": "Sharing redeem deep link" },
+              { "/": "/sharing/session*", "comment": "Shared reading session deep link" },
               { "/": "/app/*",          "comment": "Generic in-app routing" }
             ]
           }
@@ -33,10 +34,11 @@ struct AASASchemaTests {
         let aasa = try JSONDecoder().decode(AASA.self, from: data)
         #expect(aasa.applinks.details.count == 1)
         #expect(aasa.applinks.details[0].appIDs == ["9VL7VRY6QZ.org.fidexa.rishi"])
-        #expect(aasa.applinks.details[0].components.count == 3)
+        #expect(aasa.applinks.details[0].components.count == 4)
         #expect(aasa.applinks.details[0].components[0].path == "/auth/callback*")
         #expect(aasa.applinks.details[0].components[1].path == "/sharing/join*")
-        #expect(aasa.applinks.details[0].components[2].path == "/app/*")
+        #expect(aasa.applinks.details[0].components[2].path == "/sharing/session*")
+        #expect(aasa.applinks.details[0].components[3].path == "/app/*")
         #expect(aasa.webcredentials?.apps == ["9VL7VRY6QZ.org.fidexa.rishi"])
     }
 
@@ -85,6 +87,7 @@ struct AASASchemaTests {
             .deletingLastPathComponent() // rishi
             .deletingLastPathComponent() // apple
             .deletingLastPathComponent() // apps
+            .deletingLastPathComponent() // repository root
         let webFile = repoRoot
             .appendingPathComponent("apps/web/public/.well-known/apple-app-site-association")
         let webAASA = try JSONDecoder().decode(AASA.self, from: Data(contentsOf: webFile))

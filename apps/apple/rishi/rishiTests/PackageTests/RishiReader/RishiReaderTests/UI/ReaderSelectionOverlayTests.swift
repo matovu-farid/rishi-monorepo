@@ -8,7 +8,7 @@ struct ReaderSelectionOverlayTests {
     @Test("Reader selection menu is below the clickable edge arrows")
     func selectionMenuPrecedesArrowLayer() throws {
         let source = try Self.source(named: "ReaderScreen.swift", in: Self.readerUIDir())
-        let pending = try #require(source.range(of: "if let pending = pendingSelection {").map(\.lowerBound))
+        let pending = try #require(source.range(of: "pendingSelectionOverlay").map(\.lowerBound))
         let arrows = try #require(source.range(of: "if shouldShowEdgeArrows {").map(\.lowerBound))
         #expect(pending < arrows)
 
@@ -41,7 +41,7 @@ struct ReaderSelectionOverlayTests {
         #expect(coordinator.contains(".key(.escape)"))
         #expect(coordinator.contains("public func handleEscape() -> Bool"))
         #expect(reader.contains("context.coordinator.onEscape = onEscape"))
-        #expect(screen.contains("onEscape: {"))
+        #expect(screen.contains("onEscape: dismissPendingSelection"))
         #expect(screen.contains("guard pendingSelection != nil else { return false }"))
         #expect(screen.contains("return true"))
     }
@@ -56,7 +56,7 @@ struct ReaderSelectionOverlayTests {
         #expect(menu.contains("highlight.readAloudFromHere"))
         #expect(menu.contains("play.fill"))
         #expect(positioned.contains("onReadAloudFrom"))
-        #expect(screen.contains("onReadAloudFrom: onReadAloudFrom.map"))
+        #expect(screen.contains("onReadAloudFrom: readAloudFromAction(for: pending)"))
         #expect(screen.contains("pending.locator.toReadiumLocator()"))
         #expect(screen.contains("onReadAloudFrom(locator)"))
     }
@@ -65,7 +65,7 @@ struct ReaderSelectionOverlayTests {
     func readAloudSelectionStartContract() throws {
         let controller = try Self.source(
             named: "ReadAloudController.swift",
-            in: Self.appRoot().appendingPathComponent("rishi", isDirectory: true)
+            in: Self.appRoot().appendingPathComponent("rishi/Audio", isDirectory: true)
         )
         let destination = try String(
             contentsOf: Self.appRoot().appendingPathComponent("rishi/Reader/ReaderDestination.swift"),
@@ -74,7 +74,7 @@ struct ReaderSelectionOverlayTests {
 
         #expect(controller.contains("func startReader(vm: ReaderViewModel, from startLocator: Locator)"))
         #expect(controller.contains("synthesizer.start(from: startLocator)"))
-        #expect(destination.contains("startReadAloud(from: Locator? = nil)"))
+        #expect(destination.contains("startReadAloud(from startLocator: Locator? = nil)"))
         #expect(destination.contains("EntitlementAIGate.gateAIFeature"))
     }
 
@@ -191,7 +191,12 @@ struct ReaderSelectionOverlayTests {
 
         #expect(destination.contains("private static let playerReservationHeight: CGFloat = 96"))
         #expect(destination.contains("vm.book.formatType == .epub ? Self.playerReservationHeight : 0"))
-        #expect(!destination.contains("readAloud?.showControls == true"))
+        let reservation = try Self.sourceSection(
+            in: destination,
+            from: "private var reservedPlayerHeight: CGFloat {",
+            to: "\n    }"
+        )
+        #expect(!reservation.contains("showControls"))
         #expect(screen.contains("readerContentBackground"))
         #expect(screen.contains("readerPlayerInsetHeight"))
     }

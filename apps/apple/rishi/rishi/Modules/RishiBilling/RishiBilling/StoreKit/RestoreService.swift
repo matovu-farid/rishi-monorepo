@@ -30,10 +30,12 @@ public enum RestoreError: Error, Equatable, Sendable {
 public struct RestoreEntitlement: Sendable, Equatable {
     public let productID: String
     public let jws: String
+    public let revocationDate: Date?
 
-    public init(productID: String, jws: String) {
+    public init(productID: String, jws: String, revocationDate: Date? = nil) {
         self.productID = productID
         self.jws = jws
+        self.revocationDate = revocationDate
     }
 }
 
@@ -90,20 +92,7 @@ public actor RestoreService {
             try await AppStore.sync()
         }
         self.activeEntitlements = activeEntitlements ?? {
-            var entitlements: [RestoreEntitlement] = []
-            for await result in Transaction.currentEntitlements {
-                guard case .verified(let transaction) = result,
-                      transaction.revocationDate == nil,
-                      RishiProductID.all.contains(transaction.productID)
-                else { continue }
-                entitlements.append(
-                    RestoreEntitlement(
-                        productID: transaction.productID,
-                        jws: result.jwsRepresentation
-                    )
-                )
-            }
-            return entitlements
+            await Self.loadCurrentEntitlements()
         }
         self.entitlementSync = entitlementSync ?? {
             try await syncEntitlement(jws: $0)
@@ -143,7 +132,9 @@ public actor RestoreService {
         let entitlements = await activeEntitlements()
         var granted: [String] = []
         for entitlement in entitlements {
-            guard RishiProductID.all.contains(entitlement.productID) else { continue }
+            guard RishiProductID.all.contains(entitlement.productID),
+                  entitlement.revocationDate == nil
+            else { continue }
             do {
                 let result = try await entitlementSync(entitlement.jws)
                 guard result.verified else {
@@ -185,7 +176,9 @@ public actor RestoreService {
     /// call unconditionally at launch. No-op when `StoreKitIAPFlag` is OFF
     /// (the flip goes through `setOnDevice`, which is flag-gated).
     public func refreshOnDeviceEntitlementAtLaunch() async {
-        let granted = await activeEntitlements().map(\.productID)
+        let granted = await activeEntitlements()
+            .filter { RishiProductID.all.contains($0.productID) && $0.revocationDate == nil }
+            .map(\.productID)
         guard !granted.isEmpty else {
             Log.event("iap.launch_reconcile.none", level: .info)
             return
@@ -194,6 +187,55 @@ public actor RestoreService {
         Log.event("iap.launch_reconcile.granted", level: .info,
                   data: ["count": "\(granted.count)",
                          "ids": granted.joined(separator: ",")])
+    }
+
+    /// Read the finite current entitlement snapshot for each product Rishi
+    /// recognizes. `Transaction.currentEntitlements` is an asynchronous
+    /// sequence that can remain open for updates on simulator/runtime
+    /// versions, so using it as the launch/restore operation's completion
+    /// boundary can block the app indefinitely. The per-product API returns
+    /// one optional result and gives us the same verified/non-revoked filter
+    /// without waiting on an open sequence.
+    private static func loadCurrentEntitlements() async -> [RestoreEntitlement] {
+        await withTaskGroup(of: RestoreEntitlement?.self) { group in
+            for productID in RishiProductID.all {
+                group.addTask {
+                    guard let result = await currentEntitlement(for: productID),
+                          case .verified(let transaction) = result,
+                          transaction.revocationDate == nil
+                    else { return nil }
+                    return RestoreEntitlement(
+                        productID: transaction.productID,
+                        jws: result.jwsRepresentation
+                    )
+                }
+            }
+
+            var entitlements: [RestoreEntitlement] = []
+            for await entitlement in group {
+                if let entitlement {
+                    entitlements.append(entitlement)
+                }
+            }
+            return entitlements
+        }
+    }
+
+    private static func currentEntitlement(
+        for productID: String
+    ) async -> VerificationResult<Transaction>? {
+        await withTaskGroup(of: VerificationResult<Transaction>?.self) { group in
+            group.addTask {
+                await Transaction.currentEntitlement(for: productID)
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(2))
+                return nil
+            }
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
     }
 
     /// Walks `Transaction.currentEntitlements`, filters to verified +

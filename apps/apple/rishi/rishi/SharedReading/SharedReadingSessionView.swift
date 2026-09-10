@@ -71,7 +71,7 @@ struct SharedReadingSessionView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if let bookId = UUID(uuidString: join.response.book.bookId) {
+                if let bookId = join.localBookId ?? UUID(uuidString: join.response.book.bookId) {
                     NavigationLink {
                         ReaderDestinationView(
                             route: join.response.book.format == .pdf ? .pdf(bookId) : .epub(bookId),

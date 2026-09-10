@@ -59,4 +59,32 @@ struct SharedReadingSessionRepairTests {
         #expect(snapshot.attempts == 2)
         #expect(snapshot.repairs == 1)
     }
+
+    @Test("repairs a locally imported book missing from the server before retrying")
+    func repairsBookMissingFromServer() async throws {
+        let counter = Counter()
+
+        let result = try await SharedReadingSessionCreation.create(
+            operation: {
+                await counter.attempt()
+                let snapshot = await counter.snapshot()
+                if snapshot.attempts == 1 {
+                    throw SharedReadingError.from(
+                        code: .sessionLinkInvalid,
+                        message: "Book not found"
+                    )
+                }
+                return "created"
+            },
+            repair: {
+                await counter.repair()
+                return true
+            }
+        )
+
+        #expect(result == "created")
+        let snapshot = await counter.snapshot()
+        #expect(snapshot.attempts == 2)
+        #expect(snapshot.repairs == 1)
+    }
 }

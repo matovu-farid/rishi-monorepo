@@ -102,13 +102,26 @@ struct RishiChatServiceTests {
         Data(frames.joined().utf8)
     }
 
+    private func streamProvider(
+        frames: [String]
+    ) -> @Sendable () async -> AsyncThrowingStream<Data, Error> {
+        let body = sseBody(frames)
+        return {
+            AsyncThrowingStream { continuation in
+                continuation.yield(body)
+                continuation.finish()
+            }
+        }
+    }
+
     private func makeService(
         userId: UserID = UUID(),
         hook: SpyDirtyHook? = nil,
         worker: WorkerClient,
         conversationStore: any ConversationStore,
         messageStore: any MessageStore,
-        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider()
+        dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
+        streamProvider: (@Sendable () async -> AsyncThrowingStream<Data, Error>)? = nil
     ) -> RishiChatService {
         let lookup = ConversationLookup(store: conversationStore)
         return RishiChatService(
@@ -117,7 +130,8 @@ struct RishiChatServiceTests {
             dataUseConsentProvider: dataUseConsentProvider,
             conversationLookup: lookup,
             messageStore: messageStore,
-            dirtyHook: hook
+            dirtyHook: hook,
+            streamProvider: streamProvider
         )
     }
 
@@ -154,20 +168,17 @@ struct RishiChatServiceTests {
     func happyPathStreamsTokensThenCompleted() async throws {
         let (worker, _) = makeWorker()
         let bookId = UUID()
-        ChatMockURLProtocol.setHandler { _ in
-            let body = self.sseBody([
-                #"data: {"delta":"he"}"# + "\n\n",
-                #"data: {"delta":"llo"}"# + "\n\n",
-                "data: [DONE]\n\n",
-            ])
-            return (self.okResponse(), body)
-        }
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let service = makeService(
             worker: worker,
             conversationStore: convoStore,
-            messageStore: msgStore
+            messageStore: msgStore,
+            streamProvider: streamProvider(frames: [
+                #"data: {"delta":"he"}"# + "\n\n",
+                #"data: {"delta":"llo"}"# + "\n\n",
+                "data: [DONE]\n\n",
+            ])
         )
 
         var events: [ChatEvent] = []
@@ -184,21 +195,18 @@ struct RishiChatServiceTests {
         let (worker, _) = makeWorker()
         let userId = UUID()
         let bookId = UUID()
-        ChatMockURLProtocol.setHandler { _ in
-            let body = self.sseBody([
-                #"data: {"delta":"he"}"# + "\n\n",
-                #"data: {"delta":"llo"}"# + "\n\n",
-                "data: [DONE]\n\n",
-            ])
-            return (self.okResponse(), body)
-        }
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let service = makeService(
             userId: userId,
             worker: worker,
             conversationStore: convoStore,
-            messageStore: msgStore
+            messageStore: msgStore,
+            streamProvider: streamProvider(frames: [
+                #"data: {"delta":"he"}"# + "\n\n",
+                #"data: {"delta":"llo"}"# + "\n\n",
+                "data: [DONE]\n\n",
+            ])
         )
 
         for try await _ in service.stream(query: "what is X?", bookId: bookId) {}
@@ -219,12 +227,6 @@ struct RishiChatServiceTests {
         let (worker, _) = makeWorker()
         let userId = UUID()
         let bookId = UUID()
-        ChatMockURLProtocol.setHandler { _ in
-            (self.okResponse(), self.sseBody([
-                #"data: {"delta":"x"}"# + "\n\n",
-                "data: [DONE]\n\n",
-            ]))
-        }
         let initial = Date(timeIntervalSinceReferenceDate: 0)
         let existing = Conversation(
             userId: userId,
@@ -239,7 +241,11 @@ struct RishiChatServiceTests {
             userId: userId,
             worker: worker,
             conversationStore: convoStore,
-            messageStore: msgStore
+            messageStore: msgStore,
+            streamProvider: streamProvider(frames: [
+                #"data: {"delta":"x"}"# + "\n\n",
+                "data: [DONE]\n\n",
+            ])
         )
 
         for try await _ in service.stream(query: "hi", bookId: bookId) {}
@@ -254,19 +260,17 @@ struct RishiChatServiceTests {
         let (worker, _) = makeWorker()
         let bookId = UUID()
         let hook = SpyDirtyHook()
-        ChatMockURLProtocol.setHandler { _ in
-            (self.okResponse(), self.sseBody([
-                #"data: {"delta":"x"}"# + "\n\n",
-                "data: [DONE]\n\n",
-            ]))
-        }
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let service = makeService(
             hook: hook,
             worker: worker,
             conversationStore: convoStore,
-            messageStore: msgStore
+            messageStore: msgStore,
+            streamProvider: streamProvider(frames: [
+                #"data: {"delta":"x"}"# + "\n\n",
+                "data: [DONE]\n\n",
+            ])
         )
 
         for try await _ in service.stream(query: "hi", bookId: bookId) {}

@@ -2,6 +2,26 @@ import { ErrorCodes, RegistryError } from "./instance-registry.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export function bookReadinessIdentifier(bookIdentifier) {
+  return bookIdentifier.split("#", 1)[0];
+}
+
+async function waitForBook(state, app, bookIdentifier, timeoutMs = 60000) {
+  const readinessIdentifier = bookReadinessIdentifier(bookIdentifier);
+  const deadline = Date.now() + timeoutMs;
+  let lastState;
+  while (Date.now() < deadline) {
+    lastState = await state(app);
+    if ((lastState.accessibility?.tree ?? "").toLowerCase().includes(readinessIdentifier.toLowerCase())) return lastState;
+    await sleep(500);
+  }
+  throw new RegistryError(ErrorCodes.WAIT_TIMEOUT, `book was not ready before timeout: ${bookIdentifier}`, {
+    app,
+    bookIdentifier,
+    state: lastState?.accessibility ?? null,
+  });
+}
+
 function inviteFromState(result) {
   const visible = result.accessibility?.tree ?? "";
   const candidate = visible.match(/https?:\/\/[^\s'"<>]+/i)?.[0]?.replace(/[),.;]+$/, "") ?? null;
@@ -20,13 +40,17 @@ export function createToolHandlers({ driver, registry, memory }) {
       if (identifier && !(result.accessibility?.tree ?? "").includes(identifier)) throw new RegistryError(ErrorCodes.ACTION_NOT_SUPPORTED, `semantic identifier not found: ${identifier}`);
       return { app, state: result.accessibility ?? null, screenshots: result.screenshots ?? [] };
     },
+    read_app_logs: async ({ app, limit = 200 }) => driver.logs(app, limit),
     capture_screenshot: async ({ app }) => {
       const result = await state(app, true);
       return { app, screenshots: result.screenshots ?? [] };
     },
     select_book: async ({ app, identifier, action }) => driver.clickIdentifier(app, identifier, action === "select_to_share" ? "context_menu" : "open"),
+    click_text: async ({ app, text, index }) => driver.request(app, { op: "tapText", text, ...(index === undefined ? {} : { index }) }),
     create_reading_session: async ({ app, bookIdentifier }) => {
+      await waitForBook(state, app, bookIdentifier);
       await driver.clickIdentifier(app, bookIdentifier, "context_menu");
+      await sleep(500);
       await driver.clickText(app, "Select to Share");
       await driver.clickText(app, "Start reading");
       await driver.clickText(app, "Create reading link");

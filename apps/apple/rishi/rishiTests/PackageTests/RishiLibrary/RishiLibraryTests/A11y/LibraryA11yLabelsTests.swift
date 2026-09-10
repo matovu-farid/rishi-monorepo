@@ -12,9 +12,11 @@ struct LibraryA11yLabelsTests {
             .deletingLastPathComponent()   // A11y/
             .deletingLastPathComponent()   // RishiLibraryTests/
             .deletingLastPathComponent()   // Tests/
-            .deletingLastPathComponent()   // RishiLibrary/ (package root)
+            .deletingLastPathComponent()   // RishiLibrary/ (package test group)
+            .deletingLastPathComponent()   // PackageTests/
+            .deletingLastPathComponent()   // rishiTests/
         return packageRoot
-            .appendingPathComponent("Sources/RishiLibrary/Views", isDirectory: true)
+            .appendingPathComponent("rishi/Modules/RishiLibrary/RishiLibrary/Views", isDirectory: true)
     }
 
     private static func librarySources() throws -> [URL] {
@@ -63,6 +65,7 @@ struct LibraryA11yLabelsTests {
         #expect(s.contains("Delete \\(book.title)"))
         // Hint guides VoiceOver users on how to interact.
         #expect(s.contains(".accessibilityHint("))
+        #expect(s.contains(".accessibilityValue(book.formatType.rawValue)"))
     }
 
     @Test("BookCoverImageView is decoratively hidden from VoiceOver")

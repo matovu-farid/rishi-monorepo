@@ -25,6 +25,7 @@ struct BookImporterTests {
         rootURL: URL,
         bookStore: any BookStore,
         bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook(),
+        metadataExtractors: [String: any MetadataExtractor]? = nil,
         isTombstoned: (@Sendable (BookID) async -> Bool)? = nil
     ) -> BookImporter {
         BookImporter(
@@ -35,7 +36,7 @@ struct BookImporterTests {
                 "pdf": PDFKitCoverExtractor(targetSize: CGSize(width: 120, height: 160)),
                 "epub": EpubCoverExtractor()
             ],
-            metadataExtractors: [
+            metadataExtractors: metadataExtractors ?? [
                 "pdf": PDFKitMetadataExtractor(),
                 "epub": EpubMetadataExtractor()
             ],
@@ -87,17 +88,17 @@ struct BookImporterTests {
         }
     }
 
-    @Test("importBook mints deterministic ids — same metadata across filenames collapses to one id")
-    func deterministicId_collapsesAcrossFilenames() async throws {
+    @Test("importBook keeps different content separate even when metadata matches")
+    func differentContent_sameMetadata_getsSeparateIdentity() async throws {
         let root = makeTempRoot("import-dedup")
         defer { try? FileManager.default.removeItem(at: root) }
         let srcDir = makeTempRoot("import-dedup-src")
         defer { try? FileManager.default.removeItem(at: srcDir) }
-        // Same embedded metadata, different filenames -> same deterministic id.
+        // Same embedded metadata, different content -> separate identities.
         let srcA = srcDir.appendingPathComponent("alpha.epub")
         let srcB = srcDir.appendingPathComponent("beta.epub")
         try await FixtureBuilders.writeTinyEPUB(to: srcA, withCover: true)
-        try await FixtureBuilders.writeTinyEPUB(to: srcB, withCover: true)
+        try await FixtureBuilders.writeTinyEPUB(to: srcB, withCover: false)
 
         let store = InMemoryBookStore()
         let importer = makeImporter(rootURL: root, bookStore: store)
@@ -106,7 +107,59 @@ struct BookImporterTests {
         let bookA = try await importer.importBook(from: srcA, ownerId: userId)
         let bookB = try await importer.importBook(from: srcB, ownerId: userId)
 
-        #expect(bookA.id == bookB.id, "Identical metadata must collapse to one deterministic id")
+        #expect(bookA.id != bookB.id, "Different content must not overwrite an existing book")
+        #expect((await store.snapshot()).count == 2)
+    }
+
+    @Test("importBook deduplicates identical content even when metadata differs")
+    func contentHash_deduplicatesDifferentMetadata() async throws {
+        let root = makeTempRoot("import-content-hash")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("import-content-hash-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let srcA = srcDir.appendingPathComponent("first-copy.pdf")
+        let srcB = srcDir.appendingPathComponent("second-copy.pdf")
+        try FixtureBuilders.writeTinyPDF(to: srcA)
+        try FileManager.default.copyItem(at: srcA, to: srcB)
+
+        let store = InMemoryBookStore()
+        let importer = makeImporter(rootURL: root, bookStore: store, metadataExtractors: [:])
+        let userId = UUID()
+
+        let bookA = try await importer.importBook(from: srcA, ownerId: userId)
+        let bookB = try await importer.importBook(from: srcB, ownerId: userId)
+
+        #expect(bookB.id == bookA.id)
+        #expect((await store.snapshot()).count == 1)
+    }
+
+    @Test("importBook deduplicates concurrent copies of the same content")
+    func concurrentImports_sameContent_createOneBook() async throws {
+        let root = makeTempRoot("import-concurrent-dedup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("import-concurrent-dedup-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let srcA = srcDir.appendingPathComponent("copy-a.pdf")
+        let srcB = srcDir.appendingPathComponent("copy-b.pdf")
+        try FixtureBuilders.writeTinyPDF(to: srcA)
+        try FileManager.default.copyItem(at: srcA, to: srcB)
+
+        let store = InMemoryBookStore()
+        let importer = makeImporter(rootURL: root, bookStore: store, metadataExtractors: [:])
+        let userId = UUID()
+        let imported = try await withThrowingTaskGroup(of: Book.self, returning: [Book].self) { group in
+            group.addTask { try await importer.importBook(from: srcA, ownerId: userId) }
+            group.addTask { try await importer.importBook(from: srcB, ownerId: userId) }
+            var books: [Book] = []
+            for try await book in group {
+                books.append(book)
+            }
+            return books
+        }
+
+        #expect(imported.count == 2)
+        #expect(Set(imported.map(\.id)).count == 1)
+        #expect((await store.snapshot()).count == 1)
     }
 
     @Test("importBook rotates identity when the deterministic candidate is tombstoned")

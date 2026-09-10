@@ -60,7 +60,9 @@ struct ReadAheadCoordinatorTests {
 
         let requested = await waitForRequests(source, count: 2)
         
-        #expect(requested.map { $0.text } == ["b", "c"])
+        // TTSPrewarmer intentionally warms requests concurrently; completion
+        // order is not part of the coordinator contract.
+        #expect(requested.map { $0.text }.sorted() == ["b", "c"])
         
         #expect(requested.allSatisfy { $0.passageId == nil })
         #expect(requested.allSatisfy { $0.voice == "v" && $0.model == "eleven_v3" && $0.speed == 1.0 })

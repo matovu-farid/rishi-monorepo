@@ -42,6 +42,7 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
     private var pendingToolCalls: [RealtimeToolCallEvent] = []
     private var sentToolResults: [(callId: String, payload: String)] = []
+    private var toolResultWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var sendToolResultError: RealtimeClientError?
 
     public init() {}
@@ -185,6 +186,24 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     /// Responder wrote the expected payload back.
     public func sentToolResultsSnapshot() -> [(callId: String, payload: String)] {
         lock.withLock { sentToolResults }
+    }
+
+    /// Wait until a result for `callId` has been recorded. This is an
+    /// event-driven test seam; callers do not need to guess how long a
+    /// chapter-index or tool handler will take.
+    public func waitForToolResult(callId: String) async {
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = lock.withLock { () -> Bool in
+                if sentToolResults.contains(where: { $0.callId == callId }) {
+                    return true
+                }
+                toolResultWaiters[callId, default: []].append(continuation)
+                return false
+            }
+            if resumeImmediately {
+                continuation.resume()
+            }
+        }
     }
 
     /// Stage a one-shot error for the next `sendToolResult(...)` call. Cleared
@@ -331,8 +350,10 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
             lock.withLock { self.sendToolResultError = nil }
             throw stagedError
         }
-        lock.withLock {
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             self.sentToolResults.append((callId: callId, payload: payload))
+            return self.toolResultWaiters.removeValue(forKey: callId) ?? []
         }
+        for waiter in waiters { waiter.resume() }
     }
 }

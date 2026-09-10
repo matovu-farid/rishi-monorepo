@@ -23,7 +23,8 @@ struct EphemeralKeyFetcherTests {
         return WorkerClient(
             baseURL: URL(string: "https://api.fidexa.org")!,
             session: session,
-            tokenProvider: StaticTokenProvider("stub-token")
+            tokenProvider: StaticTokenProvider("stub-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
     }
 

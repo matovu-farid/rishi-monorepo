@@ -200,8 +200,8 @@ struct SettingsScreenSmokeTests {
             footerDetectionStore: InMemoryFooterDetectionStore(initial: true),
             billingEntitlement: .init(isGranted: true),
             onSubscribe: {},
-            onSignOut: {},
             onEditUsername: {},
+            onSignOut: {},
             onDelete: {},
             onDeleted: {},
             onDismiss: {}

@@ -96,6 +96,10 @@ struct VoiceSessionPresenterSingleSessionTests {
         func messageDidUpdate(_ id: MessageID) async {}
     }
 
+    private struct GrantedMicGate: MicPermissionGate {
+        func request() async -> MicPermissionDecision { .granted }
+    }
+
     private struct InstantKeyFetcher: EphemeralKeyFetching {
         func fetch(
             language: String?,
@@ -167,6 +171,7 @@ struct VoiceSessionPresenterSingleSessionTests {
             conversationLookup: ConversationLookup(store: store),
             userIdProvider: { userId },
             dirtyHook: StubDirtyHook(),
+            micGate: GrantedMicGate(),
             clientFactory: { RecordingRealtimeClient() },
             keyFetcherFactory: { InstantKeyFetcher() },
             sessionCoordinatorFactory: { nil }
@@ -215,6 +220,7 @@ struct VoiceSessionPresenterSingleSessionTests {
             conversationLookup: ConversationLookup(store: store),
             userIdProvider: { userId },
             dirtyHook: StubDirtyHook(),
+            micGate: GrantedMicGate(),
             clientFactory: { client },
             keyFetcherFactory: { InstantKeyFetcher() },
             sessionCoordinatorFactory: { nil }

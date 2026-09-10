@@ -391,7 +391,35 @@ enum ServiceGraphFactory {
             await embedderForPrewarm.prewarm()
         }
 
-        let voiceSessionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+        #if DEBUG
+            let isUITest = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        #else
+            let isUITest = false
+        #endif
+
+        let voiceSessionCoordinator: any VoiceSessionCoordinating
+        let voiceClientFactory: @MainActor () -> any RealtimeClientAPI
+        let voiceControlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)?
+        let micPermissionGate: any MicPermissionGate
+        #if DEBUG
+            if isUITest {
+                voiceSessionCoordinator = UITestVoiceSessionCoordinator()
+                voiceClientFactory = { UITestRealtimeClient() }
+                voiceControlSocketFactory = { _, _ in nil }
+                micPermissionGate = UITestMicPermissionGate()
+            } else {
+                let productionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+                voiceSessionCoordinator = productionCoordinator
+                voiceClientFactory = { RealtimeAPIAdapter() }
+                voiceControlSocketFactory = nil
+                micPermissionGate = SystemMicPermissionGate()
+            }
+        #else
+            voiceSessionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+            voiceClientFactory = { RealtimeAPIAdapter() }
+            voiceControlSocketFactory = nil
+            micPermissionGate = SystemMicPermissionGate()
+        #endif
         let chapterIndexCache = ServiceGraphChapterIndexCoordinatorCache()
         let chapterIndexContentVersionProvider: @Sendable (BookID) async -> String? = { bookId in
             guard let book = try? await bookStore.book(bookId) else { return nil }
@@ -455,11 +483,14 @@ enum ServiceGraphFactory {
                 conversationLookup: conversationLookup,
                 userIdProvider: { [userIdBox] in userIdBox.value },
                 dirtyHook: voiceDirtyAdapter,
+                micGate: micPermissionGate,
                 bookSearch: bookSearch,
                 embedderPrewarm: embedderPrewarm,
                 chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
                 chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
+                clientFactory: voiceClientFactory,
                 sessionCoordinatorFactory: { voiceSessionCoordinator },
+                controlSocketFactory: voiceControlSocketFactory,
                 sessionRegistry: voiceSessionRegistry,
             )
         }

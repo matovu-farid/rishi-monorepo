@@ -21,6 +21,7 @@ actor SharedReadingSessionCoordinator {
     private let transport: any SharedReadingSignalingTransport
     private let localParticipantUserId: String
     private let refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?
+    private let refreshBearerToken: (@Sendable () async throws -> String)?
 
     private var eventTask: Task<Void, Never>?
     private var didFinish = false
@@ -39,11 +40,13 @@ actor SharedReadingSessionCoordinator {
     init(
         transport: any SharedReadingSignalingTransport,
         localParticipantUserId: String,
-        refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)? = nil
+        refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)? = nil,
+        refreshBearerToken: (@Sendable () async throws -> String)? = nil
     ) {
         self.transport = transport
         self.localParticipantUserId = localParticipantUserId
         self.refreshAdmission = refreshAdmission
+        self.refreshBearerToken = refreshBearerToken
 
         var continuation: AsyncStream<SharedReadingSessionCoordinatorSnapshot>.Continuation!
         self.stateUpdates = AsyncStream { continuation = $0 }
@@ -81,7 +84,12 @@ actor SharedReadingSessionCoordinator {
         }
 
         do {
-            try await transport.connect(admission: admission, bearerToken: bearerToken, refreshAdmission: refreshAdmission)
+            try await transport.connect(
+                admission: admission,
+                bearerToken: bearerToken,
+                refreshAdmission: refreshAdmission,
+                refreshBearerToken: refreshBearerToken
+            )
         } catch {
             eventTask?.cancel()
             eventTask = nil

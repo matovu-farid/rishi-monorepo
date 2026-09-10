@@ -61,6 +61,11 @@ struct SilentPushHandlerTests {
         func upsert(_ message: Message) async throws {}
         func delete(_ id: MessageID) async throws {}
     }
+    private actor StubChapterIndexPersistence: ChapterIndexPersistence {
+        func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+        func upsertChapterIndex(_ index: ChapterIndex) async throws {}
+        func markChapterIndexDirty(bookID: BookID) async throws {}
+    }
 
     // MARK: - URLProtocol counter
 
@@ -85,15 +90,19 @@ struct SilentPushHandlerTests {
         config.protocolClasses = [SilentPushMockURLProtocol.self]
         let session = URLSession(configuration: config)
         SilentPushMockURLProtocol.handler = { request in
-            if request.url?.path == "/api/sync/changes" {
+            if request.url?.path == "/api/sync/changes" || request.url?.path == "/api/sync/events" {
                 return (200, changesResponseBody, nil)
+            }
+            if request.url?.path == "/api/sync/conversations" || request.url?.path == "/api/sync/messages" {
+                return (200, Data("{\"rows\":[]}".utf8), nil)
             }
             return (404, Data(), nil)
         }
         let client = WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
         let metadata = StubMetadata()
         let queue = SyncQueue(metadataStore: metadata)
@@ -109,6 +118,12 @@ struct SilentPushHandlerTests {
         let conversationUploader = ConversationUploader(workerClient: client, conversationStore: StubConversationStore(), metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: client, messageStore: StubMessageStore(), metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
+        let chapterIndexUploader = ChapterIndexUploader(
+            workerClient: client,
+            bookStore: bookStore,
+            persistence: StubChapterIndexPersistence(),
+            metadataStore: metadata
+        )
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let conversationStore = StubConversationStore()
@@ -126,6 +141,7 @@ struct SilentPushHandlerTests {
                 conversationUploader: conversationUploader,
                 messageUploader: messageUploader,
                 bookmarkUploader: bookmarkUploader,
+                chapterIndexUploader: chapterIndexUploader,
                 fetcher: fetcher,
                 applier: applier,
                 conversationsFetcher: conversationsFetcher,

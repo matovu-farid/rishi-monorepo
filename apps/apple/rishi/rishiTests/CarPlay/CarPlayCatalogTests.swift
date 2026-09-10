@@ -11,7 +11,7 @@ struct CarPlayCatalogTests {
     func filtersToPlayableCurrentUserBooks() {
         let epub = makeBook("000000000101", title: "Playable")
         let pdf = makeBook("000000000102", title: "PDF", format: .pdf)
-        let otherUserEPUB = makeBook("000000000103", userID: otherUserID, title: "Other User")
+        let otherUserEPUB = makeBook("000000000103", title: "Other User", userID: otherUserID)
 
         let snapshot = CarPlayCatalog.project(
             currentUserID: currentUserID,
@@ -55,7 +55,7 @@ struct CarPlayCatalogTests {
         #expect(snapshot.sections.map(\.kind) == [.continueListening, .library])
         #expect(snapshot.sections[0].rows.map(\.id) == [newest.id, older.id])
         #expect(snapshot.sections[1].rows.map(\.id) == [
-            alpha.id, sameLowerID.id, sameHigherID.id, newest.id, older.id, zulu.id
+            alpha.id, newest.id, older.id, sameLowerID.id, sameHigherID.id, zulu.id
         ])
     }
 
@@ -71,8 +71,8 @@ struct CarPlayCatalogTests {
             positions: [
                 Position(bookId: inProgress.id, locator: "start", percentComplete: 0.5)
             ],
-            coverDataByBookID: [inProgress.id: coverData],
-            perSectionCap: 10
+            perSectionCap: 10,
+            coverDataByBookID: [inProgress.id: coverData]
         )
 
         #expect(snapshot.sections[0].rows.first(where: { $0.id == inProgress.id })?.coverData == coverData)
@@ -181,8 +181,8 @@ struct CarPlayCatalogTests {
 
     private func makeBook(
         _ id: String,
-        userID: UserID? = nil,
         title: String,
+        userID: UserID? = nil,
         format: BookFormat = .epub
     ) -> Book {
         Book(

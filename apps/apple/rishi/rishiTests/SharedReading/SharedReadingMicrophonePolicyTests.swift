@@ -1,4 +1,5 @@
 import XCTest
+@testable import rishi
 
 final class SharedReadingMicrophonePolicyTests: XCTestCase {
     func testStartsUnmutedAndSpeaksWhenReadingIsPaused() {

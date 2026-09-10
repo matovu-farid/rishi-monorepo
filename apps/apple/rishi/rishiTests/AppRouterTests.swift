@@ -11,7 +11,7 @@ import SwiftUI
 
 
 @MainActor
-@Suite("AppRouter")
+@Suite("AppRouter", .serialized)
 struct AppRouterTests {
 
     
@@ -103,6 +103,21 @@ struct AppRouterTests {
         #expect(router.path.isEmpty)
     }
 
+    @Test("app-boundary dispatcher accepts session deep links")
+    func appBoundaryDispatcherAcceptsSessionDeepLink() async {
+        let token = "session-\(UUID().uuidString)"
+        let url = URL(string: "rishi://sharing/session?token=\(token)")!
+
+        #expect(AppRouter.enqueueShareOrSessionToken(from: url))
+
+        for _ in 0..<20 {
+            if await PendingSessionInviteStore.anonymous.load() == token { break }
+            await Task.yield()
+        }
+        #expect(await PendingSessionInviteStore.anonymous.load() == token)
+        await PendingSessionInviteStore.anonymous.clear()
+    }
+
     
 
     @Test("openBook deep link resolves book, fires onBookResolved, replaces path")
@@ -126,23 +141,25 @@ struct AppRouterTests {
         router.onBookResolved = { b in resolvedBook = b }
 
         let url = URL(string: "rishi://book/\(bookId.uuidString)")!
-        _ = await AppDependencies.shared.replaceUserId(userID)
+        AppDependencies.shared.userIdBox.value = userID
         router.handle(
             url: url,
             bookStore: store,
             conversationStore: nil,
-            currentUserID: book.userId
+            currentUserID: book.userId,
+            currentUserIDProvider: { book.userId }
         )
 
         
-        await Task.yield()
-        await Task.yield()
-        await Task.yield()
+        for _ in 0..<100 {
+            if resolvedBook != nil { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
 
         #expect(resolvedBook?.id == bookId)
         
         #expect(router.path.count == 1)
-        _ = await AppDependencies.shared.replaceUserId(nil)
+        AppDependencies.shared.userIdBox.value = nil
     }
 
     @Test("openConversation deep link resolves conversation, fires onConversationResolved")
@@ -161,22 +178,24 @@ struct AppRouterTests {
         router.onConversationResolved = { c in resolvedConvo = c }
 
         let url = URL(string: "rishi://conversation/\(convoId.uuidString)")!
-        _ = await AppDependencies.shared.replaceUserId(userID)
+        AppDependencies.shared.userIdBox.value = userID
         router.handle(
             url: url,
             bookStore: nil,
             conversationStore: store,
-            currentUserID: convo.userId
+            currentUserID: convo.userId,
+            currentUserIDProvider: { convo.userId }
         )
 
-        await Task.yield()
-        await Task.yield()
-        await Task.yield()
+        for _ in 0..<100 {
+            if resolvedConvo != nil { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
 
         #expect(resolvedConvo?.id == convoId)
         
         #expect(router.path.isEmpty)
-        _ = await AppDependencies.shared.replaceUserId(nil)
+        AppDependencies.shared.userIdBox.value = nil
     }
 
     @Test("openBook with nil bookStore is a no-op")

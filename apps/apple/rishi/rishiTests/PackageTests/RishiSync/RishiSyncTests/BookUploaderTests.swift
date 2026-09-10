@@ -89,8 +89,26 @@ struct BookUploaderTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
+    }
+
+    private func body(of request: URLRequest) -> Data? {
+        if let httpBody = request.httpBody { return httpBody }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 2_048
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
     }
 
     // MARK: - Tests
@@ -141,7 +159,7 @@ struct BookUploaderTests {
         #expect(captured[1].httpMethod == "PUT")
         #expect(captured[1].url?.absoluteString == presignedURL)
         #expect(captured[2].url?.path == "/api/sync/push")
-        let pushed = try #require(captured[2].httpBody)
+        let pushed = try #require(body(of: captured[2]))
         let pushJSON = try #require(try JSONSerialization.jsonObject(with: pushed) as? [String: Any])
         let changes = try #require(pushJSON["changes"] as? [[String: Any]])
         let payload = try #require(changes.first?["payload"] as? [String: Any])

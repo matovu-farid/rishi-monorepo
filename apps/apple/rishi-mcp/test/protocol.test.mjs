@@ -6,6 +6,7 @@ test("publishes the semantic Apple testing tools", () => {
   assert.equal(SERVER_INFO.name, "rishi-apple-mcp");
   assert.ok(TOOLS.some((tool) => tool.name === "inspect_app_state"));
   assert.ok(TOOLS.some((tool) => tool.name === "create_reading_session"));
+  assert.ok(TOOLS.some((tool) => tool.name === "read_app_logs"));
 });
 
 test("rejects missing and unknown tool arguments before acting", () => {

@@ -63,7 +63,7 @@ struct ReaderDestinationTests {
             .appendingPathComponent("rishi/Library/LibraryTabView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        let cleanup = try #require(source.range(of: "await dependencies.voicePresenter.cleanupRegisteredReaderSessions()"))
+        let cleanup = try #require(source.range(of: "dependencies.voicePresenter.scheduleRegisteredReaderCleanup()"))
         let route = source.range(of: "router.path.append(ReaderRoute.route(for: book))")
         #expect(route != nil)
         #expect(cleanup.lowerBound < route!.lowerBound)
@@ -78,10 +78,12 @@ struct ReaderDestinationTests {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         let cleanup = try #require(
-            source.range(of: "await services.voice.presenter.cleanupRegisteredReaderSessions()")
+            source.range(of: "services.voice.presenter.scheduleRegisteredReaderCleanup()")
         )
         let handle = try #require(source.range(of: "router.handle(") )
-        #expect(cleanup.lowerBound < handle.lowerBound)
+        // The cleanup callback is supplied to the router call and is invoked
+        // by the router before presenting the resolved reader.
+        #expect(handle.lowerBound < cleanup.lowerBound)
     }
 
     @Test("deep-link router awaits cleanup before presenting a resolved book")

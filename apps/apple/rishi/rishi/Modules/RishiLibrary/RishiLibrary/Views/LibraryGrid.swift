@@ -13,6 +13,9 @@ struct LibraryGrid: View {
     public let onBeginSelection: (Book) -> Void
     public let onToggleSelection: (Book) -> Void
     public let onShareSingle: (Book) -> Void
+    public let onStartSharedReading: (Book) -> Void
+
+    static let startSharedReadingContextMenuTitle = "Start Shared Reading"
 
     @State private var pendingDelete: Book?
 
@@ -36,7 +39,8 @@ struct LibraryGrid: View {
         selectedBookIDs: Set<BookID> = [],
         onBeginSelection: @escaping (Book) -> Void = { _ in },
         onToggleSelection: @escaping (Book) -> Void = { _ in },
-        onShareSingle: @escaping (Book) -> Void = { _ in }
+        onShareSingle: @escaping (Book) -> Void = { _ in },
+        onStartSharedReading: @escaping (Book) -> Void = { _ in }
     ) {
         self.books = books
         self.positionLookup = positionLookup
@@ -48,6 +52,7 @@ struct LibraryGrid: View {
         self.onBeginSelection = onBeginSelection
         self.onToggleSelection = onToggleSelection
         self.onShareSingle = onShareSingle
+        self.onStartSharedReading = onStartSharedReading
     }
     
 
@@ -115,6 +120,7 @@ struct LibraryGrid: View {
         .accessibilityElement(children: .combine)
 
         .accessibilityIdentifier("library-book-cell")
+        .accessibilityValue(book.formatType.rawValue)
         .accessibilityLabel(accessibilityText(for: book))
         .accessibilityHint(
             selectionMode
@@ -126,6 +132,11 @@ struct LibraryGrid: View {
                 onShareSingle(book)
             } label: {
                 Label("Share Book", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                onStartSharedReading(book)
+            } label: {
+                Label(Self.startSharedReadingContextMenuTitle, systemImage: "person.3.fill")
             }
             Button {
                 onBeginSelection(book)

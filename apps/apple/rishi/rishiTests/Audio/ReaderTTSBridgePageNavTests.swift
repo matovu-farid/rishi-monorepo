@@ -46,10 +46,11 @@ struct ReaderTTSBridgePageNavTests {
     
     @Test("new page refreshes paragraphs and resets to passage 0 (port of tts-page-navigation.spec)")
     func newPageResetsToPassageZero() async {
-        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .normal) })
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
 
         await env.bridge.start(paragraphs: ["a", "b"])
-        
+        await waitUntil(timeout: 5) { env.recorder.nonNilIndices.contains(0) }
+        await env.bridge.jump(to: 1)
         await waitUntil(timeout: 5) { env.recorder.nonNilIndices.contains(1) }
 
         let countBeforeSecondStart = env.recorder.events.count
@@ -74,7 +75,7 @@ struct ReaderTTSBridgePageNavTests {
     
     @Test("page change tears down old session before new start (no bleed)")
     func pageChangeTearsDownOldSessionBeforeNewStart() async {
-        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .normal) })
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
 
         await env.bridge.start(paragraphs: ["a", "b"])
         await waitUntil(timeout: 5) { env.recorder.nonNilIndices.contains(0) }
@@ -135,7 +136,7 @@ struct ReaderTTSBridgePageNavTests {
     
     @Test("jump(to: k) plays paragraph k (port of resume-paragraph / read-aloud-from-selection)")
     func jumpPlaysTargetParagraph() async {
-        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .normal) })
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
 
         await env.bridge.start(paragraphs: ["a", "b", "c", "d"])
         await waitUntil(timeout: 5) { env.recorder.nonNilIndices.contains(0) }

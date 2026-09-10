@@ -17,6 +17,7 @@ struct BookmarkUploaderTests {
     private actor StubMetadata: SyncMetadataStore {
         var cleanCalls: [(UUID, SyncEntityKind, Date, String?)] = []
         var forgetCalls: [(UUID, SyncEntityKind)] = []
+        var tombstoneAcknowledgements: [(UUID, SyncEntityKind)] = []
 
         func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {}
         func markClean(entityId: UUID, kind: SyncEntityKind, lastSyncedAt: Date, remoteEtag: String?) async throws {
@@ -30,11 +31,17 @@ struct BookmarkUploaderTests {
         func forget(entityId: UUID, kind: SyncEntityKind) async throws {
             forgetCalls.append((entityId, kind))
         }
+        func acknowledgeTombstoneIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+            tombstoneAcknowledgements.append((entityId, kind))
+            return true
+        }
 
         func cleanIds() -> [UUID] { cleanCalls.map(\.0) }
         func cleanKinds() -> [SyncEntityKind] { cleanCalls.map(\.1) }
         func forgetIds() -> [UUID] { forgetCalls.map(\.0) }
         func forgetKinds() -> [SyncEntityKind] { forgetCalls.map(\.1) }
+        func acknowledgedTombstoneIds() -> [UUID] { tombstoneAcknowledgements.map(\.0) }
+        func acknowledgedTombstoneKinds() -> [SyncEntityKind] { tombstoneAcknowledgements.map(\.1) }
     }
 
     private actor StubBookmarkStore: BookmarkStore {
@@ -61,7 +68,8 @@ struct BookmarkUploaderTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
     }
 
@@ -132,7 +140,7 @@ struct BookmarkUploaderTests {
         #expect(BookmarkUploaderMockURLProtocol.capturedSnapshot().isEmpty)
     }
 
-    @Test("Missing local row -> tombstone (deleted=true) in body + metadata.forget(.bookmark)")
+    @Test("Missing local row -> tombstone (deleted=true) in body + retained metadata tombstone")
     func missingRowTombstones() async throws {
         BookmarkUploaderMockURLProtocol.reset()
         let session = makeSession()
@@ -181,10 +189,11 @@ struct BookmarkUploaderTests {
         ])
 
         #expect(pushed == 1)
-        let forgotten = await metadata.forgetIds()
-        #expect(forgotten == [missingId])
-        let forgetKinds = await metadata.forgetKinds()
-        #expect(forgetKinds == [.bookmark])
+        let acknowledged = await metadata.acknowledgedTombstoneIds()
+        #expect(acknowledged == [missingId])
+        let acknowledgedKinds = await metadata.acknowledgedTombstoneKinds()
+        #expect(acknowledgedKinds == [.bookmark])
+        #expect((await metadata.forgetIds()).isEmpty)
         let cleaned = await metadata.cleanIds()
         #expect(cleaned.isEmpty)
 
@@ -264,7 +273,7 @@ struct BookmarkUploaderTests {
         #expect(payload["created_at"] is String)
     }
 
-    @Test("Mixed live + tombstone batch: markClean + forget split correctly")
+    @Test("Mixed live + tombstone batch: markClean + retained tombstone split correctly")
     func mixedBatch() async throws {
         BookmarkUploaderMockURLProtocol.reset()
         let session = makeSession()
@@ -300,8 +309,8 @@ struct BookmarkUploaderTests {
 
         #expect(pushed == 2)
         let cleaned = await metadata.cleanIds()
-        let forgotten = await metadata.forgetIds()
+        let acknowledged = await metadata.acknowledgedTombstoneIds()
         #expect(cleaned == [liveBookmark.id])
-        #expect(forgotten == [tombstonedId])
+        #expect(acknowledged == [tombstonedId])
     }
 }

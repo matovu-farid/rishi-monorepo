@@ -46,6 +46,10 @@ public actor SharePackageService {
         case syncQueueUnavailable
     }
 
+    private struct PartialImportError: Error {
+        let importedCount: Int
+    }
+
     private let workerClient: WorkerClient
     private let bookStore: any BookStore
     private let fileStorage: BookFileStorage
@@ -364,6 +368,9 @@ public actor SharePackageService {
                 if tokenImportedCount > 0 {
                     NotificationCenter.default.post(name: Self.libraryDidChange, object: nil)
                 }
+            } catch let error as PartialImportError {
+                importedCount += error.importedCount
+                Log.error("sharing.pending_redeem.partial_failure", error: error)
             } catch {
                 if isTerminalShareError(error) {
                     await pendingStore.remove(token: token)
@@ -403,6 +410,7 @@ public actor SharePackageService {
         // would turn a transient persistence error into a duplicate import.
         var existingBooks = try await bookStore.books(for: userID)
         for item in items {
+            do {
             guard await currentUserId() == userID else { throw ServiceError.accountChanged }
             guard let format = BookFormat(rawValue: item.format.lowercased()) else {
                 throw ServiceError.invalidBookFormat(item.format)
@@ -420,7 +428,7 @@ public actor SharePackageService {
             }
             let recordedLocalID = await pendingStore.bookID(token: token, userID: userID, packageID: packageID, itemID: item.id)
             var localID = recordedLocalID
-                ?? DeterministicBookID.make(title: item.title, author: item.author, format: format)
+                ?? DeterministicBookID.make(title: item.title, author: item.author, format: format, ownerId: userID)
                 ?? UUID()
             if let existingLocal = try await bookStore.book(localID),
                recordedLocalID == nil || existingLocal.userId != userID {
@@ -469,6 +477,12 @@ public actor SharePackageService {
                 imported += 1
             } else {
                 Log.event("sharing.pending_redeem.item_skipped", data: ["reason": "local_file_present"])
+            }
+            } catch {
+                if let serviceError = error as? ServiceError, serviceError == .accountChanged {
+                    throw error
+                }
+                throw PartialImportError(importedCount: imported)
             }
         }
         if requiresSync {

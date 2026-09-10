@@ -44,7 +44,8 @@ struct RemoteChangeFetcherTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token")
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
     }
 

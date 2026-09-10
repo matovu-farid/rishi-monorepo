@@ -25,7 +25,12 @@ struct TTSRoundTripOfflineTests {
 
     private func loadFixtureMP3() throws -> Data {
         let url = try #require(
-            PackageTestResourceBundle.bundle.url(forResource: "alice-p0", withExtension: "mp3", subdirectory: "Fixtures"),
+            PackageTestResourceBundle.url(
+                forResource: "alice-p0",
+                withExtension: "mp3",
+                subdirectory: "Fixtures",
+                relativeTo: #filePath
+            ),
             "alice-p0.mp3 fixture must be bundled via Package.swift resources"
         )
         return try Data(contentsOf: url)
@@ -33,7 +38,12 @@ struct TTSRoundTripOfflineTests {
 
     private func loadExpectedText() throws -> String {
         let url = try #require(
-            PackageTestResourceBundle.bundle.url(forResource: "alice-p0-expected", withExtension: "txt", subdirectory: "Fixtures"),
+            PackageTestResourceBundle.url(
+                forResource: "alice-p0-expected",
+                withExtension: "txt",
+                subdirectory: "Fixtures",
+                relativeTo: #filePath
+            ),
             "alice-p0-expected.txt ground-truth fixture must be bundled via Package.swift resources"
         )
         return try String(contentsOf: url, encoding: .utf8)

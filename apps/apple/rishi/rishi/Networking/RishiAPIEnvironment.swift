@@ -1,16 +1,14 @@
 import Foundation
 
 enum RishiAPIEnvironmentMode: String, Sendable, Equatable {
-    case development
     case production
 }
 
 /// The only application-level source of Worker endpoint selection.
 ///
 /// The HTTP endpoint is used by WorkerClient and specialized API clients. The
-/// WebSocket endpoint is emitted by the local primary Worker through its
-/// SHARING_WORKER_WS_URL binding and is retained here for diagnostics and
-/// endpoint validation.
+/// WebSocket endpoint is the canonical production sharing Worker endpoint and
+/// is retained here for diagnostics and endpoint validation.
 struct RishiAPIEnvironment: Sendable, Equatable {
     let mode: RishiAPIEnvironmentMode
     let httpBaseURL: URL
@@ -30,27 +28,18 @@ struct RishiAPIEnvironment: Sendable, Equatable {
     }
 
     static func load(
-        info: [String: Any] = Bundle.main.infoDictionary ?? [:],
-        processEnvironment: [String: String] = ProcessInfo.processInfo.environment
+        info: [String: Any] = Bundle.main.infoDictionary ?? [:]
     ) -> RishiAPIEnvironment? {
-        let mode: RishiAPIEnvironmentMode = {
-            #if DEBUG
-            return .development
-            #else
-            return .production
-            #endif
-        }()
+        // Debug builds intentionally use the same production backend as
+        // Release builds. This prevents a missing local Worker or local
+        // database/auth configuration from masquerading as an app failure.
+        let mode: RishiAPIEnvironmentMode = .production
 
         let configuredHTTP = info["RishiAPIBaseURL"] as? String
         let configuredWebSocket = info["RishiSharingWebSocketURL"] as? String
 
-        #if DEBUG
-        let httpString = processEnvironment["RISHI_API_URL"] ?? configuredHTTP
-        let webSocketString = processEnvironment["RISHI_SHARING_WEBSOCKET_URL"] ?? configuredWebSocket
-        #else
         let httpString = configuredHTTP
         let webSocketString = configuredWebSocket
-        #endif
 
         guard let httpString,
               let webSocketString,

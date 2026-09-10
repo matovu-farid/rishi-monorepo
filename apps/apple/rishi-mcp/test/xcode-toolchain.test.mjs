@@ -27,11 +27,11 @@ test("selects a booted iPhone 17 Pro before other available simulators", () => {
     devices: {
       "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [
         { name: "iPhone 17", udid: "old-device", state: "Booted" },
-        { name: "iPhone 17 Pro", udid: "pro-shutdown", state: "Shutdown" },
-        { name: "iPhone 17 Pro", udid: "pro-booted", state: "Booted" },
+        { name: "iPhone 17 Pro", udid: "PRO-SHUTDOWN", state: "Shutdown" },
+        { name: "iPhone 17 Pro", udid: "Pro-Booted", state: "Booted" },
       ],
     },
   };
 
-  assert.deepEqual(selectIPhone17DeviceIds(devices), ["pro-booted", "pro-shutdown"]);
+  assert.deepEqual(selectIPhone17DeviceIds(devices), ["Pro-Booted", "PRO-SHUTDOWN"]);
 });

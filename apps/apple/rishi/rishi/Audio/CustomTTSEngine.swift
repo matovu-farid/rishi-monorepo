@@ -127,6 +127,9 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
                         requestToken: UUID()
                     )
                     activeTokens = request.tokenSnapshot
+                    await MainActor.run {
+                        state.activate(tokens: request.tokenSnapshot)
+                    }
                     await cancellationStop.setCurrent(request.tokenSnapshot)
                     Log.event("tts.readaloud.speak.piece", data: [
                         "index": String(index),

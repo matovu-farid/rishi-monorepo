@@ -137,6 +137,26 @@ struct SimulatorDumpSinkTests {
         #expect(fields?["b"] == "two")
     }
 
+    @Test func sensitiveDiagnosticFieldsAreRedacted() throws {
+        let dir = makeTmpDir("redaction")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sink = try SimulatorDumpSink.makeForTesting(at: dir)
+        defer { sink.close() }
+
+        sink.record(name: "sharing.session.failed", level: .error, data: [
+            "token": "bearer-secret",
+            "invite_url": "https://rishi.example/sharing/session?token=bearer-secret",
+            "stage": "redeem",
+        ])
+        sink.flushForTesting()
+
+        let raw = try String(contentsOf: dir.appendingPathComponent("all.log"), encoding: .utf8)
+        #expect(!raw.contains("bearer-secret"))
+        #expect(raw.contains("[REDACTED]"))
+        #expect(raw.contains("redeem"))
+    }
+
     @Test func sinkReceivesLogEventCallsViaRegistration() throws {
         let dir = makeTmpDir("register")
         defer { try? FileManager.default.removeItem(at: dir) }

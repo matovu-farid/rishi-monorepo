@@ -35,7 +35,10 @@ public enum CustomTTSTokenizer {
         if let before = selection.before,
            let contextualRange = fullText.range(of: before + highlight)
         {
-            selectionRange = contextualRange
+            selectionRange = fullText.index(
+                contextualRange.upperBound,
+                offsetBy: -highlight.count
+            )..<contextualRange.upperBound
         } else {
             selectionRange = fullText.range(of: highlight)
         }

@@ -120,7 +120,12 @@ struct TTSEngineTests {
     /// `makeFixture`'s default decode to nothing).
     private func loadFixtureMP3Chunks(sliceSize: Int = 4096) throws -> [Data] {
         let url = try #require(
-            PackageTestResourceBundle.bundle.url(forResource: "alice-p0", withExtension: "mp3", subdirectory: "Fixtures"),
+            PackageTestResourceBundle.url(
+                forResource: "alice-p0",
+                withExtension: "mp3",
+                subdirectory: "Fixtures",
+                relativeTo: #filePath
+            ),
             "alice-p0.mp3 fixture must be bundled"
         )
         let data = try Data(contentsOf: url)

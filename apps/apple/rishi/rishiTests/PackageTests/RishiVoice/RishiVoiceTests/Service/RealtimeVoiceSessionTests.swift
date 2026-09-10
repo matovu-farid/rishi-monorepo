@@ -41,7 +41,6 @@ struct RealtimeVoiceSessionTests {
         await fakes.session.start(preflighted: true)
 
         #expect(fakes.state.status == .live)
-        #expect(fakes.micGate.requestCount == 0)
         #expect(fakes.configurator.configureCalls.count == configureCallsAfterPreflight)
         #expect(fakes.client.connectCalls == ["k"])
         _ = await fakes.session.end()
@@ -82,15 +81,6 @@ struct RealtimeVoiceSessionTests {
     }
 
     // MARK: - Failure paths
-
-    @Test("Mic denied → .failed(.micDenied); coordinator never invoked")
-    func micDeniedFails() async {
-        let fakes = makeSession(micDecision: .denied)
-        await fakes.session.start()
-        #expect(fakes.state.status == .failed(reason: .micDenied))
-        #expect(fakes.client.connectCalls.isEmpty)
-        #expect(await fakes.coordinator.currentMode == .idle)
-    }
 
     @Test(
         "Key fetch failure → .failed(.keyFetch(classified)); audio mode released",
@@ -201,8 +191,7 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.client.connectCalls.count == 1)
         #expect(fakes.state.status == .live)
         #expect(fakes.client.cancelCurrentResponseCalls == 1)
-        #expect(fakes.client.micCaptureEnabledCalls == [false])
-        #expect(fakes.client.assistantOutputEnabledCalls == [false])
+        #expect(fakes.client.micCaptureEnabledCalls == [true, false])
     }
 
     @Test("resumeFromBackground restores live when transport is connected")
@@ -215,8 +204,7 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.state.status == .live)
         #expect(fakes.state.activityPhase == .listening)
         #expect(fakes.client.connectCalls.count == 1)
-        #expect(fakes.client.micCaptureEnabledCalls == [false, true])
-        #expect(fakes.client.assistantOutputEnabledCalls == [false, true])
+        #expect(fakes.client.micCaptureEnabledCalls == [true, false, true])
     }
 
     @Test("Reconnect: 3 consecutive failures → .failed(.networkLost); audio mode released")
@@ -309,7 +297,6 @@ struct RealtimeVoiceSessionTests {
         let configurator: FakeAudioSessionConfigurator
         let client: FakeRealtimeClient
         let fetcher: CapturingEphemeralKeyFetcher
-        let micGate: FakeMicPermissionGate
     }
 
     @MainActor
@@ -321,7 +308,6 @@ struct RealtimeVoiceSessionTests {
         let configurator = FakeAudioSessionConfigurator()
         let coordinator = AudioSessionCoordinator(configurator: configurator)
         let client = FakeRealtimeClient()
-        let micGate = FakeMicPermissionGate(decision: micDecision)
         let fetcher = CapturingEphemeralKeyFetcher(result: keyFetchResult)
 
         let session = RealtimeVoiceSession(
@@ -340,8 +326,24 @@ struct RealtimeVoiceSessionTests {
             configurator: configurator,
             client: client,
             fetcher: fetcher,
-            micGate: micGate
         )
+    }
+}
+
+/// Shared fixture for the standalone microphone-permission gate tests. The
+/// current RealtimeVoiceSession delegates permission to the SDK and does not
+/// inject this gate itself.
+final class FakeMicPermissionGate: MicPermissionGate, @unchecked Sendable {
+    private let decision: MicPermissionDecision
+    private(set) var requestCount = 0
+
+    init(decision: MicPermissionDecision) {
+        self.decision = decision
+    }
+
+    func request() async -> MicPermissionDecision {
+        requestCount += 1
+        return decision
     }
 }
 
@@ -383,16 +385,5 @@ private struct DelayedTrialSessionCoordinator: VoiceSessionCoordinating {
     func registerCall(rishiSessionId: String, callId: String, nonce: String) async throws {
         await gate.enter()
         await gate.waitForRelease()
-    }
-}
-
-/// Test fake for `MicPermissionGate` — returns the decision passed at init.
-final class FakeMicPermissionGate: MicPermissionGate, @unchecked Sendable {
-    private let decision: MicPermissionDecision
-    private(set) var requestCount = 0
-    init(decision: MicPermissionDecision) { self.decision = decision }
-    func request() async -> MicPermissionDecision {
-        requestCount += 1
-        return decision
     }
 }

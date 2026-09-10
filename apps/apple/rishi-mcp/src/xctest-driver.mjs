@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,12 +28,30 @@ async function waitForExit(child, timeoutMs) {
   });
 }
 
+function runExternal(commandName, args, env) {
+  return new Promise((resolvePromise, reject) => {
+    execFile(commandName, args, { timeout: 10000, env }, (error, stdout, stderr) => {
+      if (error) reject(Object.assign(error, { stdout, stderr }));
+      else resolvePromise({ stdout, stderr });
+    });
+  });
+}
+
 export function selectIPhone17DeviceIds(devices) {
   const available = Object.values(devices?.devices ?? {}).flat();
   return available
     .filter((device) => device.name === "iPhone 17 Pro")
     .sort((left, right) => Number(right.state === "Booted") - Number(left.state === "Booted"))
-    .map((device) => device.udid.toLowerCase());
+    // Keep the simulator's canonical UUID casing. `simctl` accepts a
+    // lowercased UUID, but xcodebuild destination resolution can reject it.
+    .map((device) => device.udid);
+}
+
+export function derivedDataPath(target, { environment = process.env, temp } = {}) {
+  const targetKey = target === "catalyst" ? "CATALYST" : "IPHONE17";
+  return environment[`RISHI_MCP_DERIVED_DATA_${targetKey}`]
+    ?? environment.RISHI_MCP_DERIVED_DATA
+    ?? join(temp ?? tmpdir(), "derived");
 }
 
 async function iphone17DeviceIds(env = process.env) {
@@ -81,9 +100,16 @@ export class XCTestDriver {
     const temp = await mkdtemp(join(tmpdir(), "rishi-mcp-"));
     const server = createServer();
     const session = { target, temp, child: null, server, port: null, pending: [] };
-    server.on("connection", (connection) => {
+    server.on("connection", async (connection) => {
       const pending = session.pending.shift();
       if (!pending) {
+        connection.destroy();
+        return;
+      }
+      try {
+        await this.#launchExternalTarget(session);
+      } catch (error) {
+        pending.finish(error);
         connection.destroy();
         return;
       }
@@ -134,12 +160,16 @@ export class XCTestDriver {
     });
     session.port = server.address().port;
     session.bridgeConfig = join("/private/tmp", `rishi-mcp-${target}-bridge.json`);
-    await writeFile(session.bridgeConfig, JSON.stringify({ port: session.port }), { mode: 0o600 });
     const destination = target === "iphone17"
       ? `platform=iOS Simulator,id=${(await iphone17DeviceIds(this.#environment))[0] ?? ""}`
       : "platform=macOS,variant=Mac Catalyst";
     const env = this.#environment;
-    const derivedData = process.env.RISHI_MCP_DERIVED_DATA ?? join(temp, "derived");
+    const derivedData = derivedDataPath(target, { environment: env, temp });
+    // XCTest's launch/activate APIs wait for UI quiescence. Rishi performs
+    // library restore and prewarming during startup, so Catalyst can remain
+    // non-quiescent even though its window is usable. Launch the installed
+    // target externally and let the XCTest bridge attach without that wait.
+    await writeFile(session.bridgeConfig, JSON.stringify({ port: session.port, launchApp: false }), { mode: 0o600 });
     const buildAction = process.env.RISHI_MCP_TEST_WITHOUT_BUILDING === "1" ? "test-without-building" : "test";
     const args = [buildAction, "-project", this.#project, "-scheme", this.#scheme, "-configuration", "Debug", "-destination", destination, "-only-testing:rishiUITests/MCPControlUITests/testServer", "-parallel-testing-enabled", "NO", "-derivedDataPath", derivedData];
     const child = spawn(this.#xcodebuild, args, { detached: true, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -183,7 +213,7 @@ export class XCTestDriver {
   }
 
   async #waitForBridge(session) {
-    const deadline = Date.now() + Number(process.env.RISHI_MCP_START_TIMEOUT_MS ?? 120000);
+    const deadline = Date.now() + Number(this.#environment.RISHI_MCP_START_TIMEOUT_MS ?? 120000);
     let lastError;
     while (Date.now() < deadline) {
       if (session.child.exitCode !== null || session.child.signalCode !== null) {
@@ -223,9 +253,56 @@ export class XCTestDriver {
     });
   }
 
+  async #launchExternalTarget(session) {
+    if (session.externalLaunch) return session.externalLaunch;
+    session.externalLaunch = (async () => {
+      const existing = await externalTargets(this.#environment);
+      if (existing.has(session.target)) return { alreadyRunning: true };
+      if (session.target === "catalyst") {
+        const derivedData = derivedDataPath(session.target, { environment: this.#environment, temp: session.temp });
+        const appPath = join(derivedData, "Build", "Products", "Debug-maccatalyst", "rishi.app");
+        try {
+          // Bring Catalyst to the foreground so accessibility actions and
+          // desktop screenshots target Rishi rather than whichever app was
+          // previously frontmost.
+          await runExternal("open", [appPath], this.#environment);
+        } catch (error) {
+          throw Object.assign(new Error(`could not launch Catalyst app externally: ${error.stderr || error.message}`), { code: "DRIVER_UNAVAILABLE" });
+        }
+        return { path: appPath };
+      }
+      const [deviceId] = await iphone17DeviceIds(this.#environment);
+      if (!deviceId) throw Object.assign(new Error("no available iPhone 17 Pro simulator for external launch"), { code: "DRIVER_UNAVAILABLE" });
+      try {
+        await runExternal("xcrun", ["simctl", "launch", deviceId, "org.fidexa.rishi"], this.#environment);
+      } catch (error) {
+        throw Object.assign(new Error(`could not launch iPhone 17 Pro app externally: ${error.stderr || error.message}`), { code: "DRIVER_UNAVAILABLE" });
+      }
+      return { deviceId };
+    })();
+    return session.externalLaunch;
+  }
+
   async state(target, screenshot = false) {
-    const response = await this.request(target, { op: "snapshot", screenshot });
-    return { window: { id: 1, app: target }, accessibility: { tree: response.debugDescription ?? "" }, screenshots: response.screenshotPath ? [{ id: "latest", url: `file://${response.screenshotPath}` }] : [] };
+    const response = await this.request(target, { op: "snapshot", screenshot: false });
+    const screenshots = screenshot ? [{ id: "latest", url: `file://${await this.#captureScreenshot(target)}` }] : [];
+    return { window: { id: 1, app: target }, accessibility: { tree: response.debugDescription ?? "" }, screenshots };
+  }
+
+  async #captureScreenshot(target) {
+    const path = join(tmpdir(), `rishi-mcp-${target}-screenshot-${randomUUID()}.png`);
+    try {
+      if (target === "iphone17") {
+        const [deviceId] = await iphone17DeviceIds(this.#environment);
+        if (!deviceId) throw new Error("no available iPhone 17 Pro simulator for screenshot capture");
+        await runExternal("xcrun", ["simctl", "io", deviceId, "screenshot", path], this.#environment);
+      } else {
+        await runExternal("screencapture", ["-x", "-o", path], this.#environment);
+      }
+      return path;
+    } catch (error) {
+      throw Object.assign(new Error(`could not capture ${target} screenshot: ${error.stderr || error.message}`), { code: "STATE_CHANGED" });
+    }
   }
   async logs(target, limit = 200) {
     const directory = target === "catalyst"

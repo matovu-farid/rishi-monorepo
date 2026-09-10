@@ -29,7 +29,7 @@ struct SyncPayloadCodecBookmarkTests {
             chapters: [
                 .init(id: "chapter-2", name: "Two", summary: "Second", sourcePosition: 1),
                 .init(id: "chapter-1", name: "One", summary: "First", sourcePosition: 0),
-            ], updatedAt: Date(timeIntervalSince1970: 1_700_000_001)
+            ], createdAt: Date(timeIntervalSince1970: 1_700_000_000), updatedAt: Date(timeIntervalSince1970: 1_700_000_001)
         )
         let payload = try SyncPayloadCodec.encodeChapterIndex(index)
         let decoded = try SyncPayloadCodec.decodeChapterIndex(payload, fallbackUpdatedAt: index.updatedAt)

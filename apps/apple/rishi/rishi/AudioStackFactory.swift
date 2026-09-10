@@ -42,8 +42,16 @@ enum AudioStackFactory {
         dataUseConsentProvider: any WorkerDataUseConsentProvider
     ) -> AudioStack {
         #if (os(iOS) || targetEnvironment(macCatalyst)) && canImport(AVFAudio)
-            let configurator: any AudioSessionConfigurator =
-                AVAudioSessionConfigurator()
+            let configurator: any AudioSessionConfigurator
+            #if DEBUG
+                if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                    configurator = FakeAudioSessionConfigurator()
+                } else {
+                    configurator = AVAudioSessionConfigurator()
+                }
+            #else
+                configurator = AVAudioSessionConfigurator()
+            #endif
         #else
             let configurator: any AudioSessionConfigurator =
                 FakeAudioSessionConfigurator()
@@ -86,7 +94,20 @@ enum AudioStackFactory {
 
         let prewarmer = TTSPrewarmer(source: chunkSource)
         let streamer = TTSStreamer(source: chunkSource)
-        let engine = ChunkedAudioPlayerTTSEngine(streamer: streamer, state: state)
+        let engine: any TTSPlaying
+        #if DEBUG
+            if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                let script: FakeTTSEngine.Script =
+                    ProcessInfo.processInfo.environment["RISHI_UITEST_TTS_AUTOPLAY"] == "1"
+                    ? .timed(.seconds(1))
+                    : .holds
+                engine = FakeTTSEngine(state: state, script: script)
+            } else {
+                engine = ChunkedAudioPlayerTTSEngine(streamer: streamer, state: state)
+            }
+        #else
+            engine = ChunkedAudioPlayerTTSEngine(streamer: streamer, state: state)
+        #endif
         let settingsStore = UserDefaultsTTSSettingsStore()
         let nowPlaying = NowPlayingController(
             infoSurface: infoSurface,

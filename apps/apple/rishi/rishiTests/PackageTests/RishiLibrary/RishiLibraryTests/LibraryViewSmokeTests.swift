@@ -85,12 +85,12 @@ struct LibraryViewSmokeTests {
         )
         _ = LibraryView(
             books: stub.books,
+            readingNow: stub.readingNow,
+            libraryBookCount: stub.books.count,
             positionLookup: stub.positionLookup,
             coverURL: stub.coverURL,
             onOpen: stub.onOpen,
-            onDelete: stub.onDelete,
-            readingNow: stub.readingNow,
-            libraryBookCount: stub.books.count
+            onDelete: stub.onDelete
         )
         #expect(LibraryView.shouldShowReadingNow([]) == false)
         #expect(LibraryView.shouldShowReadingNow(stub.readingNow) == true)
@@ -99,6 +99,11 @@ struct LibraryViewSmokeTests {
     }
 
     // MARK: - Sub-view construction (smoke)
+
+    @Test("library context menu exposes direct shared-reading action")
+    func libraryGrid_exposesDirectSharedReadingAction() {
+        #expect(LibraryGrid.startSharedReadingContextMenuTitle == "Start Shared Reading")
+    }
 
     @Test("ReadingNowShelf, LibraryGrid, LibraryEmptyStateView, BookCoverImageView all construct")
     func subViews_construct() {

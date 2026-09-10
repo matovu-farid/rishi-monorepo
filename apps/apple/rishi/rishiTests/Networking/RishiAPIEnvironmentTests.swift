@@ -5,17 +5,31 @@ import Testing
 
 @Suite("Rishi API environment")
 struct RishiAPIEnvironmentTests {
-    @Test("accepts local development HTTP and WebSocket endpoints")
-    func acceptsDevelopmentEndpoints() {
+    @Test("accepts explicitly supplied endpoint values")
+    func acceptsExplicitEndpoints() {
         let environment = RishiAPIEnvironment(
-            mode: .development,
-            httpBaseURL: URL(string: "http://127.0.0.1:8787")!,
-            sharingWebSocketURL: URL(string: "ws://127.0.0.1:8788")!
+            mode: .production,
+            httpBaseURL: URL(string: "https://api.fidexa.org")!,
+            sharingWebSocketURL: URL(string: "wss://sharing.fidexa.org")!
         )
 
-        #expect(environment?.mode == .development)
-        #expect(environment?.httpBaseURL.absoluteString == "http://127.0.0.1:8787")
-        #expect(environment?.sharingWebSocketURL.absoluteString == "ws://127.0.0.1:8788")
+        #expect(environment?.mode == .production)
+        #expect(environment?.httpBaseURL.absoluteString == "https://api.fidexa.org")
+        #expect(environment?.sharingWebSocketURL.absoluteString == "wss://sharing.fidexa.org")
+    }
+
+    @Test("loads the compiled production configuration")
+    func loadsCompiledProductionConfiguration() {
+        let environment = RishiAPIEnvironment.load(
+            info: [
+                "RishiAPIBaseURL": "https://api.fidexa.org",
+                "RishiSharingWebSocketURL": "wss://sharing.fidexa.org"
+            ]
+        )
+
+        #expect(environment?.mode == .production)
+        #expect(environment?.httpBaseURL.absoluteString == "https://api.fidexa.org")
+        #expect(environment?.sharingWebSocketURL.absoluteString == "wss://sharing.fidexa.org")
     }
 
     @Test("accepts production endpoints")
@@ -32,14 +46,14 @@ struct RishiAPIEnvironmentTests {
     @Test("rejects malformed or query-bearing endpoints")
     func rejectsMalformedEndpoints() {
         #expect(RishiAPIEnvironment(
-            mode: .development,
+            mode: .production,
             httpBaseURL: URL(string: "not-a-url")!,
-            sharingWebSocketURL: URL(string: "ws://127.0.0.1:8788")!
+            sharingWebSocketURL: URL(string: "wss://sharing.fidexa.org")!
         ) == nil)
         #expect(RishiAPIEnvironment(
-            mode: .development,
-            httpBaseURL: URL(string: "http://127.0.0.1:8787?production=true")!,
-            sharingWebSocketURL: URL(string: "ws://127.0.0.1:8788")!
+            mode: .production,
+            httpBaseURL: URL(string: "https://api.fidexa.org?production=true")!,
+            sharingWebSocketURL: URL(string: "wss://sharing.fidexa.org")!
         ) == nil)
     }
 }

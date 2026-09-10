@@ -45,8 +45,11 @@ final class LibraryNavigationUITests: XCTestCase {
 
     @MainActor
     private func robustTap(_ element: XCUIElement) {
-        usleep(300_000)
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .tap()
+        XCTAssertTrue(
+            element.waitForExistence(timeout: 5),
+            "Expected the Chats control to remain available before tapping."
+        )
+        XCTAssertTrue(element.isHittable, "Expected the Chats control to be hittable.")
+        element.tap()
     }
 }

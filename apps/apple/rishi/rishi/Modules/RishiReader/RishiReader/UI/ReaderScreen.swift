@@ -556,12 +556,21 @@ public struct ReaderScreen: View {
         if chrome.isVisible {
             VStack {
                 Spacer()
-                EPUBProgressIndicator(
-                    totalProgression: viewModel.latestLocator?.locations
-                        .totalProgression
-                )
-                .padding(.bottom, RishiSpacing.m)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                if isEPUBReader {
+                    EPUBProgressIndicator(
+                        totalProgression: viewModel.latestLocator?.locations
+                            .totalProgression
+                    )
+                    .padding(.bottom, RishiSpacing.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if viewModel.book.formatType == .pdf {
+                    PDFPageIndicator(
+                        currentPage: viewModel.latestLocator?.locations.page ?? 1,
+                        totalPages: viewModel.publication?.metadata.numberOfPages ?? 1
+                    )
+                    .padding(.bottom, RishiSpacing.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
     }

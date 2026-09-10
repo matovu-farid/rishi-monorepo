@@ -48,7 +48,7 @@ struct SubscriptionPaywallStateTests {
 
     @Test("active plan is first when the paywall reopens")
     func activePlanIsMerchandisedFirst() {
-        let active = RishiProductID.voiceAnnualMacCatalyst
+        let active = RishiProductID.currentPlatformPaywallProductIDs.last!
         let ids = RishiProductID.paywallProductIDs(activeProductID: active)
 
         #expect(ids.first == active)

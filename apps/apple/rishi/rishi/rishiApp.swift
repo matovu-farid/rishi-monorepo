@@ -34,7 +34,28 @@ struct rishiApp: App {
     #endif
 
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+            let uiTestUserID = UUID(uuidString: "7F7B3D2A-8B8D-4D2E-9D1D-9B4C8F7E6A10")!
+            deps.userIdBox.value = uiTestUserID
+            currentUserBox.signIn(
+                user: User(
+                    id: uiTestUserID,
+                    email: "ui-test@rishi.invalid",
+                    name: "Rishi UI Test"
+                )
+            )
+        }
+        #endif
         SentryLaunchConfiguration.start()
+        #if DEBUG
+        if let sink = SimulatorDumpSink.make() {
+            Log.installSink(sink)
+            Log.event("diagnostics.sink.installed", data: ["path": sink.directory.path])
+        } else {
+            Log.error("diagnostics.sink.install_failed")
+        }
+        #endif
     
     }
 
@@ -50,13 +71,13 @@ struct rishiApp: App {
                     // URL events continue to propagate to existing deep-link
                     // handlers.
                     _ = GoogleSignInCoordinator.handle(url)
-                    if !AppRouter.enqueueShareToken(from: url) {
+                    if !AppRouter.enqueueShareOrSessionToken(from: url) {
                         router.handle(url: url, bookStore: nil, conversationStore: nil)
                     }
                 }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { userActivity in
                     guard let url = userActivity.webpageURL else { return }
-                    if !AppRouter.enqueueShareToken(from: url) {
+                    if !AppRouter.enqueueShareOrSessionToken(from: url) {
                         router.handle(url: url, bookStore: nil, conversationStore: nil)
                     }
                 }
@@ -100,6 +121,9 @@ struct rishiApp: App {
                         try Tips.configure([
                             .displayFrequency(.immediate)
                         ])
+                        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                            Tips.hideAllTipsForTesting()
+                        }
                         #else
                         try Tips.configure()
                         #endif
