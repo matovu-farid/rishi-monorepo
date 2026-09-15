@@ -22,8 +22,9 @@
 ## Mandatory command/result wrapper
 
 No raw `xcodebuild` command below is itself accepted as a test/build gate. Run it
-through `scripts/test-integrity/run-verified.ts`. Tests include a unique path such
-as `-resultBundlePath /private/tmp/A2.xcresult` and use format `xcresult`;
+through `scripts/test-integrity/run-verified.ts`. Tests create a private unique
+run root and use `-resultBundlePath <private-run-root>/result.xcresult` with
+format `xcresult`;
 builds use format `command`. Every green test requires discovered `> 0`, skipped/
 failed `0`, and exit `0`; every red test requires discovered/failed `> 0` and
 nonzero exit. Missing/unparseable result bundles fail. The literal command shown
@@ -60,7 +61,8 @@ static contract test unchanged.
 Run:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingGenerationTests/generationTypesAreDeclaredAndDistinct()" --artifact /private/tmp/A0-red.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A0-red.xcresult -only-testing:rishiTests/SharedReadingGenerationTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A0-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingGenerationTests/generationTypesAreDeclaredAndDistinct()" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingGenerationTests
 ```
 
 Expected red: the named types do not exist.
@@ -99,7 +101,8 @@ reader sequence independently and asserts current state is unchanged.
 - [ ] **Step 4: Run focused tests and commit**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A0-green.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A0-green.xcresult -only-testing:rishiTests/SharedReadingModelsTests -only-testing:rishiTests/SharedReadingGenerationTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A0-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingModelsTests -only-testing:rishiTests/SharedReadingGenerationTests
 git add apps/apple/rishi/rishi/SharedReading/SharedReadingModels.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingModelsTests.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingGenerationTests.swift
 git commit -m "fix(apple): separate shared reading generations"
 ```
@@ -136,7 +139,8 @@ incompatible-book, explicit cancellation, and one-loop-only concurrency.
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingReconnectTests/retryBackoffResetsOnlyAfterAuthoritativeState()" --artifact /private/tmp/A1-red.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A1-red.xcresult -only-testing:rishiTests/SharedReadingReconnectTests -only-testing:rishiTests/SharedReadingCoordinatorFenceTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A1-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingReconnectTests/retryBackoffResetsOnlyAfterAuthoritativeState()" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingReconnectTests -only-testing:rishiTests/SharedReadingCoordinatorFenceTests
 ```
 
 Expected: wrapper confirms discovered/failed `> 0`, skipped `0`, underlying exit
@@ -198,7 +202,8 @@ private func resetSubordinateFences(for epoch: SharedReadingRoomEpoch) {
 - [ ] **Step 4: Run red/green focused tests**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A1-green.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A1-green.xcresult -only-testing:rishiTests/SharedReadingReconnectTests -only-testing:rishiTests/SharedReadingCoordinatorFenceTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A1-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingReconnectTests -only-testing:rishiTests/SharedReadingCoordinatorFenceTests
 ```
 
 Expected: controlled-clock tests pass without wall-clock sleeps; discovered
@@ -239,7 +244,8 @@ removed/ended, one 401 bearer refresh, and fresh admission ticket replacement.
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingActiveRecoveryTests/activeAndRejoinUseVersionedRoutes()" --artifact /private/tmp/A2-red.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A2-red.xcresult -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingActiveRecoveryTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A2-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingActiveRecoveryTests/activeAndRejoinUseVersionedRoutes()" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingActiveRecoveryTests
 ```
 
 Expected: wrapper confirms discovered/failed `> 0`, skipped `0`, underlying exit
@@ -270,7 +276,8 @@ sequence captured by the live test.
 - [ ] **Step 4: Run focused tests and commit**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A2-green.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A2-green.xcresult -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingActiveRecoveryTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A2-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingActiveRecoveryTests
 git add apps/apple/rishi/rishi/SharedReading/SharedReadingAPI.swift apps/apple/rishi/rishi/SharedReading/ActiveReadingSessionsView.swift apps/apple/rishi/rishi/SharedReading/ActiveReadingSessionStore.swift apps/apple/rishi/rishi/SharedReading/SharedReadingSessionView.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingAPITests.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingActiveRecoveryTests.swift
 git commit -m "fix(apple): rejoin active reading sessions"
 ```
@@ -307,7 +314,8 @@ delayed account-A callback after account B signs in.
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SignedOutViewModelTests/accountSwitchDrainsOldIdentityBeforePublishingNewIdentity()" --artifact /private/tmp/A3-red.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A3-red.xcresult -only-testing:rishiTests/SharedReadingSessionRegistryTests -only-testing:rishiTests/SignedOutViewModelTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A3-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SignedOutViewModelTests/accountSwitchDrainsOldIdentityBeforePublishingNewIdentity()" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingSessionRegistryTests -only-testing:rishiTests/SignedOutViewModelTests
 ```
 
 Expected: wrapper confirms discovered/failed `> 0`, skipped `0`, underlying exit
@@ -344,7 +352,8 @@ timeout, contradiction, or inconclusive probe fails.
 - [ ] **Step 5: Run lifecycle tests and commit**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A3-green.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A3-green.xcresult -only-testing:rishiTests/SharedReadingSessionRegistryTests -only-testing:rishiTests/SignedOutViewModelTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A3-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingSessionRegistryTests -only-testing:rishiTests/SignedOutViewModelTests
 git add apps/apple/rishi/rishi/SharedReading/SharedReadingSessionRegistry.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingSessionRegistryTests.swift apps/apple/rishi/rishi/ServiceGraphFactory.swift apps/apple/rishi/rishi/rishiApp.swift apps/apple/rishi/rishi/RootView.swift apps/apple/rishi/rishi/Auth/SignedOutViewModel.swift apps/apple/rishi/rishi/Account/AccountDeletionCoordinator.swift apps/apple/rishi/rishi/SharedReading/PendingSessionInviteStore.swift apps/apple/rishi/rishi/SharedReading/SharedSessionProgressStore.swift apps/apple/rishi/rishiTests/SignedOutViewModelTests.swift
 git commit -m "fix(apple): drain shared sessions on account changes"
 ```
@@ -377,8 +386,10 @@ Run both platforms before implementation, serialized and only after the resource
 gate:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingSemanticControlTests/testPrimaryClickOpensBookAndSecondaryClickShowsActions" --artifact /private/tmp/A4-catalyst-red.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -resultBundlePath /private/tmp/A4-catalyst-red.xcresult -only-testing:rishiUITests/SharedReadingSemanticControlTests
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingSemanticControlTests/testTapOpensBookAndLongPressShowsActions" --artifact /private/tmp/A4-iphone-red.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A4-iphone-red.xcresult -only-testing:rishiUITests/SharedReadingSemanticControlTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A4-catalyst-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingSemanticControlTests/testPrimaryClickOpensBookAndSecondaryClickShowsActions" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiUITests/SharedReadingSemanticControlTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A4-iphone-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect fail --require-failure-id "SharedReadingSemanticControlTests/testTapOpensBookAndLongPressShowsActions" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiUITests/SharedReadingSemanticControlTests
 ```
 
 Expected: each wrapper confirms discovered/failed `> 0`, skipped `0`, underlying
@@ -412,8 +423,10 @@ tool. No title-only or list-index selectors are accepted.
 - [ ] **Step 4: Run focused UI tests under the resource gate**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A4-catalyst-green.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -resultBundlePath /private/tmp/A4-catalyst-green.xcresult -only-testing:rishiUITests/SharedReadingSemanticControlTests
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A4-iphone-green.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A4-iphone-green.xcresult -only-testing:rishiUITests/SharedReadingSemanticControlTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A4-catalyst-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiUITests/SharedReadingSemanticControlTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A4-iphone-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiUITests/SharedReadingSemanticControlTests
 ```
 
 Expected: single activation opens; context gesture shows actions; discovered
@@ -434,7 +447,8 @@ git commit -m "fix(apple): expose shared reading controls"
 - [ ] **Step 1: Run focused non-live suites**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --artifact /private/tmp/A5-unit.xcresult --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath /private/tmp/A5-unit.xcresult -only-testing:rishiTests/SharedReadingModelsTests -only-testing:rishiTests/SharedReadingGenerationTests -only-testing:rishiTests/SharedReadingReconnectTests -only-testing:rishiTests/SharedReadingCoordinatorFenceTests -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingActiveRecoveryTests -only-testing:rishiTests/SharedReadingSessionRegistryTests -only-testing:rishiTests/SharedReadingSessionRepairTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-A5-unit.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format xcresult --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.json" --xcresult "$RISHI_RUN_ROOT/result.xcresult" --cwd . -- xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RUN_ROOT/result.xcresult" -only-testing:rishiTests/SharedReadingModelsTests -only-testing:rishiTests/SharedReadingGenerationTests -only-testing:rishiTests/SharedReadingReconnectTests -only-testing:rishiTests/SharedReadingCoordinatorFenceTests -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingActiveRecoveryTests -only-testing:rishiTests/SharedReadingSessionRegistryTests -only-testing:rishiTests/SharedReadingSessionRepairTests
 ```
 
 Expected: discovered `> 0`, skipped/failed `0`, exit `0`.
@@ -445,10 +459,12 @@ Only after host available memory is at least 8 GiB and disk at least 20 GiB:
 
 ```bash
 set -euo pipefail
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/A5-catalyst-preflight-command.json --cwd . -- bun scripts/test-integrity/resource-preflight.ts --min-available-memory-gib 8 --min-free-disk-gib 20 --target catalyst --artifact /private/tmp/A5-catalyst-preflight.json
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --resource-artifact /private/tmp/A5-catalyst-preflight.json --owned-output-root /private/tmp/rishi-shared-reading-catalyst-derived --artifact /private/tmp/A5-catalyst-build.json --cwd . -- xcodebuild build -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -derivedDataPath /private/tmp/rishi-shared-reading-catalyst-derived
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/A5-iphone-preflight-command.json --cwd . -- bun scripts/test-integrity/resource-preflight.ts --min-available-memory-gib 8 --min-free-disk-gib 20 --target iphone17pro --artifact /private/tmp/A5-iphone-preflight.json
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --resource-artifact /private/tmp/A5-iphone-preflight.json --owned-output-root /private/tmp/rishi-shared-reading-iphone-derived --artifact /private/tmp/A5-iphone-build.json --cwd . -- xcodebuild build -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath /private/tmp/rishi-shared-reading-iphone-derived
+RISHI_CATALYST_ROOT=$(mktemp -d /private/tmp/rishi-catalyst.XXXXXX)
+RISHI_IPHONE_ROOT=$(mktemp -d /private/tmp/rishi-iphone17pro.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_CATALYST_ROOT" --artifact "$RISHI_CATALYST_ROOT/preflight-command.json" --cwd . -- bun scripts/test-integrity/resource-preflight.ts --min-available-memory-gib 8 --min-free-disk-gib 20 --target catalyst --owned-output-root "$RISHI_CATALYST_ROOT" --artifact "$RISHI_CATALYST_ROOT/resource-preflight.json"
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --resource-artifact "$RISHI_CATALYST_ROOT/resource-preflight.json" --expected-resource-target catalyst --min-available-memory-gib 8 --min-free-disk-gib 20 --owned-output-root "$RISHI_CATALYST_ROOT" --artifact "$RISHI_CATALYST_ROOT/build-evidence.json" --cwd . -- xcodebuild build -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -derivedDataPath "$RISHI_CATALYST_ROOT"
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_IPHONE_ROOT" --artifact "$RISHI_IPHONE_ROOT/preflight-command.json" --cwd . -- bun scripts/test-integrity/resource-preflight.ts --min-available-memory-gib 8 --min-free-disk-gib 20 --target iphone17pro --owned-output-root "$RISHI_IPHONE_ROOT" --artifact "$RISHI_IPHONE_ROOT/resource-preflight.json"
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --resource-artifact "$RISHI_IPHONE_ROOT/resource-preflight.json" --expected-resource-target iphone17pro --min-available-memory-gib 8 --min-free-disk-gib 20 --owned-output-root "$RISHI_IPHONE_ROOT" --artifact "$RISHI_IPHONE_ROOT/build-evidence.json" --cwd . -- xcodebuild build -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath "$RISHI_IPHONE_ROOT"
 ```
 
 Expected: serialized exits `0`; bundle IDs, versions, Mach-O UUIDs/hashes, build

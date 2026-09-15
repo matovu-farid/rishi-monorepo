@@ -24,8 +24,7 @@ No owner may stage unrelated dirty files or edit another lane's files.
 
 No raw test/typecheck/build command below is itself accepted as a gate. Execute
 each through `scripts/test-integrity/run-verified.ts`. For Vitest, the wrapper
-adds a task-labelled reporter path such as
-`--reporter=json --outputFile=/private/tmp/W3-vitest.json`, parses that
+adds a task-labelled reporter path inside the supplied private run root, parses that
 artifact, and records the individual exit. For typecheck/build use format
 `command`. Every green run requires discovered `> 0`, skipped/failed `0`, and
 exit `0`; every red run requires discovered/failed `> 0` and nonzero exit. An
@@ -142,7 +141,8 @@ Run:
 
 ```bash
 cd workers/worker
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "migrates populated intermediate predecessor without data loss" --artifact /private/tmp/W1-migration-red.json --cwd . -- bun run test -- src/db/session-sharing-migration.test.ts
+RISHI_W1_RED_ROOT=$(mktemp -d /private/tmp/rishi-W1-red.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "migrates populated intermediate predecessor without data loss" --owned-output-root "$RISHI_W1_RED_ROOT" --artifact "$RISHI_W1_RED_ROOT/migration.json" --cwd . -- bun run test -- src/db/session-sharing-migration.test.ts
 ```
 
 Expected red: current nested-directory replay or non-null alteration fails at
@@ -182,9 +182,10 @@ local clone, then introspect only that clone:
 
 ```bash
 cd workers/worker
-bunx wrangler d1 export rishi --remote --no-data --output=/private/tmp/rishi-session-invites-schema.sql
-sqlite3 /private/tmp/rishi-session-invites-reconciliation.sqlite ".read /private/tmp/rishi-session-invites-schema.sql"
-RISHI_RECONCILIATION_DB_URL=/private/tmp/rishi-session-invites-reconciliation.sqlite bunx drizzle-kit pull --init --config=drizzle.reconciliation.config.ts
+RISHI_W1_RECONCILIATION_ROOT=$(mktemp -d /private/tmp/rishi-W1-reconciliation.XXXXXX)
+bunx wrangler d1 export rishi --remote --no-data --output="$RISHI_W1_RECONCILIATION_ROOT/schema.sql"
+sqlite3 "$RISHI_W1_RECONCILIATION_ROOT/reconciliation.sqlite" ".read $RISHI_W1_RECONCILIATION_ROOT/schema.sql"
+RISHI_RECONCILIATION_DB_URL="$RISHI_W1_RECONCILIATION_ROOT/reconciliation.sqlite" bunx drizzle-kit pull --init --config=drizzle.reconciliation.config.ts
 ```
 
 `drizzle.reconciliation.config.ts` reads only the task-specific
@@ -218,9 +219,10 @@ proof:
 
 ```bash
 cd workers/worker
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W1-physical-snapshot-command.json --cwd . -- bun run scripts/verify-migration-pattern.ts --snapshot-before /private/tmp/W1-physical-before.json
+RISHI_W1_PHYSICAL_ROOT=$(mktemp -d /private/tmp/rishi-W1-physical.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_PHYSICAL_ROOT" --artifact "$RISHI_W1_PHYSICAL_ROOT/snapshot-command.json" --cwd . -- bun run scripts/verify-migration-pattern.ts --snapshot-before "$RISHI_W1_PHYSICAL_ROOT/before.json"
 bunx drizzle-kit generate --config=drizzle.config.ts --name=session_invites_physical_noop
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W1-physical-noop.json --cwd . -- bun run scripts/verify-migration-pattern.ts --assert-noop --before /private/tmp/W1-physical-before.json --generated-name session_invites_physical_noop --expect-executable-statements 0
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_PHYSICAL_ROOT" --artifact "$RISHI_W1_PHYSICAL_ROOT/noop.json" --cwd . -- bun run scripts/verify-migration-pattern.ts --assert-noop --before "$RISHI_W1_PHYSICAL_ROOT/before.json" --generated-name session_invites_physical_noop --expect-executable-statements 0
 ```
 
 The verifier requires either no new canonical artifacts or a generated artifact
@@ -244,7 +246,8 @@ to the test migrator or deployment pattern.
 - [ ] **Step 4: Verify generated files and migration allowlists**
 
 ```bash
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W1-verify-migrations.json --cwd . -- bun run verify:migrations
+RISHI_W1_VERIFY_ROOT=$(mktemp -d /private/tmp/rishi-W1-verify.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_VERIFY_ROOT" --artifact "$RISHI_W1_VERIFY_ROOT/migrations.json" --cwd . -- bun run verify:migrations
 git status --porcelain=v2 -- workers/worker/drizzle workers/worker/src/db/schema.ts workers/worker/wrangler.jsonc workers/worker/wrangler.dev.jsonc
 git diff --name-only -- workers/worker/drizzle
 ```
@@ -259,8 +262,9 @@ staging; it may not contain either quarantined historical directory.
 - [ ] **Step 5: Prove all local predecessor states**
 
 ```bash
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W1-migration-green.json --cwd . -- bun run test -- src/db/session-sharing-schema.test.ts src/db/session-sharing-migration.test.ts
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W1-migrate-local.json --cwd . -- bun run migrate:local
+RISHI_W1_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-W1-green.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W1_GREEN_ROOT" --artifact "$RISHI_W1_GREEN_ROOT/migration.json" --cwd . -- bun run test -- src/db/session-sharing-schema.test.ts src/db/session-sharing-migration.test.ts
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_GREEN_ROOT" --artifact "$RISHI_W1_GREEN_ROOT/migrate-local.json" --cwd . -- bun run migrate:local
 ```
 
 Expected green: fresh, empty-intermediate, and populated-intermediate pass;
@@ -325,7 +329,8 @@ Add replay, wrong user/room/epoch/generation, reissue supersession, and expired
 lease cases. Run the focused suite and record the current failures.
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "createRoom binds canonical sessionId" --require-failure-id "admission ticket has exactly one prefix" --require-failure-id "unconsumed admission lease expires and restores capacity" --artifact /private/tmp/W2-red.json --cwd workers/sharing-worker -- bun run test -- test/versioned-apple-route.test.ts test/SessionRoom.appleTopology.test.ts test/tokens.test.ts test/wsCreds.test.ts test/AppleSessionRoom.recovery.test.ts
+RISHI_W2_RED_ROOT=$(mktemp -d /private/tmp/rishi-W2-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "createRoom binds canonical sessionId" --require-failure-id "admission ticket has exactly one prefix" --require-failure-id "unconsumed admission lease expires and restores capacity" --owned-output-root "$RISHI_W2_RED_ROOT" --artifact "$RISHI_W2_RED_ROOT/evidence.json" --cwd workers/sharing-worker -- bun run test -- test/versioned-apple-route.test.ts test/SessionRoom.appleTopology.test.ts test/tokens.test.ts test/wsCreds.test.ts test/AppleSessionRoom.recovery.test.ts
 ```
 
 Expected: all three named new tests are discovered and failing, skipped `0`,
@@ -454,7 +459,8 @@ commands/state remain unavailable under `/v1`. Run:
 
 ```bash
 cd workers/sharing-worker
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W2-cf-typegen.json --cwd . -- bun run cf-typegen
+RISHI_W2_TYPEGEN_ROOT=$(mktemp -d /private/tmp/rishi-W2-typegen.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W2_TYPEGEN_ROOT" --artifact "$RISHI_W2_TYPEGEN_ROOT/cf-typegen.json" --cwd . -- bun run cf-typegen
 ```
 
 Commit the regenerated `worker-configuration.d.ts`. Add a production-config test
@@ -467,9 +473,10 @@ same authority through authenticated `/v2` WebSocket admission.
 
 ```bash
 cd workers/sharing-worker
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W2-focused-green.json --cwd . -- bun run test -- test/versioned-apple-route.test.ts test/SessionRoom.appleTopology.test.ts test/tokens.test.ts test/wsCreds.test.ts test/AppleSessionRoom.recovery.test.ts
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W2-typecheck.json --cwd . -- bunx tsc --noEmit
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W2-full-green.json --cwd . -- bun run test
+RISHI_W2_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-W2-green.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W2_GREEN_ROOT" --artifact "$RISHI_W2_GREEN_ROOT/focused.json" --cwd . -- bun run test -- test/versioned-apple-route.test.ts test/SessionRoom.appleTopology.test.ts test/tokens.test.ts test/wsCreds.test.ts test/AppleSessionRoom.recovery.test.ts
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W2_GREEN_ROOT" --artifact "$RISHI_W2_GREEN_ROOT/typecheck.json" --cwd . -- bunx tsc --noEmit
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W2_GREEN_ROOT" --artifact "$RISHI_W2_GREEN_ROOT/full.json" --cwd . -- bun run test
 ```
 
 Expected: nonzero discovery, skipped/failed `0`, exits `0`; controlled-clock
@@ -530,7 +537,8 @@ new creation is disabled. Legacy routes and `/v1` behavior remain unchanged.
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "createRoom receives canonical sessionId after durable provisioning" --require-failure-id "creation disabled fails before mutations while active remains available" --artifact /private/tmp/W3-red.json --cwd workers/worker -- bun run test -- src/routes/session-shares.test.ts src/routes/session-observations.test.ts src/session-sharing-service.test.ts
+RISHI_W3_RED_ROOT=$(mktemp -d /private/tmp/rishi-W3-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "createRoom receives canonical sessionId after durable provisioning" --require-failure-id "creation disabled fails before mutations while active remains available" --owned-output-root "$RISHI_W3_RED_ROOT" --artifact "$RISHI_W3_RED_ROOT/evidence.json" --cwd workers/worker -- bun run test -- src/routes/session-shares.test.ts src/routes/session-observations.test.ts src/session-sharing-service.test.ts
 ```
 
 Expected: wrapper exits `0` only when tests are discovered, at least one named
@@ -645,9 +653,10 @@ conflict is terminal. Never leak bearer, invite token, HMAC, or signed URL.
 
 ```bash
 cd workers/worker
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W3-focused-green.json --cwd . -- bun run test -- src/routes/session-shares.test.ts src/routes/session-observations.test.ts src/session-sharing-service.test.ts src/api-version.test.ts
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W3-typecheck.json --cwd . -- bun run type-check
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W3-full-green.json --cwd . -- bun run test
+RISHI_W3_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-W3-green.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W3_GREEN_ROOT" --artifact "$RISHI_W3_GREEN_ROOT/focused.json" --cwd . -- bun run test -- src/routes/session-shares.test.ts src/routes/session-observations.test.ts src/session-sharing-service.test.ts src/api-version.test.ts
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W3_GREEN_ROOT" --artifact "$RISHI_W3_GREEN_ROOT/typecheck.json" --cwd . -- bun run type-check
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W3_GREEN_ROOT" --artifact "$RISHI_W3_GREEN_ROOT/full.json" --cwd . -- bun run test
 ```
 
 Expected: creation interruption cases converge to one invite/room; `/active`
@@ -679,7 +688,8 @@ the client sends no `actingUserId` or caller-selected controller generation.
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "revokeAccountReferences never accepts actingUserId" --artifact /private/tmp/W4-red.json --cwd workers/worker -- bun run test -- src/account-deletion.integration.test.ts src/session-sharing-service.test.ts
+RISHI_W4_RED_ROOT=$(mktemp -d /private/tmp/rishi-W4-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "revokeAccountReferences never accepts actingUserId" --owned-output-root "$RISHI_W4_RED_ROOT" --artifact "$RISHI_W4_RED_ROOT/evidence.json" --cwd workers/worker -- bun run test -- src/account-deletion.integration.test.ts src/session-sharing-service.test.ts
 ```
 
 Expected: wrapper exits `0` only when the new matrix is discovered, at least one
@@ -717,10 +727,11 @@ type PurgeResult = { ok: true } | { ok: false; code: "CONFLICT"; error: string }
 
 ```bash
 cd workers/worker
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W4-focused-green.json --cwd . -- bun run test -- src/account-deletion.integration.test.ts src/session-sharing-service.test.ts
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W4-migrations.json --cwd . -- bun run verify:migrations
-bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W4-typecheck.json --cwd . -- bun run type-check
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W4-full-green.json --cwd . -- bun run test
+RISHI_W4_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-W4-green.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W4_GREEN_ROOT" --artifact "$RISHI_W4_GREEN_ROOT/focused.json" --cwd . -- bun run test -- src/account-deletion.integration.test.ts src/session-sharing-service.test.ts
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W4_GREEN_ROOT" --artifact "$RISHI_W4_GREEN_ROOT/migrations.json" --cwd . -- bun run verify:migrations
+bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W4_GREEN_ROOT" --artifact "$RISHI_W4_GREEN_ROOT/typecheck.json" --cwd . -- bun run type-check
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W4_GREEN_ROOT" --artifact "$RISHI_W4_GREEN_ROOT/full.json" --cwd . -- bun run test
 ```
 
 Expected: all matrix cases pass, invocation-chain work is bounded/retriable,
@@ -762,11 +773,12 @@ and migration-history misuse. Fix and re-review all Critical/High findings.
 
 ```bash
 set -euo pipefail
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W5-sharing-tests.json --cwd workers/sharing-worker -- bun run test
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W5-sharing-typecheck.json --cwd workers/sharing-worker -- bunx tsc --noEmit
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W5-worker-migrations.json --cwd workers/worker -- bun run verify:migrations
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/W5-worker-typecheck.json --cwd workers/worker -- bun run type-check
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W5-worker-tests.json --cwd workers/worker -- bun run test
+RISHI_W5_ROOT=$(mktemp -d /private/tmp/rishi-W5.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W5_ROOT" --artifact "$RISHI_W5_ROOT/sharing-tests.json" --cwd workers/sharing-worker -- bun run test
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W5_ROOT" --artifact "$RISHI_W5_ROOT/sharing-typecheck.json" --cwd workers/sharing-worker -- bunx tsc --noEmit
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W5_ROOT" --artifact "$RISHI_W5_ROOT/worker-migrations.json" --cwd workers/worker -- bun run verify:migrations
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W5_ROOT" --artifact "$RISHI_W5_ROOT/worker-typecheck.json" --cwd workers/worker -- bun run type-check
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W5_ROOT" --artifact "$RISHI_W5_ROOT/worker-tests.json" --cwd workers/worker -- bun run test
 git diff --check origin/main...HEAD -- workers packages/sharing-protocol
 ```
 
@@ -798,7 +810,8 @@ tampered response, replayed challenge, `/v1` access, and log-redaction cases.
 
 ```bash
 cd workers/worker
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/W5-trust-green.json --cwd . -- bun run test -- scripts/verify-sharing-trust.test.ts src/session-sharing-service.test.ts
+RISHI_W5_TRUST_ROOT=$(mktemp -d /private/tmp/rishi-W5-trust.XXXXXX)
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_W5_TRUST_ROOT" --artifact "$RISHI_W5_TRUST_ROOT/evidence.json" --cwd . -- bun run test -- scripts/verify-sharing-trust.test.ts src/session-sharing-service.test.ts
 ```
 
 - [ ] **Step 5: Record the exact later rollout order and keep mutation disabled**

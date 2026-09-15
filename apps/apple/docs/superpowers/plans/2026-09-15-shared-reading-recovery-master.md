@@ -109,6 +109,10 @@ type VerifiedCounts = { discovered: number; passed: number; skipped: number; fai
 finish/exit status without environment values, parses the named format, and
 rejects missing/unparseable artifacts, `discovered === 0`, any skip, a pass with
 failures/nonzero exit, or an expected red with zero exit/no failed assertion.
+The canonical CLI is `--format FORMAT --expect pass|fail --artifact PATH
+--cwd PATH -- COMMAND`; the positional format remains only as a bootstrap/self-test
+compatibility form. Normalized artifacts are files distinct from reporter output
+directories such as `.xcresult` bundles.
 For red tests, repeatable `--require-failure-id EXACT_TEST_ID` requires every
 named test to be present and failing; an unrelated failure cannot satisfy it.
 The Vitest parser uses full test names, the SwiftPM parser uses suite-qualified
@@ -130,18 +134,44 @@ test counts.
 
 `codex-jsonl` preserves stdout byte-for-byte at a distinct required
 `--raw-output` path, parses every JSONL event, and writes a separate normalized
-artifact. It requires one session ID, initialization, tools/list, only the
-allowed MCP server, the named tools/calls/results, and any named validation
-rejection; malformed/truncated JSONL or shell/file-write/arbitrary-network/
-state-injection/non-approved-server events fail.
+artifact. Against the pinned Codex CLI schema it requires exactly one
+`thread.started` identifier, one ordered turn whose `turn.completed` is terminal,
+matched `item.started`/`item.completed` records for `mcp_tool_call` items,
+schema-valid optional `item.updated` and non-capability `todo_list` updates, immutable
+server/tool/arguments, only the
+allowed MCP server, successful results for the named tools, and any exact
+`error.message` rejection correlated to its required tool. Malformed/truncated JSONL, unmatched calls, unexpected
+tool errors, non-approved servers, or non-MCP command/file/web/computer-use
+capability items fail. Raw MCP initialize/tools-list frames are transport
+internals and are not expected in `codex exec --json` output.
 
 `resource-preflight.ts` records UTC sample time, available memory, free disk,
 target locks/process inventory, and a digest in a normalized artifact. Its tests
 cover thresholds, stale samples, duplicate target processes, lock conflicts, and
 malformed platform output. `run-verified.ts --resource-artifact PATH` rejects a
-sample older than ten seconds or below the requested thresholds and records its
-own child PID/start-time/descendants plus any `--owned-output-root` for build
-cleanup reconciliation.
+sample older than ten seconds or below the requested thresholds. Immediately
+before an Xcode command, while holding the destination lane lock, the runner
+re-samples resources and process/lock identities and revalidates the thresholds;
+this closes the preflight-to-exec race. It records its own child PID/start-time
+plus descendant PID/start-time/executable identities and any
+`--owned-output-root` for build cleanup reconciliation, and rejects success if
+any recorded descendant remains alive.
+
+The owned output root must already exist, be owned by the current user, have
+exact mode `0700`, and be an exclusive runner namespace protected by its own
+nonblocking lock: no other process may
+rename the root or its descendants during a verified write. The writer stages
+bytes directly in the pinned root, rejects symlink/path replacement, atomically
+renames into the validated parent, and detects and cleans up deterministic swaps.
+POSIX directory descriptors cannot prevent another process from renaming an
+already-open root inode; callers enforce exclusivity with the preflight/lock
+protocol. Xcode invocations require an explicit unique `--owned-output-root`,
+keep the normalized artifact and `.xcresult` inside it, and hold nonblocking
+exclusive root and Catalyst/iPhone lane locks through command completion and
+artifact commit. Captured stdout/stderr and streamed xcresult hashing have
+explicit fail-closed byte/entry limits. The resource digest is an accidental-corruption checksum, not an
+authentication MAC; trust comes from the exclusive local root, atomic contained
+write, freshness window, and caller-supplied threshold validation.
 
 Run:
 
@@ -179,7 +209,7 @@ git commit -m "test: enforce result integrity"
 git rev-parse HEAD > /private/tmp/shared-reading-I0.sha
 ```
 
-Expected: exactly the two test-integrity files and CI workflow are committed;
+Expected: exactly the four test-integrity scripts and CI workflow are committed;
 Electron tests and Mobile lint remain explicitly disabled while Worker,
 sharing-protocol, Swift MCP, and result-integrity checks remain enabled. An
 independent reviewer must return PASS with zero open Critical/High.
@@ -210,7 +240,8 @@ git -C "$RISHI_MAIN_WORKTREE" push origin HEAD:main
 git fetch origin main
 MAIN_AFTER=$(git rev-parse origin/main)
 git merge-base --is-ancestor "$I0_SHA" "$MAIN_AFTER"
-printf '{"i0":"%s","mainBefore":"%s","mainAfter":"%s","force":false}\n' "$I0_SHA" "$MAIN_BEFORE" "$MAIN_AFTER" > /private/tmp/shared-reading-I0-landing.json
+RISHI_LANDING_ROOT=$(mktemp -d /private/tmp/rishi-I0-landing.XXXXXX)
+printf '{"i0":"%s","mainBefore":"%s","mainAfter":"%s","force":false}\n' "$I0_SHA" "$MAIN_BEFORE" "$MAIN_AFTER" > "$RISHI_LANDING_ROOT/landing.json"
 ```
 
 Any dirty main worktree, protected-branch rejection, conflict, SHA mismatch, or
@@ -295,8 +326,9 @@ git add -f apps/apple/docs/superpowers/reviews/shared-reading-change-inventory.m
 git add -f apps/apple/docs/superpowers/reviews/shared-reading-feature-paths.txt
 git diff --cached --name-status
 git commit -m "docs: inventory shared reading recovery changes"
-git diff --name-only origin/main...HEAD | sort > /private/tmp/shared-reading-feature-actual.txt
-diff -u apps/apple/docs/superpowers/reviews/shared-reading-feature-paths.txt /private/tmp/shared-reading-feature-actual.txt
+RISHI_INVENTORY_ROOT=$(mktemp -d /private/tmp/rishi-shared-reading-inventory.XXXXXX)
+git diff --name-only origin/main...HEAD | sort > "$RISHI_INVENTORY_ROOT/feature-actual.txt"
+diff -u apps/apple/docs/superpowers/reviews/shared-reading-feature-paths.txt "$RISHI_INVENTORY_ROOT/feature-actual.txt"
 ```
 
 Expected: both review manifests are based on the refreshed main SHA and are the
@@ -322,11 +354,12 @@ reviewer, and a code-quality reviewer.
 
 ```bash
 set -euo pipefail
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/master-W2-sharing.json --cwd workers/sharing-worker -- bun run test
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/master-W2-sharing-typecheck.json --cwd workers/sharing-worker -- bunx tsc --noEmit
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/master-W3-migrations.json --cwd workers/worker -- bun run verify:migrations
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/master-W3-typecheck.json --cwd workers/worker -- bun run type-check
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/master-W3-worker.json --cwd workers/worker -- bun run test
+RISHI_GATE_ROOT=$(mktemp -d /private/tmp/rishi-master-worker-gate.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_GATE_ROOT" --artifact "$RISHI_GATE_ROOT/W2-sharing.json" --cwd workers/sharing-worker -- bun run test
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_GATE_ROOT" --artifact "$RISHI_GATE_ROOT/W2-sharing-typecheck.json" --cwd workers/sharing-worker -- bunx tsc --noEmit
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_GATE_ROOT" --artifact "$RISHI_GATE_ROOT/W3-migrations.json" --cwd workers/worker -- bun run verify:migrations
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_GATE_ROOT" --artifact "$RISHI_GATE_ROOT/W3-typecheck.json" --cwd workers/worker -- bun run type-check
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_GATE_ROOT" --artifact "$RISHI_GATE_ROOT/W3-worker.json" --cwd workers/worker -- bun run test
 ```
 
 Expected: nonzero tests discovered, zero skipped/failed, both typechecks exit
@@ -365,8 +398,10 @@ processes. The host becomes a fixture/evidence helper only.
 
 - [ ] **Step 2: Connect the registered server to Codex**
 
-Use the actual registered stdio executable and prove `initialize`, `tools/list`,
-read-only instance/memory calls, then semantic app actions.
+Use the actual registered stdio executable and prove the Codex thread/turn
+lifecycle plus correlated MCP item start/completion records for read-only
+instance/memory calls, then semantic app actions. Optional schema-valid
+`item.updated` records may appear but are not required.
 
 - [ ] **Step 3: Run the complete two-account scenario**
 
@@ -408,15 +443,16 @@ Critical/High findings. `PASS WITH NOTES` requires explicit user acceptance.
 
 ```bash
 set -euo pipefail
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/final-sharing.json --cwd workers/sharing-worker -- bun run test
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/final-sharing-typecheck.json --cwd workers/sharing-worker -- bunx tsc --noEmit
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/final-migrations.json --cwd workers/worker -- bun run verify:migrations
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/final-worker-typecheck.json --cwd workers/worker -- bun run type-check
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/final-worker.json --cwd workers/worker -- bun run test
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/final-mcp.log --cwd . -- swift test --package-path apps/apple/rishi-mcp
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/final-e2e-host.log --cwd . -- swift test --package-path apps/apple/rishi-e2e-host
-git diff --name-only origin/main...HEAD | sort > /private/tmp/shared-reading-feature-final.txt
-diff -u apps/apple/docs/superpowers/reviews/shared-reading-feature-paths.txt /private/tmp/shared-reading-feature-final.txt
+RISHI_FINAL_ROOT=$(mktemp -d /private/tmp/rishi-shared-reading-final.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/sharing.json" --cwd workers/sharing-worker -- bun run test
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/sharing-typecheck.json" --cwd workers/sharing-worker -- bunx tsc --noEmit
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/migrations.json" --cwd workers/worker -- bun run verify:migrations
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/worker-typecheck.json" --cwd workers/worker -- bun run type-check
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/worker.json" --cwd workers/worker -- bun run test
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/mcp.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_FINAL_ROOT" --artifact "$RISHI_FINAL_ROOT/e2e-host.log" --cwd . -- swift test --package-path apps/apple/rishi-e2e-host
+git diff --name-only origin/main...HEAD | sort > "$RISHI_FINAL_ROOT/feature-final.txt"
+diff -u apps/apple/docs/superpowers/reviews/shared-reading-feature-paths.txt "$RISHI_FINAL_ROOT/feature-final.txt"
 ```
 
 Then run the serialized Xcode and live MCP commands in the detailed plans.

@@ -81,8 +81,9 @@ tool result; it does not accept a bearer session or internal room command.
 - [ ] **Step 3: Run Swift and legacy parity suites**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/M0-green.log --cwd . -- swift test --package-path apps/apple/rishi-mcp
-bun scripts/test-integrity/run-verified.ts --format node-test --expect pass --artifact /private/tmp/M0-node-green.json --cwd . -- node --test --test-reporter=tap apps/apple/rishi-mcp/test/*.test.mjs
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M0.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/swift-green.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp
+bun scripts/test-integrity/run-verified.ts --format node-test --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/node-green.json" --cwd . -- node --test --test-reporter=tap apps/apple/rishi-mcp/test/*.test.mjs
 ```
 
 Expected before deletion: both suites discover tests and pass the same public
@@ -139,7 +140,8 @@ struct ProcessLaunchRecord: Codable, Sendable {
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "ProcessSupervisorTests.concurrentSameTargetStartIsRejected" --artifact /private/tmp/M1-red.log --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'ProcessSupervisorTests|InstanceRegistryTests|MemorySnapshotTests|ResourcePreflightTests|XCTestDriverTests'
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M1-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "ProcessSupervisorTests.concurrentSameTargetStartIsRejected" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'ProcessSupervisorTests|InstanceRegistryTests|MemorySnapshotTests|ResourcePreflightTests|XCTestDriverTests'
 ```
 
 Expected: discovered/failed `> 0`, skipped `0`, underlying exit nonzero. Missing
@@ -181,7 +183,8 @@ owned MCP, E2E, Xcode, XCTest, Catalyst, Simulator app process.
 - [ ] **Step 4: Run ownership/resource tests**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/M1-green.log --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'ProcessSupervisorTests|InstanceRegistryTests|MemorySnapshotTests|ResourcePreflightTests|XCTestDriverTests'
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M1-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'ProcessSupervisorTests|InstanceRegistryTests|MemorySnapshotTests|ResourcePreflightTests|XCTestDriverTests'
 ```
 
 Expected: discovered `> 0`, skipped/failed `0`, exit `0`; every fake owned PID
@@ -232,7 +235,8 @@ struct EvidenceEnvelope: Codable, Sendable {
 Run before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "EvidenceVerifierTests.rejectsSingleProducerFabrication" --artifact /private/tmp/M2-red.log --cwd . -- swift test --package-path apps/apple/rishi-e2e-host --filter 'Evidence|OSProcessSampler|SessionObservationVerifier'
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M2-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "EvidenceVerifierTests.rejectsSingleProducerFabrication" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-e2e-host --filter 'Evidence|OSProcessSampler|SessionObservationVerifier'
 ```
 
 Expected: discovered/failed `> 0`, skipped `0`, underlying exit nonzero. Otherwise
@@ -272,8 +276,9 @@ not match the same-run build product.
 - [ ] **Step 5: Run evidence tests and commit**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/M2-host-green.log --cwd . -- swift test --package-path apps/apple/rishi-e2e-host --filter 'Evidence|OSProcessSampler|SessionObservationVerifier'
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/M2-mcp-green.log --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter MCPProtocolTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M2-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/host.log" --cwd . -- swift test --package-path apps/apple/rishi-e2e-host --filter 'Evidence|OSProcessSampler|SessionObservationVerifier'
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/mcp.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter MCPProtocolTests
 git diff --name-only -- apps/apple/rishi-e2e-host/Sources/RishiE2EHost/EvidenceRecord.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/EvidenceLedger.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/EvidenceVerifier.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/OSProcessSampler.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SessionObservationVerifier.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/ProcessRunner.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/EvidenceLedgerTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/EvidenceVerifierTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/OSProcessSamplerTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SessionObservationVerifierTests.swift apps/apple/rishi-mcp/Sources/RishiAppleMCP/MCPProtocol.swift apps/apple/rishi-mcp/Tests/RishiAppleMCPTests/MCPProtocolTests.swift
 git add apps/apple/rishi-e2e-host/Sources/RishiE2EHost/EvidenceRecord.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/EvidenceLedger.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/EvidenceVerifier.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/OSProcessSampler.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SessionObservationVerifier.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/ProcessRunner.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/EvidenceLedgerTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/EvidenceVerifierTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/OSProcessSamplerTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SessionObservationVerifierTests.swift apps/apple/rishi-mcp/Sources/RishiAppleMCP/MCPProtocol.swift apps/apple/rishi-mcp/Tests/RishiAppleMCPTests/MCPProtocolTests.swift
 git diff --cached --name-status
@@ -334,7 +339,8 @@ semantic element discovery.
 Run before bridge implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "AppToolsTests.rejectsUnknownOrCoordinateActions" --artifact /private/tmp/M3-red.log --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'AppToolsTests|XCTestDriverTests|MCPProtocolTests'
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M3-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "AppToolsTests.rejectsUnknownOrCoordinateActions" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'AppToolsTests|XCTestDriverTests|MCPProtocolTests'
 ```
 
 Expected: discovered/failed `> 0`, skipped `0`, underlying exit nonzero. Otherwise
@@ -343,7 +349,8 @@ do not proceed.
 - [ ] **Step 4: Run package/UI bridge tests and commit**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/M3-green.log --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'AppToolsTests|XCTestDriverTests|MCPProtocolTests'
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M3-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter 'AppToolsTests|XCTestDriverTests|MCPProtocolTests'
 ```
 
 Expected: discovered `> 0`, skipped/failed `0`, exit `0`.
@@ -381,7 +388,8 @@ It may start only its sampler/verifier helpers through the shared supervisor.
 Run the new static/behavior test before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "SharedReadingHostTests.testAcceptedHostNeverLaunchesPeers" --artifact /private/tmp/M4-red.log --cwd . -- swift test --package-path apps/apple/rishi-e2e-host --filter SharedReadingHostTests
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M4-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect fail --require-failure-id "SharedReadingHostTests.testAcceptedHostNeverLaunchesPeers" --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-e2e-host --filter SharedReadingHostTests
 ```
 
 Expected: discovered/failed `> 0`, skipped `0`, underlying exit nonzero because
@@ -410,7 +418,7 @@ rishi-e2e-host verify-run --run-root ABSOLUTE_RUN_ROOT --phase live
 rishi-e2e-host verify-run --run-root ABSOLUTE_RUN_ROOT --phase cleanup
 ```
 
-`prepare-run` creates only the supplied root and its `derived/catalyst`,
+`prepare-run` initializes only the already-created private supplied root and its `derived/catalyst`,
 `derived/iphone17pro`, `results`, `evidence`, and `transcripts` children; it never
 launches an app peer. `preflight-run` requires that prepared manifest, refreshes
 resource/process/lock samples without recreating or deleting evidence, and never
@@ -425,7 +433,8 @@ workspace, or `/private/tmp` tree.
 - [ ] **Step 4: Run host tests and commit**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact /private/tmp/M4-green.log --cwd . -- swift test --package-path apps/apple/rishi-e2e-host
+RISHI_RUN_ROOT=$(mktemp -d /private/tmp/rishi-M4-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_RUN_ROOT" --artifact "$RISHI_RUN_ROOT/evidence.log" --cwd . -- swift test --package-path apps/apple/rishi-e2e-host
 git diff --name-only -- apps/apple/rishi-e2e-host/Package.swift apps/apple/rishi-e2e-host/README.md apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingHost.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHostCLI/main.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/FixtureBookProvisioner.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/RendezvousRelay.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/ResourcePreflight.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/TestAccountClient.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SharedReadingHostTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/FixtureBookProvisionerTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/RendezvousRelayTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/ResourcePreflightTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/TestAccountClientTests.swift
 git add apps/apple/rishi-e2e-host/Package.swift apps/apple/rishi-e2e-host/README.md apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingHost.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHostCLI/main.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/FixtureBookProvisioner.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/RendezvousRelay.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/ResourcePreflight.swift apps/apple/rishi-e2e-host/Sources/RishiE2EHost/TestAccountClient.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SharedReadingHostTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/FixtureBookProvisionerTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/RendezvousRelayTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/ResourcePreflightTests.swift apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/TestAccountClientTests.swift
 git diff --cached --name-status
@@ -453,16 +462,15 @@ and the supervisor PID/start-time in the evidence ledger and exits nonzero below
 8 GiB available memory or 20 GiB free disk:
 
 ```bash
-RISHI_SHARED_READING_RUN_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-RISHI_SHARED_READING_RUN_ROOT=/private/tmp/rishi-shared-reading-$RISHI_SHARED_READING_RUN_ID
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/M5-preflight-command.json --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host prepare-run --run-root "$RISHI_SHARED_READING_RUN_ROOT"
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-resource-preflight.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host preflight-run --run-root "$RISHI_SHARED_READING_RUN_ROOT"
+RISHI_SHARED_READING_RUN_ROOT=$(mktemp -d /private/tmp/rishi-shared-reading.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/M5-prepare-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host prepare-run --run-root "$RISHI_SHARED_READING_RUN_ROOT"
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-resource-preflight.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host preflight-run --run-root "$RISHI_SHARED_READING_RUN_ROOT"
 ```
 
 - [ ] **Step 2: Build the exact executable through the audited supervisor**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-build-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host supervised-command --run-root "$RISHI_SHARED_READING_RUN_ROOT" -- swift build -c release --package-path apps/apple/rishi-mcp
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-build-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host supervised-command --run-root "$RISHI_SHARED_READING_RUN_ROOT" -- swift build -c release --package-path apps/apple/rishi-mcp
 ```
 
 `supervised-command` is implemented and tested in M4 on top of M1's process
@@ -488,8 +496,8 @@ uses a fake `codex` executable to cover missing/add, exact existing, mismatch,
 malformed JSON, add failure, and readback mismatch. Run the tested adapter:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-registration-tests.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter CodexRegistrationTests
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-registration-command.json" --cwd . -- apps/apple/rishi-mcp/scripts/register-codex-mcp.sh rishi-apple-shared-reading /Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi-mcp/.build/release/rishi-apple-mcp "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-mcp-registration.json"
+bun scripts/test-integrity/run-verified.ts --format swift-output --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-registration-tests.log" --cwd . -- swift test --package-path apps/apple/rishi-mcp --filter CodexRegistrationTests
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/M5-registration-command.json" --cwd . -- apps/apple/rishi-mcp/scripts/register-codex-mcp.sh rishi-apple-shared-reading /Users/faridmatovu/projects/rishi-monorepo/apps/apple/rishi-mcp/.build/release/rishi-apple-mcp "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-mcp-registration.json"
 ```
 
 If the first `get` succeeds, do not run `add`; verify its command is byte-for-byte
@@ -504,11 +512,12 @@ Create one run ID and root, then invoke a real non-ephemeral Codex task so the
 originating task/session identity can be retained:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format codex-jsonl --expect pass --allow-server rishi-apple-shared-reading --require-tool list_app_instances --require-tool memory_snapshot --raw-output "$RISHI_SHARED_READING_RUN_ROOT/transcripts/codex-read-only.jsonl" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-read-only-normalized.json" --cwd . -- codex exec --json -C /Users/faridmatovu/projects/rishi-monorepo --sandbox read-only "Use only the registered rishi-apple-shared-reading MCP server. Call list_app_instances, then memory_snapshot, and return both structured results without launching an app."
+bun scripts/test-integrity/run-verified.ts --format codex-jsonl --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --allow-server rishi-apple-shared-reading --require-tool list_app_instances --require-tool memory_snapshot --raw-output "$RISHI_SHARED_READING_RUN_ROOT/transcripts/codex-read-only.jsonl" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-read-only-normalized.json" --cwd . -- codex exec --json -C /Users/faridmatovu/projects/rishi-monorepo --sandbox read-only "Use only the registered rishi-apple-shared-reading MCP server. Call list_app_instances, then memory_snapshot, and return both structured results without launching an app."
 ```
 
-Retain raw Codex JSONL including session/task identity, MCP initialization,
-`tools/list`, and `tools/call` events. The MCP producer log records correlation
+Retain raw Codex JSONL containing the actual `thread.started`, `turn.started`,
+`mcp_tool_call` item start/update-if-present/completion, and terminal
+`turn.completed` events emitted by Codex 0.146. The MCP producer log records correlation
 ID, server PID/start time, executable hash, tool name, and redacted result digest.
 The independent OS sampler binds that PID/start time/hash. The verifier requires
 each Codex call correlation/digest to match the MCP log; direct server invocation
@@ -528,8 +537,8 @@ as Codex connectivity evidence.
 
 ```bash
 RISHI_CODEX_SESSION_ID=$(apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host codex-session-id --run-root "$RISHI_SHARED_READING_RUN_ROOT")
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-policy-before-invalid.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host assert-codex-policy --run-root "$RISHI_SHARED_READING_RUN_ROOT" --sandbox read-only --only-server rishi-apple-shared-reading
-bun scripts/test-integrity/run-verified.ts --format codex-jsonl --expect pass --allow-server rishi-apple-shared-reading --require-tool send_reader_action --require-rejection INVALID_READER_ACTION --raw-output "$RISHI_SHARED_READING_RUN_ROOT/transcripts/codex-invalid-action.jsonl" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-invalid-action-normalized.json" --cwd . -- codex exec resume --json "$RISHI_CODEX_SESSION_ID" "Use only rishi-apple-shared-reading MCP. Call send_reader_action with an invalid action and report the structured validation error. Do not launch or mutate an app."
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-policy-before-invalid.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host assert-codex-policy --run-root "$RISHI_SHARED_READING_RUN_ROOT" --sandbox read-only --only-server rishi-apple-shared-reading
+bun scripts/test-integrity/run-verified.ts --format codex-jsonl --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --allow-server rishi-apple-shared-reading --require-tool send_reader_action --require-rejection "send_reader_action=unsupported reader action" --raw-output "$RISHI_SHARED_READING_RUN_ROOT/transcripts/codex-invalid-action.jsonl" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-invalid-action-normalized.json" --cwd . -- codex exec resume --json "$RISHI_CODEX_SESSION_ID" "Use only rishi-apple-shared-reading MCP. Call send_reader_action with an invalid action and report the exact unsupported reader action error. Do not launch or mutate an app."
 ```
 
 `codex-session-id` parses the retained raw Codex event, rejects zero/multiple/
@@ -566,7 +575,7 @@ and zero duplicate Rishi instances. Abort if memory is below 8 GiB, disk below
 20 GiB, or either target has an unowned/duplicate instance.
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/preflight-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host preflight-run --run-root "$RISHI_SHARED_READING_RUN_ROOT"
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/preflight-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host preflight-run --run-root "$RISHI_SHARED_READING_RUN_ROOT"
 ```
 
 Expected: run directories/manifest exist, no app/Xcode/XCTest peer launched, and
@@ -612,11 +621,12 @@ open_shared_book(catalyst)
 Execute the sequence through the bound Codex session and retain its raw events:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-policy-before-live.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host assert-codex-policy --run-root "$RISHI_SHARED_READING_RUN_ROOT" --sandbox read-only --only-server rishi-apple-shared-reading
-bun scripts/test-integrity/run-verified.ts --format codex-jsonl --expect pass --allow-server rishi-apple-shared-reading --require-tool start_app --require-tool create_reading_session --require-tool join_reading_session --require-tool wait_for_participant --require-tool start_reading_session --require-tool open_shared_book --require-tool send_reader_action --require-tool restart_app --require-tool open_active_sessions --require-tool rejoin_active_session --require-tool leave_reading_session --require-tool end_reading_session --require-tool stop_app --raw-output "$RISHI_SHARED_READING_RUN_ROOT/transcripts/codex-live-flow.jsonl" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-live-flow-normalized.json" --cwd . -- codex exec resume --json "$RISHI_CODEX_SESSION_ID" "Using only the registered rishi-apple-shared-reading MCP tools and the run manifest's deterministic book ID, perform the recorded sequence: preflight both destinations; start exactly Catalyst and iPhone 17 Pro; create on Catalyst; join on iPhone; wait for the distinct participant; start and open the shared book; move to a precise locator; pause and resume; restart only iPhone; open active sessions and rejoin; verify a newer authoritative sequence; have iPhone leave; have Catalyst end; stop only owned targets. Abort on any tool error, duplicate instance, memory/resource gate, identity mismatch, skipped test, missing observation, or non-MCP capability use."
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-policy-before-live.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host assert-codex-policy --run-root "$RISHI_SHARED_READING_RUN_ROOT" --sandbox read-only --only-server rishi-apple-shared-reading
+bun scripts/test-integrity/run-verified.ts --format codex-jsonl --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --allow-server rishi-apple-shared-reading --require-tool start_app --require-tool create_reading_session --require-tool join_reading_session --require-tool wait_for_participant --require-tool start_reading_session --require-tool open_shared_book --require-tool send_reader_action --require-tool restart_app --require-tool open_active_sessions --require-tool rejoin_active_session --require-tool leave_reading_session --require-tool end_reading_session --require-tool stop_app --raw-output "$RISHI_SHARED_READING_RUN_ROOT/transcripts/codex-live-flow.jsonl" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/codex-live-flow-normalized.json" --cwd . -- codex exec resume --json "$RISHI_CODEX_SESSION_ID" "Using only the registered rishi-apple-shared-reading MCP tools and the run manifest's deterministic book ID, perform the recorded sequence: preflight both destinations; start exactly Catalyst and iPhone 17 Pro; create on Catalyst; join on iPhone; wait for the distinct participant; start and open the shared book; move to a precise locator; pause and resume; restart only iPhone; open active sessions and rejoin; verify a newer authoritative sequence; have iPhone leave; have Catalyst end; stop only owned targets. Abort on any tool error, duplicate instance, memory/resource gate, identity mismatch, skipped test, missing observation, or non-MCP capability use."
 ```
 
-Missing Codex session identity, raw `tools/call` events, MCP correlation matches,
+Missing Codex session identity, ordered thread/turn lifecycle events, correlated
+MCP item start/completion records,
 or independently observed effects makes the run fail even if the UI appears
 correct. The live verifier rejects shell/terminal, file-write, arbitrary-network,
 direct state-injection, and every MCP-server event whose server name is not
@@ -657,7 +667,7 @@ Run all three member-authorized observation probes while the owner app remains
 available, then stop both MCP-owned targets and execute:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/cleanup-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host verify-run --run-root "$RISHI_SHARED_READING_RUN_ROOT" --phase cleanup
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/cleanup-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host verify-run --run-root "$RISHI_SHARED_READING_RUN_ROOT" --phase cleanup
 ```
 
 The cleanup verifier exits nonzero on any surviving owned descendant, missing/
@@ -672,7 +682,7 @@ Finalize producer signatures and ledger digest; copy public keys/digest/signatur
 into both result bundles and Codex transcript. Run the independent verifier.
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/live-verifier-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host verify-run --run-root "$RISHI_SHARED_READING_RUN_ROOT" --phase live
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_SHARED_READING_RUN_ROOT" --artifact "$RISHI_SHARED_READING_RUN_ROOT/evidence/live-verifier-command.json" --cwd . -- apps/apple/rishi-e2e-host/.build/debug/rishi-e2e-host verify-run --run-root "$RISHI_SHARED_READING_RUN_ROOT" --phase live
 ```
 
 Expected: discovered `> 0`, passed peer tests `= 1` per target, skipped/failed

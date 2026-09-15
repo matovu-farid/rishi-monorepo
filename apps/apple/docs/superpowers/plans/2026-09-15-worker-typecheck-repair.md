@@ -60,7 +60,8 @@ expect(config.include).not.toContain("../../packages/shared/src/**/*.ts");
 Run:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "Worker typecheck boundary excludes the all-shared-source glob" --artifact /private/tmp/T0-red.json --cwd workers/worker -- bun run test -- src/typecheck-boundary.test.ts
+RISHI_T0_RED_ROOT=$(mktemp -d /private/tmp/rishi-T0-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "Worker typecheck boundary excludes the all-shared-source glob" --owned-output-root "$RISHI_T0_RED_ROOT" --artifact "$RISHI_T0_RED_ROOT/evidence.json" --cwd workers/worker -- bun run test -- src/typecheck-boundary.test.ts
 ```
 
 Expected: discovered/failed `> 0`, skipped `0`, underlying exit nonzero.
@@ -74,8 +75,9 @@ not add shared test/module excludes or copy declarations.
 - [ ] **Step 3: Run boundary and typecheck**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/T0-green.json --cwd workers/worker -- bun run test -- src/typecheck-boundary.test.ts
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/T0-typecheck-baseline.json --cwd workers/worker -- bun run scripts/verify-typecheck-baseline.ts --stage T0
+RISHI_T0_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-T0-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_T0_GREEN_ROOT" --artifact "$RISHI_T0_GREEN_ROOT/tests.json" --cwd workers/worker -- bun run test -- src/typecheck-boundary.test.ts
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_T0_GREEN_ROOT" --artifact "$RISHI_T0_GREEN_ROOT/typecheck-baseline.json" --cwd workers/worker -- bun run scripts/verify-typecheck-baseline.ts --stage T0
 ```
 
 `verify-typecheck-baseline.ts --stage T0|T1|T2` runs
@@ -127,7 +129,8 @@ Run the focused test through the integrity runner and require a discovered,
 non-skipped failure before implementation:
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "copies ArrayBufferLike bytes into an ArrayBuffer-backed view" --require-failure-id "normalizes every Web API binary boundary" --artifact /private/tmp/T1-red.json --cwd workers/worker -- bun run test -- src/utils/web-bytes.test.ts src/app-store-server-library-node/request-body.test.ts src/billing/apns.test.ts src/billing/jws-verify.test.ts src/durable-objects/voice-session/nonce.test.ts src/index.web-bytes.test.ts
+RISHI_T1_RED_ROOT=$(mktemp -d /private/tmp/rishi-T1-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "copies ArrayBufferLike bytes into an ArrayBuffer-backed view" --require-failure-id "normalizes every Web API binary boundary" --owned-output-root "$RISHI_T1_RED_ROOT" --artifact "$RISHI_T1_RED_ROOT/evidence.json" --cwd workers/worker -- bun run test -- src/utils/web-bytes.test.ts src/app-store-server-library-node/request-body.test.ts src/billing/apns.test.ts src/billing/jws-verify.test.ts src/durable-objects/voice-session/nonce.test.ts src/index.web-bytes.test.ts
 ```
 
 - [ ] **Step 2: Implement one safe helper**
@@ -149,8 +152,9 @@ conversion.
 - [ ] **Step 3: Run focused behavior tests and typecheck**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/T1-green.json --cwd workers/worker -- bun run test -- src/utils/web-bytes.test.ts src/app-store-server-library-node/request-body.test.ts src/billing/apns.test.ts src/billing/jws-verify.test.ts src/durable-objects/voice-session/nonce.test.ts src/index.web-bytes.test.ts
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/T1-typecheck-stage.json --cwd workers/worker -- bun run scripts/verify-typecheck-baseline.ts --stage T1
+RISHI_T1_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-T1-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_T1_GREEN_ROOT" --artifact "$RISHI_T1_GREEN_ROOT/tests.json" --cwd workers/worker -- bun run test -- src/utils/web-bytes.test.ts src/app-store-server-library-node/request-body.test.ts src/billing/apns.test.ts src/billing/jws-verify.test.ts src/durable-objects/voice-session/nonce.test.ts src/index.web-bytes.test.ts
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_T1_GREEN_ROOT" --artifact "$RISHI_T1_GREEN_ROOT/typecheck-stage.json" --cwd workers/worker -- bun run scripts/verify-typecheck-baseline.ts --stage T1
 ```
 
 Expected: discovered `> 0`, skipped/failed `0`; the stage verifier proves every
@@ -175,7 +179,8 @@ allowance rows with `combined` still roll over and synchronize both reader and
 voice allowances.
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "combined history rolls over both allowance dimensions" --require-failure-id "combined history synchronizes without becoming an Apple product" --artifact /private/tmp/T2-red.json --cwd workers/worker -- bun run test -- src/billing/apple-product-plans.test.ts src/billing/allowance-period-rollover.test.ts src/billing/entitlement-sync.test.ts
+RISHI_T2_RED_ROOT=$(mktemp -d /private/tmp/rishi-T2-red.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "combined history rolls over both allowance dimensions" --require-failure-id "combined history synchronizes without becoming an Apple product" --owned-output-root "$RISHI_T2_RED_ROOT" --artifact "$RISHI_T2_RED_ROOT/evidence.json" --cwd workers/worker -- bun run test -- src/billing/apple-product-plans.test.ts src/billing/allowance-period-rollover.test.ts src/billing/entitlement-sync.test.ts
 ```
 
 Expected: discovered/failed `> 0`, skipped `0`, and failures are the new
@@ -196,8 +201,9 @@ allowance dimensions without inventing a new StoreKit product.
 - [ ] **Step 3: Run billing tests and typecheck**
 
 ```bash
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/T2-green.json --cwd workers/worker -- bun run test -- src/billing/apple-product-plans.test.ts src/billing/allowance-period-rollover.test.ts src/billing/entitlement-sync.test.ts
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/T2-typecheck-stage.json --cwd workers/worker -- bun run scripts/verify-typecheck-baseline.ts --stage T2
+RISHI_T2_GREEN_ROOT=$(mktemp -d /private/tmp/rishi-T2-green.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_T2_GREEN_ROOT" --artifact "$RISHI_T2_GREEN_ROOT/tests.json" --cwd workers/worker -- bun run test -- src/billing/apple-product-plans.test.ts src/billing/allowance-period-rollover.test.ts src/billing/entitlement-sync.test.ts
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_T2_GREEN_ROOT" --artifact "$RISHI_T2_GREEN_ROOT/typecheck-stage.json" --cwd workers/worker -- bun run scripts/verify-typecheck-baseline.ts --stage T2
 ```
 
 Expected: all combined-history tests pass, no product map accepts combined, all
@@ -269,8 +275,9 @@ double-cast is permitted. Do not spread casts across routes.
 
 ```bash
 set -euo pipefail
-bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --artifact /private/tmp/T3-worker.json --cwd workers/worker -- bun run test
-bun scripts/test-integrity/run-verified.ts --format command --expect pass --artifact /private/tmp/T3-typecheck.json --cwd workers/worker -- bun run type-check
+RISHI_T3_ROOT=$(mktemp -d /private/tmp/rishi-T3.XXXXXX)
+bun scripts/test-integrity/run-verified.ts --format vitest-json --expect pass --owned-output-root "$RISHI_T3_ROOT" --artifact "$RISHI_T3_ROOT/worker.json" --cwd workers/worker -- bun run test
+bun scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_T3_ROOT" --artifact "$RISHI_T3_ROOT/typecheck.json" --cwd workers/worker -- bun run type-check
 ```
 
 Expected: nonzero test discovery, skipped/failed `0`, both exits `0`; no
