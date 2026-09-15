@@ -480,17 +480,32 @@ export function mergeBoundedProcessIdentities(
 }
 
 export function parseProcessIdentityTable(output: string): ProcessRow[] {
-  const rows = output.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-    const match = line.match(/^([1-9]\d*)\s+(\d+)\s+([1-9]\d*)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/);
-    if (!match) throw new Error("malformed process identity snapshot");
-    return { pid: Number(match[1]), parentPid: Number(match[2]), processGroupId: Number(match[3]), state: match[4], startTime: match[5], executable: match[6] };
+  const rows = output.split("\n");
+  if (output.endsWith("\n")) rows.pop();
+  const malformed = (row: string) => {
+    const safeRow = row.replace(/[^\x20-\x7e]/g, "?").replace(/\s+/g, " ").trim();
+    return new Error(`malformed process identity snapshot row: ${safeRow ? `${safeRow.slice(0, 253)}${safeRow.length > 253 ? "..." : ""}` : "<empty>"}`);
+  };
+  const parsed = rows.map((raw) => {
+    const line = raw.trim();
+    const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/);
+    if (!match) throw malformed(raw);
+    const [pid, parentPid, processGroupId] = match.slice(1, 4).map(Number);
+    if (![pid, parentPid, processGroupId].every(Number.isSafeInteger)) throw malformed(raw);
+    return { pid, parentPid, processGroupId, state: match[4], startTime: match[5], executable: match[6] };
   });
-  if (rows.length === 0) throw new Error("malformed process identity snapshot");
-  return rows;
+  if (parsed.length === 0) throw malformed("");
+  return parsed;
+}
+
+export function processSnapshotEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...environment, LC_ALL: "C" };
 }
 
 async function processIdentityTable(): Promise<ProcessRow[]> {
-  const child = Bun.spawn(["ps", "-axo", "pid=,ppid=,pgid=,state=,lstart=,comm="], { stdout: "pipe", stderr: "pipe" });
+  // lstart is the portable process-start field supported by macOS and
+  // procps. Force the C locale so its weekday/month tokens are stable.
+  const child = Bun.spawn(["ps", "-axo", "pid=,ppid=,pgid=,state=,lstart=,comm="], { stdout: "pipe", stderr: "pipe", env: processSnapshotEnvironment() });
   const [exitCode, stdout] = await Promise.all([child.exited, readBounded(child.stdout, 8 * 1024 * 1024, "process snapshot")]);
   if (exitCode !== 0) throw new Error(`process identity snapshot failed with exit ${exitCode}`);
   return parseProcessIdentityTable(new TextDecoder().decode(stdout));
@@ -504,9 +519,13 @@ type NativeProcessOps = {
 };
 let nativeProcessOps: NativeProcessOps | undefined;
 
+export function posixLibcPathForPlatform(platform: string = process.platform): string | undefined {
+  return platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : platform === "linux" ? "libc.so.6" : undefined;
+}
+
 function processOps(): NativeProcessOps {
   if (nativeProcessOps) return nativeProcessOps;
-  const library = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : process.platform === "linux" ? "libc.so.6" : undefined;
+  const library = posixLibcPathForPlatform();
   if (!library) throw new Error("verified process containment requires POSIX session semantics");
   nativeProcessOps = dlopen(library, {
     getsid: { args: [FFIType.i32], returns: FFIType.i32 },
@@ -545,7 +564,7 @@ export async function sessionMemberIdentities(
   });
   const resnapshot = dependencies.resnapshot ?? processIdentityTable;
   for (const { pid, processGroupId, state, startTime, executable } of rows) {
-    if (pid === leaderPid) continue;
+    if (pid <= 0 || pid === leaderPid) continue;
     const identity = { pid, processGroupId, sessionId, startTime, executable };
     const currentSessionId = sessionIdFor(pid);
     if (currentSessionId < 0) {
@@ -596,7 +615,7 @@ export async function sampleSessionIdentities(
 }
 
 function signalProcessGroups(processGroupIds: number[], signal: NodeJS.Signals): void {
-  for (const processGroupId of [...new Set(processGroupIds)].sort((left, right) => left - right)) {
+  for (const processGroupId of [...new Set(processGroupIds.filter((processGroupId) => Number.isSafeInteger(processGroupId) && processGroupId > 0))].sort((left, right) => left - right)) {
     try {
       process.kill(-processGroupId, signal);
     } catch (error) {
@@ -648,6 +667,7 @@ export function validateObservedProcessIdentities(
   const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
   const live: ProcessIdentity[] = [];
   for (const identity of observed.values()) {
+    if (identity.pid <= 0) continue;
     const row = rowsByPid.get(identity.pid);
     if (!row || /^Z/.test(row.state) || row.processGroupId !== identity.processGroupId
       || row.startTime !== identity.startTime || row.executable !== identity.executable) continue;
@@ -686,7 +706,7 @@ export async function terminateProcessGroupMembers(
     });
   const signalGroups = dependencies.signalGroups ?? signalProcessGroups;
   const signalPids = dependencies.signalPids ?? ((processIds: number[], signal: NodeJS.Signals) => {
-    for (const pid of [...new Set(processIds)].sort((left, right) => left - right)) {
+    for (const pid of [...new Set(processIds.filter((pid) => Number.isSafeInteger(pid) && pid > 0))].sort((left, right) => left - right)) {
       try { process.kill(pid, signal); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
@@ -714,8 +734,12 @@ export async function terminateProcessGroupMembers(
   };
   const signal = async (members: ProcessIdentity[], value: NodeJS.Signals): Promise<void> => {
     const validated = await validateSignalMembers(members);
-    const processIds = validated.filter((member) => member.sessionId !== sessionId || member.processGroupId === launcherPid).map((member) => member.pid);
-    const processGroupIds = [...new Set(validated.filter((member) => member.sessionId === sessionId && member.processGroupId !== launcherPid).map((member) => member.processGroupId))].sort((left, right) => left - right);
+    const processIds = validated
+      .filter((member) => member.pid > 0 && (member.sessionId !== sessionId || member.processGroupId === launcherPid || member.processGroupId <= 0))
+      .map((member) => member.pid);
+    const processGroupIds = [...new Set(validated
+      .filter((member) => member.sessionId === sessionId && member.processGroupId > 0 && member.processGroupId !== launcherPid)
+      .map((member) => member.processGroupId))].sort((left, right) => left - right);
     if (processIds.length > 0) signalPids(processIds, value);
     if (processGroupIds.length > 0) signalGroups(processGroupIds, value);
     if (processIds.length > 0 || processGroupIds.length > 0) signals.push({ signal: value, processGroupIds, processIds });
@@ -1030,7 +1054,7 @@ let nativeDirectoryOps: NativeDirectoryOps | undefined;
 
 function directoryOps(): NativeDirectoryOps {
   if (nativeDirectoryOps) return nativeDirectoryOps;
-  const library = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : process.platform === "linux" ? "libc.so.6" : undefined;
+  const library = posixLibcPathForPlatform();
   if (!library) throw new Error("containment-safe output writes are unsupported on this platform");
   nativeDirectoryOps = dlopen(library, {
     openat: { args: [FFIType.i32, FFIType.cstring, FFIType.i32, FFIType.i32], returns: FFIType.i32 },

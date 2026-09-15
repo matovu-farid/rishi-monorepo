@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFil
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoBuildInfrastructureDiagnostics, collectDescendantPids, exerciseVerificationLocksForTest, mergeBoundedProcessIdentities, parseNodeTap, parseProcessIdentityTable, parseSwiftOutput, parseVitestJson, parseXcresultSummary, productionLaneLockPath, readBounded, resolveOutputStreamLimit, sampleDescendantsWhileRunning, sampleSessionIdentities, sessionMemberIdentities, terminateProcessGroupMembers, validateCodexJsonl, validateEvidence, validateObservedProcessIdentities, validateSessionSignalMembers, writeContainedFile } from "./run-verified";
+import { assertNoBuildInfrastructureDiagnostics, collectDescendantPids, exerciseVerificationLocksForTest, mergeBoundedProcessIdentities, parseNodeTap, parseProcessIdentityTable, parseSwiftOutput, parseVitestJson, parseXcresultSummary, posixLibcPathForPlatform, processSnapshotEnvironment, productionLaneLockPath, readBounded, resolveOutputStreamLimit, sampleDescendantsWhileRunning, sampleSessionIdentities, sessionMemberIdentities, terminateProcessGroupMembers, validateCodexJsonl, validateEvidence, validateObservedProcessIdentities, validateSessionSignalMembers, writeContainedFile } from "./run-verified";
 
 const runner = join(import.meta.dir, "run-verified.ts");
 const temporaryDirectories: string[] = [];
@@ -92,7 +92,7 @@ async function waitForFile(path: string, timeoutMs = 2_000): Promise<string> {
 }
 
 function continuousOutputFixture(statePath: string): string {
-  return `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen("/usr/lib/libSystem.B.dylib", { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(statePath)}, JSON.stringify({ pid: process.pid, sessionId: getsid(0) })); const chunk = "x".repeat(4096); while (true) process.stdout.write(chunk)`;
+  return `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen(${JSON.stringify(posixLibcPathForPlatform())}, { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(statePath)}, JSON.stringify({ pid: process.pid, sessionId: getsid(0) })); const chunk = "x".repeat(4096); while (true) process.stdout.write(chunk)`;
 }
 
 async function stopFixtureSession(statePath: string): Promise<void> {
@@ -346,9 +346,37 @@ describe("run-verified", () => {
     await expect(sampled).rejects.toThrow("process snapshot unavailable");
   });
 
-  test("records process start time and executable to disambiguate PID reuse", () => {
-    const rows = parseProcessIdentityTable("101 1 101 S Mon Sep 15 12:34:56 2026 /usr/bin/xcodebuild\n");
-    expect(rows).toEqual([{ pid: 101, parentPid: 1, processGroupId: 101, state: "S", startTime: "Mon Sep 15 12:34:56 2026", executable: "/usr/bin/xcodebuild" }]);
+  test("parses a full Linux process table with kernel and namespace zero identities", () => {
+    const rows = parseProcessIdentityTable([
+      "0 0 0 I Thu Jan  1 00:00:00 1970 [swapper/0]",
+      "1 0 0 Ss Mon Sep 15 12:34:56 2026 /sbin/init",
+      "2 0 0 I Mon Sep 15 12:34:56 2026 [kthreadd]",
+      "101 1 101 S Mon Sep 15 12:34:56 2026 /usr/bin/xcodebuild",
+    ].join("\n") + "\n");
+    expect(rows).toEqual([
+      { pid: 0, parentPid: 0, processGroupId: 0, state: "I", startTime: "Thu Jan  1 00:00:00 1970", executable: "[swapper/0]" },
+      { pid: 1, parentPid: 0, processGroupId: 0, state: "Ss", startTime: "Mon Sep 15 12:34:56 2026", executable: "/sbin/init" },
+      { pid: 2, parentPid: 0, processGroupId: 0, state: "I", startTime: "Mon Sep 15 12:34:56 2026", executable: "[kthreadd]" },
+      { pid: 101, parentPid: 1, processGroupId: 101, state: "S", startTime: "Mon Sep 15 12:34:56 2026", executable: "/usr/bin/xcodebuild" },
+    ]);
+  });
+
+  test("keeps the C locale for portable lstart parsing without discarding the caller environment", () => {
+    expect(processSnapshotEnvironment({ PATH: "/test/bin", LC_ALL: "de_DE.UTF-8", PRESERVE_ME: "yes" })).toEqual({
+      PATH: "/test/bin", LC_ALL: "C", PRESERVE_ME: "yes",
+    });
+  });
+
+  test("uses the same POSIX libc choice in test fixtures as production", () => {
+    expect(posixLibcPathForPlatform("darwin")).toBe("/usr/lib/libSystem.B.dylib");
+    expect(posixLibcPathForPlatform("linux")).toBe("libc.so.6");
+    expect(posixLibcPathForPlatform("win32")).toBeUndefined();
+  });
+
+  test("reports a bounded sanitized malformed process-table row", () => {
+    const malformed = `101 1 101 S Mon September 15 12:34:56 2026 /usr/bin/xcodebuild ${"x".repeat(512)}`;
+    expect(() => parseProcessIdentityTable(`${malformed}\n`)).toThrow(/malformed process identity snapshot row: .{1,256}$/);
+    expect(() => parseProcessIdentityTable("\n")).toThrow("malformed process identity snapshot row: <empty>");
   });
 
   test("proves a snapshotted process exited before treating a failed getsid as benign", async () => {
@@ -376,7 +404,7 @@ describe("run-verified", () => {
     const directory = await temporaryDirectory();
     const artifact = join(directory, "artifact.json");
     const targetSessionId = join(directory, "target.sid");
-    const sessionProbe = `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen("/usr/lib/libSystem.B.dylib", { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(targetSessionId)}, String(getsid(0)) + "\\n")`;
+    const sessionProbe = `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen(${JSON.stringify(posixLibcPathForPlatform())}, { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(targetSessionId)}, String(getsid(0)) + "\\n")`;
     const result = await run([
       "command", "--artifact", artifact, "--cwd", directory, "--", process.execPath, "-e", sessionProbe,
     ]);
@@ -517,6 +545,21 @@ describe("run-verified", () => {
       signalGroups: () => { throw new Error("detached member must not be group-signaled"); },
       wait: async () => {},
     });
+    expect(pidSignals).toEqual([[11]]);
+  });
+
+  test("never group-signals a nonpositive process group", async () => {
+    const member = { pid: 11, processGroupId: 0, sessionId: 10, startTime: "start", executable: "/bin/member" };
+    const groupSignals: number[][] = [];
+    const pidSignals: number[][] = [];
+    await terminateProcessGroupMembers(10, 10, new Map(), {
+      snapshotMembers: (() => { const values = [[member], []]; return async () => values.shift() ?? []; })(),
+      validateSignalMembers: async (members) => members,
+      signalGroups: (processGroupIds) => groupSignals.push(processGroupIds),
+      signalPids: (processIds) => pidSignals.push(processIds),
+      wait: async () => {},
+    });
+    expect(groupSignals).toEqual([]);
     expect(pidSignals).toEqual([[11]]);
   });
 
