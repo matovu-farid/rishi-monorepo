@@ -4,13 +4,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 apple_root="$repo_root/apps/apple/rishi/rishi"
 
-# RishiAPIEnvironment is the one allowed place for the DEBUG process override
-# and the compiled Release endpoint values. Tests may use explicit fixture URLs.
+# Tests may use explicit fixture URLs, but production Apple code must use only
+# the compiled canonical production endpoint configuration.
 violations="$(rg -n \
   --glob '*.swift' \
   --glob '!**/rishiTests/**' \
   --glob '!**/*Tests.swift' \
-  'URL\(string:\s*"https://api\.fidexa\.org"|ProcessInfo\.processInfo\.environment\["RISHI_API_URL"\]' \
+  'URL\(string:\s*"(https://api|wss://sharing)\.fidexa\.org"|ProcessInfo\.processInfo\.environment\["RISHI_(API|SHARING|WEBSOCKET)[^"]*URL"\]' \
   "$apple_root" \
   | rg -v '/Networking/RishiAPIEnvironment\.swift:' || true)"
 
