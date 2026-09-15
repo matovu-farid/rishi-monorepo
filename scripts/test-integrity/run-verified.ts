@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } 
 import { dlopen, FFIType } from "bun:ffi";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, parse, relative, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { collectResourceSample, validateResourceSample, type ResourceSample } from "./resource-preflight";
 
 type Format = "vitest-json" | "node-test" | "swift-output" | "xcresult" | "codex-jsonl" | "command";
@@ -515,6 +515,7 @@ type NativeProcessOps = {
   getsid: (pid: number) => number;
   getpgid: (pid: number) => number;
   getpgrp: () => number;
+  kill: (pid: number, signal: number) => number;
   setsid: () => number;
 };
 let nativeProcessOps: NativeProcessOps | undefined;
@@ -531,9 +532,18 @@ function processOps(): NativeProcessOps {
     getsid: { args: [FFIType.i32], returns: FFIType.i32 },
     getpgid: { args: [FFIType.i32], returns: FFIType.i32 },
     getpgrp: { args: [], returns: FFIType.i32 },
+    kill: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
     setsid: { args: [], returns: FFIType.i32 },
   }).symbols as NativeProcessOps;
   return nativeProcessOps;
+}
+
+export function sendPosixSignal(pid: number, signal: NodeJS.Signals | 0): boolean {
+  if (pid === 0) throw new Error("POSIX signaling requires a nonzero process identity");
+  if (!Number.isSafeInteger(pid) || pid < -2_147_483_647 || pid > 2_147_483_647) throw new Error("POSIX signaling requires a signed 32-bit process identity");
+  const signalNumber = signal === 0 ? 0 : osConstants.signals[signal];
+  if (!Number.isSafeInteger(signalNumber)) throw new Error(`unsupported POSIX signal: ${signal}`);
+  return processOps().kill(pid, signalNumber) === 0;
 }
 
 function posixSessionId(pid: number): number {
@@ -542,7 +552,6 @@ function posixSessionId(pid: number): number {
 
 type SessionMembershipDependencies = {
   sessionIdFor?: (pid: number) => number;
-  isAlive?: (pid: number) => boolean;
   resnapshot?: () => Promise<ProcessRow[]>;
 };
 
@@ -555,13 +564,6 @@ export async function sessionMemberIdentities(
 ): Promise<ProcessIdentity[]> {
   const identities: ProcessIdentity[] = [];
   const sessionIdFor = dependencies.sessionIdFor ?? posixSessionId;
-  const isAlive = dependencies.isAlive ?? ((pid: number) => {
-    try { process.kill(pid, 0); return true; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-      throw error;
-    }
-  });
   const resnapshot = dependencies.resnapshot ?? processIdentityTable;
   for (const { pid, processGroupId, state, startTime, executable } of rows) {
     if (pid <= 0 || pid === leaderPid) continue;
@@ -570,7 +572,6 @@ export async function sessionMemberIdentities(
     if (currentSessionId < 0) {
       if (/^Z/.test(state)) continue;
       else {
-        if (!isAlive(pid)) continue;
         const sameProcess = (row: ProcessRow | undefined): row is ProcessRow => Boolean(row
           && row.processGroupId === processGroupId
           && row.startTime === startTime
@@ -616,11 +617,9 @@ export async function sampleSessionIdentities(
 
 function signalProcessGroups(processGroupIds: number[], signal: NodeJS.Signals): void {
   for (const processGroupId of [...new Set(processGroupIds.filter((processGroupId) => Number.isSafeInteger(processGroupId) && processGroupId > 0))].sort((left, right) => left - right)) {
-    try {
-      process.kill(-processGroupId, signal);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
+    // Delivery failure is not treated as proof of exit. Cleanup always takes
+    // a fresh identity/session snapshot after each signal attempt.
+    sendPosixSignal(-processGroupId, signal);
   }
 }
 
@@ -707,9 +706,9 @@ export async function terminateProcessGroupMembers(
   const signalGroups = dependencies.signalGroups ?? signalProcessGroups;
   const signalPids = dependencies.signalPids ?? ((processIds: number[], signal: NodeJS.Signals) => {
     for (const pid of [...new Set(processIds.filter((pid) => Number.isSafeInteger(pid) && pid > 0))].sort((left, right) => left - right)) {
-      try { process.kill(pid, signal); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      }
+      // As with group delivery, only the following identity snapshot proves
+      // whether this exact process remains.
+      sendPosixSignal(pid, signal);
     }
   });
   const wait = dependencies.wait ?? ((milliseconds: number) => new Promise<void>((resolveDelay) => setTimeout(resolveDelay, milliseconds)));
