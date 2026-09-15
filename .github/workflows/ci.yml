@@ -29,7 +29,6 @@ jobs:
         run: |
           bun test --timeout 15000 scripts/test-integrity/run-verified.test.ts scripts/test-integrity/resource-preflight.test.ts
           bun scripts/test-integrity/run-verified.ts self-test
-
   lint-web:
     name: Web (lint + build)
     runs-on: ubuntu-latest

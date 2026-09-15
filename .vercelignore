@@ -6,7 +6,6 @@
 # Heavy unrelated apps
 apps/main
 apps/mobile
-apps/rishi-electron
 apps/dioxus
 
 # Tauri-only packages (massive)

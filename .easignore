@@ -34,7 +34,6 @@ node_modules/
 
 # Other Rishi apps not needed for the mobile build
 apps/web/
-apps/rishi-electron/
 crates/
 workers/
 

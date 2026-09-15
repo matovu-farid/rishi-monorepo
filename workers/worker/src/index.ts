@@ -1407,9 +1407,10 @@ app.post(
 // The correct flow is now `POST /api/voice-sessions`
 // (`workers/worker/src/routes/voice-sessions.ts`), which creates a
 // ledger-backed session before letting the client mint/register a call.
-// `apps/rishi-electron` (desktop client) still calls this removed route and
-// has not yet migrated to `/api/voice-sessions` — that migration is tracked
-// separately and is not blocked by this removal.
+// Current Apple clients use `/api/voice-sessions`. The retired Electron source
+// called this removed route and is now archived outside the monorepo, so there
+// is no in-tree migration target. Keep other released desktop compatibility
+// contracts frozen; do not repurpose this removed route for new clients.
 app.post(
   "/api/text/completions",
   requireAuth,

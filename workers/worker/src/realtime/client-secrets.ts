@@ -9,7 +9,8 @@ import {
 } from "@rishi/shared/voice-chat/build-realtime-agent";
 import { REALTIME_VOICE_MODEL } from "@rishi/shared/realtime/model";
 
-// Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
+// Authoritative server-side compatibility allowlist. The Apple UI currently
+// exposes a subset of these codes; client options must remain within this list.
 export const ALLOWED_REALTIME_LANGUAGES = [
   "en",
   "es",

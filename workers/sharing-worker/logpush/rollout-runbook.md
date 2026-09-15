@@ -1,5 +1,12 @@
 # Shared Reading — Staged Rollout Runbook
 
+> **ARCHIVED — LEGACY ELECTRON PROCEDURE. DO NOT EXECUTE.** The steps below
+> document the retired Electron rollout and remain only as protocol history.
+> The checked-in runtime on `origin/main` exposes only the frozen legacy `/v1`
+> transport. Apple `/v2` is planned but not yet implemented; it must be added
+> separately, with its own Durable Object class and binding, before current
+> Apple testing. Do not execute these steps or add Apple behavior to `/v1`.
+
 ## Phase 0: Internal (team only, no redeploy needed)
 
 **Trigger:** Worker deployed, Plan 2 merged, E2E suite green.

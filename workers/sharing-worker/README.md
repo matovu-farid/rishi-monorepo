@@ -1,39 +1,57 @@
-# rishi-sharing-worker
+# Rishi sharing Worker
 
-Cloudflare Worker + Durable Object backend for shared reading sessions in the Rishi Electron app.
+This Cloudflare Worker and its `SessionRoom` Durable Object preserve the
+checked-in shared-reading transport used by released legacy clients. The
+deprecated Electron source is archived in the private
+[`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/e460dda4eed5d69134d2e7f865b2d14a51de277e)
+repository.
 
-See `docs/superpowers/specs/2026-05-30-shared-reading-electron-design.md` for the full design.
+## Current compatibility boundary
 
-## Local dev
+The runtime on `origin/main` exposes `/health` and the frozen legacy `/v1`
+session, redeem, user-search, and WebSocket routes. Its Wrangler configuration
+contains only the `SESSION_ROOM` binding, the `SessionRoom` class, and the `v1`
+migration.
 
-    pnpm install
-    pnpm dev
-    pnpm test
+Apple `/v2` sharing is planned but is not implemented on `origin/main`. Do not
+point the Apple app at `/v1` or claim Apple shared-reading acceptance has been
+tested against `/v2`. Implement `/v2` separately with its own Durable Object
+class, binding, and append-only migration before Apple testing. Preserve `/v1`
+unchanged for released-client compatibility.
 
-## Secrets
+## Local checks
 
-Generate a 48-byte secret and set it for the production environment:
+Use Bun for this Worker, as required by repository policy:
 
-    openssl rand -base64 48 | pnpm exec wrangler secret put WORKER_HMAC_SECRET --env production
+```bash
+cd workers/sharing-worker
+bun install
+bun run test
+bun run dev
+```
 
-## Deploy
+The local health check is:
 
-    pnpm exec wrangler login                                 # one-time, interactive
-    pnpm exec wrangler deploy --env production --minify
+```bash
+curl -i http://localhost:8787/health
+```
 
-The output prints the workers.dev URL (e.g. `https://rishi-sharing-worker.<account>.workers.dev`).
+## Secrets and deployment
 
-## Smoke check
+`WORKER_HMAC_SECRET` signs join and reconnect tokens. It is the same trust
+secret named `SHARING_INTERNAL_SECRET` by the primary Worker; never rotate or
+configure only one side.
 
-    curl -i https://rishi-sharing-worker.<account>.workers.dev/health
-    # Expected: HTTP/2 200, body: ok
+```bash
+openssl rand -base64 48 | bunx wrangler secret put WORKER_HMAC_SECRET --env production
+bunx wrangler tail --env production
+```
 
-## Tail logs
+Do not deploy from a feature branch until the mandatory comparison with
+`origin/main` proves every released API, binding, migration, and Durable Object
+contract remains backward compatible. Record that audit, confirm both Workers'
+shared secret configuration, and obtain deployment authorization before using:
 
-    pnpm exec wrangler tail --env production
-
-## Domain
-
-The worker runs on `workers.dev` for v1. A custom domain (`sharing.rishi.fidexa.org`) is deferred
-until the `rishi.fidexa.org` DNS zone is delegated to Cloudflare DNS management.
-The WebSocket URL is embedded in the Electron binary; it is not user-visible.
+```bash
+bunx wrangler deploy --env production --minify
+```

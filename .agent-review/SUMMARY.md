@@ -1,5 +1,12 @@
 # Multi-Agent Test Review — Final Summary
 
+> **ARCHIVED — LEGACY ELECTRON REVIEW.** These findings describe the retired
+> Electron app and are preserved as historical evidence only. They are not
+> current monorepo implementation or testing instructions. The reviewed source
+> is archived in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy)
+> repository.
+
 **Date:** 2026-05-21
 **Phases run:** Pilot + Phase A (renderer core) + Phase B (e2e specs)
 **Phase C (everything else, ~80 files):** Skipped — Phase A+B already delivered strong ROI and the e2e environment limitations would compound through Phase C.
