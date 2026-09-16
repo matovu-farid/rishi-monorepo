@@ -1620,7 +1620,7 @@ categories:
 | Worker | `cd workers/worker && bun run test && bun run type-check && bun run verify:migrations` | normalized Worker test/type/migration JSON |
 | sharing-worker | `cd workers/sharing-worker && bun run test && bunx tsc --noEmit` | normalized sharing test/type JSON |
 | Swift MCP | `swift build --package-path apps/apple/rishi-mcp --jobs 1 && swift test --package-path apps/apple/rishi-mcp --jobs 1` | normalized Swift build/test JSON |
-| Apple UI acceptance | Run the four `MCPControlUITests` invite/session semantic tests named in the release manifest on iPhone 17 Pro and Mac Catalyst, then invoke `run-shared-reading-acceptance.sh` with the exact arguments above. The focused XCTest steps compile the clean app/UI-test graph without using the excluded test-auth suites; the MCP step is the real two-account behavioral proof. | both `.xcresult` bundles, normalized test JSON, and final-SHA MCP plus real two-account E2E JSON |
+| Apple UI acceptance | Run the four `MCPControlUITests` invite/session semantic tests named in the release manifest with the dedicated `rishi-mcp` scheme on iPhone 17 Pro and Mac Catalyst, then invoke `run-shared-reading-acceptance.sh` with the exact arguments above. The focused XCTest steps compile only the clean app/UI-test graph without using the excluded test-auth suites or unrelated unit-test target; the MCP step is the real two-account behavioral proof. | both `.xcresult` bundles, normalized test JSON, and final-SHA MCP plus real two-account E2E JSON |
 
 The runner must execute the manifest commands, including the acceptance driver
 after all build/test commands, and stamp every artifact with the
