@@ -1,7 +1,9 @@
 apps/apple/docs/superpowers/plans/2026-08-30-apple-mcp-control-server.md
 apps/apple/docs/superpowers/plans/2026-08-30-book-sync-metadata-repair.md
+apps/apple/docs/superpowers/plans/2026-09-15-shared-reading-worker-protocol.md
 apps/apple/docs/superpowers/reviews/shared-reading-change-inventory.md
 apps/apple/docs/superpowers/reviews/shared-reading-feature-paths.txt
+apps/apple/docs/superpowers/reviews/shared-reading-generated-migration-files.txt
 apps/apple/docs/superpowers/reviews/shared-reading-worker-baseline.md
 apps/apple/docs/superpowers/specs/2026-08-30-apple-mcp-control-server-design.md
 apps/apple/docs/superpowers/specs/2026-08-30-book-sync-metadata-repair-design.md
@@ -125,9 +127,11 @@ workers/worker/drizzle/migrations/20260820112725_session_invites_from_prod_sessi
 workers/worker/drizzle/migrations/20260820112725_session_invites_from_prod_session_only/snapshot.json
 workers/worker/drizzle/migrations/20260820121338_session_invites_idempotency/migration.sql
 workers/worker/drizzle/migrations/20260820121338_session_invites_idempotency/snapshot.json
+workers/worker/scripts/verify-migration-pattern.ts
 workers/worker/src/api-version.test.ts
 workers/worker/src/api-version.ts
 workers/worker/src/db/schema.ts
+workers/worker/src/db/session-sharing-migration.test.ts
 workers/worker/src/db/session-sharing-schema.test.ts
 workers/worker/src/env.d.ts
 workers/worker/src/health.test.ts
