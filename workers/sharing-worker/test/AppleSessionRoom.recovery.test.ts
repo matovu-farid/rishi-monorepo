@@ -1,6 +1,7 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import { sign } from "../src/hmac";
+import type { AppleSessionRoom } from "../src/AppleSessionRoom";
 
 const SECRET = "test-secret-do-not-use-in-prod";
 const CONTENT_HASH = "a".repeat(64);
@@ -110,6 +111,11 @@ function nextSocketClose(ws: WebSocket): Promise<CloseEvent> {
 }
 
 describe("AppleSessionRoom admission recovery", () => {
+  it("[W4-008] exposes an HMAC-only account-revocation payload without a sessionId", () => {
+    expectTypeOf<Parameters<AppleSessionRoom["revokeAccountReferences"]>[0]>()
+      .toEqualTypeOf<{ accountUserId: string; deletionOperationId: string }>();
+  });
+
   it("createRoom binds canonical sessionId", async () => {
     const sessionId = `apple-canonical-${crypto.randomUUID()}`;
     const response = await command(sessionId, "createRoom", {
@@ -234,6 +240,334 @@ describe("AppleSessionRoom admission recovery", () => {
     const repeated = await command(sessionId, "revokeAccountReferences", payload);
     expect(repeated.status).toBe(200);
     expect(await repeated.json()).toEqual(firstResult);
+  });
+
+  it("[W4-001] persists a deleted-account tombstone and rejects rejoin, admission, and restoration", async () => {
+    const sessionId = `apple-w4-tombstone-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const issued = await issueTicket(sessionId, "u_deleted");
+
+    const revoked = await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_deleted",
+      deletionOperationId: "delete-w4-tombstone",
+    });
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toEqual({ ok: true, status: "removed" });
+
+    await expect(openSocket(sessionId, "u_deleted", issued.admissionTicket))
+      .rejects.toMatchObject({ status: 401 });
+
+    const rejoin = await command(sessionId, "issueAdmissionTicket", {
+      sessionId,
+      inviteId: "invite-rejoin",
+      userId: "u_deleted",
+      contentHash: CONTENT_HASH,
+      profile: { displayName: "Deleted" },
+    });
+    expect(rejoin.status).toBe(400);
+    expect(await rejoin.json()).toMatchObject({ code: "ACCOUNT_DELETED" });
+
+    const restored = await command(sessionId, "restoreParticipant", {
+      actingUserId: "u_owner",
+      userId: "u_deleted",
+      inviteId: "invite-restore",
+      contentHash: CONTENT_HASH,
+      expectedControllerGeneration: 1,
+      profile: { displayName: "Deleted" },
+    });
+    expect(restored.status).toBe(400);
+    expect(await restored.json()).toMatchObject({ code: "ACCOUNT_DELETED" });
+
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      expect(state.deletedAccountTombstones.u_deleted).toMatchObject({ deletionOperationId: "delete-w4-tombstone" });
+      expect(state.participants.u_deleted).toBeUndefined();
+      expect(state.seatReservations.u_deleted).toBeUndefined();
+      expect(Object.values(state.pendingAdmissionLeases).some((lease: any) => lease.userId === "u_deleted")).toBe(false);
+      expect(state.removedUserIds).not.toContain("u_deleted");
+    });
+  });
+
+  it("[W4-002] removes provisional account references before storing a SESSION_NOT_FOUND acknowledgement", async () => {
+    const sessionId = `apple-w4-provisional-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const issued = await issueTicket(sessionId, "u_absent");
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      delete state.participants.u_absent;
+      state.seatReservations.u_absent = { reservedUntil: Date.now() + 60_000, connectionGeneration: 1 };
+      state.removedUserIds.push("u_absent");
+      expect(state.pendingAdmissionLeases[issued.claims.ticketId]).toMatchObject({ userId: "u_absent" });
+      await ctx.storage.put("apple-state", state);
+    });
+
+    const payload = {
+      accountUserId: "u_absent",
+      deletionOperationId: "delete-w4-provisional",
+    };
+    const first = await command(sessionId, "revokeAccountReferences", payload);
+    expect(first.status).toBe(200);
+    const acknowledged = await first.json();
+    expect(acknowledged).toEqual({ ok: true, status: "not_found" });
+
+    const repeated = await command(sessionId, "revokeAccountReferences", payload);
+    expect(await repeated.json()).toEqual(acknowledged);
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      expect(state.participants.u_absent).toBeUndefined();
+      expect(state.seatReservations.u_absent).toBeUndefined();
+      expect(Object.values(state.pendingAdmissionLeases).some((lease: any) => lease.userId === "u_absent")).toBe(false);
+      expect(state.removedUserIds).not.toContain("u_absent");
+      expect(state.deletedAccountTombstones.u_absent).toMatchObject({ deletionOperationId: "delete-w4-provisional" });
+    });
+  });
+
+  it("[W4-006] clears an absent provisional controller reference before storing SESSION_NOT_FOUND", async () => {
+    const sessionId = `apple-w4-provisional-controller-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const owner = await issueTicket(sessionId, "u_owner");
+    await openSocket(sessionId, "u_owner", owner.admissionTicket);
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      state.controllerUserId = "u_absent_controller";
+      state.controllerGeneration = 2;
+      state.roomEpoch = 2;
+      state.pendingAdmissionLeases.stale = {
+        ticketId: "stale",
+        userId: "u_absent_controller",
+        inviteId: "invite-stale",
+        connectionGeneration: 1,
+        expiresAt: Date.now() + 60_000,
+      };
+      await ctx.storage.put("apple-state", state);
+    });
+
+    const revoked = await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_absent_controller",
+      deletionOperationId: "delete-w4-provisional-controller",
+    });
+    expect(await revoked.json()).toEqual({ ok: true, status: "not_found" });
+
+    const status = await command(sessionId, "getRoomStatus", {});
+    expect(await status.json()).toMatchObject({
+      controllerUserId: "u_owner",
+      controllerGeneration: 3,
+      roomEpoch: 3,
+    });
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      expect(state.pendingAdmissionLeases.stale).toBeUndefined();
+    });
+  });
+
+  it("[W4-007] closes a stale account socket while cleaning an absent provisional member", async () => {
+    const sessionId = `apple-w4-provisional-socket-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const issued = await issueTicket(sessionId, "u_stale_socket");
+    const socket = await openSocket(sessionId, "u_stale_socket", issued.admissionTicket);
+    const closed = nextSocketClose(socket);
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      delete state.participants.u_stale_socket;
+      state.pendingAdmissionLeases.stale = {
+        ticketId: "stale",
+        userId: "u_stale_socket",
+        inviteId: "invite-stale",
+        connectionGeneration: 1,
+        expiresAt: Date.now() + 60_000,
+      };
+      await ctx.storage.put("apple-state", state);
+    });
+
+    const revoked = await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_stale_socket",
+      deletionOperationId: "delete-w4-provisional-socket",
+    });
+    expect(await revoked.json()).toEqual({ ok: true, status: "not_found" });
+    await expect(closed).resolves.toMatchObject({ code: 1000, reason: "account deleted" });
+  });
+
+  it("[W4-003] tombstones an owner revocation before ending the room so it remains purgeable", async () => {
+    const sessionId = `apple-w4-owner-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+
+    const revoked = await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_owner",
+      deletionOperationId: "delete-w4-owner",
+    });
+    expect(await revoked.json()).toEqual({ ok: true, status: "ended" });
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      expect(state.status).toBe("ended");
+      expect(state.deletedAccountTombstones.u_owner).toMatchObject({ deletionOperationId: "delete-w4-owner" });
+    });
+
+    const purged = await command(sessionId, "purgeAppleRoom", {});
+    expect(purged.status).toBe(200);
+    expect(await purged.json()).toEqual({ ok: true });
+  });
+
+  it("[W4-010] persists initial-sharer tombstone and removal when revoking an already-ended room", async () => {
+    const sessionId = `apple-w4-ended-owner-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const owner = await issueTicket(sessionId, "u_owner");
+    await openSocket(sessionId, "u_owner", owner.admissionTicket);
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+
+    const ended = await command(sessionId, "endRoom", {
+      actingUserId: "u_owner",
+      expectedControllerGeneration: 1,
+    });
+    expect(await ended.json()).toMatchObject({ status: "ended" });
+
+    const revoked = await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_owner",
+      deletionOperationId: "delete-w4-ended-owner",
+    });
+    expect(await revoked.json()).toEqual({ ok: true, status: "ended" });
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      const state = await ctx.storage.get<any>("apple-state");
+      expect(state).toMatchObject({
+        status: "ended",
+        initialSharerUserId: "",
+        controllerUserId: "",
+        deletedAccountTombstones: {
+          u_owner: { deletionOperationId: "delete-w4-ended-owner" },
+        },
+        accountRevocations: {
+          "delete-w4-ended-owner": {
+            accountUserId: "u_owner",
+            result: { ok: true, status: "ended" },
+          },
+        },
+      });
+      expect(state.participants.u_owner).toBeUndefined();
+    });
+  });
+
+  it("[W4-004] rejects queued Apple frames after the Apple room has been purged", async () => {
+    const sessionId = `apple-w4-queued-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const owner = await issueTicket(sessionId, "u_owner");
+    await openSocket(sessionId, "u_owner", owner.admissionTicket);
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+    let server: WebSocket;
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      server = ctx.getWebSockets()[0]!;
+    });
+
+    await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_owner",
+      deletionOperationId: "delete-w4-queued",
+    });
+    await command(sessionId, "purgeAppleRoom", {});
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      await ctx.storage.put("state", {
+        sessionId,
+        hostUserId: "u_owner",
+        sharerUserId: "u_owner",
+        bookContext: { bookId: "legacy", contentHash: CONTENT_HASH, format: "epub" },
+        requiresApproval: false,
+        status: "live",
+        createdAt: Date.now(),
+        participants: {
+          u_owner: {
+            userId: "u_owner",
+            profile: { displayName: "Owner" },
+            joinedAt: Date.now(),
+            hasBookFile: false,
+            micState: "unmuted",
+            connectionState: "connected",
+          },
+        },
+        pendingJoiners: {},
+        joinTokens: {},
+        hostProfileFallback: { displayName: "Owner" },
+      });
+      await (_instance as any).webSocketMessage(server!, JSON.stringify({ v: 1, t: "has.book", value: true }));
+      expect((await ctx.storage.get<any>("state")).participants.u_owner.hasBookFile).toBe(false);
+    });
+  });
+
+  it("[W4-009] ignores a stale Apple socket close after purge instead of mutating legacy state", async () => {
+    const sessionId = `apple-w4-close-after-purge-${crypto.randomUUID()}`;
+    await createRoom(sessionId);
+    const owner = await issueTicket(sessionId, "u_owner");
+    const reader = await issueTicket(sessionId, "u_reader");
+    await openSocket(sessionId, "u_owner", owner.admissionTicket);
+    await openSocket(sessionId, "u_reader", reader.admissionTicket);
+    const namespace = (env as { APPLE_SESSION_ROOM: DurableObjectNamespace }).APPLE_SESSION_ROOM;
+    const stub = namespace.get(namespace.idFromName(sessionId));
+    let readerServer: WebSocket;
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      readerServer = ctx.getWebSockets().find((socket) => {
+        return JSON.parse(ctx.getTags(socket)[0] ?? "{}").meta?.userId === "u_reader";
+      })!;
+    });
+
+    await command(sessionId, "revokeAccountReferences", {
+      accountUserId: "u_owner",
+      deletionOperationId: "delete-w4-close-after-purge",
+    });
+    await command(sessionId, "purgeAppleRoom", {});
+
+    await runInDurableObject(stub, async (_instance, ctx) => {
+      await ctx.storage.put("state", {
+        sessionId,
+        hostUserId: "u_owner",
+        sharerUserId: "u_owner",
+        bookContext: { bookId: "legacy", contentHash: CONTENT_HASH, format: "epub" },
+        requiresApproval: false,
+        status: "live",
+        createdAt: Date.now(),
+        participants: {
+          u_owner: {
+            userId: "u_owner",
+            profile: { displayName: "Owner" },
+            joinedAt: Date.now(),
+            hasBookFile: false,
+            micState: "unmuted",
+            connectionState: "connected",
+          },
+          u_reader: {
+            userId: "u_reader",
+            profile: { displayName: "Reader" },
+            joinedAt: Date.now(),
+            hasBookFile: false,
+            micState: "unmuted",
+            connectionState: "connected",
+          },
+        },
+        pendingJoiners: {},
+        joinTokens: {},
+        hostProfileFallback: { displayName: "Owner" },
+      });
+
+      await (_instance as any).webSocketClose(readerServer!, 4000);
+
+      expect((await ctx.storage.get<any>("state")).participants.u_reader.connectionState).toBe("connected");
+    });
   });
 
   it("revokes an unconsumed ticket and ends an owner account's room idempotently", async () => {

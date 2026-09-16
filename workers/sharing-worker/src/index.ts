@@ -43,7 +43,7 @@ const INTERNAL_ACTIONS = {
 type InternalClaims = { method: string; path: string; body: unknown; exp: number };
 
 function internalStatus(code: string): 400 | 401 | 403 | 404 | 409 | 410 {
-  if (code === "ROOM_FULL") return 409;
+  if (code === "ROOM_FULL" || code === "CONFLICT") return 409;
   if (code === "FORBIDDEN") return 403;
   if (code === "SESSION_NOT_FOUND") return 404;
   if (code === "SESSION_ENDED") return 410;
@@ -83,8 +83,8 @@ app.post("/v2/internal/rooms/:id", async (c) => {
       "code" in result &&
       "error" in result
     ) {
-      const failure = result as { code: string; error: string };
-      return c.json({ code: failure.code, error: failure.error }, internalStatus(failure.code));
+      const failure = result as { ok: false; code: string; error: string };
+      return c.json(failure, internalStatus(failure.code));
     }
     return c.json(result ?? { ok: true });
   } catch (e) {

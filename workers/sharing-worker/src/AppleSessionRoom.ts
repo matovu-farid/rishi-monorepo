@@ -105,6 +105,8 @@ type AppleStoredState = {
   startupExpiresAt: number;
   hasEverBeenOccupied: boolean;
   observations: AppleObservation[];
+  /** Permanent account-deletion fences, distinct from restorable removals. */
+  deletedAccountTombstones: Record<string, { deletionOperationId: string; deletedAt: number }>;
   accountRevocations: Record<string, { accountUserId: string; result: { ok: true; status: "ended" | "removed" | "not_found" } }>;
   /** Bounded per-room budget for SDP/ICE metadata relays. */
   sdpRelayCount?: number;
@@ -272,6 +274,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
       consumedAdmissionTicketIds: {},
       pendingAdmissionLeases: {},
       observations: [],
+      deletedAccountTombstones: {},
       accountRevocations: {},
       sdpRelayCount: 0,
     };
@@ -327,6 +330,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
     const state = await this.requireAppleState(input.sessionId);
     if (state.status === "ended") throw new AppleRoomError("SESSION_ENDED");
     if (state.bookContext.contentHash !== input.contentHash) throw new AppleRoomError("BOOK_HASH_MISMATCH");
+    if (state.deletedAccountTombstones[input.userId]) throw new AppleRoomError("ACCOUNT_DELETED");
     if (state.removedUserIds.includes(input.userId)) throw new AppleRoomError("REMOVED_FROM_SESSION");
     const existing = state.participants[input.userId];
     const now = Date.now();
@@ -474,19 +478,53 @@ export class AppleSessionRoom extends DurableObject<Env> {
     const state = await this.requireAppleState();
     const previous = state.accountRevocations[input.deletionOperationId];
     if (previous) return previous.result;
+    state.deletedAccountTombstones[input.accountUserId] = {
+      deletionOperationId: input.deletionOperationId,
+      deletedAt: Date.now(),
+    };
+
+    const participant = state.participants[input.accountUserId];
+    const wasController = state.controllerUserId === input.accountUserId;
+    delete state.participants[input.accountUserId];
+    delete state.seatReservations[input.accountUserId];
+    this.removeAppleAdmissionLeases(state, input.accountUserId);
+    state.removedUserIds = state.removedUserIds.filter((userId) => userId !== input.accountUserId);
+    if (state.speakerFloor?.userId === input.accountUserId) state.speakerFloor = null;
+    if (state.controllerReturnUserId === input.accountUserId) {
+      state.controllerReturnUserId = undefined;
+      state.controllerReturnUntil = undefined;
+    }
+    if (state.latestSyncSnapshot?.controllerUserId === input.accountUserId) this.clearAppleSnapshot(state);
+
     let result: { ok: true; status: "ended" | "removed" | "not_found" };
+    let controllerChanged = false;
     if (state.initialSharerUserId === input.accountUserId) {
+      state.initialSharerUserId = "";
+      state.controllerUserId = "";
+      state.controllerReturnUserId = undefined;
+      state.controllerReturnUntil = undefined;
+      this.clearAppleSnapshot(state);
+      state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result: { ok: true, status: "ended" } };
+      await this.saveAppleState(state);
       await this.endAppleRoom(state, "controller_ended");
       result = { ok: true, status: "ended" };
-    } else if (!state.participants[input.accountUserId]) {
+    } else if (!participant) {
+      if (wasController) {
+        const replacement = this.oldestConnectedAppleParticipant(state);
+        if (!replacement) {
+          result = { ok: true, status: "ended" };
+          state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
+          await this.endAppleRoom(state, "controller_ended");
+          return result;
+        }
+        state.controllerUserId = replacement.userId;
+        state.controllerGeneration += 1;
+        state.roomEpoch += 1;
+        this.clearAppleSnapshot(state);
+        controllerChanged = true;
+      }
       result = { ok: true, status: "not_found" };
     } else {
-      const wasController = state.controllerUserId === input.accountUserId;
-      delete state.participants[input.accountUserId];
-      delete state.seatReservations[input.accountUserId];
-      for (const [ticketId, lease] of Object.entries(state.pendingAdmissionLeases)) {
-        if (lease.userId === input.accountUserId) delete state.pendingAdmissionLeases[ticketId];
-      }
       state.rosterGeneration += 1;
       this.recordObservation(state, "membership", 0);
       if (wasController) {
@@ -501,18 +539,25 @@ export class AppleSessionRoom extends DurableObject<Env> {
         state.controllerGeneration += 1;
         state.roomEpoch += 1;
         this.clearAppleSnapshot(state);
+        controllerChanged = true;
       }
       result = { ok: true, status: "removed" };
       state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
       await this.saveAppleState(state);
       this.closeAppleSockets(input.accountUserId, "account deleted");
-      if (wasController) this.broadcastControllerChange(state);
+      if (controllerChanged) this.broadcastControllerChange(state);
       this.broadcastAppleRoster(state);
       await this.scheduleAppleAlarm(state);
       return result;
     }
     state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
     await this.saveAppleState(state);
+    this.closeAppleSockets(input.accountUserId, "account deleted");
+    if (controllerChanged) {
+      this.broadcastControllerChange(state);
+      this.broadcastAppleRoster(state);
+      await this.scheduleAppleAlarm(state);
+    }
     return result;
   }
 
@@ -566,6 +611,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
   async restoreAppleParticipant(input: { actingUserId: string; userId: string; inviteId: string; contentHash: string; expectedControllerGeneration: number; profile?: { displayName: string; avatarUrl?: string } }) {
     const state = await this.requireAppleState();
     this.assertController(state, input.actingUserId, input.expectedControllerGeneration);
+    if (state.deletedAccountTombstones[input.userId]) throw new AppleRoomError("ACCOUNT_DELETED");
     if (!state.removedUserIds.includes(input.userId)) throw new AppleRoomError("NO_SUCH_PARTICIPANT");
     if (state.bookContext.contentHash !== input.contentHash) throw new AppleRoomError("BOOK_HASH_MISMATCH");
     if (await this.expireAppleReservations(state, Date.now())) throw new AppleRoomError("SESSION_ENDED");
@@ -591,6 +637,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
       if (!Number.isSafeInteger(state.rosterGeneration)) state.rosterGeneration = 0;
       state.pendingAdmissionLeases ??= {};
       state.observations ??= [];
+      state.deletedAccountTombstones ??= {};
       state.accountRevocations ??= {};
       state.startupExpiresAt ??= state.createdAt + CONFIG.APPLE_EMPTY_ROOM_MS;
       state.seatReservations ??= {};
@@ -919,7 +966,9 @@ export class AppleSessionRoom extends DurableObject<Env> {
         if (!stored) throw new AppleRoomError("SESSION_NOT_FOUND");
         stored.pendingAdmissionLeases ??= {};
         stored.consumedAdmissionTicketIds ??= {};
+        stored.deletedAccountTombstones ??= {};
         if (stored.status === "ended") throw new AppleRoomError("SESSION_ENDED");
+        if (stored.deletedAccountTombstones[meta.userId]) throw new AppleRoomError("ACCOUNT_DELETED");
         if (ticket.sessionId !== stored.sessionId || ticket.userId !== meta.userId || ticket.roomEpoch !== stored.roomEpoch) {
           throw new AppleRoomError("ADMISSION_TICKET_MISMATCH");
         }
@@ -989,7 +1038,12 @@ export class AppleSessionRoom extends DurableObject<Env> {
 
   // ---------- Hibernation handlers ----------
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    if (await this.appleState()) {
+    const appleState = await this.appleState();
+    if (appleState || this.isAppleSocket(ws)) {
+      if (!appleState) {
+        this.sendError(ws, "session_not_found", "session is over");
+        return;
+      }
       await this.handleAppleMessage(ws, raw);
       return;
     }
@@ -1193,7 +1247,9 @@ export class AppleSessionRoom extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
-    if (await this.appleState()) {
+    const apple = await this.appleState();
+    if (apple || this.isAppleSocket(ws)) {
+      if (!apple) return;
       await this.handleAppleClose(ws, code);
       return;
     }
@@ -1498,6 +1554,11 @@ export class AppleSessionRoom extends DurableObject<Env> {
     } catch {
       return -1;
     }
+  }
+
+  private isAppleSocket(ws: WebSocket): boolean {
+    const tag = this.ctx.getTags(ws)[0];
+    try { return JSON.parse(tag ?? "{}").apple === true; } catch { return false; }
   }
 
   private async handleAppleClose(ws: WebSocket, code: number) {

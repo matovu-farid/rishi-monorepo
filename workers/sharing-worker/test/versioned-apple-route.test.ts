@@ -96,7 +96,7 @@ describe("versioned Apple sharing transport", () => {
     });
   });
 
-  it("requires an ended Apple room before permanently purging its DO state", async () => {
+  it("[W4-005] maps an active Apple purge conflict to HTTP 409 and preserves the result envelope", async () => {
     const sessionId = `apple-purge-${crypto.randomUUID()}`;
     const command = async (action: string, payload: Record<string, unknown>) => {
       const path = `/v2/internal/rooms/${sessionId}`;
@@ -118,8 +118,9 @@ describe("versioned Apple sharing transport", () => {
     expect(created.status).toBe(200);
 
     const premature = await command("purgeAppleRoom", {});
-    expect(premature.status).toBe(400);
+    expect(premature.status).toBe(409);
     expect(await premature.json()).toEqual({
+      ok: false,
       code: "CONFLICT",
       error: "room must be ended before purge",
     });
