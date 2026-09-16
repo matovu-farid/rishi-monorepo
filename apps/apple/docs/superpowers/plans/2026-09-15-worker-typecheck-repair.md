@@ -407,6 +407,23 @@ recursive approach because of the unmapped gitlink, then independently
 re-reviewed the targeted correction and returned **PASS** with zero findings at
 80% confidence. Green PR CI remains the external completion gate.
 
+PR #267 merged as `b3be709d7`. Its authorized production run `35059026051`
+passed checkout, targeted submodule initialization, installs, and strict
+typecheck, then stopped before Worker deployment because the workflow replayed
+historical migration `0004_chapter_index.sql` through a D1 import endpoint that
+the GitHub token cannot use. Read-only production queries proved both migration
+tables and all four indexes already exist, with zero writes. The recovery patch
+removes only that already-applied migration replay; schema and generated
+migration artifacts remain unchanged, and deployment still requires a green
+typecheck followed by `wrangler deploy --minify` and route smoke tests.
+The workflow now includes its own path in the push filter so this workflow-only
+recovery commit triggers the authorized deployment. Future schema changes must
+use the repository's migration command before deploying dependent code; this
+patch does not establish migration replay as part of every Worker deployment.
+Terra independently re-reviewed the final recovery workflow and returned
+**PASS**, with zero findings at 80% confidence and no additional migration
+required for this schema-neutral deployment.
+
 ## Task T4: Review, commit, and upstream before feature-only work
 
 **Files:** Exact T0-T3 files only
