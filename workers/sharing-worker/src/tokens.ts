@@ -64,7 +64,9 @@ export async function verifyReconnectToken(token: string, secret: string): Promi
 /**
  * Admission tickets are deliberately a distinct token family. The prefix is
  * part of the WebSocket subprotocol value, so a reconnect token can never be
- * accidentally accepted as an Apple admission credential.
+ * accidentally accepted as an Apple admission credential. The API returns the
+ * bare signed token; the WebSocket client adds exactly one `admission.` wire
+ * prefix when it constructs Sec-WebSocket-Protocol.
  */
 export async function issueAdmissionTicket(input: AdmissionTicketInput, secret: string) {
   const claims: AdmissionTicketClaimsT = {
@@ -78,16 +80,14 @@ export async function issueAdmissionTicket(input: AdmissionTicketInput, secret: 
     exp: Date.now() + input.ttlMs,
   };
   return {
-    token: `admission.${await sign(claims, secret)}`,
+    token: await sign(claims, secret),
     claims,
   };
 }
 
 export async function verifyAdmissionTicket(token: string, secret: string): Promise<AdmissionTicketClaimsT> {
-  if (!token.startsWith("admission.")) throw new Error("invalid admission ticket prefix");
-  const signed = token.slice("admission.".length);
-  if (!signed) throw new Error("missing admission ticket");
-  const claims = AdmissionTicketClaims.parse(await verify<unknown>(signed, secret));
+  if (!token || token.startsWith("admission.")) throw new Error("invalid admission ticket prefix");
+  const claims = AdmissionTicketClaims.parse(await verify<unknown>(token, secret));
   if (claims.exp <= Date.now()) throw new Error("admission ticket expired");
   return claims;
 }

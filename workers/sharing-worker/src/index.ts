@@ -5,6 +5,7 @@ import { verifyAuth, resolveTestGlobalAuth } from "./auth";
 import { GlobalLimiter } from "./perIpLimit";
 import { UserSearchBody, searchUsers } from "./userSearch";
 import { verify } from "./hmac";
+import type { AppleSessionRoom } from "./AppleSessionRoom";
 
 const createSessionLimiter = new GlobalLimiter({ capacity: 10, windowMs: 60 * 60_000 });
 const redeemLimiter = new GlobalLimiter({ capacity: 5, windowMs: 60_000 });
@@ -12,7 +13,7 @@ const userSearchLimiter = new GlobalLimiter({ capacity: 30, windowMs: 60_000 });
 
 type Env = {
   SESSION_ROOM: DurableObjectNamespace;
-  APPLE_SESSION_ROOM: DurableObjectNamespace;
+  APPLE_SESSION_ROOM: DurableObjectNamespace<AppleSessionRoom>;
   WORKER_HMAC_SECRET: string;
   AUTH_BASE_URL: string;
   /** "1" enables the `userId--DisplayName` bearer shortcut in verifyAuth. E2E only. */
@@ -34,9 +35,20 @@ const INTERNAL_ACTIONS = {
   removeParticipant: "removeAppleParticipant",
   restoreParticipant: "restoreAppleParticipant",
   endRoom: "endRoom",
+  revokeAccountReferences: "revokeAccountReferences",
+  getMemberObservations: "getMemberObservations",
+  purgeAppleRoom: "purgeAppleRoom",
 } as const;
 
 type InternalClaims = { method: string; path: string; body: unknown; exp: number };
+
+function internalStatus(code: string): 400 | 401 | 403 | 404 | 409 | 410 {
+  if (code === "ROOM_FULL") return 409;
+  if (code === "FORBIDDEN") return 403;
+  if (code === "SESSION_NOT_FOUND") return 404;
+  if (code === "SESSION_ENDED") return 410;
+  return 400;
+}
 
 /** Primary Worker → sharing Worker command surface. The signed claims bind the
  * action to the exact path and JSON body so a bearer cannot be replayed for a
@@ -53,17 +65,32 @@ app.post("/v2/internal/rooms/:id", async (c) => {
     return c.json({ code: "SERVICE_UNAVAILABLE", error: "invalid internal authorization" }, 401);
   }
   const id = c.req.param("id");
+  if (body.action === "createRoom") {
+    const payload = body.payload as { sessionId?: unknown } | null;
+    if (!payload || payload.sessionId !== id) return c.json({ code: "INVALID_COMMAND", error: "sessionId must match room path" }, 400);
+  }
   const stub = c.env.APPLE_SESSION_ROOM.get(c.env.APPLE_SESSION_ROOM.idFromName(id));
   try {
-    const method = INTERNAL_ACTIONS[body.action as keyof typeof INTERNAL_ACTIONS];
-    // @ts-expect-error Durable Object RPC method is selected from a fixed allowlist.
-    const result = await stub[method](body.payload ?? {});
+    const result: unknown = await stub.executeInternal({
+      action: INTERNAL_ACTIONS[body.action as keyof typeof INTERNAL_ACTIONS],
+      payload: body.payload ?? {},
+    });
+    if (
+      result &&
+      typeof result === "object" &&
+      "ok" in result &&
+      result.ok === false &&
+      "code" in result &&
+      "error" in result
+    ) {
+      const failure = result as { code: string; error: string };
+      return c.json({ code: failure.code, error: failure.error }, internalStatus(failure.code));
+    }
     return c.json(result ?? { ok: true });
   } catch (e) {
     const error = e as { code?: string; message?: string };
     const code = error.code ?? "SERVICE_UNAVAILABLE";
-    const status = code === "ROOM_FULL" ? 409 : code === "FORBIDDEN" ? 403 : code === "SESSION_NOT_FOUND" ? 404 : 400;
-    return c.json({ code, error: error.message ?? code }, status as 400 | 401 | 403 | 404 | 409);
+    return c.json({ code, error: error.message ?? code }, internalStatus(code));
   }
 });
 
@@ -74,8 +101,12 @@ app.get("/v2/sessions/:id/turn", async (c) => {
   const sessionId = c.req.param("id");
   const stub = c.env.APPLE_SESSION_ROOM.get(c.env.APPLE_SESSION_ROOM.idFromName(sessionId));
   try {
-    // @ts-expect-error RPC on the Durable Object stub.
-    return c.json(await stub.getTurnCredentials({ userId: user.userId, ttlSeconds: Number(c.req.query("ttl") ?? 3600) }));
+    const result: unknown = await stub.getTurnCredentials({ userId: user.userId, ttlSeconds: Number(c.req.query("ttl") ?? 3600) });
+    if (result && typeof result === "object" && "ok" in result && result.ok === false && "code" in result && "error" in result) {
+      const failure = result as { code: string; error: string };
+      return c.json({ code: failure.code, error: failure.error }, internalStatus(failure.code));
+    }
+    return c.json(result);
   } catch (e) {
     const error = e as { code?: string; message?: string };
     return c.json({ code: error.code ?? "TURN_UNAVAILABLE", error: error.message ?? "TURN credentials unavailable" }, error.code === "FORBIDDEN" ? 403 : 503);
@@ -202,7 +233,9 @@ app.get("/v2/sessions/:id/wss", async (c) => {
 
   const sessionId = c.req.param("id");
   const stub = c.env.APPLE_SESSION_ROOM.get(c.env.APPLE_SESSION_ROOM.idFromName(sessionId));
-  return stub.fetch(c.req.raw);
+  const headers = new Headers(c.req.raw.headers);
+  headers.set("x-rishi-session-kind", "apple");
+  return stub.fetch(new Request(c.req.raw, { headers }));
 });
 
 export default app;

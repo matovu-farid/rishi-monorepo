@@ -9,8 +9,12 @@ describe("verifyAuthToken (production path)", () => {
     ));
     const u = await verifyAuthToken("eyABC.xyz", { AUTH_BASE_URL: "https://auth.example", fetcher } as any);
     expect(u).toEqual({ userId: "u_99", email: "p@x.y", displayName: "Prod" });
-    const call = fetcher.mock.calls[0]!;
-    expect(call[1]?.headers).toMatchObject({ authorization: "Bearer eyABC.xyz" });
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer eyABC.xyz" }),
+      }),
+    );
   });
 
   it("throws on non-200", async () => {

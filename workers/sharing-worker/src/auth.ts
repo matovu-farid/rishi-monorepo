@@ -66,10 +66,13 @@ export async function verifyAuth(
   if (env.TEST_AUTH_ALLOWED === "1") {
     const m = header.match(/^Bearer\s+([^\s-]+(?:-[^\s-]+)*)--(.+)$/i);
     if (m) {
+      const userId = m[1];
+      const displayName = m[2];
+      if (!userId || !displayName) throw new Error("invalid test bearer");
       return {
-        userId: m[1],
-        email: `${m[1]}@e2e.local`,
-        displayName: m[2].replace(/_/g, " "),
+        userId,
+        email: `${userId}@e2e.local`,
+        displayName: displayName.replace(/_/g, " "),
       };
     }
   }

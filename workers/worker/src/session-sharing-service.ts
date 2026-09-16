@@ -182,6 +182,10 @@ export interface SessionSharingEndRoomRequest {
   expectedControllerGeneration: number;
 }
 
+export interface SessionSharingPurgeRoomRequest {
+  sessionId: string;
+}
+
 export interface SessionSharingCreateRoomResponse {
   sessionId: string;
   roomEpoch: number;
@@ -333,6 +337,7 @@ export class SessionSharingService {
 
   async createRoom(input: SessionSharingCreateRoomRequest): Promise<SessionSharingCreateRoomResponse> {
     return this.request<SessionSharingCreateRoomResponse>(input.sessionId, "createRoom", {
+      sessionId: input.sessionId,
       initialSharerUserId: input.initialSharerUserId,
       bookContext: input.bookContext,
       maxParticipants: input.maxParticipants,
@@ -404,6 +409,10 @@ export class SessionSharingService {
       actingUserId: input.actingUserId,
       expectedControllerGeneration: input.expectedControllerGeneration,
     });
+  }
+
+  async purgeAppleRoom(input: SessionSharingPurgeRoomRequest): Promise<void> {
+    await this.request<void>(input.sessionId, "purgeAppleRoom", {});
   }
 
   private async request<TResponse>(

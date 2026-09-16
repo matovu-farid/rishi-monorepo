@@ -49,7 +49,7 @@ describe("POST /v1/users/search", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { users: Array<{ userId: string }> };
     expect(body.users.length).toBeGreaterThan(0);
-    expect(body.users[0].userId).toBe("u_alice");
+    expect(body.users[0]?.userId).toBe("u_alice");
   });
 
   it("rate-limits the caller", async () => {

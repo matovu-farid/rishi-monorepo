@@ -16,7 +16,7 @@
     { "tag": "v2", "new_sqlite_classes": ["AppleSessionRoom"] }
   ],
   "vars": {
-    "AUTH_BASE_URL": "https://rishi.fidexa.org"
+    "AUTH_BASE_URL": "https://api.fidexa.org"
   },
   "routes": [
     { "pattern": "sharing.fidexa.org", "custom_domain": true }
@@ -32,7 +32,7 @@
       // the `userId--DisplayName` E2E bearer shortcut and the
       // `data.channel.relay` test path are both rejected by the DO.
       "vars": {
-        "AUTH_BASE_URL": "https://rishi.fidexa.org"
+        "AUTH_BASE_URL": "https://api.fidexa.org"
       },
       "routes": [
         { "pattern": "sharing.fidexa.org", "custom_domain": true }

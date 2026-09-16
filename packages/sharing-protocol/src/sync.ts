@@ -177,16 +177,16 @@ const SnapshotBase = {
   sequence: Sequence,
   bookId: BookId,
   contentHash: ContentHash,
-  format: Format.optional(),
-  position: AuthoritativePosition.optional(),
-  isPlaying: z.boolean().optional(),
-  ttsRate: z.number().finite().min(0.25).max(4).optional(),
+  format: Format,
+  position: AuthoritativePosition,
+  isPlaying: z.boolean(),
+  ttsRate: z.number().finite().min(0.25).max(4),
   source: z.literal("controller").optional(),
 } as const;
 
 /** A controller snapshot used for replay/freshness fencing. */
 export const ControllerSnapshot = z.object(SnapshotBase).strict().superRefine((value, ctx) => {
-  if (value.format !== undefined && value.position !== undefined && value.format !== value.position.format) {
+  if (value.format !== value.position.format) {
     ctx.addIssue({ code: "custom", path: ["position", "format"], message: "position format must match format" });
   }
 });

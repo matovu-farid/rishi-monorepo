@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sign } from "../src/hmac";
+import { verifyAuthToken } from "../src/auth";
 
 const SECRET = "test-secret-do-not-use-in-prod";
 const CONTENT_HASH = "a".repeat(64);
@@ -95,6 +96,41 @@ describe("versioned Apple sharing transport", () => {
     });
   });
 
+  it("requires an ended Apple room before permanently purging its DO state", async () => {
+    const sessionId = `apple-purge-${crypto.randomUUID()}`;
+    const command = async (action: string, payload: Record<string, unknown>) => {
+      const path = `/v2/internal/rooms/${sessionId}`;
+      const body = { action, payload };
+      const token = await sign({ method: "POST", path, body, exp: Date.now() + 60_000 }, SECRET);
+      return SELF.fetch(`https://example.com${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-rishi-internal-token": token },
+        body: JSON.stringify(body),
+      });
+    };
+
+    const created = await command("createRoom", {
+      sessionId,
+      initialSharerUserId: "u_owner",
+      bookContext: { bookId: "book-1", contentHash: CONTENT_HASH, format: "epub" },
+      maxParticipants: 5,
+    });
+    expect(created.status).toBe(200);
+
+    const premature = await command("purgeAppleRoom", {});
+    expect(premature.status).toBe(400);
+    expect(await premature.json()).toEqual({
+      code: "CONFLICT",
+      error: "room must be ended before purge",
+    });
+
+    const ended = await command("endRoom", { actingUserId: "u_owner", expectedControllerGeneration: 1 });
+    expect(ended.status).toBe(200);
+    const purged = await command("purgeAppleRoom", {});
+    expect(purged.status).toBe(200);
+    expect(await purged.json()).toEqual({ ok: true });
+  });
+
   it("does not expose the Apple command surface under the legacy v1 path", async () => {
     const response = await SELF.fetch("https://example.com/v1/internal/rooms/legacy-room", {
       method: "POST",
@@ -103,5 +139,27 @@ describe("versioned Apple sharing transport", () => {
     });
 
     expect(response.status).toBe(404);
+  });
+
+  it("uses api.fidexa.org as the canonical production auth authority", async () => {
+    const requestedUrls: string[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(JSON.stringify({
+        user: { id: "u_auth", email: "auth@example.com", name: "Authenticated" },
+      }), { status: 200 });
+    };
+
+    await expect(verifyAuthToken("production-bearer", {
+      AUTH_BASE_URL: "https://api.fidexa.org",
+      fetcher,
+    })).resolves.toMatchObject({ userId: "u_auth" });
+
+    expect(requestedUrls).toEqual([
+      "https://api.fidexa.org/api/auth/get-session",
+    ]);
+    expect(requestedUrls).not.toContain(
+      "https://rishi.fidexa.org/api/auth/get-session",
+    );
   });
 });

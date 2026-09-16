@@ -61,6 +61,13 @@ describe("AuthoritativeSync", () => {
 });
 
 describe("controller snapshot ordering", () => {
+  it.each(["format", "position", "isPlaying", "ttsRate"] as const)("rejects a snapshot missing %s", (field) => {
+    const snapshot = { ...controller, t: "snapshot" } as Record<string, unknown>;
+    delete snapshot[field];
+
+    expect(ControllerSnapshot.safeParse(snapshot).success).toBe(false);
+  });
+
   it("rejects stale epoch, generation, and sequence values", () => {
     const current = ControllerSnapshot.parse({ ...controller, t: "snapshot" });
     expect(isStaleSnapshot({ ...current, roomEpoch: 2 }, current)).toBe(true);
