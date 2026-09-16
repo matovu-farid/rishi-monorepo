@@ -7,16 +7,16 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
     }
 
     @MainActor
-    func testNextButtonCrossesSamplePDFPageBoundary() throws {
-        try crossViaNextButton(titleContains: "sample", maxPresses: 30)
+    func testNextButtonCrossesDensePDFPageBoundary() throws {
+        try crossViaNextButton(titleContains: "dense", maxPresses: 30)
     }
 
     @MainActor
     func testWithinPageNextUnderLatentTTSKeepsPlaying() throws {
-        let app = launchAndOpenPDF(titleContains: "sample", latentTTS: true)
-        _ = startSession(app)
+        let app = launchAndOpenPDF(titleContains: "dense", latentTTS: true)
+        let (stop, _) = startSession(app)
 
-        let next = app.buttons
+        let next = app.descendants(matching: .any)
             .matching(identifier: "tts-next-paragraph").firstMatch
         XCTAssertTrue(
             next.waitForExistence(timeout: 5),
@@ -32,17 +32,18 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
             if let p = pageNumber(app), p != startPage { break }
         }
 
-        let pause = waitForButton(app, identifier: "tts-pause", timeout: 12)
-        if pause == nil {
+        let pause = app.descendants(matching: .any)
+            .matching(identifier: "tts-pause").firstMatch
+        if !pause.waitForExistence(timeout: 12) {
             attachHierarchy(app, name: "latent-next-stall")
         }
         XCTAssertTrue(
-            pause != nil,
+            pause.exists,
             "After within-page Next under latent TTS, playback never returned to "
                 + "Playing (\"tts-pause\" never reappeared) — read-aloud stalled."
         )
         XCTAssertTrue(
-            waitForButton(app, identifier: "tts-stop", timeout: 2) != nil,
+            stop.exists,
             "Read-aloud session was torn down during within-page Next."
         )
     }
@@ -53,13 +54,18 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
     }
 
     @MainActor
+    func testAutoAdvanceCrossesDensePDFPageBoundary() throws {
+        try crossViaAutoAdvance(titleContains: "dense", timeout: 120)
+    }
+
+    @MainActor
     private func crossViaNextButton(titleContains: String, maxPresses: Int)
         throws
     {
         let app = launchAndOpenPDF(titleContains: titleContains)
-        _ = startSession(app)
+        let (stop, _) = startSession(app)
 
-        let next = app.buttons
+        let next = app.descendants(matching: .any)
             .matching(identifier: "tts-next-paragraph").firstMatch
         XCTAssertTrue(
             next.waitForExistence(timeout: 5),
@@ -72,14 +78,14 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         for press in 1...maxPresses {
             robustTap(next)
             usleep(1_800_000)
-            if waitForButton(app, identifier: "tts-stop", timeout: 6) == nil {
+            if !stop.waitForExistence(timeout: 6) {
                 attachHierarchy(
                     app,
                     name: "\(titleContains)-next-halt-\(press)"
                 )
             }
             XCTAssertTrue(
-                waitForButton(app, identifier: "tts-stop", timeout: 0.1) != nil,
+                stop.exists,
                 "[\(titleContains)] After Next #\(press), the read-aloud session was torn "
                     + "down (\"tts-stop\" gone) — narration halted at the page boundary instead "
                     + "of continuing onto the next page."
@@ -104,16 +110,15 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
         titleContains: String,
         timeout: TimeInterval
     ) throws {
-        let app = launchAndOpenPDF(titleContains: titleContains, autoplayTTS: true)
-        // Capture the baseline before the one-second UI-test TTS script can
-        // finish the first sentence and move the PDF to a later page.
+        let app = launchAndOpenPDF(titleContains: titleContains)
+        let (stop, _) = startSession(app)
+
         let startPage = try requirePageNumber(app)
-        _ = startSession(app)
 
         let deadline = Date().addingTimeInterval(timeout)
         var crossed = false
         while Date() < deadline {
-            if waitForButton(app, identifier: "tts-stop", timeout: 0.5) == nil {
+            if !stop.exists {
                 attachHierarchy(app, name: "\(titleContains)-auto-halt")
                 XCTFail(
                     "[\(titleContains)] Read-aloud auto-advance tore down the session "
@@ -141,8 +146,7 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
     @MainActor
     private func launchAndOpenPDF(
         titleContains: String,
-        latentTTS: Bool = false,
-        autoplayTTS: Bool = false
+        latentTTS: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["RISHI_UITEST"] = "1"
@@ -150,15 +154,12 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
 
             app.launchEnvironment["RISHI_UITEST_TTS_LATENT"] = "1"
         }
-        if autoplayTTS {
-            app.launchEnvironment["RISHI_UITEST_TTS_AUTOPLAY"] = "1"
-        }
         app.launch()
 
         let cell = app.descendants(matching: .any).matching(
             NSPredicate(
                 format:
-                    "identifier == 'library-book-cell' AND value == 'pdf' AND label CONTAINS[c] %@",
+                    "identifier == 'library-book-cell' AND label CONTAINS[c] %@",
                 titleContains
             )
         ).firstMatch
@@ -174,14 +175,14 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
     private func startSession(_ app: XCUIApplication) -> (
         XCUIElement, XCUIElement
     ) {
-        let readAloud = app.buttons
+        let readAloud = app.descendants(matching: .any)
             .matching(identifier: "reader.toolbar.readAloud").firstMatch
         XCTAssertTrue(
             readAloud.waitForExistence(timeout: 20),
             "Read Aloud toolbar button never appeared — the PDF reader did not open."
         )
 
-        let toggle = app.buttons.matching(
+        let toggle = app.descendants(matching: .any).matching(
             NSPredicate(
                 format: "identifier == 'tts-play' OR identifier == 'tts-pause'"
             )
@@ -204,40 +205,23 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
                 + "extraction, the entitlement bypass, or the offline TTS source failed."
         )
 
-        let pause = waitForButton(app, identifier: "tts-pause", timeout: 25)
-        if pause == nil {
+        let pause = app.descendants(matching: .any)
+            .matching(identifier: "tts-pause").firstMatch
+        if !pause.waitForExistence(timeout: 25) {
             attachHierarchy(app, name: "pdf-no-playing")
         }
         XCTAssertTrue(
-            pause != nil,
+            pause.exists,
             "PDF passage 0 never reached Playing (no \"tts-pause\")."
         )
 
-        let stop = waitForButton(app, identifier: "tts-stop", timeout: 10)
+        let stop = app.descendants(matching: .any)
+            .matching(identifier: "tts-stop").firstMatch
         XCTAssertTrue(
-            stop != nil,
+            stop.waitForExistence(timeout: 10),
             "Read-aloud controls never appeared."
         )
-        return (stop ?? app.buttons.matching(identifier: "tts-stop").firstMatch, toggle)
-    }
-
-    @MainActor
-    private func waitForButton(
-        _ app: XCUIApplication,
-        identifier: String,
-        timeout: TimeInterval
-    ) -> XCUIElement? {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            // SwiftUI replaces the audio overlay's accessibility subtree when
-            // playback becomes live. Rebuild the query on each poll so a
-            // query created before that replacement cannot remain stale.
-            let button = app.buttons.matching(identifier: identifier).firstMatch
-            if button.exists { return button }
-            let remaining = max(0.1, min(1.0, deadline.timeIntervalSinceNow))
-            if button.waitForExistence(timeout: remaining) { return button }
-        }
-        return nil
+        return (stop, toggle)
     }
 
     @MainActor
@@ -256,11 +240,8 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
     private func requirePageNumber(_ app: XCUIApplication) throws -> Int {
         let indicator = app.descendants(matching: .any)
             .matching(identifier: "reader.pdf.pageIndicator").firstMatch
-        if !indicator.waitForExistence(timeout: 10) {
-            attachHierarchy(app, name: "pdf-missing-page-indicator")
-        }
         XCTAssertTrue(
-            indicator.exists,
+            indicator.waitForExistence(timeout: 10),
             "PDF page indicator (reader.pdf.pageIndicator) never appeared — cannot verify crossing."
         )
         return try XCTUnwrap(
@@ -280,7 +261,8 @@ final class PDFReadAloudPageBoundaryUITests: XCTestCase {
     @MainActor
     private func robustTap(_ element: XCUIElement) {
         usleep(300_000)
-        element.tap()
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .tap()
     }
 
     @MainActor

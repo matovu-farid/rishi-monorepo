@@ -25,7 +25,6 @@
 
 import Testing
 import Foundation
-@testable import rishi
 
 
 struct ParagraphChunkerTests {

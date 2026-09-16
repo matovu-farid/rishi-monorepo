@@ -1,7 +1,6 @@
 @testable import rishi
 import Testing
 import Foundation
-import SwiftData
 
 
 
@@ -16,7 +15,7 @@ struct SyncMetadataStoreTests {
     func entityKindRawValuesPinned() {
         // sync-v2 (Phase 37-08) adds the additive `bookmark` kind.
         let kinds = SyncEntityKind.allCases.map(\.rawValue).sorted()
-        #expect(kinds == ["book", "bookmark", "chapter_index", "conversation", "highlight", "message", "position"])
+        #expect(kinds == ["book", "bookmark", "conversation", "highlight", "message", "position"])
     }
 
     @Test("Empty DB returns 0 pending + nil cursors")
@@ -61,19 +60,6 @@ struct SyncMetadataStoreTests {
             remoteEtag: nil
         )
         #expect(try await store.operationId(entityId: id, kind: .book) == nil)
-    }
-
-    @Test("new dirty timestamps stay ahead of the latest known remote timestamp")
-    func dirtyTimestampStaysAheadOfKnownRemote() async throws {
-        let store = try makeStore()
-        let id = UUID()
-        let remoteSeenAt = Date(timeIntervalSince1970: 1_700_000_000)
-
-        try await store.markDirty(entityId: id, kind: .book)
-        try await store.recordRemoteSeen(entityId: id, kind: .book, updatedAt: remoteSeenAt)
-        try await store.markDirty(entityId: id, kind: .book)
-
-        #expect(try await store.dirtyAt(entityId: id, kind: .book)! > remoteSeenAt)
     }
 
     @Test("missing or clean metadata cannot create an ephemeral operation ID")

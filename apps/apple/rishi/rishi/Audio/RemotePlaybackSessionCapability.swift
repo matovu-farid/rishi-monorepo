@@ -29,8 +29,7 @@ final class RemotePlaybackSessionCapability: @unchecked Sendable {
         return RemoteCommandLease(
             processSessionID: processSessionID,
             accountGeneration: accountGeneration,
-            playbackGeneration: playbackGeneration,
-            parentIsValid: { [weak self] in self?.isValid ?? false }
+            playbackGeneration: playbackGeneration
         )
     }
 

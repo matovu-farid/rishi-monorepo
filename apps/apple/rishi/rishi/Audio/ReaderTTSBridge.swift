@@ -64,7 +64,7 @@ final class ReaderTTSBridge {
         self.paragraphs = paragraphs
         self.currentIndex = min(max(startIndex, 0), paragraphs.count - 1)
         await tracker.attach(state: state)
-        await startConsumingPassages()
+        startConsumingPassages()
         startAdvanceWatcher()
         guard await requestActiveMode() else {
             await stop()
@@ -97,17 +97,14 @@ final class ReaderTTSBridge {
         // A reader can be reopened before an older controller finishes its
         // async teardown. Cancel this bridge's work, but never stop the
         // shared engine after a replacement session has claimed ownership.
-        if state.playbackSessionToken == nil || state.ownsPlaybackSession(sessionToken) {
+        if state.ownsPlaybackSession(sessionToken) {
             await engine.stop(lease: lease ?? TTSAlwaysValidLease())
         }
         guard lease?.isValid ?? true else { return }
         await tracker.detach()
         paragraphs = []
         currentIndex = 0
-        if state.playbackSessionToken == nil || state.ownsPlaybackSession(sessionToken) {
-            state.currentPassageId = nil
-            onPassageChange(nil)
-        }
+        onPassageChange(nil)
     }
 
     func pause(lease: RemoteCommandLease? = nil) async {
@@ -185,13 +182,13 @@ final class ReaderTTSBridge {
         await jump(to: currentIndex)
     }
 
-    private func startConsumingPassages() async {
+    private func startConsumingPassages() {
         consumeTask?.cancel()
-
-        let stream = await tracker.passageStream()
+    
 
         consumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            let stream = await self.tracker.passageStream()
             for await passageId in stream {
                 guard let index = Int(passageId) else { continue }
                 self.onPassageChange(index)
@@ -228,9 +225,11 @@ final class ReaderTTSBridge {
         guard lease?.isValid ?? true else { return false }
         await engine.start(request: request, lease: lease ?? TTSAlwaysValidLease())
         guard lease?.isValid ?? true else { return false }
-        // The engine owns the playback state transition. In particular, do
-        // not turn a synchronous `.stopped` completion into `.playing`, or
-        // the advance watcher cannot observe the passage terminal state.
+        // Engines retain terminal failures. Do not turn a failed request into
+        // apparent playback while the bridge is awaiting its completion.
+        if state.typedFailure == nil, state.status != .error {
+            state.update(status: .playing)
+        }
         return state.typedFailure == nil && state.status != .error
     }
 

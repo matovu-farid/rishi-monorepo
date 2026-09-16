@@ -51,26 +51,26 @@ extension PDFReaderViewModel {
     // MARK: - Cache plumbing
 
     fileprivate final class HighlightCacheBox: @unchecked Sendable {
-        private var storage: [UUID: [Highlight]] = [:]
+        private var storage: [ObjectIdentifier: [Highlight]] = [:]
         private let lock = NSLock()
 
         func read(_ owner: PDFReaderViewModel) -> [Highlight] {
             lock.lock(); defer { lock.unlock() }
-            return storage[owner.highlightCacheToken] ?? []
+            return storage[ObjectIdentifier(owner)] ?? []
         }
         func write(_ owner: PDFReaderViewModel, _ value: [Highlight]) {
             lock.lock(); defer { lock.unlock() }
-            storage[owner.highlightCacheToken] = value
+            storage[ObjectIdentifier(owner)] = value
         }
         func mutate(_ owner: PDFReaderViewModel, _ body: (inout [Highlight]) -> Void) {
             lock.lock(); defer { lock.unlock() }
-            var value = storage[owner.highlightCacheToken] ?? []
+            var value = storage[ObjectIdentifier(owner)] ?? []
             body(&value)
-            storage[owner.highlightCacheToken] = value
+            storage[ObjectIdentifier(owner)] = value
         }
         func clear(_ owner: PDFReaderViewModel) {
             lock.lock(); defer { lock.unlock() }
-            storage.removeValue(forKey: owner.highlightCacheToken)
+            storage.removeValue(forKey: ObjectIdentifier(owner))
         }
     }
     fileprivate static let cache = HighlightCacheBox()

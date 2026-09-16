@@ -66,16 +66,11 @@ struct ReaderViewModelTests {
             vm.didChangeLocation(makeLocator(progression: p))
         }
 
-        // Wait beyond the debounce window and until the actor-backed write has
-        // completed. A fixed sleep alone races the executor under Xcode-beta.
-        var polledLast: Position?
-        for _ in 0..<40 {
-            polledLast = try await store.position(for: book.id)
-            if polledLast != nil { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        let last = try #require(polledLast)
-        let storedWrapper = try #require(try? ReaderPositionLocator.decode(jsonString: last.locator))
+        // Wait > debounce window
+        try await Task.sleep(for: .milliseconds(300))
+
+        let last = try await store.position(for: book.id)
+        let storedWrapper = try #require(last.flatMap { try? ReaderPositionLocator.decode(jsonString: $0.locator) })
         let inner = try #require(storedWrapper.toReadiumLocator())
         let prog = inner.locations.totalProgression ?? 0
         // The LAST progression (≈ 0.5) should win — debounce coalesces.
@@ -220,7 +215,6 @@ struct ReaderViewModelTests {
     }
 
     @Test("manual navigation remains authoritative after a read-aloud update")
-    @MainActor
     func manualNavigationRemainsAuthoritativeAfterReadAloudUpdate() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
@@ -263,7 +257,6 @@ struct ReaderViewModelTests {
     }
 
     @Test("saved read-aloud locator wins over the live visible locator")
-    @MainActor
     func savedReadAloudLocatorWinsOverVisibleLocator() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
@@ -454,9 +447,7 @@ struct ReaderViewModelTests {
 
     @Test("firstParagraphForPageEntryPrefetch extracts the first PDF sentence")
     func firstParagraphForPageEntryPrefetchUsesFirstPDFSentence() async throws {
-        let url = try #require(PackageTestResourceBundle.url(
-            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
-        ))
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
         let store = InMemoryPositionStore()
         let book = Book(
             userId: UUID(),
@@ -483,15 +474,13 @@ struct ReaderViewModelTests {
         let passages = await vm.paragraphsForUserNavigationIntent(at: locator)
 
         #expect(extracted != nil)
-        #expect(!passages.isEmpty)
+        #expect(passages.count > 1)
         #expect(extracted == passages.first)
     }
 
     @Test("PDF user navigation returns sentence-level passages")
     func pdfUserNavigationUsesSentencePassages() async throws {
-        let url = try #require(PackageTestResourceBundle.url(
-            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
-        ))
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
         let vm = ReaderViewModel(
             book: Book(
                 userId: UUID(),
@@ -513,15 +502,13 @@ struct ReaderViewModelTests {
         )
         let passages = await vm.paragraphsForUserNavigationIntent(at: locator)
 
-        #expect(!passages.isEmpty)
+        #expect(passages.count > 1)
         #expect(passages.allSatisfy { $0.contains(where: { $0.isLetter || $0.isNumber }) })
     }
 
     @Test("PDF voice context exposes the current page")
     func pdfVoiceContextExposesCurrentPage() async throws {
-        let url = try #require(PackageTestResourceBundle.url(
-            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
-        ))
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
         let vm = ReaderViewModel(
             book: Book(
                 userId: UUID(),
@@ -553,9 +540,7 @@ struct ReaderViewModelTests {
 
     @Test("PDF page-entry and navigation helpers safely fall back when content is unavailable")
     func pdfHelpersReturnSafeFallbackForUnavailableContent() async throws {
-        let url = try #require(PackageTestResourceBundle.url(
-            forResource: "sample", withExtension: "pdf", subdirectory: "Resources/Bundled", relativeTo: #filePath
-        ))
+        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
         let vm = ReaderViewModel(
             book: Book(
                 userId: UUID(),

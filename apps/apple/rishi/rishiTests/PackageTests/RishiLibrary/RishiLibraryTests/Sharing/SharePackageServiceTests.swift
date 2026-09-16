@@ -32,23 +32,6 @@ private final class ShareServiceMockURLProtocol: URLProtocol, @unchecked Sendabl
     override func stopLoading() {}
 }
 
-private func requestBody(of request: URLRequest) -> Data {
-    if let body = request.httpBody { return body }
-    guard let stream = request.httpBodyStream else { return Data() }
-    stream.open()
-    defer { stream.close() }
-    var body = Data()
-    let bufferSize = 2_048
-    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-    defer { buffer.deallocate() }
-    while stream.hasBytesAvailable {
-        let read = stream.read(buffer, maxLength: bufferSize)
-        if read <= 0 { break }
-        body.append(buffer, count: read)
-    }
-    return body
-}
-
 private final class LockIsolatedInt: @unchecked Sendable {
     private let lock = NSLock()
     private var storage = 0
@@ -92,7 +75,6 @@ private final class LockIsolatedOptionalUUID: @unchecked Sendable {
 
 private final class AsyncSignal: @unchecked Sendable {
     private let lock = NSLock()
-    private let synchronousWaiter = DispatchSemaphore(value: 0)
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var signaled = false
 
@@ -118,11 +100,6 @@ private final class AsyncSignal: @unchecked Sendable {
         }
         lock.unlock()
         continuation?.resume()
-        synchronousWaiter.signal()
-    }
-
-    func waitSynchronously() {
-        synchronousWaiter.wait()
     }
 }
 
@@ -176,7 +153,7 @@ struct SharePackageServiceTests {
         #expect(second.id == "package-prepared")
         #expect(oneTimeFirst.link == "https://rishi.test/one-time")
         #expect(oneTimeSecond.id == "package-one-time")
-        #expect(prepareCount.value == 2)
+        #expect(prepareCount.value == 3)
     }
 
     @Test("prepared links are partitioned when the authenticated account changes")
@@ -248,25 +225,25 @@ struct SharePackageServiceTests {
         ShareServiceMockURLProtocol.handler = { request in
             guard request.url?.path == "/api/shares/prepare" else { return (404, Data()) }
             prepareCount.increment()
-            let json = (try? JSONSerialization.jsonObject(with: requestBody(of: request))) as? [String: Any]
+            let json = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any]
             let ids = json?["book_ids"] as? [String] ?? []
             let prepared = ids.flatMap { bookID in
                 [[
                     "book_id": bookID,
                     "public": [
                         "id": "package-\(bookID)-public",
-                        "expires_at": NSNull(),
+                        "expires_at": 900000000,
                         "link": "https://rishi.test/\(bookID)/public",
                     ],
                     "one_time": [
                         "id": "package-\(bookID)-one-time",
-                        "expires_at": NSNull(),
+                        "expires_at": 900000000,
                         "link": "https://rishi.test/\(bookID)/one-time",
                     ],
                 ] as [String: Any]]
             }
             let payload: [String: Any] = ["links": prepared, "skipped": []]
-        return (200, (try? JSONSerialization.data(withJSONObject: payload)) ?? Data())
+            return (200, (try? JSONSerialization.data(withJSONObject: payload)) ?? Data())
         }
 
         let service = SharePackageService(
@@ -374,7 +351,7 @@ struct SharePackageServiceTests {
                 redeemCount.increment()
                 if requestNumber == 1 {
                     firstRedeemStarted.signal()
-                    releaseFirstRedeem.waitSynchronously()
+                    releaseFirstRedeem.wait()
                 }
                 let packageID = requestNumber == 1 ? "package-one" : "package-two"
                 let itemID = requestNumber == 1 ? "item-one" : "item-two"

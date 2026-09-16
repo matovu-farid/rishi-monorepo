@@ -169,10 +169,9 @@ struct DataUseConsentTests {
         #expect(DataUseConsentDisclosure.cloudSyncItems.contains("highlights"))
         #expect(DataUseConsentDisclosure.cloudSyncItems.contains("bookmarks"))
         #expect(DataUseConsentDisclosure.cloudSyncItems.contains("conversations/messages"))
-        let providers = DataUseConsentDisclosure.aiProviderItems.joined(separator: "\n")
-        #expect(providers.contains("OpenAI"))
-        #expect(providers.contains("ElevenLabs"))
-        #expect(providers.contains("Deepgram"))
+        #expect(DataUseConsentDisclosure.aiProviderItems.contains("OpenAI"))
+        #expect(DataUseConsentDisclosure.aiProviderItems.contains("ElevenLabs"))
+        #expect(DataUseConsentDisclosure.aiProviderItems.contains("Deepgram"))
         #expect(DataUseConsentDisclosure.privacyPolicyURL.absoluteString == "https://rishi.fidexa.org/privacy")
     }
 

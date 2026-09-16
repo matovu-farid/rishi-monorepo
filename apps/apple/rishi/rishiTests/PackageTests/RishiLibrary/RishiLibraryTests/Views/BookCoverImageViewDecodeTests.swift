@@ -35,11 +35,11 @@ struct BookCoverImageViewDecodeTests {
             .deletingLastPathComponent() // Views
             .deletingLastPathComponent() // RishiLibraryTests
             .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // RishiLibrary (package test group)
-            .deletingLastPathComponent() // PackageTests
-            .deletingLastPathComponent() // rishiTests
+            .deletingLastPathComponent() // package root
         let source = packageRoot
-            .appendingPathComponent("rishi/Modules/RishiLibrary/RishiLibrary/Views")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("RishiLibrary")
+            .appendingPathComponent("Views")
             .appendingPathComponent("BookCoverImageView.swift")
         return try String(contentsOf: source, encoding: .utf8)
     }

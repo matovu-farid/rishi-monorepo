@@ -200,8 +200,7 @@ struct SyncEngineTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token"),
-            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+            tokenProvider: StaticTokenProvider("test-token")
         )
     }
 
@@ -284,16 +283,6 @@ struct SyncEngineTests {
         """.utf8)
     }
 
-    private func defaultResponse(for request: URLRequest) -> (Int, Data, [String: String]?) {
-        if request.httpMethod == "GET", request.url?.path == "/api/sync/conversations" {
-            return (200, Data("{ \"rows\": [] }".utf8), nil)
-        }
-        if request.httpMethod == "GET", request.url?.path == "/api/sync/messages" {
-            return (200, Data("{ \"rows\": [] }".utf8), nil)
-        }
-        return (404, Data(), nil)
-    }
-
     private func waitForRequest(path: String) async throws {
         for _ in 0..<100 {
             if EngineMockURLProtocol.capturedSnapshot().contains(where: { $0.url?.path == path }) {
@@ -356,11 +345,7 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                // URLSession may invoke URLProtocol on the same cooperative
-                // thread pool used by the async test continuation. A bounded
-                // wait preserves an overlap window without deadlocking that
-                // pool if cancellation or scheduling changes.
-                _ = fetchGate.wait(timeout: .now() + .milliseconds(500))
+                fetchGate.wait()
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -408,7 +393,7 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                _ = fetchGate.wait(timeout: .now() + .milliseconds(500))
+                fetchGate.wait()
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -468,7 +453,7 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                _ = fetchGate.wait(timeout: .now() + .milliseconds(500))
+                fetchGate.wait()
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -564,7 +549,6 @@ struct SyncEngineTests {
         try await engine.markBookDeleted(bookId)
 
         try await waitForRequest(path: "/api/sync/changes")
-        await engine.requestSyncAndWait()
         #expect(EngineMockURLProtocol.capturedSnapshot().contains {
             $0.url?.path == "/api/sync/changes"
         })
@@ -588,7 +572,7 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                _ = fetchGate.wait(timeout: .now() + .milliseconds(500))
+                fetchGate.wait()
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
@@ -617,9 +601,7 @@ struct SyncEngineTests {
             await resetProbe.markCompleted()
         }
         try await Task.sleep(nanoseconds: 50_000_000)
-        // Account reset cancels the in-flight wave, then awaits its cancelled
-        // task before clearing account-scoped state.
-        #expect(await resetProbe.isCompleted())
+        #expect(await resetProbe.isCompleted() == false)
 
         fetchGate.signal()
         _ = await waveTask.value
@@ -646,7 +628,7 @@ struct SyncEngineTests {
                 return (200, self.emptyChangesBody(), nil)
             }
             if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
-                _ = chatGate.wait(timeout: .now() + .milliseconds(500))
+                chatGate.wait()
                 return (200, Data("{ \"rows\": [] }".utf8), nil)
             }
             if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
@@ -672,9 +654,7 @@ struct SyncEngineTests {
             await resetProbe.markCompleted()
         }
         try await Task.sleep(nanoseconds: 50_000_000)
-        // Account reset cancels the in-flight wave, then awaits its cancelled
-        // task before clearing account-scoped state.
-        #expect(await resetProbe.isCompleted())
+        #expect(await resetProbe.isCompleted() == false)
 
         chatGate.signal()
         _ = await waveTask.value
@@ -727,7 +707,7 @@ struct SyncEngineTests {
         #expect(wave.errors.isEmpty)
     }
 
-    @Test("cursor pages are applied and committed before the advisory final read-back")
+    @Test("cursor pages are applied and committed only after each successful page")
     func runOnceConsumesCursorPages() async throws {
         EngineMockURLProtocol.reset()
         let session = makeSession()
@@ -769,8 +749,7 @@ struct SyncEngineTests {
         let wave = await engine.runOnce()
 
         #expect(wave.errors.isEmpty)
-        // Two cursor pages plus the engine's advisory final projection read.
-        #expect(EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/api/sync/changes" }.count == 3)
+        #expect(EngineMockURLProtocol.capturedSnapshot().filter { $0.url?.path == "/api/sync/changes" }.count == 2)
         #expect(await metadata.incrementalCursor() == nil)
         #expect(await metadata.savedCursorCount() == 1)
     }
@@ -794,9 +773,9 @@ struct SyncEngineTests {
 
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
-                if request.url?.query?.contains("cursor=") == true {
+                #expect(request.url?.query?.contains("scope=full") == true || request.url?.query?.contains("scope=incremental") == true)
+                if request.url?.query?.contains("scope=full") == true {
                     #expect(request.url?.query?.contains("cursor=recovery-page-2") == true)
-                    #expect(request.url?.query?.contains("scope=") == false)
                 }
                 return (200, terminalBody, nil)
             }
@@ -822,7 +801,7 @@ struct SyncEngineTests {
 
         #expect(wave.errors.isEmpty)
         #expect(await metadata.recoverySnapshot() == nil)
-        #expect(try await metadata.cursorState(for: .recovery) == nil)
+        #expect(await metadata.cursorState(for: .recovery) == nil)
         #expect(await metadata.incrementalCursor() == nil)
     }
 
@@ -875,7 +854,7 @@ struct SyncEngineTests {
         let metadata = StubMetadata()
         let (storage, _) = try await makeFileStorage()
         let body = Data("""
-        { "changes": [{ "kind": "unknown", "id": "11111111-1111-4111-8111-111111111111", "payload": {}, "updated_at": 1786050000, "deleted": false }], "next_cursor": "must-not-save", "has_more": true, "cursor_scope": "incremental", "projection_complete": true }
+        { "changes": [{ "kind": "unknown", "id": "11111111-1111-4111-8111-111111111111", "payload": {}, "updated_at": "2026-08-07T00:00:00Z", "deleted": false }], "next_cursor": "must-not-save", "has_more": true, "cursor_scope": "incremental", "projection_complete": true }
         """.utf8)
 
         EngineMockURLProtocol.handler = { request in
@@ -888,7 +867,7 @@ struct SyncEngineTests {
             if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
                 return (200, Data("{ \"rows\": [] }".utf8), nil)
             }
-            return self.defaultResponse(for: request)
+            return (404, Data(), nil)
         }
 
         let engine = makeEngine(
@@ -938,7 +917,7 @@ struct SyncEngineTests {
             if request.url?.path == "/api/sync/changes" {
                 return (200, body, nil)
             }
-            return self.defaultResponse(for: request)
+            return (404, Data(), nil)
         }
 
         let engine = makeEngine(
@@ -982,7 +961,7 @@ struct SyncEngineTests {
                 """.utf8)
                 return (200, body, nil)
             }
-            return self.defaultResponse(for: request)
+            return (404, Data(), nil)
         }
 
         let engine = makeEngine(
@@ -1047,7 +1026,7 @@ struct SyncEngineTests {
             if request.url?.path == "/api/sync/changes" {
                 return (200, self.emptyChangesBody(), nil)
             }
-            return self.defaultResponse(for: request)
+            return (404, Data(), nil)
         }
 
         let engine = makeEngine(
@@ -1104,7 +1083,7 @@ struct SyncEngineTests {
                 { "applied_count": 1 }
                 """.utf8), nil)
             }
-            return self.defaultResponse(for: request)
+            return (404, Data(), nil)
         }
 
         let engine = makeEngine(
@@ -1153,7 +1132,7 @@ struct SyncEngineTests {
                 { "applied_count": 1 }
                 """.utf8), nil)
             }
-            return self.defaultResponse(for: request)
+            return (404, Data(), nil)
         }
 
         let engine = makeEngine(

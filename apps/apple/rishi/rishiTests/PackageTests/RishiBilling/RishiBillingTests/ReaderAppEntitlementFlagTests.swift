@@ -22,46 +22,38 @@ struct ReaderAppEntitlementFlagTests {
 
     @Test("isGranted is TRUE when reconciler initial level is .pro")
     func isGranted_followsReconcilerPro() {
-        let reconciler = EntitlementReconciler(initial: .subscribed)
+        let reconciler = EntitlementReconciler(initial: .pro)
         let flag = ReaderAppEntitlementFlag(reconciler: reconciler)
         #expect(flag.isGranted == true)
-        #expect(flag.level == .subscribed)
+        #expect(flag.level == .pro)
     }
 
     @Test("isGranted is FALSE when reconciler initial level is .free")
     func isGranted_followsReconcilerFree() {
-        let reconciler = EntitlementReconciler(initial: .unsubscribed)
+        let reconciler = EntitlementReconciler(initial: .free)
         let flag = ReaderAppEntitlementFlag(reconciler: reconciler)
         #expect(flag.isGranted == false)
-        #expect(flag.level == .unsubscribed)
+        #expect(flag.level == .free)
     }
 
     @Test("isGranted flips when server signal flips reconciler to .pro")
     func isGranted_updatesWhenServerFlipsToPro() {
-        let previousFlag = StoreKitIAPFlag.isEnabled
-        StoreKitIAPFlag.setEnabled(true)
-        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
-
         let reconciler = EntitlementReconciler()
         let flag = ReaderAppEntitlementFlag(reconciler: reconciler)
         #expect(flag.isGranted == false)
 
-        reconciler.setOnDevice(.subscribed)
+        reconciler.setServer(.pro)
         #expect(flag.isGranted == true)
     }
 
     @Test("preview(_:) helper builds an isolated flag pre-set to the requested level")
     func previewHelper_works() {
-        #expect(ReaderAppEntitlementFlag.preview(.subscribed).isGranted == true)
-        #expect(ReaderAppEntitlementFlag.preview(.unsubscribed).isGranted == false)
+        #expect(ReaderAppEntitlementFlag.preview(.pro).isGranted == true)
+        #expect(ReaderAppEntitlementFlag.preview(.free).isGranted == false)
     }
 
     @Test("@Observable isGranted change notifies tracker on level change")
     func isGranted_ObservationFires_OnLevelChange() async {
-        let previousFlag = StoreKitIAPFlag.isEnabled
-        StoreKitIAPFlag.setEnabled(true)
-        defer { StoreKitIAPFlag.setEnabled(previousFlag) }
-
         let reconciler = EntitlementReconciler()
         let flag = ReaderAppEntitlementFlag(reconciler: reconciler)
         let counter = FlagObservationCounter()
@@ -72,7 +64,7 @@ struct ReaderAppEntitlementFlagTests {
             counter.increment()
         }
 
-        reconciler.setOnDevice(.subscribed)
+        reconciler.setServer(.pro)
         await Task.yield()
 
         #expect(counter.value == 1)
@@ -94,13 +86,13 @@ struct ReaderAppEntitlementFlagTests {
         // ManageSubscriptionPresenter from the SwiftUI environment instead
         // of taking an onTap closure. Construction smoke only; tap
         // behaviour is exercised by ManageSubscriptionPresenterTests.
-        let row = ManageSubscriptionRow()
+        let row = ManageSubscriptionRow(entitlement: .init(isGranted: true))
         _ = row
     }
 
     @Test("ManageSubscriptionRow constructs in not-granted state via Resolver")
     func manageRowNotGranted() {
-        let row = ManageSubscriptionRow()
+        let row = ManageSubscriptionRow(entitlement: .init(isGranted: false))
         _ = row
     }
 }

@@ -8,26 +8,19 @@ final class RemoteCommandLease: @unchecked Sendable, TTSMutationLease {
     let playbackGeneration: UInt64
 
     private let lock = NSLock()
-    private let parentIsValid: @Sendable () -> Bool
     private var active = true
     private var finished = false
 
-    init(
-        processSessionID: UUID,
-        accountGeneration: UInt64,
-        playbackGeneration: UInt64,
-        parentIsValid: @escaping @Sendable () -> Bool = { true }
-    ) {
+    init(processSessionID: UUID, accountGeneration: UInt64, playbackGeneration: UInt64) {
         self.processSessionID = processSessionID
         self.accountGeneration = accountGeneration
         self.playbackGeneration = playbackGeneration
-        self.parentIsValid = parentIsValid
     }
 
     var isValid: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return active && !finished && parentIsValid()
+        return active && !finished
     }
 
     func revoke() {
@@ -40,7 +33,7 @@ final class RemoteCommandLease: @unchecked Sendable, TTSMutationLease {
     func finish() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard active, !finished, parentIsValid() else { return false }
+        guard !finished else { return false }
         finished = true
         active = false
         return true

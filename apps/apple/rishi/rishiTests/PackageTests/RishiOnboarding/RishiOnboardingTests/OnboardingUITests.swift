@@ -43,7 +43,7 @@ struct OnboardingUITests {
         let dictionary = try #require(propertyList as? [String: Any])
         let modes = try #require(dictionary["UIBackgroundModes"] as? [String])
 
-        #expect(Set(modes) == Set(["audio", "processing", "remote-notification"]))
+        #expect(Set(modes) == Set(["audio", "processing"]))
     }
 
     @Test("Onboarding CTA stays full width in compact layouts")

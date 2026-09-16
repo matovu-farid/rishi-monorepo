@@ -12,11 +12,9 @@ struct LibraryA11yLabelsTests {
             .deletingLastPathComponent()   // A11y/
             .deletingLastPathComponent()   // RishiLibraryTests/
             .deletingLastPathComponent()   // Tests/
-            .deletingLastPathComponent()   // RishiLibrary/ (package test group)
-            .deletingLastPathComponent()   // PackageTests/
-            .deletingLastPathComponent()   // rishiTests/
+            .deletingLastPathComponent()   // RishiLibrary/ (package root)
         return packageRoot
-            .appendingPathComponent("rishi/Modules/RishiLibrary/RishiLibrary/Views", isDirectory: true)
+            .appendingPathComponent("Sources/RishiLibrary/Views", isDirectory: true)
     }
 
     private static func librarySources() throws -> [URL] {
@@ -65,7 +63,6 @@ struct LibraryA11yLabelsTests {
         #expect(s.contains("Delete \\(book.title)"))
         // Hint guides VoiceOver users on how to interact.
         #expect(s.contains(".accessibilityHint("))
-        #expect(s.contains(".accessibilityValue(book.formatType.rawValue)"))
     }
 
     @Test("BookCoverImageView is decoratively hidden from VoiceOver")
@@ -74,18 +71,6 @@ struct LibraryA11yLabelsTests {
         try #require(url != nil)
         let s = try String(contentsOf: url!, encoding: .utf8)
         #expect(s.contains(".accessibilityHidden(true)"))
-    }
-
-    @Test("Catalyst books describe their secondary-click action")
-    func catalystBooksDescribeTheirSecondaryClickAction() throws {
-        let url = try Self.librarySources().first { $0.lastPathComponent == "LibraryGrid.swift" }
-        try #require(url != nil)
-        let s = try String(contentsOf: url!, encoding: .utf8)
-
-        #expect(s.contains("#if targetEnvironment(macCatalyst)"))
-        #expect(s.contains("Single tap to open."))
-        #expect(s.contains("Two-finger click for actions."))
-        #expect(s.contains("Long-press for actions."))
     }
 
     @Test("LibraryEmptyStateView uses RishiTypography, not fixed sizes")

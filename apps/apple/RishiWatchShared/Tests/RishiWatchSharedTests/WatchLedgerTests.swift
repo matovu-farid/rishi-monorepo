@@ -5,14 +5,12 @@ import XCTest
 final class WatchLedgerTests: XCTestCase {
     func testDuplicateRequestUsesSameReceipt() async throws {
         let ledger = WatchReceiptLedger()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
         let envelope = WatchMutatingCommandEnvelope(
             processSessionID: UUID(), watchClientID: UUID(), handshakeNonce: UUID(), activationSequence: 1,
-            clientSequence: 1, requestID: UUID(), issuedAt: now, playbackGeneration: 1, accountGeneration: 1,
-            command: .stop
+            clientSequence: 1, requestID: UUID(), playbackGeneration: 1, accountGeneration: 1, command: .stop
         )
-        let first = try await ledger.reserve(envelope, now: now)
-        let second = try await ledger.reserve(envelope, now: now)
+        let first = try await ledger.reserve(envelope)
+        let second = try await ledger.reserve(envelope)
         XCTAssertEqual(first, second)
     }
 

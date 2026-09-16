@@ -27,12 +27,7 @@ struct VerifyReceiptContractTests {
 
     private func loadFixture(_ name: String) throws -> Data {
         let url = try #require(
-            PackageTestResourceBundle.url(
-                forResource: name,
-                withExtension: "json",
-                subdirectory: "Fixtures",
-                relativeTo: #filePath
-            ),
+            PackageTestResourceBundle.bundle.url(forResource: name, withExtension: "json", subdirectory: "Fixtures"),
             "Missing fixture \(name).json — Package.swift must declare `.copy(\"Fixtures\")` on the test target."
         )
         return try Data(contentsOf: url)

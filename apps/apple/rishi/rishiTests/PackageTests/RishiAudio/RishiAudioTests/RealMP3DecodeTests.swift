@@ -22,12 +22,7 @@ struct RealMP3DecodeTests {
 
     private func loadFixtureMP3() throws -> Data {
         let url = try #require(
-            PackageTestResourceBundle.url(
-                forResource: "alice-p0",
-                withExtension: "mp3",
-                subdirectory: "Fixtures",
-                relativeTo: #filePath
-            ),
+            PackageTestResourceBundle.bundle.url(forResource: "alice-p0", withExtension: "mp3", subdirectory: "Fixtures"),
             "alice-p0.mp3 fixture must be bundled via Package.swift resources"
         )
         return try Data(contentsOf: url)

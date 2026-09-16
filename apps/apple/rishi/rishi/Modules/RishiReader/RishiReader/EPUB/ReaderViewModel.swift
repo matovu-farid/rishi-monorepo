@@ -23,9 +23,6 @@ public final class ReaderViewModel: @unchecked Sendable {
 
     public let book: Book
     internal let userId: UserID
-    // Stable cache identity; ObjectIdentifier can be reused after an older
-    // view-model is deallocated, which would leak highlights into a new reader.
-    internal let highlightCacheToken = UUID()
 
     /// Source URL of the EPUB on disk.
     public let documentURL: URL
@@ -181,28 +178,18 @@ public final class ReaderViewModel: @unchecked Sendable {
         // preserving the saved-page initial-location behavior.
         let bookId = book.id
         let positionStoreRef = positionStore
-        #if DEBUG
-        // UI tests reuse the simulator's library between test methods. Start
-        // each seeded reader at a stable page so a previous boundary test
-        // cannot leave the next test at the end of the PDF.
-        let uitestFreshStart = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
-        #else
-        let uitestFreshStart = false
-        #endif
         let pub: Publication?
         let restoredPosition: (locator: Locator, source: ReaderPositionLocator.Source)?
         do {
-            let result: (Publication, (locator: Locator, source: ReaderPositionLocator.Source)?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL, uitestFreshStart] in
-                let positionTask: Task<Position?, Never>? = uitestFreshStart
-                    ? nil
-                    : Task.detached(priority: .userInitiated) {
-                        try? await positionStoreRef.position(for: bookId)
-                    }
+            let result: (Publication, (locator: Locator, source: ReaderPositionLocator.Source)?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
+                let positionTask = Task.detached(priority: .userInitiated) {
+                    try? await positionStoreRef.position(for: bookId)
+                }
 
                 do {
                 let publication = try await loader.open(fileURL: documentURL)
                 let restored: (locator: Locator, source: ReaderPositionLocator.Source)?
-                if let last = await positionTask?.value {
+                if let last = await positionTask.value {
                     if let wrapper = try? ReaderPositionLocator.decode(jsonString: last.locator),
                        let locator = wrapper.toReadiumLocator()
                     {
@@ -217,7 +204,7 @@ public final class ReaderViewModel: @unchecked Sendable {
                 }
                 return (publication, restored)
                 } catch {
-                    positionTask?.cancel()
+                    positionTask.cancel()
                     throw error
                 }
             }.value
@@ -507,12 +494,7 @@ public final class ReaderViewModel: @unchecked Sendable {
         let targetPage = locator.locations.page
 
         do {
-            // Consume the throwing iterator directly. Readium's convenience
-            // AsyncSequence converts iterator errors into an unbounded
-            // recursive retry, which can hang the app on a malformed or
-            // unavailable PDF content stream.
-            let iterator = content.iterator()
-            while let element = try await iterator.next() {
+            for await element in content.sequence() {
                 guard !Task.isCancelled else { return sentences }
                 if let targetPage,
                    let elementPage = element.locator.locations.page,

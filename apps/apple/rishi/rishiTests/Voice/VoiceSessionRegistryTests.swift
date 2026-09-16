@@ -158,9 +158,6 @@ struct VoiceSessionRegistryTests {
         await registry.register(session)
         await registry.park()
         await registry.close()
-        while session.endCount == 0 {
-            try await Task.sleep(for: .milliseconds(5))
-        }
         #expect(session.endCount == 1)
         await registry.waitForServerEnd()
         #expect(registry.state == .ended)

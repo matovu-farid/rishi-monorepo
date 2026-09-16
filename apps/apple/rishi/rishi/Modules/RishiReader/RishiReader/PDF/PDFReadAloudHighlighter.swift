@@ -25,12 +25,14 @@ public enum PDFReadAloudHighlighter {
 
         let lower = pageString.distance(from: pageString.startIndex, to: range.lowerBound)
         let upper = pageString.distance(from: pageString.startIndex, to: range.upperBound)
-        guard upper > lower else { return nil }
-        // PDFPage's range API uses the page-local character offsets returned
-        // by PDFPage.string. PDFDocument.selection(from:to:) is document-wide
-        // and returns nil for generated/in-memory pages whose page index is
-        // not yet represented in the document's global text map.
-        return page.selection(for: NSRange(location: lower, length: upper - lower))
+        guard upper > lower, let document = page.document else { return nil }
+        // Character-index selections live on PDFDocument, not PDFPage; the
+        // upper bound is exclusive in our range but PDFKit wants the index of
+        // the last selected character, so step back one.
+        return document.selection(
+            from: page, atCharacterIndex: lower,
+            to: page, atCharacterIndex: upper - 1
+        )
     }
 }
 #endif

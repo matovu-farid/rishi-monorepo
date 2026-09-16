@@ -30,8 +30,7 @@ struct APNsDeviceRegistrarTests {
         WorkerClient(
             baseURL: URL(string: "https://worker.example.invalid")!,
             session: session,
-            tokenProvider: StaticTokenProvider("test-token"),
-            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+            tokenProvider: StaticTokenProvider("test-token")
         )
     }
 

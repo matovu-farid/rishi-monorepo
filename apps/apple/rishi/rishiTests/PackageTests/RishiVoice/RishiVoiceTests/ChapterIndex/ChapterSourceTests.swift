@@ -14,22 +14,22 @@ struct ChapterSourceTests {
         let snapshot = await EPUBChapterSource.snapshot(from: publication)
         let result = await EPUBChapterSource(snapshot: snapshot).chapters()
         let expected: [(href: String, name: String)] = [
-            ("OEBPS/6517791129234588483_11-h-0.htm.html#pgepubid00000", "Alice’s Adventures in Wonderland"),
-            ("OEBPS/6517791129234588483_11-h-0.htm.html#pgepubid00001", "THE MILLENNIUM FULCRUM EDITION 3.0"),
-            ("OEBPS/6517791129234588483_11-h-0.htm.html#pgepubid00002", "Contents"),
-            ("OEBPS/6517791129234588483_11-h-1.htm.html#pgepubid00003", "CHAPTER I. Down the Rabbit-Hole"),
-            ("OEBPS/6517791129234588483_11-h-2.htm.html#pgepubid00004", "CHAPTER II. The Pool of Tears"),
-            ("OEBPS/6517791129234588483_11-h-3.htm.html#pgepubid00005", "CHAPTER III. A Caucus-Race and a Long Tale"),
-            ("OEBPS/6517791129234588483_11-h-4.htm.html#pgepubid00006", "CHAPTER IV. The Rabbit Sends in a Little Bill"),
-            ("OEBPS/6517791129234588483_11-h-5.htm.html#pgepubid00007", "CHAPTER V. Advice from a Caterpillar"),
-            ("OEBPS/6517791129234588483_11-h-6.htm.html#pgepubid00008", "CHAPTER VI. Pig and Pepper"),
-            ("OEBPS/6517791129234588483_11-h-7.htm.html#pgepubid00009", "CHAPTER VII. A Mad Tea-Party"),
-            ("OEBPS/6517791129234588483_11-h-8.htm.html#pgepubid00010", "CHAPTER VIII. The Queen’s Croquet-Ground"),
-            ("OEBPS/6517791129234588483_11-h-9.htm.html#pgepubid00011", "CHAPTER IX. The Mock Turtle’s Story"),
-            ("OEBPS/6517791129234588483_11-h-10.htm.html#pgepubid00012", "CHAPTER X. The Lobster Quadrille"),
-            ("OEBPS/6517791129234588483_11-h-11.htm.html#pgepubid00013", "CHAPTER XI. Who Stole the Tarts?"),
-            ("OEBPS/6517791129234588483_11-h-12.htm.html#pgepubid00014", "CHAPTER XII. Alice’s Evidence"),
-            ("OEBPS/6517791129234588483_11-h-12.htm.html#pg-footer-heading", "THE FULL PROJECT GUTENBERG™ LICENSE"),
+            ("6517791129234588483_11-h-0.htm.html#pgepubid00000", "Alice’s Adventures in Wonderland"),
+            ("6517791129234588483_11-h-0.htm.html#pgepubid00001", "THE MILLENNIUM FULCRUM EDITION 3.0"),
+            ("6517791129234588483_11-h-0.htm.html#pgepubid00002", "Contents"),
+            ("6517791129234588483_11-h-1.htm.html#pgepubid00003", "CHAPTER I. Down the Rabbit-Hole"),
+            ("6517791129234588483_11-h-2.htm.html#pgepubid00004", "CHAPTER II. The Pool of Tears"),
+            ("6517791129234588483_11-h-3.htm.html#pgepubid00005", "CHAPTER III. A Caucus-Race and a Long Tale"),
+            ("6517791129234588483_11-h-4.htm.html#pgepubid00006", "CHAPTER IV. The Rabbit Sends in a Little Bill"),
+            ("6517791129234588483_11-h-5.htm.html#pgepubid00007", "CHAPTER V. Advice from a Caterpillar"),
+            ("6517791129234588483_11-h-6.htm.html#pgepubid00008", "CHAPTER VI. Pig and Pepper"),
+            ("6517791129234588483_11-h-7.htm.html#pgepubid00009", "CHAPTER VII. A Mad Tea-Party"),
+            ("6517791129234588483_11-h-8.htm.html#pgepubid00010", "CHAPTER VIII. The Queen’s Croquet-Ground"),
+            ("6517791129234588483_11-h-9.htm.html#pgepubid00011", "CHAPTER IX. The Mock Turtle’s Story"),
+            ("6517791129234588483_11-h-10.htm.html#pgepubid00012", "CHAPTER X. The Lobster Quadrille"),
+            ("6517791129234588483_11-h-11.htm.html#pgepubid00013", "CHAPTER XI. Who Stole the Tarts?"),
+            ("6517791129234588483_11-h-12.htm.html#pgepubid00014", "CHAPTER XII. Alice’s Evidence"),
+            ("6517791129234588483_11-h-12.htm.html#pg-footer-heading", "THE FULL PROJECT GUTENBERG™ LICENSE"),
         ]
 
         #expect(result.isAvailable)

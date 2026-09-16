@@ -68,7 +68,7 @@ struct CarPlaySessionCoordinatorTests {
 
         #expect(observed.count == 2)
         #expect(observed[0]?.userID == userID)
-        #expect(observed[1] == nil)
+        #expect(observed.last == nil)
 
         dependencies.removeCarPlayAccountChangeObserver(token)
         await dependencies.replaceUserId(userID)
@@ -82,7 +82,7 @@ struct CarPlaySessionCoordinatorTests {
             ttsEngine: FakeTTSEngine(state: state, script: .holds),
             ttsState: state,
             ttsSettingsStore: InMemoryTTSSettingsStore(),
-            ttsPrewarmer: TTSPrewarmer(source: FakeTTSChunkSource(chunks: [Data]())),
+            ttsPrewarmer: TTSPrewarmer(source: ControllerNoopChunkSource()),
             ttsPresence: TTSPresenceController(
                 state: state,
                 store: ControllerNoopPresenceStore()
@@ -103,11 +103,5 @@ struct CarPlaySessionCoordinatorTests {
         #expect(owner.activeHost == nil)
         controller.dispose()
     }
-}
-
-private final class ControllerNoopPresenceStore: TTSPresenceStore, @unchecked Sendable {
-    func read() -> TTSPresenceSnapshot? { nil }
-    func write(_ snapshot: TTSPresenceSnapshot) {}
-    func clear() {}
 }
 #endif

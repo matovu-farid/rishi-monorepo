@@ -24,7 +24,6 @@ struct VoiceUISnapshotTests {
 
     private static func rishiRoot() -> URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // UI
             .deletingLastPathComponent() // RishiVoiceTests
             .deletingLastPathComponent() // RishiVoice
             .deletingLastPathComponent() // PackageTests

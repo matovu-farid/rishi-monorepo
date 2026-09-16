@@ -56,7 +56,7 @@ final class VoiceRestartUITests: XCTestCase {
         
         openSeededBook(app)
 
-        let voiceButton = app.buttons
+        let voiceButton = app.descendants(matching: .any)
             .matching(identifier: "reader.toolbar.voice")
             .firstMatch
         XCTAssertTrue(
@@ -64,16 +64,18 @@ final class VoiceRestartUITests: XCTestCase {
             "Voice toolbar button (reader.toolbar.voice) never appeared — reader did not open."
         )
 
-        robustTap(voiceButton)
-        // Build the query after presentation. SwiftUI replaces the overlay's
-        // accessibility subtree when voice becomes live; retaining a query
-        // created before that replacement can remain stale on iOS 27.
-        let endButton = app.buttons
-            .matching(identifier: "voice-end")
+        let endButton = app.descendants(matching: .any)
+            .matching(identifier: "voice.end")
             .firstMatch
+
+        
+        
+        
+        
+        robustTap(voiceButton)
         XCTAssertTrue(
             endButton.waitForExistence(timeout: 20),
-            "First voice session never presented — \"voice-end\" did not appear. "
+            "First voice session never presented — \"voice.end\" did not appear. "
             + "The offline fakes failed to reach .live, or the session auto-ended "
             + "before the surface mounted."
         )
@@ -85,7 +87,7 @@ final class VoiceRestartUITests: XCTestCase {
         assertStaysPresent(
             endButton,
             holdSeconds: 3,
-            message: "FIRST voice session auto-ended: \"voice-end\" disappeared within "
+            message: "FIRST voice session auto-ended: \"voice.end\" disappeared within "
             + "~3s with no user interaction. The End button action fired on its own "
             + "(trigger=user-button) and tore the session down."
         )
@@ -103,7 +105,7 @@ final class VoiceRestartUITests: XCTestCase {
         robustTap(voiceButton)
         XCTAssertTrue(
             endButton.waitForExistence(timeout: 20),
-            "Second voice session never presented — \"voice-end\" did not appear after "
+            "Second voice session never presented — \"voice.end\" did not appear after "
             + "restarting voice. The session failed to reach .live or auto-ended before "
             + "the surface mounted."
         )
@@ -113,7 +115,7 @@ final class VoiceRestartUITests: XCTestCase {
         assertStaysPresent(
             endButton,
             holdSeconds: 3,
-            message: "SECOND voice session auto-ended: \"voice-end\" disappeared within "
+            message: "SECOND voice session auto-ended: \"voice.end\" disappeared within "
             + "~3s with no user interaction after the start->end->start cycle. The End "
             + "button action fired on its own (trigger=user-button) and tore the session down."
         )
@@ -125,7 +127,7 @@ final class VoiceRestartUITests: XCTestCase {
     
     @MainActor
     private func openSeededBook(_ app: XCUIApplication) {
-        let bookCell = app.buttons
+        let bookCell = app.descendants(matching: .any)
             .matching(identifier: "library-book-cell")
             .firstMatch
         XCTAssertTrue(
@@ -160,6 +162,6 @@ final class VoiceRestartUITests: XCTestCase {
     @MainActor
     private func robustTap(_ element: XCUIElement) {
         usleep(300_000)
-        element.tap()
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 }

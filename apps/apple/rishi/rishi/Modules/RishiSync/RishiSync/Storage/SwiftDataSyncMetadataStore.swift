@@ -70,25 +70,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
                 row.entityType = type
                 row.dirty = true
-                let now = Date()
-                let latestKnownRemote = [row.lastSyncedAt, row.remoteSeenAt]
-                    .compactMap { $0 }
-                    .max()
-                // The Worker uses updated_at for LWW. A device clock can be
-                // behind a timestamp already observed from the server, which
-                // would make a legitimate repair look stale forever. Keep a
-                // new local mutation strictly ahead of the latest timestamp
-                // we know about; retries still retain this value.
-                row.dirtyAt = max(
-                    now,
-                    latestKnownRemote?.addingTimeInterval(0.001) ?? .distantPast
-                )
-                if let latestKnownRemote, row.dirtyAt! > now {
-                    Log.event("sync.metadata.dirty_timestamp_adjusted", data: [
-                        "entity_id": id,
-                        "entity_type": type,
-                    ])
-                }
+                row.dirtyAt = Date()
                 // markDirty is called by a local write path, not by queue
                 // hydration. A new write therefore needs a new operation ID;
                 // retries never call markDirty and retain the old ID.

@@ -18,11 +18,9 @@ struct ChatA11yLabelsTests {
             .deletingLastPathComponent()   // A11y/
             .deletingLastPathComponent()   // RishiChatTests/
             .deletingLastPathComponent()   // Tests/
-            .deletingLastPathComponent()   // RishiChat/ (package test group)
-            .deletingLastPathComponent()   // PackageTests/
-            .deletingLastPathComponent()   // rishiTests/
+            .deletingLastPathComponent()   // RishiChat/ (package root)
         return packageRoot
-            .appendingPathComponent("rishi/Modules/RishiChat/RishiChat/UI", isDirectory: true)
+            .appendingPathComponent("Sources/RishiChat/UI", isDirectory: true)
     }
 
     private static func chatSources() throws -> [URL] {

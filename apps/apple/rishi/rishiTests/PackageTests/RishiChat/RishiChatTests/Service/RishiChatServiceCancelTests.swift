@@ -6,6 +6,102 @@ import Foundation
 
 
 
+// MARK: - Slow-drip MockURLProtocol
+
+/// A URLProtocol that emits a sequence of byte chunks with configurable
+/// inter-chunk delays. Used to exercise mid-flight cancel (CHAT-08): the test
+/// reads one chunk, drops the consuming task, and then asserts the underlying
+/// URLSessionTask was torn down via `WorkerClient.stream`'s onTermination hook.
+///
+/// Notes:
+///   - Each chunk should be >= 4096 bytes because `WorkerClient.stream` only
+///     forwards bytes to the consumer once its 4 KiB buffer flushes. SSE
+///     comment lines (`: ...\n`) are ignored by ``SSEParser`` and make safe
+///     padding.
+///   - `stopLoading()` flips an atomic flag the drip loop checks between
+///     sleeps so cancellation drops the in-flight task without writing further
+///     bytes.
+final class SlowDripURLProtocol: URLProtocol, @unchecked Sendable {
+
+    nonisolated(unsafe) static var response: HTTPURLResponse?
+    nonisolated(unsafe) static var chunks: [Data] = []
+    nonisolated(unsafe) static var interChunkSleepMS: UInt64 = 80
+    nonisolated(unsafe) static var recordedRequests: [URLRequest] = []
+    private static let lock = NSLock()
+
+    // Per-instance cancel flag flipped by stopLoading().
+    private let cancelLock = NSLock()
+    private var _cancelled = false
+    fileprivate var cancelled: Bool {
+        cancelLock.lock(); defer { cancelLock.unlock() }
+        return _cancelled
+    }
+
+    static func configure(
+        response: HTTPURLResponse,
+        chunks: [Data],
+        interChunkSleepMS: UInt64 = 80
+    ) {
+        lock.lock(); defer { lock.unlock() }
+        self.response = response
+        self.chunks = chunks
+        self.interChunkSleepMS = interChunkSleepMS
+        self.recordedRequests = []
+    }
+
+    static func reset() {
+        lock.lock(); defer { lock.unlock() }
+        response = nil
+        chunks = []
+        recordedRequests = []
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.recordedRequests.append(request)
+        let resp = Self.response
+        let chunks = Self.chunks
+        let sleepMS = Self.interChunkSleepMS
+        Self.lock.unlock()
+
+        guard let resp else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+
+        // Box the instance into a Sendable wrapper for the detached task —
+        // SlowDripURLProtocol is itself @unchecked Sendable, but the closure
+        // capture needs an explicit sending dance under Swift 6 strict.
+        let me = UncheckedSendableBox(self)
+        Task.detached {
+            for chunk in chunks {
+                if me.value.cancelled { return }
+                me.value.client?.urlProtocol(me.value, didLoad: chunk)
+                try? await Task.sleep(nanoseconds: sleepMS * 1_000_000)
+            }
+            if !me.value.cancelled {
+                me.value.client?.urlProtocolDidFinishLoading(me.value)
+            }
+        }
+    }
+
+    override func stopLoading() {
+        cancelLock.lock(); defer { cancelLock.unlock() }
+        _cancelled = true
+    }
+}
+
+/// Sendable carrier for non-Sendable references when we know the lifetime is
+/// fine for the test's purpose.
+fileprivate struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
+}
+
 // MARK: - Test helpers
 
 /// Mutable scalar box used to read back the first event from a detached Task
@@ -23,15 +119,10 @@ fileprivate final class EventBox: @unchecked Sendable {
     }
 }
 
-fileprivate final class StreamSequenceState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var index = 0
-
-    func nextIndex() -> Int {
-        lock.lock(); defer { lock.unlock() }
-        defer { index += 1 }
-        return index
-    }
+/// Sendable carrier for an AsyncThrowingStream so a closure can capture it
+/// across a Task boundary under Swift 6 strict concurrency.
+fileprivate struct StreamBox<E>: @unchecked Sendable {
+    let stream: AsyncThrowingStream<E, Error>
 }
 
 // MARK: - Suite
@@ -40,60 +131,23 @@ fileprivate final class StreamSequenceState: @unchecked Sendable {
 struct RishiChatServiceCancelTests {
 
     private func makeWorker(token: String? = "test-token") -> WorkerClient {
+        SlowDripURLProtocol.reset()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SlowDripURLProtocol.self]
+        let session = URLSession(configuration: config)
         return WorkerClient(
             baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
             tokenProvider: StaticTokenProvider(token)
         )
     }
 
-    /// Deterministic replacement for the URLSession/URLProtocol boundary. The
-    /// service's cancellation contract is exercised by cancelling the
-    /// returned stream, while WorkerClient transport behavior is covered by
-    /// its own tests.
-    private func makeStreamProvider(
-        chunks: [Data],
-        interChunkSleepMS: UInt64
-    ) -> @Sendable () async -> AsyncThrowingStream<Data, Error> {
-        {
-            AsyncThrowingStream { continuation in
-                let producer = Task {
-                    for chunk in chunks {
-                        guard !Task.isCancelled else {
-                            continuation.finish()
-                            return
-                        }
-                        continuation.yield(chunk)
-                        try? await Task.sleep(nanoseconds: interChunkSleepMS * 1_000_000)
-                    }
-                    continuation.finish()
-                }
-                continuation.onTermination = { _ in producer.cancel() }
-            }
-        }
-    }
-
-    private func makeSequencedStreamProvider(
-        streams: [([Data], UInt64)]
-    ) -> @Sendable () async -> AsyncThrowingStream<Data, Error> {
-        let state = StreamSequenceState()
-        return {
-            let streamIndex = min(state.nextIndex(), streams.count - 1)
-            let (chunks, interChunkSleepMS) = streams[streamIndex]
-            return AsyncThrowingStream { continuation in
-                let producer = Task {
-                    for chunk in chunks {
-                        guard !Task.isCancelled else {
-                            continuation.finish()
-                            return
-                        }
-                        continuation.yield(chunk)
-                        try? await Task.sleep(nanoseconds: interChunkSleepMS * 1_000_000)
-                    }
-                    continuation.finish()
-                }
-                continuation.onTermination = { _ in producer.cancel() }
-            }
-        }
+    private func okResponse() -> HTTPURLResponse {
+        HTTPURLResponse(
+            url: URL(string: "https://api.rishi.test/api/chat")!,
+            statusCode: 200, httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
     }
 
     /// Build an SSE chunk that contains exactly one `data:` frame plus enough
@@ -117,6 +171,12 @@ struct RishiChatServiceCancelTests {
         let chunk2 = paddedSSEFrame(#"data: {"delta":"second"}"# + "\n\n")
         let chunk3 = paddedSSEFrame(#"data: {"delta":"third"}"# + "\n\n")
         let chunk4 = Data("data: [DONE]\n\n".utf8)
+        SlowDripURLProtocol.configure(
+            response: okResponse(),
+            chunks: [chunk1, chunk2, chunk3, chunk4],
+            interChunkSleepMS: 120
+        )
+
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let lookup = ConversationLookup(store: convoStore)
@@ -125,22 +185,19 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { userId },
             workerClient: worker,
             conversationLookup: lookup,
-            messageStore: msgStore,
-            streamProvider: makeStreamProvider(
-                chunks: [chunk1, chunk2, chunk3, chunk4],
-                interChunkSleepMS: 120
-            )
+            messageStore: msgStore
         )
 
         let bookId = UUID()
+        let streamBox = StreamBox(stream: service.stream(query: "ping", bookId: bookId))
         let firstBox = EventBox()
         let startedAt = Date()
 
         // Consume up to the first event, then return — exiting the for-loop
         // drops the iterator and fires the AsyncThrowingStream's
-        // onTermination hook, which cancels the inner turn task and transport.
+        // onTermination hook, which cancels the inner turn task + URLSession.
         let iteratorTask: Task<Void, Error> = Task {
-            for try await event in service.stream(query: "ping", bookId: bookId) {
+            for try await event in streamBox.stream {
                 firstBox.set(event)
                 break
             }
@@ -159,6 +216,12 @@ struct RishiChatServiceCancelTests {
         let chunk1 = paddedSSEFrame(#"data: {"delta":"abc"}"# + "\n\n")
         let chunk2 = paddedSSEFrame(#"data: {"delta":"def"}"# + "\n\n")
         let chunk3 = Data("data: [DONE]\n\n".utf8)
+        SlowDripURLProtocol.configure(
+            response: okResponse(),
+            chunks: [chunk1, chunk2, chunk3],
+            interChunkSleepMS: 250
+        )
+
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let lookup = ConversationLookup(store: convoStore)
@@ -169,17 +232,14 @@ struct RishiChatServiceCancelTests {
             workerClient: worker,
             conversationLookup: lookup,
             messageStore: msgStore,
-            dirtyHook: hook,
-            streamProvider: makeStreamProvider(
-                chunks: [chunk1, chunk2, chunk3],
-                interChunkSleepMS: 250
-            )
+            dirtyHook: hook
         )
 
         let bookId = UUID()
+        let streamBox = StreamBox(stream: service.stream(query: "ping", bookId: bookId))
         let firstBox = EventBox()
         let iteratorTask: Task<Void, Error> = Task {
-            for try await event in service.stream(query: "ping", bookId: bookId) {
+            for try await event in streamBox.stream {
                 firstBox.set(event)
                 break
             }
@@ -225,6 +285,12 @@ struct RishiChatServiceCancelTests {
         let chunk2 = paddedSSEFrame(#"data: {"delta":"two"}"# + "\n\n")
         let chunk3 = paddedSSEFrame(#"data: {"delta":"three"}"# + "\n\n")
         let chunk4 = Data("data: [DONE]\n\n".utf8)
+        SlowDripURLProtocol.configure(
+            response: okResponse(),
+            chunks: [chunk1, chunk2, chunk3, chunk4],
+            interChunkSleepMS: 150
+        )
+
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let lookup = ConversationLookup(store: convoStore)
@@ -232,17 +298,14 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { UUID() },
             workerClient: worker,
             conversationLookup: lookup,
-            messageStore: msgStore,
-            streamProvider: makeStreamProvider(
-                chunks: [chunk1, chunk2, chunk3, chunk4],
-                interChunkSleepMS: 150
-            )
+            messageStore: msgStore
         )
 
         let bookId = UUID()
+        let streamBox = StreamBox(stream: service.stream(query: "ping", bookId: bookId))
         let firstBox = EventBox()
         let iteratorTask: Task<Void, Error> = Task {
-            for try await event in service.stream(query: "ping", bookId: bookId) {
+            for try await event in streamBox.stream {
                 firstBox.set(event)
                 break
             }
@@ -259,6 +322,12 @@ struct RishiChatServiceCancelTests {
     func serviceIsReusableAfterCancel() async throws {
         let worker = makeWorker()
         let cancelChunk = paddedSSEFrame(#"data: {"delta":"x"}"# + "\n\n")
+        SlowDripURLProtocol.configure(
+            response: okResponse(),
+            chunks: [cancelChunk, Data("data: [DONE]\n\n".utf8)],
+            interChunkSleepMS: 300
+        )
+
         let convoStore = InMemoryConversationStore()
         let msgStore = InMemoryMessageStore()
         let lookup = ConversationLookup(store: convoStore)
@@ -267,20 +336,15 @@ struct RishiChatServiceCancelTests {
             userIdProvider: { userId },
             workerClient: worker,
             conversationLookup: lookup,
-            messageStore: msgStore,
-            streamProvider: makeSequencedStreamProvider(
-                streams: [
-                    ([cancelChunk, Data("data: [DONE]\n\n".utf8)], 300),
-                    ([Data((#"data: {"delta":"hello"}"# + "\n\n" + "data: [DONE]\n\n").utf8)], 0),
-                ]
-            )
+            messageStore: msgStore
         )
 
         // First turn: cancel.
         let bookId1 = UUID()
+        let streamBox1 = StreamBox(stream: service.stream(query: "first", bookId: bookId1))
         let firstBox = EventBox()
         let cancelTask: Task<Void, Error> = Task {
-            for try await event in service.stream(query: "first", bookId: bookId1) {
+            for try await event in streamBox1.stream {
                 firstBox.set(event)
                 break
             }
@@ -289,6 +353,14 @@ struct RishiChatServiceCancelTests {
         try? await Task.sleep(nanoseconds: 300_000_000)
 
         // Second turn: full happy-path stream that we let run to completion.
+        SlowDripURLProtocol.configure(
+            response: okResponse(),
+            chunks: [
+                Data((#"data: {"delta":"hello"}"# + "\n\n" + "data: [DONE]\n\n").utf8),
+            ],
+            interChunkSleepMS: 0
+        )
+
         let bookId2 = UUID()
         var events: [ChatEvent] = []
         for try await event in service.stream(query: "second", bookId: bookId2) {

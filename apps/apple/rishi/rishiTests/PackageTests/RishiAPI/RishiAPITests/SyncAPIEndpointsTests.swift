@@ -117,7 +117,7 @@ struct SyncAPIEndpointsTests {
         let str = String(decoding: data, as: UTF8.self)
         #expect(str.contains("\"updated_at\""))
         #expect(str.contains("\"deleted\":false"))
-        #expect(str.contains("\"operation_id\":\"\(operationId.uuidString)\""))
+        #expect(str.contains("\"operation_id\":\"(operationId.uuidString)\""))
     }
 
     @Test("SyncPushEndpoint path + method are pinned")

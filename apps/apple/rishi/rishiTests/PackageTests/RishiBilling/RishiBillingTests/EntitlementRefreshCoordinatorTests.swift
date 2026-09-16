@@ -39,11 +39,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("returnsRefreshFailure: failure is returned")
     func returnsRefreshFailure() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        harness.configure(responses: [
-            1: .failure(statusCode: 500),
-            2: .failure(statusCode: 500),
-            3: .failure(statusCode: 500),
-        ])
+        harness.configure(responses: [1: .failure(statusCode: 500)])
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
@@ -63,11 +59,7 @@ struct EntitlementRefreshCoordinatorTests {
     @Test("launch refresh hook runs when the server refresh fails")
     func launchRefreshRunsWhenRefreshFails() async {
         let harness = LockedEntitlementURLProtocolHarness()
-        harness.configure(responses: [
-            1: .failure(statusCode: 500),
-            2: .failure(statusCode: 500),
-            3: .failure(statusCode: 500),
-        ])
+        harness.configure(responses: [1: .failure(statusCode: 500)])
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
@@ -87,7 +79,7 @@ struct EntitlementRefreshCoordinatorTests {
         if case .success = result {
             Issue.record("Expected refresh failure")
         }
-        #expect(harness.requestCount == 3)
+        #expect(harness.requestCount == 1)
         #expect(await launchSpy.callCount() == 1)
     }
 
@@ -138,8 +130,9 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        provider.armBlockingReadBarrier(for: .launchCallerOne, afterReadCount: 2)
-        let launchSpy = GatedLaunchRefreshSpy()
+        provider.armBlockingReadBarrier(for: .launchCallerOne)
+        provider.armBlockingReadBarrier(for: .launchCallerTwo)
+        let launchSpy = LaunchRefreshSpy()
         let coordinator = makeCoordinator(
             provider: provider,
             harness: harness,
@@ -150,42 +143,27 @@ struct EntitlementRefreshCoordinatorTests {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
-        defer {
-            launchOne.cancel()
-            provider.releaseReadBarrier(for: .launchCallerOne)
-            launchSpy.release()
-        }
-
-        guard provider.waitForReadBarrier(for: .launchCallerOne) else {
-            Issue.record("First launch caller did not reach early validation")
-            return
-        }
-        provider.set("user-b")
-        provider.releaseReadBarrier(for: .launchCallerOne)
-
-        guard await launchSpy.waitForEntry() else {
-            Issue.record("First launch caller did not start reconciliation")
-            return
-        }
-
-        provider.set("user-a")
-        provider.armBlockingReadBarrier(for: .launchCallerTwo, afterReadCount: 2)
         let launchTwo = Task {
             await RefreshTestTaskContext.$role.withValue(.launchCallerTwo) {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
         defer {
+            launchOne.cancel()
             launchTwo.cancel()
+            provider.releaseReadBarrier(for: .launchCallerOne)
             provider.releaseReadBarrier(for: .launchCallerTwo)
         }
-        guard provider.waitForReadBarrier(for: .launchCallerTwo) else {
-            Issue.record("Returning launch caller did not reach early validation")
+
+        guard provider.waitForReadBarrier(for: .launchCallerOne),
+              provider.waitForReadBarrier(for: .launchCallerTwo)
+        else {
+            Issue.record("Both launch callers did not reach early validation")
             return
         }
         provider.set("user-b")
+        provider.releaseReadBarrier(for: .launchCallerOne)
         provider.releaseReadBarrier(for: .launchCallerTwo)
-        launchSpy.release()
 
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
@@ -207,7 +185,12 @@ struct EntitlementRefreshCoordinatorTests {
 
         let provider = MutableUserProvider("user-a")
         provider.armBlockingReadBarrier(for: .launchCaller)
-        let launchSpy = GatedLaunchRefreshSpy()
+        let hookEntered = DispatchSemaphore(value: 0)
+        let hookRelease = DispatchSemaphore(value: 0)
+        let launchSpy = GatedLaunchRefreshSpy(
+            entered: hookEntered,
+            release: hookRelease
+        )
         let coordinator = makeCoordinator(
             provider: provider,
             harness: harness,
@@ -221,7 +204,7 @@ struct EntitlementRefreshCoordinatorTests {
         defer {
             launchOne.cancel()
             provider.releaseReadBarrier(for: .launchCaller)
-            launchSpy.release()
+            hookRelease.signal()
         }
 
         guard provider.waitForReadBarrier(for: .launchCaller) else {
@@ -230,7 +213,7 @@ struct EntitlementRefreshCoordinatorTests {
         }
         provider.set("user-b")
         provider.releaseReadBarrier(for: .launchCaller)
-        guard await launchSpy.waitForEntry() else {
+        guard hookEntered.wait(timeout: .now() + 5) == .success else {
             Issue.record("A early launch generation did not start reconciliation")
             return
         }
@@ -248,7 +231,7 @@ struct EntitlementRefreshCoordinatorTests {
             return
         }
         #expect(await launchSpy.callCount() == 1)
-        launchSpy.release()
+        hookRelease.signal()
 
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
@@ -345,7 +328,7 @@ struct EntitlementRefreshCoordinatorTests {
 
         let defaults = makeDefaults()
         let oldSnapshot = EntitlementSnapshot.trialActive(remainingCredits: 17)
-        let oldPayload = seed(oldSnapshot, for: "user-a", in: defaults)
+        let oldData = seed(oldSnapshot, for: "user-a", in: defaults)
         let service = EntitlementService(
             workerClient: makeWorkerClient(harness: harness),
             defaults: defaults
@@ -376,7 +359,7 @@ struct EntitlementRefreshCoordinatorTests {
         }
         expectAccountChanged(result)
         #expect(await service.resolutionNow() == .unresolved)
-        #expect(cachedPayload(for: "user-a", in: defaults) == oldPayload)
+        #expect(defaults.data(forKey: cacheKey(for: "user-a")) == oldData)
     }
 
     @Test("lateAccountAResponseDoesNotResetHydratedB: stale A work leaves B and both caches intact")
@@ -392,8 +375,8 @@ struct EntitlementRefreshCoordinatorTests {
         let defaults = makeDefaults()
         let snapshotA = EntitlementSnapshot.trialActive(remainingCredits: 11)
         let snapshotB = EntitlementSnapshot.trialActive(remainingCredits: 22)
-        let payloadA = seed(snapshotA, for: "user-a", in: defaults)
-        let payloadB = seed(snapshotB, for: "user-b", in: defaults)
+        let dataA = seed(snapshotA, for: "user-a", in: defaults)
+        let dataB = seed(snapshotB, for: "user-b", in: defaults)
         let service = EntitlementService(
             workerClient: makeWorkerClient(harness: harness),
             defaults: defaults
@@ -430,8 +413,8 @@ struct EntitlementRefreshCoordinatorTests {
             return
         }
         #expect(hydratedB == snapshotB)
-        #expect(cachedPayload(for: "user-a", in: defaults) == payloadA)
-        #expect(cachedPayload(for: "user-b", in: defaults) == payloadB)
+        #expect(defaults.data(forKey: cacheKey(for: "user-a")) == dataA)
+        #expect(defaults.data(forKey: cacheKey(for: "user-b")) == dataB)
     }
 
     @Test("coalescedResultRevalidatesAccount: joined callers reject a result after account switch")
@@ -445,7 +428,12 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        let launchSpy = GatedLaunchRefreshSpy()
+        let hookEntered = DispatchSemaphore(value: 0)
+        let hookRelease = DispatchSemaphore(value: 0)
+        let launchSpy = GatedLaunchRefreshSpy(
+            entered: hookEntered,
+            release: hookRelease
+        )
         let coordinator = makeCoordinator(
             provider: provider,
             harness: harness,
@@ -465,7 +453,7 @@ struct EntitlementRefreshCoordinatorTests {
             first.cancel()
             second.cancel()
             responseGate.signal()
-            for _ in 0..<4 { launchSpy.release() }
+            for _ in 0..<4 { hookRelease.signal() }
         }
         guard harness.waitForRequestCount(1),
               provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2)
@@ -476,11 +464,11 @@ struct EntitlementRefreshCoordinatorTests {
         #expect(harness.requestCount == 1)
         provider.set("user-b")
         responseGate.signal()
-        guard await launchSpy.waitForEntry() else {
+        guard hookEntered.wait(timeout: .now() + 5) == .success else {
             Issue.record("Launch reconciliation hook did not start within 5 seconds")
             return
         }
-        for _ in 0..<4 { launchSpy.release() }
+        for _ in 0..<4 { hookRelease.signal() }
 
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(first),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(second)
@@ -652,7 +640,12 @@ struct EntitlementRefreshCoordinatorTests {
         defer { harness.reset() }
 
         let provider = MutableUserProvider("user-a")
-        let launchSpy = GatedLaunchRefreshSpy()
+        let hookEntered = DispatchSemaphore(value: 0)
+        let hookRelease = DispatchSemaphore(value: 0)
+        let launchSpy = GatedLaunchRefreshSpy(
+            entered: hookEntered,
+            release: hookRelease
+        )
         let coordinator = makeCoordinator(
             provider: provider,
             harness: harness,
@@ -679,7 +672,7 @@ struct EntitlementRefreshCoordinatorTests {
             launchOne.cancel()
             launchTwo.cancel()
             responseGate.signal()
-            for _ in 0..<4 { launchSpy.release() }
+            for _ in 0..<4 { hookRelease.signal() }
         }
         guard provider.waitForReadCount(for: .launchCallerTwo, atLeast: 2) else {
             Issue.record("Second launch caller did not join the launch generation")
@@ -687,12 +680,12 @@ struct EntitlementRefreshCoordinatorTests {
         }
 
         responseGate.signal()
-        guard await launchSpy.waitForEntry() else {
+        guard hookEntered.wait(timeout: .now() + 5) == .success else {
             Issue.record("Launch reconciliation hook did not start")
             return
         }
         provider.set("user-b")
-        for _ in 0..<4 { launchSpy.release() }
+        for _ in 0..<4 { hookRelease.signal() }
 
         guard case .completed(let firstResult) = await awaitEntitlementTaskValue(launchOne),
               case .completed(let secondResult) = await awaitEntitlementTaskValue(launchTwo)
@@ -706,16 +699,23 @@ struct EntitlementRefreshCoordinatorTests {
         #expect(await launchSpy.callCount() == 1)
     }
 
-    @Test("launchPromotionReReadsAfterSourceTask: launch waits for source work and runs once")
-    func launchPromotionReReadsAfterSourceTask() async {
+    @Test("launchPromotionReReadsNewerNonLaunchTask: launch waits for newer work and runs once")
+    func launchPromotionReReadsNewerNonLaunchTask() async {
         let harness = LockedEntitlementURLProtocolHarness()
         let firstGate = DispatchSemaphore(value: 0)
+        let newerForegroundGate = DispatchSemaphore(value: 0)
+        let launchGate = DispatchSemaphore(value: 0)
         harness.configure(
             responses: [
                 1: .success(paidSnapshot),
-                2: .success(paidSnapshot)
+                2: .success(paidSnapshot),
+                3: .success(paidSnapshot)
             ],
-            gates: [1: firstGate]
+            gates: [
+                1: firstGate,
+                2: newerForegroundGate,
+                3: launchGate
+            ]
         )
         defer { harness.reset() }
 
@@ -728,6 +728,9 @@ struct EntitlementRefreshCoordinatorTests {
         )
         defer {
             firstGate.signal()
+            newerForegroundGate.signal()
+            launchGate.signal()
+            provider.releaseReadBarrier(for: .launchCaller)
             harness.reset()
         }
 
@@ -741,23 +744,72 @@ struct EntitlementRefreshCoordinatorTests {
             Issue.record("Initial foreground request did not start with its role")
             return
         }
+        provider.armReadBarrier(for: .launchCaller)
         let launch = Task {
             await RefreshTestTaskContext.$role.withValue(.launchCaller) {
                 await coordinator.refreshIfSignedIn(reason: .launch)
             }
         }
-        defer {
-            firstForeground.cancel()
-            launch.cancel()
-        }
-        firstGate.signal()
-        guard harness.waitForRequestCount(2) else {
-            Issue.record("Promoted launch request did not start")
+        guard provider.waitForReadBarrier(for: .launchCaller) else {
+            Issue.record("Launch caller did not reach the in-flight wait")
             return
         }
+        provider.armBlockingReadBarrier(for: .launchCaller)
+
+        let newerForeground = Task {
+            harness.markTaskStarted(.newerForeground)
+            guard case .completed = await awaitEntitlementTaskValue(firstForeground) else {
+                return nil
+            }
+            harness.registerRequestRole(.newerForeground)
+            return await RefreshTestTaskContext.$role.withValue(.newerForeground) {
+                await coordinator.refreshIfSignedIn(reason: .foreground)
+            }
+        }
+        defer {
+            firstForeground.cancel()
+            newerForeground.cancel()
+            launch.cancel()
+        }
+        guard harness.waitForTaskStart(.newerForeground) else {
+            Issue.record("Newer foreground task did not install")
+            return
+        }
+        firstGate.signal()
+        guard harness.waitForRequestRole(.newerForeground, at: 2) else {
+            Issue.record("Newer foreground request did not start with its role")
+            return
+        }
+        guard provider.waitForReadBarrier(for: .launchCaller) else {
+            Issue.record("Launch caller did not reach the re-read barrier")
+            return
+        }
+        harness.registerRequestRole(.promotedLaunch)
+        provider.releaseReadBarrier(for: .launchCaller)
+        newerForegroundGate.signal()
+        guard harness.waitForResponseCompletion(for: 2) else {
+            Issue.record("Newer foreground response did not fully complete")
+            return
+        }
+        guard harness.waitForRequestRole(.promotedLaunch, at: 3) else {
+            Issue.record("Promoted launch request did not start with its role")
+            return
+        }
+        guard harness.requestStartedAfterResponseCompletion(
+            request: 3,
+            after: 2
+        ) else {
+            Issue.record("Promoted launch request started before newer foreground completed")
+            return
+        }
+        launchGate.signal()
 
         guard case .completed = await awaitEntitlementTaskValue(firstForeground) else {
             Issue.record("Initial foreground task did not complete within 5 seconds")
+            return
+        }
+        guard case .completed = await awaitEntitlementTaskValue(newerForeground) else {
+            Issue.record("Newer foreground task did not complete within 5 seconds")
             return
         }
         guard case .completed(let result) = await awaitEntitlementTaskValue(launch) else {
@@ -773,7 +825,12 @@ struct EntitlementRefreshCoordinatorTests {
             return
         }
         #expect(snapshot == paidSnapshot)
-        #expect(harness.requestCount == 2)
+        #expect(harness.requestCount == 3)
+        #expect(harness.observedRequestRoles() == [
+            .initialForeground,
+            .newerForeground,
+            .promotedLaunch
+        ])
         #expect(await launchSpy.callCount() == 1)
     }
 
@@ -812,27 +869,15 @@ struct EntitlementRefreshCoordinatorTests {
         _ snapshot: EntitlementSnapshot,
         for userId: String,
         in defaults: UserDefaults
-    ) -> CachedEntitlementSnapshotPayloadForTests {
-        let payload = CachedEntitlementSnapshotPayloadForTests(
-            cachedAt: Date(timeIntervalSince1970: 1_700_000_000),
-            snapshot: snapshot
+    ) -> Data {
+        let data = try! JSONEncoder().encode(
+            CachedEntitlementSnapshotPayloadForTests(
+                cachedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                snapshot: snapshot
+            )
         )
-        let data = try! JSONEncoder().encode(payload)
         defaults.set(data, forKey: cacheKey(for: userId))
-        return payload
-    }
-
-    private func cachedPayload(
-        for userId: String,
-        in defaults: UserDefaults
-    ) -> CachedEntitlementSnapshotPayloadForTests? {
-        guard let data = defaults.data(forKey: cacheKey(for: userId)) else {
-            return nil
-        }
-        return try? JSONDecoder().decode(
-            CachedEntitlementSnapshotPayloadForTests.self,
-            from: data
-        )
+        return data
     }
 
     private func cacheKey(for userId: String) -> String {
@@ -894,7 +939,7 @@ private enum RefreshRole: String, Hashable, Sendable {
     case promotedLaunch
 }
 
-private struct CachedEntitlementSnapshotPayloadForTests: Codable, Equatable {
+private struct CachedEntitlementSnapshotPayloadForTests: Codable {
     let cachedAt: Date
     let snapshot: EntitlementSnapshot
 }
@@ -915,69 +960,27 @@ private actor LaunchRefreshSpy: EntitlementLaunchRefresh {
 
 private final class GatedLaunchRefreshSpy: EntitlementLaunchRefresh, @unchecked Sendable {
     private let lock = NSLock()
-    private let releaseGate = AsyncTestGate()
+    private let entered: DispatchSemaphore
+    private let release: DispatchSemaphore
     private var calls = 0
 
-    func refreshOnDeviceEntitlementAtLaunch() async {
-        incrementCallCount()
-        await releaseGate.wait()
+    init(entered: DispatchSemaphore, release: DispatchSemaphore) {
+        self.entered = entered
+        self.release = release
     }
 
-    private func incrementCallCount() {
+    func refreshOnDeviceEntitlementAtLaunch() async {
         lock.lock()
         calls += 1
         lock.unlock()
-    }
-
-    func waitForEntry() async -> Bool {
-        for _ in 0..<500 {
-            if callCount() > 0 {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return callCount() > 0
-    }
-
-    func release() {
-        releaseGate.signal()
+        entered.signal()
+        _ = release.wait(timeout: .now() + 5)
     }
 
     func callCount() -> Int {
         lock.lock()
         defer { lock.unlock() }
         return calls
-    }
-}
-
-private final class AsyncTestGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pendingSignals = 0
-    private var waiter: CheckedContinuation<Void, Never>?
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            if pendingSignals > 0 {
-                pendingSignals -= 1
-                lock.unlock()
-                continuation.resume()
-            } else {
-                waiter = continuation
-                lock.unlock()
-            }
-        }
-    }
-
-    func signal() {
-        lock.lock()
-        let continuation = waiter
-        waiter = nil
-        if continuation == nil {
-            pendingSignals += 1
-        }
-        lock.unlock()
-        continuation?.resume()
     }
 }
 
@@ -1088,10 +1091,7 @@ private final class MutableUserProvider: @unchecked Sendable {
                 return false
             }
         }
-        let currentReadCount = role.map { readCounts[$0, default: 0] } ?? 0
-        let shouldBlock = barrier.map {
-            !$0.consumed && currentReadCount >= $0.minimumReadCount
-        } ?? false
+        let shouldBlock = barrier.map { !$0.consumed } ?? false
         if shouldBlock {
             barrier?.consumed = true
         }
@@ -1114,16 +1114,13 @@ private final class MutableUserProvider: @unchecked Sendable {
 
     func armReadBarrier(for role: RefreshRole) {
         lock.lock()
-        readBarriers[role] = ReadBarrier(blocksRead: false, minimumReadCount: 1)
+        readBarriers[role] = ReadBarrier(blocksRead: false)
         lock.unlock()
     }
 
-    func armBlockingReadBarrier(for role: RefreshRole, afterReadCount: Int = 1) {
+    func armBlockingReadBarrier(for role: RefreshRole) {
         lock.lock()
-        readBarriers[role] = ReadBarrier(
-            blocksRead: true,
-            minimumReadCount: afterReadCount
-        )
+        readBarriers[role] = ReadBarrier(blocksRead: true)
         lock.unlock()
     }
 
@@ -1168,14 +1165,12 @@ private final class MutableUserProvider: @unchecked Sendable {
 
     private final class ReadBarrier: @unchecked Sendable {
         let blocksRead: Bool
-        let minimumReadCount: Int
         let reached = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
         var consumed = false
 
-        init(blocksRead: Bool, minimumReadCount: Int) {
+        init(blocksRead: Bool) {
             self.blocksRead = blocksRead
-            self.minimumReadCount = minimumReadCount
         }
     }
 }
@@ -1315,7 +1310,7 @@ private final class LockedEntitlementURLProtocolHarness: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return observedRoles.keys
-            .sorted()
+            .sorted { $0.rawValue < $1.rawValue }
             .compactMap { observedRoles[$0] }
     }
 

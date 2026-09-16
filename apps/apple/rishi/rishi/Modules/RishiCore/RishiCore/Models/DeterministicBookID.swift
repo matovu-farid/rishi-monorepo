@@ -19,11 +19,6 @@ extension UUID {
 /// on two devices (or under a different filename) collapses to one id and
 /// dedupes through the sync upsert. Identity = normalized title + author +
 /// format.
-///
-/// Server book ids are globally unique, so the owner-scoped overload must be
-/// used for persisted user books. Keeping the legacy overload preserves the
-/// wire/import compatibility surface for callers that only need a metadata
-/// fingerprint.
 public enum DeterministicBookID {
     private static let namespace = UUID(uuidString: "9E1B6C42-7F3A-5D88-A1C4-2B5E0F7A9D31")!
 
@@ -31,24 +26,11 @@ public enum DeterministicBookID {
     /// `format`. Returns `nil` when the normalized title is empty so untitled
     /// books fall back to a random id rather than all collapsing into one.
     public static func make(title: String?, author: String?, format: BookFormat) -> BookID? {
-        make(title: title, author: author, format: format, ownerId: nil)
-    }
-
-    /// Returns a deterministic id scoped to one account. This retains
-    /// same-account cross-device convergence while preventing two accounts
-    /// importing the same title from generating the same globally-unique id.
-    public static func make(title: String?, author: String?, format: BookFormat, ownerId: UserID) -> BookID? {
-        make(title: title, author: author, format: format, ownerId: ownerId.uuidString)
-    }
-
-    private static func make(title: String?, author: String?, format: BookFormat, ownerId: String?) -> BookID? {
         let normalizedTitle = normalize(title)
         guard !normalizedTitle.isEmpty else { return nil }
         let normalizedAuthor = normalize(author)
         // 0x1F unit separator prevents field-boundary collisions.
-        let name = [ownerId, normalizedTitle, normalizedAuthor, format.rawValue]
-            .compactMap { $0 }
-            .joined(separator: "\u{1F}")
+        let name = normalizedTitle + "\u{1F}" + normalizedAuthor + "\u{1F}" + format.rawValue
         return UUID(version5: namespace, name: name)
     }
 

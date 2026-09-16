@@ -51,9 +51,6 @@ struct ReaderNavigatorCoordinatorFollowTests {
         let recorder = Recorder()
         viewModel.onUserNavigation = { recorder.locators.append($0) }
 
-        // Readium's first callback establishes the initial visible location;
-        // the following callback is the actual user page turn.
-        coordinator.handleLocationChange(try makeLocator(progression: 0.50))
         coordinator.isFollowingReadAloud = true
         coordinator.handleLocationChange(try makeLocator(progression: 0.66))
 

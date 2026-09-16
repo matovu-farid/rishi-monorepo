@@ -4,28 +4,13 @@ import XCTest
 
 final class WatchProtocolTests: XCTestCase {
     func testCommandRoundTripsWithHandshakeFields() throws {
-        let processSessionID = UUID()
-        let watchClientID = UUID()
-        let handshakeNonce = UUID()
-        let requestID = UUID()
-        let issuedAt = Date(timeIntervalSince1970: 1_700_000_000.75)
         let envelope = WatchMutatingCommandEnvelope(
-            processSessionID: processSessionID, watchClientID: watchClientID, handshakeNonce: handshakeNonce,
-            activationSequence: 3, clientSequence: 8, requestID: requestID, issuedAt: issuedAt,
-            playbackGeneration: 2, accountGeneration: 4, command: .setPlaybackRate(1.25)
+            processSessionID: UUID(), watchClientID: UUID(), handshakeNonce: UUID(), activationSequence: 3,
+            clientSequence: 8, requestID: UUID(), playbackGeneration: 2, accountGeneration: 4,
+            command: .setPlaybackRate(1.25)
         )
         let decoded = try WatchCodec.decode(WatchMutatingCommandEnvelope.self, from: WatchCodec.encode(envelope))
-        XCTAssertEqual(decoded.protocolVersion, envelope.protocolVersion)
-        XCTAssertEqual(decoded.processSessionID, envelope.processSessionID)
-        XCTAssertEqual(decoded.watchClientID, envelope.watchClientID)
-        XCTAssertEqual(decoded.handshakeNonce, envelope.handshakeNonce)
-        XCTAssertEqual(decoded.activationSequence, envelope.activationSequence)
-        XCTAssertEqual(decoded.clientSequence, envelope.clientSequence)
-        XCTAssertEqual(decoded.requestID, envelope.requestID)
-        XCTAssertEqual(decoded.playbackGeneration, envelope.playbackGeneration)
-        XCTAssertEqual(decoded.accountGeneration, envelope.accountGeneration)
-        XCTAssertEqual(decoded.command, envelope.command)
-        XCTAssertLessThan(abs(decoded.issuedAt.timeIntervalSince(envelope.issuedAt)), 1)
+        XCTAssertEqual(decoded, envelope)
     }
 
     func testSnapshotClampsProgressAndTruncatesText() {

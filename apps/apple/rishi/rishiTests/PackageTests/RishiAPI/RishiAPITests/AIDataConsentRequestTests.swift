@@ -66,9 +66,9 @@ struct AIDataConsentRequestTests {
 
     @Test func markedRequestOmitsHeaderWhenProviderHasNoCurrentGrant() async throws {
         let client = client(provider: ConsentProvider(value: false))
-        await #expect(throws: WorkerDataUseConsentRequiredError.self) {
-            _ = try await client.buildRequest(for: ConsentEndpoint())
-        }
+        let request = try await client.buildRequest(for: ConsentEndpoint())
+
+        #expect(request.value(forHTTPHeaderField: "X-Rishi-Data-Use-Consent") == nil)
     }
 
     @Test func remoteContentAndAIEndpointsAreMarkedWhileControlEndpointsAreNot() {

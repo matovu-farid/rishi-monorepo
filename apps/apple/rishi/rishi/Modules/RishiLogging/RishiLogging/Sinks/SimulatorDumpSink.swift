@@ -1,8 +1,8 @@
 import Foundation
 import os
 
-/// DEBUG-only `LogSink` that mirrors every structured log event into
-/// reset-on-launch dump files inside the simulator or Catalyst app sandbox.
+/// DEBUG-simulator-only `LogSink` that mirrors every structured log event into
+/// reset-on-launch dump files inside the simulator's app sandbox.
 ///
 /// ## Why
 /// When the user runs the app in the iOS Simulator and reports a bug, the
@@ -35,32 +35,26 @@ import os
 /// write per stream per event happens off the calling thread/actor.
 ///
 /// ## Gate
-/// `SimulatorDumpSink.make()` returns `nil` outside of `DEBUG`. The test-only factory
+/// `SimulatorDumpSink.make()` returns `nil` outside of
+/// `DEBUG && targetEnvironment(simulator)`. The test-only factory
 /// `makeForTesting(at:)` bypasses the gate so unit tests can exercise the
 /// sink on the macOS test host.
 public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
 
     // MARK: - Public factories
 
-    /// Debug factory. The dump is written inside the app container. In Release
-    /// or on a real iOS device the sink is a no-op.
+    /// Production factory. Returns `nil` outside `DEBUG && simulator`. On a
+    /// real device or in Release the dump sink is a no-op (a nil return means
+    /// `AppDependencies` simply skips `Log.installSink(...)`).
     ///
     /// On a successful init in the simulator the dump directory is
     /// `<NSTemporaryDirectory>/rishi-dump/`, which resolves on the host to
     /// `~/Library/Developer/CoreSimulator/Devices/<UDID>/data/Containers/Data/Application/<APPID>/tmp/rishi-dump/`.
     public static func make() -> SimulatorDumpSink? {
-        #if DEBUG
-        #if targetEnvironment(simulator)
+        #if DEBUG && targetEnvironment(simulator)
         let url = NSTemporaryDirectory()
         let dir = URL(fileURLWithPath: url).appendingPathComponent("rishi-dump", isDirectory: true)
         return try? SimulatorDumpSink(directory: dir)
-        #elseif targetEnvironment(macCatalyst)
-        guard let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
-        let dir = url.appendingPathComponent("rishi-dump", isDirectory: true)
-        return try? SimulatorDumpSink(directory: dir)
-        #else
-        return nil
-        #endif
         #else
         return nil
         #endif
@@ -160,7 +154,7 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
             ts: Date(),
             level: level.rawValue,
             message: name,
-            fields: Self.redactedFields(data)
+            fields: data
         )
         let line: Data
         do {
@@ -233,19 +227,6 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
             return true
         }
         return false
-    }
-
-    private static func redactedFields(_ fields: [String: String]?) -> [String: String]? {
-        guard let fields else { return nil }
-        let sensitiveKeyFragments = ["token", "secret", "authorization", "password", "cookie"]
-        return fields.reduce(into: [String: String]()) { result, entry in
-            let key = entry.key.lowercased()
-            if sensitiveKeyFragments.contains(where: key.contains) || entry.value.range(of: "token=", options: .caseInsensitive) != nil {
-                result[entry.key] = "[REDACTED]"
-            } else {
-                result[entry.key] = entry.value
-            }
-        }
     }
 }
 

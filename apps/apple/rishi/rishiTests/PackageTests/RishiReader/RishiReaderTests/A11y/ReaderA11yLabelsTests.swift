@@ -14,7 +14,7 @@ import Testing
 @Suite("Reader a11y — file-level invariants")
 struct ReaderA11yLabelsTests {
 
-    /// Resolve the reader's consolidated `rishi/Modules/.../UI` directory relative to THIS
+    /// Resolve the reader's `Sources/.../UI` directory relative to THIS
     /// test file. `#filePath` returns the absolute path under SPM AND
     /// xcodebuild — unlike `#file`, which Xcode helpfully turns into a
     /// relative path under the simulator sandbox.
@@ -24,12 +24,10 @@ struct ReaderA11yLabelsTests {
         let packageRoot = here
             .deletingLastPathComponent()   // A11y/
             .deletingLastPathComponent()   // RishiReaderTests/
-            .deletingLastPathComponent()   // RishiReader/ (package test group)
-            .deletingLastPathComponent()   // PackageTests/
-            .deletingLastPathComponent()   // rishiTests/
-            .deletingLastPathComponent()   // rishi/ (app project root)
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // RishiReader/ (package root)
         return packageRoot
-            .appendingPathComponent("rishi/Modules/RishiReader/RishiReader/UI", isDirectory: true)
+            .appendingPathComponent("Sources/RishiReader/UI", isDirectory: true)
     }
 
     private static func readerSources() throws -> [URL] {
@@ -43,16 +41,10 @@ struct ReaderA11yLabelsTests {
     func noFixedFontSizes() throws {
         for url in try Self.readerSources() {
             let s = try String(contentsOf: url, encoding: .utf8)
-            let lines = s.components(separatedBy: .newlines)
-            for (idx, line) in lines.enumerated() where line.contains(".font(.system(size:") {
-                let preceding = lines[max(0, idx - 3)..<idx].joined(separator: "\n")
-                // SF Symbol sizing is an icon treatment, not fixed text
-                // typography; the EPUB edge arrows use this intentionally.
-                if preceding.contains("Image(systemName:") { continue }
-                Issue.record(
-                    "Fixed text font size in \(url.lastPathComponent):\(idx + 1) violates Dynamic Type (A11Y-02)"
-                )
-            }
+            #expect(
+                !s.contains(".font(.system(size:"),
+                "Fixed font size in \(url.lastPathComponent) violates Dynamic Type (A11Y-02)"
+            )
         }
     }
 
@@ -79,29 +71,24 @@ struct ReaderA11yLabelsTests {
     @Test("Reader toolbar buttons declare accessibilityLabel from A11yLabel")
     func toolbarButtonsCarryLabels() throws {
         // Phase 18 Plan 18-07 (F-P1-05) — the standalone overlay toolbar
-        // files were removed. EPUB owns its toolbar in ReaderScreen.swift.
-        // PDFReaderScreen.swift
-        // applies the shared ReaderToolBar modifier, so its labels live in
-        // ToolBar.swift rather than in the screen wrapper.
-        let requiredLabelsByFile: [String: [String]] = [
-            "ReaderScreen.swift": [
-                "A11yLabel.readerReadAloud",
-                "A11yLabel.readerOpenVoice",
-                "A11yLabel.readerOpenTypography",
-                "A11yLabel.readerOpenTheme",
-            ],
-            "ToolBar.swift": [
-                "A11yLabel.readerReadAloud",
-                "A11yLabel.readerOpenVoice",
-                "A11yLabel.readerOpenTheme",
-            ],
-        ]
-        for url in try Self.readerSources()
-            where requiredLabelsByFile.keys.contains(url.lastPathComponent) {
+        // files were deleted in favor of native `.toolbar { ToolbarItemGroup }`
+        // blocks living inside the reader screens themselves. Assertions
+        // now run against the screen source files.
+        let screens = ["PDFReaderScreen.swift", "ReaderScreen.swift"]
+        for url in try Self.readerSources() where screens.contains(url.lastPathComponent) {
             let s = try String(contentsOf: url, encoding: .utf8)
-            for label in requiredLabelsByFile[url.lastPathComponent]! {
-                #expect(s.contains(label), "\(url.lastPathComponent) missing \(label)")
-            }
+            // Every reader screen references the shared A11yLabel
+            // vocabulary at least once — this guarantees we're not
+            // duplicating strings.
+            #expect(
+                s.contains("A11yLabel."),
+                "\(url.lastPathComponent) should source labels from A11yLabel"
+            )
+            // Phase 18 Plan 18-01 (F-P0-02) — the in-app close button
+            // (`A11yLabel.readerClose`) was deleted in favor of the system
+            // NavigationStack back chevron, so it's no longer asserted.
+            #expect(s.contains("A11yLabel.readerOpenTOC"))
+            #expect(s.contains("A11yLabel.readerOpenTheme"))
         }
     }
 
@@ -172,48 +159,33 @@ struct ReaderA11yLabelsTests {
 
     @Test("Toolbar accessibilityIdentifier sites match the screen's static identifier list")
     func toolbarButtonsLabelled() throws {
-        let expectedByImplementation: [String: (source: String, identifiers: [String])] = [
-            "ReaderScreen.swift": (
-                source: "ReaderScreen.swift",
-                identifiers: [
-                    "reader.toolbar.toc",
-                    "reader.toolbar.typography",
-                    "reader.toolbar.theme",
-                    "reader.toolbar.bookmark",
-                    "reader.toolbar.bookmarksList",
-                    "reader.toolbar.search",
-                    "reader.toolbar.more",
-                    "reader.toolbar.readAloud",
-                    "reader.toolbar.voice",
-                ]
-            ),
-            "PDFReaderScreen.swift": (
-                source: "ToolBar.swift",
-                identifiers: [
-                    "reader.toolbar.toc",
-                    "reader.toolbar.theme",
-                    "reader.toolbar.bookmark",
-                    "reader.toolbar.bookmarksList",
-                    "reader.toolbar.search",
-                    "reader.toolbar.more",
-                    "reader.toolbar.readAloud",
-                    "reader.toolbar.voice",
-                ]
-            ),
+        // Phase 18 Plan 18-07 (F-P1-05) — with the overlay toolbar files
+        // deleted, the toolbar Button call sites now sit inline inside
+        // each screen's `.toolbar { ToolbarItemGroup }` block, mixed in
+        // with unrelated highlight-menu / picker buttons. Counting raw
+        // `Button(...)` call sites in the whole file would over-count.
+        // Instead we count the `reader.toolbar.*` accessibility-identifier
+        // sites and assert they equal the expected list (no more, no
+        // fewer). If the runtime block grows or shrinks the test will
+        // flag the mismatch.
+        let expectedByFile: [String: Int] = [
+            // Phase 37 Plan 37-03 added the EPUB bookmark toggle + bookmarks-list
+            // identifier sites (5 -> 7); Plan 37-05 added the search button
+            // (7 -> 8).
+            "ReaderScreen.swift": 8,
+            // Phase 37 Plan 37-02 added the bookmark toggle + bookmarks-list
+            // identifier sites (4 -> 6); Plan 37-04 added the search button
+            // (6 -> 7).
+            "PDFReaderScreen.swift": 7,
         ]
-        let sources = try Self.readerSources()
-        for (screen, contract) in expectedByImplementation {
-            let implementation = try #require(
-                sources.first { $0.lastPathComponent == contract.source },
-                "Missing toolbar implementation \(contract.source) for \(screen)"
+        for url in try Self.readerSources() where expectedByFile.keys.contains(url.lastPathComponent) {
+            let s = try String(contentsOf: url, encoding: .utf8)
+            let idSites = s.components(separatedBy: ".accessibilityIdentifier(\"reader.toolbar.").count - 1
+            let expected = expectedByFile[url.lastPathComponent]!
+            #expect(
+                idSites == expected,
+                "\(url.lastPathComponent): expected \(expected) reader.toolbar.* identifier sites, found \(idSites)"
             )
-            let s = try String(contentsOf: implementation, encoding: .utf8)
-            let actualIdentifiers = Set(
-                s.components(separatedBy: ".accessibilityIdentifier(\"").dropFirst().compactMap {
-                    $0.split(separator: "\"").first.map(String.init)
-                }
-            )
-            #expect(actualIdentifiers == Set(contract.identifiers))
         }
     }
 }

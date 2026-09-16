@@ -12,12 +12,8 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
         app.launchEnvironment["RISHI_UITEST"] = "1"
         app.launch()
 
-        // This scenario exercises EPUB paragraph navigation. The first
-        // seeded cell is the PDF boundary fixture and has no next paragraph.
-        let bookCell = app.buttons
-            .matching(
-                NSPredicate(format: "identifier == 'library-book-cell' AND value == 'epub'")
-            )
+        let bookCell = app.descendants(matching: .any)
+            .matching(identifier: "library-book-cell")
             .firstMatch
         XCTAssertTrue(
             bookCell.waitForExistence(timeout: 30),
@@ -25,7 +21,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
         )
         robustTap(bookCell)
 
-        let readAloud = app.buttons
+        let readAloud = app.descendants(matching: .any)
             .matching(identifier: "reader.toolbar.readAloud")
             .firstMatch
         if !readAloud.waitForExistence(timeout: 15) {
@@ -39,7 +35,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
             "Read Aloud toolbar button never appeared — reader did not open."
         )
 
-        let toggle = app.buttons.matching(
+        let toggle = app.descendants(matching: .any).matching(
             NSPredicate(
                 format: "identifier == 'tts-play' OR identifier == 'tts-pause'"
             )
@@ -77,7 +73,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
             )
         }
 
-        let pause = app.buttons
+        let pause = app.descendants(matching: .any)
             .matching(identifier: "tts-pause").firstMatch
         if !pause.waitForExistence(timeout: 25) {
             let snap = XCTAttachment(string: app.debugDescription)
@@ -91,7 +87,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
                 + "The offline TTS source failed to render audio."
         )
 
-        let next = app.buttons
+        let next = app.descendants(matching: .any)
             .matching(identifier: "tts-next-paragraph").firstMatch
         XCTAssertTrue(
             next.waitForExistence(timeout: 5),
@@ -101,7 +97,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
 
         usleep(1_000_000)
 
-        let resumed = app.buttons
+        let resumed = app.descendants(matching: .any)
             .matching(identifier: "tts-pause").firstMatch
         XCTAssertTrue(
             resumed.waitForExistence(timeout: 15),
@@ -119,14 +115,14 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
 
         _ = startPlayingSession(app)
 
-        let stop = app.buttons
+        let stop = app.descendants(matching: .any)
             .matching(identifier: "tts-stop").firstMatch
         XCTAssertTrue(
             stop.waitForExistence(timeout: 25),
             "Read-aloud controls never appeared before the page-boundary sweep."
         )
 
-        let next = app.buttons
+        let next = app.descendants(matching: .any)
             .matching(identifier: "tts-next-paragraph").firstMatch
         XCTAssertTrue(
             next.waitForExistence(timeout: 5),
@@ -152,7 +148,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
     private func startPlayingSession(_ app: XCUIApplication) -> (
         XCUIElement, XCUIElement
     ) {
-        let bookCell = app.buttons
+        let bookCell = app.descendants(matching: .any)
             .matching(identifier: "library-book-cell")
             .firstMatch
         XCTAssertTrue(
@@ -161,7 +157,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
         )
         robustTap(bookCell)
 
-        let readAloud = app.buttons
+        let readAloud = app.descendants(matching: .any)
             .matching(identifier: "reader.toolbar.readAloud")
             .firstMatch
         XCTAssertTrue(
@@ -169,7 +165,7 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
             "Read Aloud toolbar button never appeared — reader did not open."
         )
 
-        let toggle = app.buttons.matching(
+        let toggle = app.descendants(matching: .any).matching(
             NSPredicate(
                 format: "identifier == 'tts-play' OR identifier == 'tts-pause'"
             )
@@ -205,7 +201,8 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
     @MainActor
     private func robustTap(_ element: XCUIElement) {
         usleep(300_000)
-        element.tap()
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .tap()
     }
 
     @MainActor

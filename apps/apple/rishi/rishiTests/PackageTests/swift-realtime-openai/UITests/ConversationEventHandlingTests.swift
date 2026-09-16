@@ -9,7 +9,7 @@ struct ConversationEventHandlingTests {
 
     @Test("response.output_item.added appends a function call entry")
     func responseOutputItemAddedAppendsEntry() throws {
-        let conversation = RealtimeConversation(debug: false)
+        let conversation = Conversation(debug: false)
         let item = Item.functionCall(.init(
             id: "item-1",
             status: .inProgress,
@@ -39,7 +39,7 @@ struct ConversationEventHandlingTests {
 
     @Test("response.output_item.done updates the existing function call entry")
     func responseOutputItemDoneUpdatesEntry() throws {
-        let conversation = RealtimeConversation(debug: false)
+        let conversation = Conversation(debug: false)
         let added = Item.functionCall(.init(
             id: "item-1",
             status: .inProgress,
