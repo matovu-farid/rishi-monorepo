@@ -1,5 +1,11 @@
 # Phase B (E2E Specs) — Test Review Index
 
+> **ARCHIVED — LEGACY ELECTRON REVIEW.** This index and its findings refer to
+> the retired Electron app. They are historical records, not active monorepo
+> instructions. The corresponding source is preserved in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy)
+> repository.
+
 ## Wave Status
 
 | Wave | Status | Started | Completed |

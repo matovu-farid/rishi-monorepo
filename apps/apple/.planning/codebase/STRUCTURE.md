@@ -1,5 +1,11 @@
 # Codebase Structure
 
+> **HISTORICAL SNAPSHOT — ARCHIVED ELECTRON APP.** This map describes source
+> preserved in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/28f05c0a9f4d123e3ec3d2bb34706cf9a47de405)
+> repository. It is parity context for Apple development, not current
+> monorepo architecture or executable guidance.
+
 **Analysis Date:** 2026-06-09
 
 **Target codebase:** `apps/rishi-electron` (the existing Electron desktop reader). This map gives the iOS team a feature-by-feature inventory so each module can be mirrored in SwiftUI.

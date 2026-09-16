@@ -1,5 +1,12 @@
 # Billing implementation — handoff
 
+> **Legacy handoff:** This document predates the retirement of the Electron
+> client. Electron references below describe historical behavior or contracts
+> retained for already-released clients; they are not current implementation
+> targets. New client work and testing belongs in `apps/apple` and must use a
+> versioned API. Preserve the legacy desktop authentication and billing routes
+> for compatibility rather than changing them in place.
+
 Pickup point as of `65090285` on `main`. Read alongside `BILLING.md`
 (the live-mode runbook) and `packages/shared/src/billing/` (the
 shared types + cost calculator).
@@ -104,18 +111,19 @@ Expected outcomes to verify:
 - usage > $1, valid card → invoice paid → sub stays `active`
 - usage > $1, declining test card (`4000000000000341`) → dunning → eventually `unpaid` → gate blocks
 
-### 2. Realtime client wiring in `apps/rishi-electron` (and `apps/mobile`)
+### 2. Realtime client wiring in the Apple app
 
-Why: voice chat is the most expensive feature. In production today,
-real users using voice cost us money but pay nothing because the
-client never calls `POST /api/billing/realtime-usage`. This is a
-real revenue leak that goes live the moment we go live.
+Why: voice chat is the most expensive feature. The historical Electron
+client did not report usage to the legacy `POST /api/billing/realtime-usage`
+route. Keep that route compatible for released clients. Current work should
+wire `apps/apple` to the supported versioned billing API; if that API does not
+yet exist, add it under `/api/v1` without changing the legacy route.
 
 Touch points (need investigation):
-- `packages/shared/src/voice-chat/` — find where realtime sessions
-  end and add a POST to `/api/billing/realtime-usage` with token
-  counts from `response.done` events
-- Mobile equivalent in `apps/mobile/`
+- `apps/apple/` — find where realtime sessions end and report token counts
+  from completion events to the versioned billing API.
+- `workers/worker/` — preserve the legacy route and add or use the versioned
+  Apple-facing contract.
 
 ### 3. Existing-user backfill
 
@@ -151,9 +159,9 @@ in-app banner.
 
 ### 7. In-app "Manage billing" button
 
-Why: users need a way to reach the portal. Add a button in
-`apps/rishi-electron` settings that calls `POST /api/billing/portal`
-and opens the returned URL.
+Why: users need a way to reach the portal. Add the button to the Apple app's
+settings and open the URL returned by the supported versioned billing API.
+The legacy `POST /api/billing/portal` behavior remains compatibility-only.
 
 ## Local dev setup notes
 
@@ -169,7 +177,7 @@ TEST_AUTH_SECRET=local-billing-test-2026-06-03
 
 # Two terminals:
 stripe listen --forward-to http://localhost:8787/api/auth/stripe/webhook
-cd workers/worker && pnpm run dev
+cd workers/worker && bun run dev
 
 # Drive a test signup:
 curl -X POST http://localhost:8787/test/sign-in \
@@ -188,9 +196,9 @@ curl -X POST http://localhost:8787/test/sign-in \
   query `wrangler d1 execute rishi-sync --remote --command "..."`
   to compare schema vs. D1 reality before applying.
 
-- **pnpm + file: deps don't auto-refresh.** After editing
+- **Bun + file: deps don't auto-refresh.** After editing
   `packages/shared/package.json` (e.g., adding an export), you need
-  to re-run `pnpm install` in any package that depends on
+  to re-run `bun install` in any package that depends on
   `@rishi/shared`, otherwise the symlinked copy is stale.
 
 - **`stripe listen` whsec is ephemeral.** Each `stripe listen`
@@ -224,10 +232,10 @@ cat workers/worker/BILLING.md         # the runbook
 cat workers/worker/BILLING-HANDOFF.md # this file
 
 # Run all worker billing tests:
-cd workers/worker && pnpm test --run src/billing/
+cd workers/worker && bunx vitest run src/billing/
 
 # Run all shared billing tests:
-cd packages/shared && pnpm test --run src/billing/
+cd packages/shared && bun run test -- src/billing/
 ```
 
 ## Recommended next step

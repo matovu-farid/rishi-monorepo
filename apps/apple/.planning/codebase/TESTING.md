@@ -1,5 +1,11 @@
 # Testing Patterns
 
+> **HISTORICAL SNAPSHOT — ARCHIVED ELECTRON APP.** The test patterns below
+> document source preserved in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/28f05c0a9f4d123e3ec3d2bb34706cf9a47de405)
+> repository. Do not run these Electron commands in this monorepo. Current
+> testing targets the Xcode project under `apps/apple/rishi`.
+
 **Analysis Date:** 2026-06-09
 
 **Target codebase:** `apps/rishi-electron`.
@@ -376,16 +382,13 @@ This is how `importBookViaOpenFile` exercises the production OS-file-open pipeli
 - Launches the app with extra env: `SHARING_WORKER_URL`, `VITE_SHARING_ENABLED=1`, `RISHI_SHARING_TEST_AUTH=1`, `RISHI_SHARING_TEST_USER_ID`, `RISHI_SHARING_TEST_DISPLAY_NAME`.
 - `RISHI_E2E_VERBOSE=1` streams main stdout / stderr and renderer console to the test runner.
 
-## CI Setup
+## CI status after archival
 
-**Workflow:** `.github/workflows/ci.yml` → job `lint-and-test-electron`:
-- Runs on `ubuntu-latest` with a 15-minute timeout.
-- Working directory: `apps/rishi-electron`.
-- Steps: checkout → pnpm setup → `pnpm install --frozen-lockfile` → `pnpm lint` → `pnpm test` → `pnpm build`.
-- **Does not run `pnpm test:e2e` in CI.** E2E is a manual / local-only verification step. Playwright Electron tests require a display and the native binaries — they would need xvfb on Ubuntu and a longer timeout. (Confirmed by inspecting `.github/workflows/ci.yml`.)
-- The `Release Desktop` workflow (`.github/workflows/release-desktop.yml`) is the user's standard release CI; `release-electron.yml`, `release-mas.yml` ship the signed binaries.
-
-**Retries on CI:** Playwright config uses `retries: 2` when `process.env.CI` is set. Vitest is not retried.
+The Electron CI and release workflows described by the historical snapshot
+were deleted when the app left this monorepo. They must not be recreated or
+used as current verification guidance. Validate current Apple work through the
+`rishi` Xcode scheme and its Apple test targets, following the active plan for
+the feature under test.
 
 ---
 

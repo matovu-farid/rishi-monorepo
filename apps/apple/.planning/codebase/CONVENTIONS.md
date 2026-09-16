@@ -1,5 +1,11 @@
 # Coding Conventions
 
+> **HISTORICAL SNAPSHOT — ARCHIVED ELECTRON APP.** These conventions describe
+> source preserved in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/28f05c0a9f4d123e3ec3d2bb34706cf9a47de405)
+> repository. They are historical parity context, not current Apple or
+> monorepo coding instructions.
+
 **Analysis Date:** 2026-06-09
 
 **Target codebase:** `apps/rishi-electron` (Electron + electron-vite, TypeScript, React 19).
