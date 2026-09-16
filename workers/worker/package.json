@@ -51,6 +51,7 @@
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^1.0.0-rc.4",
     "tsx": "^4.22.4",
+    "typescript": "5.9.3",
     "vitest": "^4.1.6",
     "wrangler": "^4.107.0"
   },

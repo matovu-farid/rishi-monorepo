@@ -1,5 +1,12 @@
 # Handover — Better Auth migration + Redis-polling desktop handoff
 
+> **ARCHIVED — LEGACY ELECTRON HANDOVER. DO NOT EXECUTE THE ELECTRON ACTIONS
+> BELOW.** The referenced app now lives only in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/e460dda4eed5d69134d2e7f865b2d14a51de277e)
+> archive. The Worker `/desktop/*` routes remain frozen for already-released
+> client compatibility; their presence does not make Electron a current
+> monorepo target. Current app work and testing belongs in `apps/apple`.
+
 **Session ended:** 2026-05-10
 **State:** code-complete and deployed to production. End-to-end user testing pending.
 

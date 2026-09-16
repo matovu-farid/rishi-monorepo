@@ -56,6 +56,7 @@ vi.mock("openai", () => {
         create: vi.fn(async (args: Record<string, unknown>) => {
           speechCalls.push(args)
           return {
+            body: new Response(speechAudioBytes).body,
             arrayBuffer: async () =>
               speechAudioBytes.buffer.slice(
                 speechAudioBytes.byteOffset,
@@ -200,6 +201,13 @@ vi.mock("./billing/stripe", () => ({
 
 vi.mock("./db/drizzle", () => ({
   createDb: () => ({
+    insert: () => ({
+      values: () => ({
+        onConflictDoUpdate: () => ({
+          run: async () => undefined,
+        }),
+      }),
+    }),
     select: () => ({
       from: () => ({
         where: () => ({ get: async () => null }),
@@ -224,6 +232,7 @@ vi.mock("@rishi/shared/schema", () => ({
   conversations: {},
   messages: {},
   bookmarks: {},
+  userApiUsage: {},
 }))
 
 vi.mock("@rishi/shared/billing/stripe-config", () => ({
@@ -234,6 +243,7 @@ vi.mock("drizzle-orm", () => ({
   eq: () => ({}),
   desc: () => ({}),
   and: () => ({}),
+  sql: () => ({}),
 }))
 
 vi.mock("@upstash/redis/cloudflare", () => ({
@@ -281,6 +291,14 @@ const env = {
     get: ttsCacheGetMock,
     put: ttsCachePutMock,
   } as unknown as R2Bucket,
+  USER_USAGE_LEDGER: {
+    getByName: () => ({
+      reserveTts: async () => ({ reservationId: "reservation_test" }),
+      commitTtsReservation: async () => undefined,
+      releaseTtsReservation: async () => undefined,
+      getEntitlementSnapshot: async () => ({}),
+    }),
+  },
 } as unknown as Record<string, unknown>
 
 // Collect waitUntil promises so the test can flush metering + R2 writeback
@@ -297,7 +315,10 @@ const ctx = {
 async function callSpeech(body: unknown) {
   const req = new Request("https://api.fidexa.org/api/audio/speech", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Rishi-Data-Use-Consent": "2026-07-29",
+    },
     body: JSON.stringify(body),
   })
   return app.fetch(req, env, ctx)
@@ -449,7 +470,7 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     // Data(canonical.utf8)).
   })
 
-  it("event mode cache hit streams chunk and done frames with cache-key-derived ids", async () => {
+  it("event mode cache hit streams chunk and done frames with telemetry ids", async () => {
     const cachedBytes = new Uint8Array([9, 9, 9, 9])
     ttsCacheGetMock.mockResolvedValue({
       bytes: async () => cachedBytes,
@@ -461,6 +482,7 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
       voice: "alloy",
       speed: 1.0,
       response_mode: "events",
+      telemetry_id: "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11",
     })
 
     expect(res.status).toBe(200)
@@ -472,7 +494,7 @@ describe("POST /api/audio/speech — R2 cache gate (Phase 22-01)", () => {
     const frames = parseEventFrames(await res.text())
     expect(frames.map((frame) => frame.event)).toEqual(["chunk", "done"])
 
-    const requestId = await computeKey(text, "alloy", 1.0)
+    const requestId = "4e6a1d0f-2c73-4c3b-9b18-0d4f8c2a7e11"
     expect(frames[0].id).toBe(`${requestId}#00000000`)
     expect(JSON.parse(frames[0].data!)).toMatchObject({
       request_id: requestId,

@@ -281,7 +281,9 @@ vi.mock("drizzle-orm", () => ({
   max: (col: ColRef) => ({ __agg: "max", col }),
   exists: (query: { get: () => unknown }) => ({ kind: "exists", query }),
   notExists: (query: { get: () => unknown }) => ({ kind: "notExists", query }),
-  sql: (strings: TemplateStringsArray, ...values: unknown[]) => values.length === 1 ? values[0] : ({ __sql: true }),
+  sql: (_strings: TemplateStringsArray, ...values: unknown[]) => ({
+    as: () => values.length === 1 ? values[0] : ({ __sql: true }),
+  }),
   getTableColumns: (_t: unknown) => ({}),
 }))
 

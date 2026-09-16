@@ -42,10 +42,10 @@ describe("sync change cursors", () => {
   })
 
   it("orders tuples by updated_at, then kind, then id", () => {
-    const sameTime = { ...cursor, updatedAtMs: 10, highWaterMs: 10 }
+    const sameTime = { updatedAtMs: 10, kind: "book" as const, id: cursor.id }
 
     expect(compareSyncCursorTuple({ ...sameTime, kind: "book", id: "z" }, { ...sameTime, kind: "highlight", id: "a" })).toBeLessThan(0)
     expect(compareSyncCursorTuple({ ...sameTime, kind: "highlight", id: "a" }, { ...sameTime, kind: "highlight", id: "b" })).toBeLessThan(0)
-    expect(compareSyncCursorTuple({ ...sameTime, updatedAtMs: 11, highWaterMs: 11 }, sameTime)).toBeGreaterThan(0)
+    expect(compareSyncCursorTuple({ ...sameTime, updatedAtMs: 11 }, sameTime)).toBeGreaterThan(0)
   })
 })

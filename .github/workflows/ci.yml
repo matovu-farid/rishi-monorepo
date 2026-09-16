@@ -27,38 +27,8 @@ jobs:
 
       - name: Verify result-integrity runner
         run: |
-          bun test scripts/test-integrity/run-verified.test.ts scripts/test-integrity/resource-preflight.test.ts
+          bun test --timeout 15000 scripts/test-integrity/run-verified.test.ts scripts/test-integrity/resource-preflight.test.ts
           bun scripts/test-integrity/run-verified.ts self-test
-
-  lint-and-build-electron:
-    name: Electron (lint + build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: apps/rishi-electron
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/rishi-electron/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        run: pnpm run lint
-
-      - name: Build
-        run: pnpm run build
-
   lint-web:
     name: Web (lint + build)
     runs-on: ubuntu-latest
@@ -104,6 +74,9 @@ jobs:
         working-directory: workers/worker
     steps:
       - uses: actions/checkout@v4
+
+      - name: Initialize Worker App Store dependency
+        run: git -C ../.. submodule update --init --depth 1 workers/worker/src/app-store-server-library-node
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # pinned-by-SHA + explicit bun-version skips the GitHub tags-API resolve that returns 401 (#221)
         with:

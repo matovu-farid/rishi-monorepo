@@ -1,5 +1,11 @@
 # Pilot - Test Review Index
 
+> **ARCHIVED — LEGACY ELECTRON REVIEW.** This historical review refers to the
+> retired Electron app and is not current monorepo implementation or testing
+> guidance. The reviewed source is preserved in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/28f05c0a9f4d123e3ec3d2bb34706cf9a47de405)
+> archive.
+
 ## Wave Status
 
 | Wave | Status | Started | Completed |

@@ -3,10 +3,11 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFil
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoBuildInfrastructureDiagnostics, collectDescendantPids, exerciseVerificationLocksForTest, mergeBoundedProcessIdentities, parseNodeTap, parseProcessIdentityTable, parseSwiftOutput, parseVitestJson, parseXcresultSummary, productionLaneLockPath, readBounded, resolveOutputStreamLimit, sampleDescendantsWhileRunning, sampleSessionIdentities, sessionMemberIdentities, terminateProcessGroupMembers, validateCodexJsonl, validateEvidence, validateObservedProcessIdentities, validateSessionSignalMembers, writeContainedFile } from "./run-verified";
+import { assertNoBuildInfrastructureDiagnostics, collectDescendantPids, exerciseVerificationLocksForTest, mergeBoundedProcessIdentities, parseNodeTap, parseProcessIdentityTable, parseSwiftOutput, parseVitestJson, parseXcresultSummary, posixLibcPathForPlatform, processSnapshotEnvironment, productionLaneLockPath, readBounded, resolveOutputStreamLimit, sampleDescendantsWhileRunning, sampleSessionIdentities, sendPosixSignal, sessionMemberIdentities, terminateProcessGroupMembers, validateCodexJsonl, validateEvidence, validateObservedProcessIdentities, validateSessionSignalMembers, writeContainedFile } from "./run-verified";
 
 const runner = join(import.meta.dir, "run-verified.ts");
 const temporaryDirectories: string[] = [];
+const darwinTest = process.platform === "darwin" ? test : test.skip;
 const vitestWriter = (payload: string) => `const path = process.argv.find((value) => value.startsWith("--outputFile="))?.slice("--outputFile=".length); if (!path) process.exit(9); await Bun.write(path, ${JSON.stringify(payload)});`;
 
 function xcresultSummary(overrides: Record<string, unknown> = {}) {
@@ -65,7 +66,7 @@ async function temporaryDirectory(): Promise<string> {
 
 function terminateIfAlive(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
-  try { process.kill(pid, "SIGKILL"); } catch {}
+  sendPosixSignal(pid, "SIGKILL");
 }
 
 afterEach(async () => {
@@ -92,12 +93,12 @@ async function waitForFile(path: string, timeoutMs = 2_000): Promise<string> {
 }
 
 function continuousOutputFixture(statePath: string): string {
-  return `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen("/usr/lib/libSystem.B.dylib", { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(statePath)}, JSON.stringify({ pid: process.pid, sessionId: getsid(0) })); const chunk = "x".repeat(4096); while (true) process.stdout.write(chunk)`;
+  return `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen(${JSON.stringify(posixLibcPathForPlatform())}, { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(statePath)}, JSON.stringify({ pid: process.pid, sessionId: getsid(0) })); const chunk = "x".repeat(4096); while (true) process.stdout.write(chunk)`;
 }
 
 async function stopFixtureSession(statePath: string): Promise<void> {
   const state = JSON.parse(await readFile(statePath, "utf8").catch(() => "{}")) as { pid?: number; sessionId?: number };
-  if (Number.isInteger(state.sessionId) && state.sessionId! > 0) try { process.kill(-state.sessionId!, "SIGKILL"); } catch {}
+  if (Number.isInteger(state.sessionId) && state.sessionId! > 0) sendPosixSignal(-state.sessionId!, "SIGKILL");
   terminateIfAlive(state.pid ?? 0);
 }
 
@@ -346,37 +347,79 @@ describe("run-verified", () => {
     await expect(sampled).rejects.toThrow("process snapshot unavailable");
   });
 
-  test("records process start time and executable to disambiguate PID reuse", () => {
-    const rows = parseProcessIdentityTable("101 1 101 S Mon Sep 15 12:34:56 2026 /usr/bin/xcodebuild\n");
-    expect(rows).toEqual([{ pid: 101, parentPid: 1, processGroupId: 101, state: "S", startTime: "Mon Sep 15 12:34:56 2026", executable: "/usr/bin/xcodebuild" }]);
+  test("parses a full Linux process table with kernel and namespace zero identities", () => {
+    const rows = parseProcessIdentityTable([
+      "0 0 0 I Thu Jan  1 00:00:00 1970 [swapper/0]",
+      "1 0 0 Ss Mon Sep 15 12:34:56 2026 /sbin/init",
+      "2 0 0 I Mon Sep 15 12:34:56 2026 [kthreadd]",
+      "101 1 101 S Mon Sep 15 12:34:56 2026 /usr/bin/xcodebuild",
+    ].join("\n") + "\n");
+    expect(rows).toEqual([
+      { pid: 0, parentPid: 0, processGroupId: 0, state: "I", startTime: "Thu Jan  1 00:00:00 1970", executable: "[swapper/0]" },
+      { pid: 1, parentPid: 0, processGroupId: 0, state: "Ss", startTime: "Mon Sep 15 12:34:56 2026", executable: "/sbin/init" },
+      { pid: 2, parentPid: 0, processGroupId: 0, state: "I", startTime: "Mon Sep 15 12:34:56 2026", executable: "[kthreadd]" },
+      { pid: 101, parentPid: 1, processGroupId: 101, state: "S", startTime: "Mon Sep 15 12:34:56 2026", executable: "/usr/bin/xcodebuild" },
+    ]);
+  });
+
+  test("keeps the C locale for portable lstart parsing without discarding the caller environment", () => {
+    expect(processSnapshotEnvironment({ PATH: "/test/bin", LC_ALL: "de_DE.UTF-8", PRESERVE_ME: "yes" })).toEqual({
+      PATH: "/test/bin", LC_ALL: "C", PRESERVE_ME: "yes",
+    });
+  });
+
+  test("uses the same POSIX libc choice in test fixtures as production", () => {
+    expect(posixLibcPathForPlatform("darwin")).toBe("/usr/lib/libSystem.B.dylib");
+    expect(posixLibcPathForPlatform("linux")).toBe("libc.so.6");
+    expect(posixLibcPathForPlatform("win32")).toBeUndefined();
+  });
+
+  test("delivers signals through libc with portable numeric signal constants", () => {
+    expect(sendPosixSignal(process.pid, 0)).toBe(true);
+    expect(sendPosixSignal(2_147_483_647, "SIGTERM")).toBe(false);
+    expect(() => sendPosixSignal(0, "SIGTERM")).toThrow("nonzero process identity");
+    expect(() => sendPosixSignal(2_147_483_648, 0)).toThrow("signed 32-bit process identity");
+  });
+
+  test("reports a bounded sanitized malformed process-table row", () => {
+    const malformed = `101 1 101 S Mon September 15 12:34:56 2026 /usr/bin/xcodebuild ${"x".repeat(512)}`;
+    expect(() => parseProcessIdentityTable(`${malformed}\n`)).toThrow(/malformed process identity snapshot row: .{1,256}$/);
+    expect(() => parseProcessIdentityTable("\n")).toThrow("malformed process identity snapshot row: <empty>");
   });
 
   test("proves a snapshotted process exited before treating a failed getsid as benign", async () => {
     const row = { pid: 101, parentPid: 1, processGroupId: 100, state: "S", startTime: "Mon Sep 15 12:34:56 2026", executable: "/bin/short-lived" };
     await expect(sessionMemberIdentities(100, 100, [row], new Map(), {
       sessionIdFor: () => -1,
-      isAlive: () => true,
       resnapshot: async () => [],
     })).resolves.toEqual([]);
     await expect(sessionMemberIdentities(100, 100, [row], new Map(), {
       sessionIdFor: () => -1,
-      isAlive: () => true,
       resnapshot: async () => [row],
     })).rejects.toThrow("unable to verify the POSIX session for live process 101 (S)");
     const knownIdentity = { pid: row.pid, processGroupId: row.processGroupId, sessionId: 100, startTime: row.startTime, executable: row.executable };
     const known = new Map([[`${knownIdentity.pid}\0${knownIdentity.processGroupId}\0${knownIdentity.sessionId}\0${knownIdentity.startTime}\0${knownIdentity.executable}`, knownIdentity]]);
     await expect(sessionMemberIdentities(100, 100, [row], known, {
       sessionIdFor: () => -1,
-      isAlive: () => true,
       resnapshot: async () => [],
     })).resolves.toEqual([]);
+  });
+
+  test("uses fresh identity snapshots instead of a signal-zero liveness probe", async () => {
+    const row = { pid: 2_147_483_647, parentPid: 1, processGroupId: 100, state: "S", startTime: "Mon Sep 15 12:34:56 2026", executable: "/bin/short-lived" };
+    const snapshots = [[row], []];
+    await expect(sessionMemberIdentities(100, 100, [row], new Map(), {
+      sessionIdFor: () => -1,
+      resnapshot: async () => snapshots.shift() ?? [],
+    })).resolves.toEqual([]);
+    expect(snapshots).toEqual([]);
   });
 
   test("runs an ordinary command in a verified launcher session", async () => {
     const directory = await temporaryDirectory();
     const artifact = join(directory, "artifact.json");
     const targetSessionId = join(directory, "target.sid");
-    const sessionProbe = `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen("/usr/lib/libSystem.B.dylib", { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(targetSessionId)}, String(getsid(0)) + "\\n")`;
+    const sessionProbe = `const { dlopen, FFIType } = await import("bun:ffi"); const { getsid } = dlopen(${JSON.stringify(posixLibcPathForPlatform())}, { getsid: { args: [FFIType.i32], returns: FFIType.i32 } }).symbols; await Bun.write(${JSON.stringify(targetSessionId)}, String(getsid(0)) + "\\n")`;
     const result = await run([
       "command", "--artifact", artifact, "--cwd", directory, "--", process.execPath, "-e", sessionProbe,
     ]);
@@ -409,7 +452,7 @@ describe("run-verified", () => {
       ]);
       expect(result.exitCode).toBe(0);
       orphanPid = Number(await waitForFile(pidFile));
-      expect(() => process.kill(orphanPid, 0)).toThrow();
+      expect(sendPosixSignal(orphanPid, 0)).toBe(false);
       const record = JSON.parse(await readFile(join(directory, "artifact.json"), "utf8"));
       expect(record.child.descendantPids).toContain(orphanPid);
       expect(record.child.remainingAfterCleanup).toEqual([]);
@@ -426,7 +469,7 @@ describe("run-verified", () => {
     try {
       expect(await first.exited).toBe(0);
       orphanPid = Number(await waitForFile(pidFile));
-      expect(() => process.kill(orphanPid, 0)).toThrow();
+      expect(sendPosixSignal(orphanPid, 0)).toBe(false);
       const second = await run(["command", "--artifact", join(root, "second.json"), "--owned-output-root", root, "--", process.execPath, "-e", "process.exit(0)"]);
       expect(second.exitCode).toBe(0);
     } finally {
@@ -520,6 +563,35 @@ describe("run-verified", () => {
     expect(pidSignals).toEqual([[11]]);
   });
 
+  test("never group-signals a nonpositive process group", async () => {
+    const member = { pid: 11, processGroupId: 0, sessionId: 10, startTime: "start", executable: "/bin/member" };
+    const groupSignals: number[][] = [];
+    const pidSignals: number[][] = [];
+    await terminateProcessGroupMembers(10, 10, new Map(), {
+      snapshotMembers: (() => { const values = [[member], []]; return async () => values.shift() ?? []; })(),
+      validateSignalMembers: async (members) => members,
+      signalGroups: (processGroupIds) => groupSignals.push(processGroupIds),
+      signalPids: (processIds) => pidSignals.push(processIds),
+      wait: async () => {},
+    });
+    expect(groupSignals).toEqual([]);
+    expect(pidSignals).toEqual([[11]]);
+  });
+
+  test("requires a fresh cleanup snapshot after failed signal delivery", async () => {
+    const member = { pid: 11, processGroupId: 11, sessionId: 10, startTime: "start", executable: "/bin/member" };
+    const snapshots = [[member], []];
+    const deliveryResults: boolean[] = [];
+    await expect(terminateProcessGroupMembers(10, 10, new Map(), {
+      snapshotMembers: async () => snapshots.shift() ?? [],
+      validateSignalMembers: async (members) => members,
+      signalGroups: () => { deliveryResults.push(false); },
+      wait: async () => {},
+    })).resolves.toMatchObject({ remaining: [] });
+    expect(deliveryResults).toEqual([false]);
+    expect(snapshots).toEqual([]);
+  });
+
   test("output overflow drains, terminates, and reaps a continuously writing subprocess", async () => {
     const directory = await temporaryDirectory();
     const statePath = join(directory, "writer.json");
@@ -532,7 +604,7 @@ describe("run-verified", () => {
       expect(outcome).not.toBe(0);
       expect(await new Response(wrapper.stderr).text()).toContain("byte safety limit");
       const state = JSON.parse(await waitForFile(statePath));
-      expect(() => process.kill(state.pid, 0)).toThrow();
+      expect(sendPosixSignal(state.pid, 0)).toBe(false);
     } finally {
       wrapper.kill("SIGKILL");
       await stopFixtureSession(statePath);
@@ -567,7 +639,7 @@ describe("run-verified", () => {
       const outcome = await Promise.race([wrapper.exited, Bun.sleep(3_000).then(() => "timeout" as const)]);
       expect(outcome).not.toBe("timeout");
       const state = JSON.parse(await waitForFile(statePath));
-      expect(() => process.kill(state.pid, 0)).toThrow();
+      expect(sendPosixSignal(state.pid, 0)).toBe(false);
       const second = await run(["command", "--artifact", join(root, "second.json"), "--owned-output-root", root, "--", process.execPath, "-e", "process.exit(0)"]);
       expect(second.exitCode).not.toBe(0);
       expect(second.stderr).toContain("cleanup remains unproven");
@@ -605,7 +677,7 @@ describe("run-verified", () => {
     expect(pidText).toMatch(/^[1-9]\d*$/);
     wrapper.kill("SIGTERM");
     expect(await Promise.race([wrapper.exited, Bun.sleep(4_000).then(() => "timeout" as const)])).toBe(143);
-    expect(() => process.kill(Number(pidText), 0)).toThrow();
+    expect(sendPosixSignal(Number(pidText), 0)).toBe(false);
     expect((await readFile(join(root, ".run-verified.lock"))).length).toBe(0);
   }, 5_000);
 
@@ -681,7 +753,7 @@ describe("run-verified", () => {
       ]);
       expect(result.exitCode).toBe(0);
       sleepPid = Number(await readFile(pidFile, "utf8"));
-      expect(() => process.kill(sleepPid, 0)).toThrow();
+      expect(sendPosixSignal(sleepPid, 0)).toBe(false);
     } finally {
       terminateIfAlive(sleepPid || Number(await readFile(pidFile, "utf8").catch(() => "0")));
     }
@@ -706,7 +778,7 @@ describe("run-verified", () => {
       expect(sleepPidText).toMatch(/^[1-9]\d*$/);
       helperPid = Number(helperPidText);
       sleepPid = Number(sleepPidText);
-      expect(() => process.kill(helperPid, 0)).toThrow();
+      expect(sendPosixSignal(helperPid, 0)).toBe(false);
       const status = Bun.spawnSync(["ps", "-o", "pid=,ppid=,pgid=,state=,comm=", "-p", String(sleepPid)]);
       expect(new TextDecoder().decode(status.stdout).trim()).toBe("");
     } finally {
@@ -725,10 +797,10 @@ describe("run-verified", () => {
         `sleep 30 >/dev/null 2>&1 & printf '%s' $! > ${JSON.stringify(ownedPidFile)}`,
       ]);
       expect(result.exitCode).toBe(0);
-      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+      expect(sendPosixSignal(unrelated.pid, 0)).toBe(true);
     } finally {
       terminateIfAlive(Number(await readFile(ownedPidFile, "utf8").catch(() => "0")));
-      process.kill(-unrelated.pid, "SIGKILL");
+      sendPosixSignal(-unrelated.pid, "SIGKILL");
       await unrelated.exited;
     }
   });
@@ -785,7 +857,7 @@ describe("run-verified", () => {
     expect(await readFile(marker, "utf8").catch(() => null)).toBeNull();
   });
 
-  test("resamples resources under the lane lock and rejects a process that appeared after preflight", async () => {
+  darwinTest("resamples resources under the lane lock and rejects a process that appeared after preflight", async () => {
     const root = await temporaryDirectory();
     const tools = join(root, "tools");
     const marker = join(root, "executed");

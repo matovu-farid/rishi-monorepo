@@ -1,13 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { VerifyReceiptResponse } from "./apple-verify-receipt";
 
 /**
  * Worker half of the verify-receipt contract gate (14-08).
  *
  * Reads the SAME JSON fixtures the iOS Swift Testing suite asserts against
- * (apps/apple/Packages/RishiAPI/Tests/RishiAPITests/Fixtures/). If a future
+ * (apps/apple/rishi/rishiTests/PackageTests/RishiAPI/RishiAPITests/Fixtures/). If a future
  * change moves the worker's emitted shape away from the locked contract
  * (premiumUntil as JSON number of seconds-since-1970, transactionId as JSON
  * number, reason explicit null on success), this suite fails loudly — and
@@ -17,9 +16,9 @@ import type { VerifyReceiptResponse } from "./apple-verify-receipt";
  * private copy.
  */
 
-const fixturesDir = resolve(
-  __dirname,
-  "../../../../apps/apple/Packages/RishiAPI/Tests/RishiAPITests/Fixtures",
+const fixturesDir = new URL(
+  "../../../../apps/apple/rishi/rishiTests/PackageTests/RishiAPI/RishiAPITests/Fixtures/",
+  import.meta.url,
 );
 
 interface ContractRequest {
@@ -30,7 +29,7 @@ interface ContractRequest {
 
 describe("apple-verify-receipt contract — response shape", () => {
   const fixture: VerifyReceiptResponse = JSON.parse(
-    readFileSync(resolve(fixturesDir, "verify-receipt-response.json"), "utf-8"),
+    readFileSync(new URL("verify-receipt-response.json", fixturesDir), "utf-8"),
   );
 
   it("has the three canonical fields (verified, premiumUntil, reason)", () => {
@@ -78,7 +77,7 @@ describe("apple-verify-receipt contract — response shape", () => {
 
 describe("apple-verify-receipt contract — request shape", () => {
   const fixture: ContractRequest = JSON.parse(
-    readFileSync(resolve(fixturesDir, "verify-receipt-request.json"), "utf-8"),
+    readFileSync(new URL("verify-receipt-request.json", fixturesDir), "utf-8"),
   );
 
   it("transactionId is a JSON number in the Apple UInt64 magnitude range (Pitfall 2)", () => {

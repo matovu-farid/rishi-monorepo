@@ -9,28 +9,33 @@ import { createDb } from "../db/drizzle";
 import { createTestD1 } from "../test-utils/d1";
 import { user, userApiUsage } from "../db/schema";
 
-const { openaiResponse, elevenLabsBytes } = vi.hoisted(() => ({
-  openaiResponse: {
-    value: "sec_test",
-    expires_at: 1_700_000_000,
-    id: "sess_test",
-  },
-  elevenLabsBytes: new Uint8Array([5, 6, 7, 8]),
-}));
+const {
+  openaiBytes,
+  elevenLabsBytes,
+  openaiSpeechCreate,
+  elevenLabsFetch,
+} = vi.hoisted(() => {
+  const openaiBytes = new Uint8Array([1, 2, 3, 4]);
+  const elevenLabsBytes = new Uint8Array([5, 6, 7, 8]);
+  const openaiSpeechCreate = vi.fn(async () => ({
+    body: new Response(openaiBytes).body,
+  }));
+  const elevenLabsFetch = vi.fn(
+    async () =>
+      new Response(elevenLabsBytes, {
+        status: 200,
+        headers: { "Content-Type": "audio/mpeg" },
+      }),
+  );
 
-vi.mock("axios", () => ({
-  default: {
-    post: vi.fn(async () => ({ data: openaiResponse })),
-  },
-}));
+  return { openaiBytes, elevenLabsBytes, openaiSpeechCreate, elevenLabsFetch };
+});
 
 vi.mock("openai", () => {
   class MockOpenAI {
     audio = {
       speech: {
-        create: vi.fn(async () => ({
-          arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
-        })),
+        create: openaiSpeechCreate,
       },
     };
   }
@@ -44,12 +49,7 @@ vi.mock("@sentry/cloudflare", () => ({
 
 vi.stubGlobal(
   "fetch",
-  vi.fn(async () =>
-    new Response(elevenLabsBytes, {
-      status: 200,
-      headers: { "Content-Type": "audio/mpeg" },
-    }),
-  ),
+  elevenLabsFetch,
 );
 
 vi.mock("../routes/sync", async () => {
@@ -120,7 +120,7 @@ vi.mock("../billing/stripe", () => ({
 vi.mock("../billing/meter", () => ({
   meterFromContext: async () => undefined,
 }));
-import { app } from "../index.ts";
+import { app } from "../index";
 
 const env = {
   ACCESS_TOKEN_SECRET: "access-secret",
@@ -133,6 +133,14 @@ const env = {
     get: async () => null,
     put: async () => ({}),
   } as unknown as R2Bucket,
+  USER_USAGE_LEDGER: {
+    getByName: () => ({
+      reserveTts: async () => ({ reservationId: "reservation_test" }),
+      commitTtsReservation: async () => undefined,
+      releaseTtsReservation: async () => undefined,
+      getEntitlementSnapshot: async () => ({}),
+    }),
+  },
 } as unknown as Env;
 
 let db: D1Database & { close: () => void };
@@ -151,6 +159,7 @@ async function call(
   const headers = new Headers();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
+  headers.set("X-Rishi-Data-Use-Consent", "2026-07-29");
 
   return app.fetch(
     new Request(`https://api.fidexa.org${path}`, {
@@ -171,7 +180,6 @@ async function call(
 async function usageFor(userId: string) {
   return createDb(db)
     .select({
-      voiceChatRequests: userApiUsage.voiceChatRequests,
       ttsRequests: userApiUsage.ttsRequests,
     })
     .from(userApiUsage)
@@ -194,6 +202,8 @@ beforeEach(async () => {
   await testDb.delete(userApiUsage).run();
   await testDb.delete(user).run();
   pending = [];
+  openaiSpeechCreate.mockClear();
+  elevenLabsFetch.mockClear();
   await testDb
     .insert(user)
     .values([
@@ -217,27 +227,7 @@ beforeEach(async () => {
     .run();
 });
 
-describe("authenticated voice and TTS usage flows", () => {
-  it("persists and accumulates voice-chat requests without a subscription", async () => {
-    const first = await call("/api/realtime/client_secrets", {
-      method: "POST",
-      body: { language: "en" },
-      userId: "user_alice",
-    });
-    const second = await call("/api/realtime/client_secrets", {
-      method: "POST",
-      body: { language: "en" },
-      userId: "user_alice",
-    });
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    await Promise.all(pending);
-    await expect(usageFor("user_alice")).resolves.toEqual({
-      voiceChatRequests: 2,
-      ttsRequests: 0,
-    });
-  });
-
+describe("authenticated TTS usage flows", () => {
   it("persists TTS requests for both providers and keeps users separate", async () => {
     const openAi = await call("/api/audio/speech", {
       method: "POST",
@@ -249,16 +239,23 @@ describe("authenticated voice and TTS usage flows", () => {
       body: { text: "hello", voice: "alloy", model: "eleven_v3", speed: 1 },
       userId: "user_bob",
     });
-    await Promise.all(pending);
 
     expect(openAi.status).toBe(200);
+    expect(openAi.headers.get("Content-Type")).toBe("audio/mpeg");
+    await expect(openAi.arrayBuffer()).resolves.toEqual(openaiBytes.buffer);
+    expect(openaiSpeechCreate).toHaveBeenCalledTimes(1);
+
     expect(elevenLabs.status).toBe(200);
+    expect(elevenLabs.headers.get("Content-Type")).toBe("audio/mpeg");
+    await expect(elevenLabs.arrayBuffer()).resolves.toEqual(elevenLabsBytes.buffer);
+    expect(elevenLabsFetch).toHaveBeenCalledTimes(1);
+
+    await Promise.all(pending);
+
     await expect(usageFor("user_alice")).resolves.toEqual({
-      voiceChatRequests: 0,
       ttsRequests: 1,
     });
     await expect(usageFor("user_bob")).resolves.toEqual({
-      voiceChatRequests: 0,
       ttsRequests: 1,
     });
   });

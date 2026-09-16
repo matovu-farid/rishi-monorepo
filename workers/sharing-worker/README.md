@@ -1,45 +1,48 @@
-# rishi-sharing-worker
+# Rishi sharing Worker
 
-Cloudflare Worker + Durable Object backend for shared reading sessions in the Rishi Electron app.
+This Cloudflare Worker preserves the frozen `/v1` `SessionRoom` transport used
+by released legacy clients. The deprecated Electron source is archived in the
+private
+[`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/e460dda4eed5d69134d2e7f865b2d14a51de277e)
+repository.
 
-See `docs/superpowers/specs/2026-05-30-shared-reading-electron-design.md` for the full design.
+The Apple shared-reading feature adds a separate `/v2` transport backed by the
+`AppleSessionRoom` Durable Object, binding, and append-only migration. Never add
+Apple semantics to `/v1`, and do not claim production acceptance until the
+versioned rollout and two-account MCP evidence gates pass.
 
-## Local dev
+## Local checks
 
-    bun install
-    bun run dev:local
-    bun test
+Use Bun for this Worker, as required by repository policy:
 
-For Apple development, use the repository-root launcher. It starts this
-Worker together with the primary Worker, verifies both health endpoints, and
-stops only the processes it owns:
+```bash
+cd workers/sharing-worker
+bun install
+bun run test
+bun run dev:local
+```
 
-    scripts/start-rishi-workers-dev.sh
+For Apple development, use the repository-root launcher. It starts this Worker
+together with the primary Worker, verifies both health endpoints, and stops only
+the processes it owns:
 
-## Secrets
+```bash
+scripts/start-rishi-workers-dev.sh
+```
 
-Generate a 48-byte secret and set it for the production environment:
+The local health check is:
 
-    openssl rand -base64 48 | bunx wrangler secret put WORKER_HMAC_SECRET --env production
+```bash
+curl -i http://localhost:8788/health
+```
 
-## Deploy
+## Secrets and deployment
 
-    bunx wrangler login                                 # one-time, interactive
-    bunx wrangler deploy --env production --minify
+`WORKER_HMAC_SECRET` is the same trust secret named
+`SHARING_INTERNAL_SECRET` by the primary Worker. Never configure or rotate only
+one side.
 
-The output prints the workers.dev URL (e.g. `https://rishi-sharing-worker.<account>.workers.dev`).
-
-## Smoke check
-
-    curl -i https://rishi-sharing-worker.<account>.workers.dev/health
-    # Expected: HTTP/2 200, body: ok
-
-## Tail logs
-
-    bunx wrangler tail --env production
-
-## Domain
-
-The worker runs on `workers.dev` for v1. A custom domain (`sharing.rishi.fidexa.org`) is deferred
-until the `rishi.fidexa.org` DNS zone is delegated to Cloudflare DNS management.
-The WebSocket URL is embedded in the Electron binary; it is not user-visible.
+Do not deploy from a feature branch. First complete the mandatory comparison
+with `origin/main`, prove every released API, binding, migration, and Durable
+Object contract remains backward compatible, verify both secret fingerprints,
+and obtain separate deployment authorization.

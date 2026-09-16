@@ -1,5 +1,11 @@
 # External Integrations
 
+> **HISTORICAL SNAPSHOT — ARCHIVED ELECTRON APP.** This map describes source
+> preserved in the private
+> [`rishi-electron-legacy`](https://github.com/matovu-farid/rishi-electron-legacy/tree/28f05c0a9f4d123e3ec3d2bb34706cf9a47de405)
+> repository. It is parity context for Apple development, not current
+> monorepo architecture or executable guidance.
+
 **Analysis Date:** 2026-06-09
 **Target:** `apps/rishi-electron`
 

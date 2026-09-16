@@ -7,6 +7,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, embedMany, APICallError } from "ai";
 
 import * as Sentry from "@sentry/cloudflare";
+import type { CloudflareOptions } from "@sentry/cloudflare";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
@@ -61,6 +62,7 @@ import { resolveCorsOrigin } from "./cors-origin";
 import { sessionSharesRoutes } from "./routes/session-shares";
 import { sharedReadingRoutePrefix } from "./api-version";
 import { workerMetadataHeaders } from "./health";
+import { webBytes } from "./utils/web-bytes";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -261,7 +263,7 @@ function buildTtsRawResponse(
   if (entitlementHeader) {
     headers["X-Entitlement-Remaining"] = entitlementHeader;
   }
-  return new Response(bytes, { headers });
+  return new Response(webBytes(bytes).buffer, { headers });
 }
 
 function buildTtsEventResponse(
@@ -1415,9 +1417,10 @@ app.post(
 // The correct flow is now `POST /api/voice-sessions`
 // (`workers/worker/src/routes/voice-sessions.ts`), which creates a
 // ledger-backed session before letting the client mint/register a call.
-// `apps/rishi-electron` (desktop client) still calls this removed route and
-// has not yet migrated to `/api/voice-sessions` — that migration is tracked
-// separately and is not blocked by this removal.
+// Current Apple clients use `/api/voice-sessions`. The retired Electron source
+// called this removed route and is now archived outside the monorepo, so there
+// is no in-tree migration target. Keep other released desktop compatibility
+// contracts frozen; do not repurpose this removed route for new clients.
 app.post(
   "/api/text/completions",
   requireAuth,
@@ -1581,7 +1584,7 @@ app.post("/api/audio/transcribe", requireAuth, requireAiDataConsent, async (c) =
           Authorization: `Token ${c.env.DEEPGRAM_KEY}`,
           "Content-Type": validatedMimeType,
         },
-        body: audioBytes,
+        body: webBytes(audioBytes).buffer,
         signal: dgAbort.signal,
       },
     );
@@ -1604,7 +1607,37 @@ app.post("/api/audio/transcribe", requireAuth, requireAiDataConsent, async (c) =
   return c.json({ transcript });
 });
 
-const sentryHandler = Sentry.withSentry((env: any) => {
+type RequiredFetchHandler<Environment> = {
+  fetch: NonNullable<ExportedHandler<Environment>["fetch"]>;
+};
+
+type SentryWrapper<Environment> = (
+  options: (env: Environment) => CloudflareOptions,
+  handler: ExportedHandler<Environment>,
+) => ExportedHandler<Environment>;
+
+export function createTypedSentryHandler<Environment>(
+  handler: RequiredFetchHandler<Environment>,
+  options: (env: Environment) => CloudflareOptions,
+  withSentry: SentryWrapper<Environment> = (callback, workerHandler) =>
+    Sentry.withSentry<Environment>(callback, workerHandler),
+): RequiredFetchHandler<Environment> {
+  const wrapped = withSentry(options, handler);
+  const fetch = wrapped.fetch;
+  if (!fetch) throw new Error("Sentry fetch handler unavailable");
+  return {
+    fetch: (request, env, ctx) =>
+      Promise.resolve().then(() => fetch(request, env, ctx)),
+  };
+}
+
+const honoHandler: RequiredFetchHandler<Env> = {
+  fetch(request, env, ctx) {
+    return app.fetch(request as Parameters<typeof app.fetch>[0], env, ctx);
+  },
+};
+
+const sentryHandler = createTypedSentryHandler(honoHandler, (env) => {
   const { id: versionId } = env.CF_VERSION_METADATA;
   return {
     dsn: env.SENTRY_DSN || "",
@@ -1649,7 +1682,7 @@ const sentryHandler = Sentry.withSentry((env: any) => {
       return event;
     },
   };
-}, app);
+});
 
 const scheduled = async (_controller: ScheduledController, env: Env): Promise<void> => {
   const db = createDb(env.DB);
@@ -1661,8 +1694,7 @@ const scheduled = async (_controller: ScheduledController, env: Env): Promise<vo
 };
 
 export default {
-  fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
-    sentryHandler.fetch(request, env, ctx),
+  fetch: sentryHandler.fetch,
   scheduled,
 };
 
