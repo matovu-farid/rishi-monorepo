@@ -48,6 +48,10 @@ public actor SyncQueue {
         return head
     }
 
+    public func remove(entityId: UUID, kind: SyncEntityKind) {
+        items.removeAll { $0.entityId == entityId && $0.kind == kind }
+    }
+
     public func pendingCount() -> Int { items.count }
 
     public func isLoaded() -> Bool { loaded }

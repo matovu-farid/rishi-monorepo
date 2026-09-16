@@ -291,20 +291,30 @@ public final class ManagedProcess: @unchecked Sendable {
     #endif
 }
 
-private final class CommandTimeoutState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
-
-    func markTimedOut() {
-        lock.lock()
-        value = true
-        lock.unlock()
+final class CommandTimeoutState: @unchecked Sendable {
+    private enum Outcome {
+        case pending
+        case completed
+        case timedOut
     }
 
-    var didTimeOut: Bool {
+    private let lock = NSLock()
+    private var outcome = Outcome.pending
+
+    func claimCompletion() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return value
+        guard outcome == .pending else { return false }
+        outcome = .completed
+        return true
+    }
+
+    func claimTimeout() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard outcome == .pending else { return false }
+        outcome = .timedOut
+        return true
     }
 }
 
@@ -337,7 +347,7 @@ public struct ProcessRunner: Sendable {
         // sessions use the default discarding drains from start() instead.
         let managed = try start(executable, arguments: arguments, environment: environment, drainOutput: false)
         let timeoutState = CommandTimeoutState()
-        return try await withThrowingTaskGroup(of: CommandResult.self) { group in
+        return try await withThrowingTaskGroup(of: CommandResult?.self) { group in
             group.addTask {
                 // Drain both pipes while xcodebuild is running. Waiting for
                 // exit before reading can deadlock once a verbose build fills
@@ -354,19 +364,16 @@ public struct ProcessRunner: Sendable {
                     throw RegistryError(.driverUnavailable, "command cleanup did not finish: \(executable)")
                 }
                 managed.closePipes()
-                if timeoutState.didTimeOut {
-                    throw RegistryError(.waitTimeout, "command timed out: \(executable)")
-                }
                 let result = CommandResult(
                     status: managed.process.terminationStatus,
                     stdout: String(data: await stdoutTask.value, encoding: .utf8) ?? "",
                     stderr: String(data: await stderrTask.value, encoding: .utf8) ?? ""
                 )
-                return result
+                return timeoutState.claimCompletion() ? result : nil
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
-                timeoutState.markTimedOut()
+                guard timeoutState.claimTimeout() else { return nil }
                 managed.killProcessGroup()
                 let cleaned = await managed.waitForExitAndCleanup(timeout: .seconds(3))
                 managed.closePipes()
@@ -375,9 +382,13 @@ public struct ProcessRunner: Sendable {
                 }
                 throw RegistryError(.waitTimeout, "command timed out: \(executable)")
             }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
+            while let next = try await group.next() {
+                if let result = next {
+                    group.cancelAll()
+                    return result
+                }
+            }
+            throw RegistryError(.driverUnavailable, "command produced no result: \(executable)")
         }
     }
 

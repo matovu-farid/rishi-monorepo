@@ -151,6 +151,24 @@ final class XCTestDriverTests: XCTestCase {
         }
     }
 
+    func testCommandTimeoutStateAllowsExactlyOneConcurrentOutcome() async {
+        let state = CommandTimeoutState()
+        let winners = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for index in 0..<100 {
+                group.addTask {
+                    index.isMultiple(of: 2)
+                        ? state.claimCompletion()
+                        : state.claimTimeout()
+                }
+            }
+            var results: [Bool] = []
+            for await result in group { results.append(result) }
+            return results
+        }
+
+        XCTAssertEqual(winners.filter { $0 }.count, 1)
+    }
+
     func testNormallyCompletedCommandCleansUpOwnedDescendant() async throws {
         let result = try await ProcessRunner().run(
             "/bin/sh",
