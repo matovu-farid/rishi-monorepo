@@ -38,6 +38,7 @@ type ObservedCheckpoint = {
 };
 
 const ACCOUNT_R2_PAGE_LIMIT = 100;
+const ACCOUNT_R2_REFERENCE_CHUNK_SIZE = 49;
 
 function sweepError(
   phase: AccountR2SweepPhase,
@@ -157,7 +158,13 @@ async function liveOwnerIds(db: WorkerDb, ownerIds: string[]): Promise<Set<strin
 
 async function referencedKeys(db: WorkerDb, keys: string[]): Promise<Set<string>> {
   try {
-    return await referencedR2Keys(db, keys);
+    const references = new Set<string>();
+    for (let offset = 0; offset < keys.length; offset += ACCOUNT_R2_REFERENCE_CHUNK_SIZE) {
+      const chunk = keys.slice(offset, offset + ACCOUNT_R2_REFERENCE_CHUNK_SIZE);
+      const chunkReferences = await referencedR2Keys(db, chunk);
+      for (const key of chunkReferences) references.add(key);
+    }
+    return references;
   } catch (error) {
     throw sweepError("references", "Unable to resolve R2 object references", error);
   }
@@ -220,10 +227,10 @@ export async function reconcileAccountR2Page(
   const removable = candidates.filter((key) => !references.has(key));
 
   let deleted = 0;
-  for (const key of removable) {
+  if (removable.length > 0) {
     try {
-      await bucket.delete(key);
-      deleted += 1;
+      await bucket.delete(removable);
+      deleted = removable.length;
     } catch (error) {
       throw sweepError("delete", "Unable to delete an unreferenced R2 account object", error);
     }

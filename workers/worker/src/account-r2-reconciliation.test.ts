@@ -5,6 +5,7 @@ import { books, deletionState, sessionInviteItems, sessionInvites, sharePackageI
 import { createTestD1, type TestD1 } from "./test-utils/d1";
 import {
   ACCOUNT_R2_CHECKPOINT_PREFIX,
+  ACCOUNT_R2_RECONCILIATION_PREFIXES,
   reconcileAccountR2Page,
   type AccountR2Prefix,
   type AccountR2SweepError,
@@ -68,8 +69,8 @@ function fakeBucket(initialKeys: string[] = []) {
       objects.set(key, { body: value, etag });
       return { key, etag };
     }),
-    delete: vi.fn(async (key: string) => {
-      objects.delete(key);
+    delete: vi.fn(async (keys: string | string[]) => {
+      for (const key of Array.isArray(keys) ? keys : [keys]) objects.delete(key);
     }),
   };
   return bucket;
@@ -154,6 +155,7 @@ describe("account R2 reconciliation", () => {
     await reconcileAccountR2Page(db, bucket as unknown as R2Bucket, "books/", 1000);
 
     expect(bucket.objects.has("books/alice/orphan.epub")).toBe(true);
+    expect(bucket.delete).not.toHaveBeenCalled();
     close(d1);
   });
 
@@ -224,8 +226,82 @@ describe("account R2 reconciliation", () => {
     await reconcileAccountR2Page(db, bucket as unknown as R2Bucket, "books/", 1000);
 
     expect(bucket.list).toHaveBeenCalledWith({ prefix: "books/", limit: 100 });
-    expect(bucket.delete).toHaveBeenCalledTimes(100);
+    expect(bucket.delete).toHaveBeenCalledTimes(1);
+    expect(bucket.delete).toHaveBeenCalledWith(keys.slice(0, 100));
     expect(bucket.objects.has(keys[100])).toBe(true);
+    close(d1);
+  });
+
+  it("[W4R-BUDGET] batches 100 removable keys within the two-prefix subrequest budget", async () => {
+    const keys = Array.from({ length: 100 }, (_, index) => `books/gone/${String(index).padStart(3, "0")}.epub`);
+    const keySet = new Set(keys);
+    const { d1, db } = fixture();
+    const bucket = fakeBucket(keys);
+    const prepare = d1.prepare.bind(d1);
+    const referenceChunkSizes: number[] = [];
+    const referenceBoundParameterCounts: number[] = [];
+    vi.spyOn(d1, "prepare").mockImplementation((query) => {
+      const statement = prepare(query);
+      return new Proxy(statement, {
+        get(target, property, receiver) {
+          if (property !== "bind") return Reflect.get(target, property, receiver);
+          return (...values: unknown[]) => {
+            const candidateParameterCount = values.filter(
+              (value): value is string => typeof value === "string" && keySet.has(value),
+            ).length;
+            if (candidateParameterCount > 0) {
+              referenceChunkSizes.push(candidateParameterCount / 2);
+              referenceBoundParameterCounts.push(values.length);
+            }
+            return target.bind(...values);
+          };
+        },
+      });
+    });
+
+    const result = await reconcileAccountR2Page(db, bucket as unknown as R2Bucket, "books/", 1000);
+
+    expect(referenceChunkSizes).toEqual([49, 49, 49, 49, 49, 49, 2, 2, 2]);
+    expect(Math.max(...referenceBoundParameterCounts)).toBeLessThanOrEqual(100);
+    expect(bucket.delete).toHaveBeenCalledTimes(1);
+    expect(bucket.delete).toHaveBeenCalledWith(keys);
+    expect(result.deleted).toBe(100);
+
+    // One prefix models: checkpoint get + list + set-based owner lookup +
+    // nine set-based reference lookups + one batched delete + checkpoint put.
+    const modeledPerPrefixSubrequests = 1 + 1 + 1 + referenceChunkSizes.length + 1 + 1;
+    const modeledBothPrefixesSubrequests = modeledPerPrefixSubrequests * ACCOUNT_R2_RECONCILIATION_PREFIXES.length;
+    expect(modeledPerPrefixSubrequests).toBe(14);
+    expect(modeledBothPrefixesSubrequests).toBe(28);
+    expect(modeledBothPrefixesSubrequests).toBeLessThanOrEqual(50);
+    close(d1);
+  });
+
+  it("[W4R-REFERENCES] does not delete or advance the checkpoint after a later reference chunk fails", async () => {
+    const { d1, db } = fixture();
+    const keys = Array.from({ length: 50 }, (_, index) => `books/gone/${String(index).padStart(3, "0")}.epub`);
+    const failureKey = keys[49];
+    const bucket = fakeBucket(keys);
+    const prepare = d1.prepare.bind(d1);
+    vi.spyOn(d1, "prepare").mockImplementation((query) => {
+      const statement = prepare(query);
+      return new Proxy(statement, {
+        get(target, property, receiver) {
+          if (property !== "bind") return Reflect.get(target, property, receiver);
+          return (...values: unknown[]) => {
+            if (values.filter((value) => value === failureKey).length === 2) {
+              throw new Error("reference lookup unavailable");
+            }
+            return target.bind(...values);
+          };
+        },
+      });
+    });
+
+    await expect(reconcileAccountR2Page(db, bucket as unknown as R2Bucket, "books/", 1000))
+      .rejects.toMatchObject({ code: "ACCOUNT_R2_SWEEP_FAILED", phase: "references", retryable: true });
+    expect(bucket.delete).not.toHaveBeenCalled();
+    expect(checkpoint(bucket, "books/")).toBeUndefined();
     close(d1);
   });
 
@@ -260,13 +336,15 @@ describe("account R2 reconciliation", () => {
   it("[W4R-DELETE] does not advance the checkpoint after a delete failure and replays safely", async () => {
     const { d1, db } = fixture();
     const bucket = fakeBucket(["books/gone/a.epub", "books/gone/b.epub"]);
-    bucket.delete.mockImplementationOnce(async (key: string) => {
-      bucket.objects.delete(key);
+    bucket.delete.mockImplementationOnce(async (keys: string | string[]) => {
+      for (const key of Array.isArray(keys) ? keys : [keys]) bucket.objects.delete(key);
       throw new Error("delete failed after partial success");
     });
 
     await expect(reconcileAccountR2Page(db, bucket as unknown as R2Bucket, "books/", 1000))
       .rejects.toMatchObject({ code: "ACCOUNT_R2_SWEEP_FAILED", phase: "delete", retryable: true });
+    expect(bucket.delete).toHaveBeenCalledTimes(1);
+    expect(bucket.delete).toHaveBeenCalledWith(["books/gone/a.epub", "books/gone/b.epub"]);
     expect(checkpoint(bucket, "books/")).toBeUndefined();
     await reconcileAccountR2Page(db, bucket as unknown as R2Bucket, "books/", 2000);
     expect(bucket.objects.has("books/gone/a.epub")).toBe(false);
