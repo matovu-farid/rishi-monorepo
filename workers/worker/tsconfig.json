@@ -10,7 +10,7 @@
        "DOM",
       "ESNext"
     ],
-   "types": ["./worker-configuration.d.ts",  "@cloudflare/workers-types"],
+   "types": ["./worker-configuration.d.ts"],
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx",
     "paths": {
@@ -20,25 +20,8 @@
       "drizzle-orm/*": ["./node_modules/drizzle-orm/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "drizzle.config.ts", "drizzle-do.config.ts", "../../packages/shared/src/**/*.ts", "src/db/schema.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "drizzle.config.ts", "drizzle-do.config.ts"],
   "exclude": [
-    "node_modules",
-    "../../packages/shared/src/tts/**",
-    "../../packages/shared/src/voice-chat/*.test.ts",
-    "../../packages/shared/src/voice-chat/activation-program.ts",
-    "../../packages/shared/src/voice-chat/emitter.ts",
-    "../../packages/shared/src/voice-chat/errors.ts",
-    "../../packages/shared/src/voice-chat/index.ts",
-    "../../packages/shared/src/voice-chat/key-cache.ts",
-    "../../packages/shared/src/voice-chat/local-vad.ts",
-    "../../packages/shared/src/voice-chat/machine.ts",
-    "../../packages/shared/src/voice-chat/pageTextCap.ts",
-    "../../packages/shared/src/voice-chat/service.ts",
-    "../../packages/shared/src/voice-chat/usage-extract.ts",
-    "../../packages/shared/src/formats/**",
-    "../../packages/shared/src/machines/**",
-    "../../packages/shared/src/book-import/**",
-    "../../packages/shared/src/indexing/**",
-    "../../packages/shared/src/connectivity/**"
+    "node_modules"
   ]
 }

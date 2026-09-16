@@ -19,6 +19,12 @@ const CURRENT_MACOS_PRODUCT_IDS = [
 ] as const;
 
 describe("Apple cross-platform product plans", () => {
+  it("never exposes combined as a StoreKit product plan", () => {
+    expect(
+      Object.values(APPLE_PRODUCT_PLAN_MAP).map(({ plan }) => plan),
+    ).not.toContain("combined");
+  });
+
   it("accepts every current iOS and macOS Reader/Voice product ID", () => {
     expect(Object.keys(APPLE_PRODUCT_PLAN_MAP).sort()).toEqual(
       [

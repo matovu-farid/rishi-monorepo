@@ -24,6 +24,7 @@
  */
 
 export type ApplePlan = "reader" | "voice";
+export type PersistedAllowancePlan = ApplePlan | "combined";
 
 export interface ApplePlanMapping {
   plan: ApplePlan;

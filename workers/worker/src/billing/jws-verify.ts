@@ -36,6 +36,7 @@ import {
   type JWTPayload,
 } from "jose";
 import * as x509 from "@peculiar/x509";
+import { webBytes } from "../utils/web-bytes";
 import { APPLE_ROOT_CA_G3_DER } from "./apple-root-ca-g3";
 
 // Ensure @peculiar/x509 uses the Workers/Node WebCrypto instance.
@@ -143,7 +144,7 @@ async function verifyXcodeStoreKitJWS<T extends JWTPayload>(
 
   let leafCert: x509.X509Certificate;
   try {
-    leafCert = new x509.X509Certificate(b64StdToBytes(x5c[0]));
+    leafCert = new x509.X509Certificate(webBytes(b64StdToBytes(x5c[0])));
   } catch (e) {
     throw new JWSInvalid("chain", `Xcode x5c[0] parse failed: ${String(e)}`);
   }
@@ -272,9 +273,9 @@ export async function verifyAppleJWS<T extends JWTPayload>(
   let intermediateCert: x509.X509Certificate;
   let rootCert: x509.X509Certificate;
   try {
-    leafCert = new x509.X509Certificate(b64StdToBytes(x5c[0]));
-    intermediateCert = new x509.X509Certificate(b64StdToBytes(x5c[1]));
-    rootCert = new x509.X509Certificate(sentRootBytes);
+    leafCert = new x509.X509Certificate(webBytes(b64StdToBytes(x5c[0])));
+    intermediateCert = new x509.X509Certificate(webBytes(b64StdToBytes(x5c[1])));
+    rootCert = new x509.X509Certificate(webBytes(sentRootBytes));
   } catch (e) {
     throw new JWSInvalid("chain", `x5c parse failed: ${String(e)}`);
   }
