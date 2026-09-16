@@ -63,6 +63,10 @@ import { sessionSharesRoutes } from "./routes/session-shares";
 import { sharedReadingRoutePrefix } from "./api-version";
 import { workerMetadataHeaders } from "./health";
 import { webBytes } from "./utils/web-bytes";
+import {
+  ACCOUNT_R2_RECONCILIATION_PREFIXES,
+  reconcileAccountR2Page,
+} from "./account-r2-reconciliation";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -1684,8 +1688,21 @@ const sentryHandler = createTypedSentryHandler(honoHandler, (env) => {
   };
 });
 
-const scheduled = async (_controller: ScheduledController, env: Env): Promise<void> => {
+export const scheduled = async (controller: ScheduledController, env: Env): Promise<void> => {
   const db = createDb(env.DB);
+  if (controller.cron === "* * * * *") {
+    const nowMs = Date.now();
+    let firstFailure: unknown;
+    for (const prefix of ACCOUNT_R2_RECONCILIATION_PREFIXES) {
+      try {
+        await reconcileAccountR2Page(db, env.BOOK_STORAGE, prefix, nowMs);
+      } catch (error) {
+        firstFailure ??= error;
+      }
+    }
+    if (firstFailure !== undefined) throw firstFailure;
+    return;
+  }
   await retryPendingDeletions(db, env);
   await purgeExpiredShares(db, env.BOOK_STORAGE);
   await precreateShareLinks(db, env);

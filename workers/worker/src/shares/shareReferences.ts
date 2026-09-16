@@ -1,7 +1,7 @@
 import { and, eq, inArray, ne, or } from "drizzle-orm";
 
 import type { WorkerDb } from "../db/drizzle";
-import { books, sharePackageItems } from "../db/schema";
+import { books, sessionInviteItems, sharePackageItems } from "../db/schema";
 
 /**
  * Share items reference the original book objects directly. The owning book
@@ -16,7 +16,7 @@ export async function referencedR2Keys(
   const uniqueKeys = [...new Set(keys.filter(Boolean))];
   if (uniqueKeys.length === 0) return new Set();
 
-  const [libraryRows, shareRows] = await Promise.all([
+  const [libraryRows, shareRows, sessionRows] = await Promise.all([
     db.select({ fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key })
       .from(books)
       .where(and(
@@ -35,10 +35,17 @@ export async function referencedR2Keys(
         inArray(sharePackageItems.coverR2Key, uniqueKeys),
       ))
       .all(),
+    db.select({ fileR2Key: sessionInviteItems.fileR2Key, coverR2Key: sessionInviteItems.coverR2Key })
+      .from(sessionInviteItems)
+      .where(or(
+        inArray(sessionInviteItems.fileR2Key, uniqueKeys),
+        inArray(sessionInviteItems.coverR2Key, uniqueKeys),
+      ))
+      .all(),
   ]);
 
   return new Set(
-    [...libraryRows, ...shareRows].flatMap((row) => [row.fileR2Key, row.coverR2Key])
+    [...libraryRows, ...shareRows, ...sessionRows].flatMap((row) => [row.fileR2Key, row.coverR2Key])
       .filter((key): key is string => Boolean(key)),
   );
 }
