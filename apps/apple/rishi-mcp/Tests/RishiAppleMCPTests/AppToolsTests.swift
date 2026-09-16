@@ -52,6 +52,81 @@ final class AppToolsTests: XCTestCase {
         XCTAssertEqual(driver.openedURLs, ["rishi://sharing/session?token=abc%2F123"])
     }
 
+    func testJoinReadingSessionAcceptsCanonicalHTTPSInviteURL() async throws {
+        let driver = ReadingSessionDriver()
+        let memory = EmptyMemory()
+        let tools = AppTools(driver: driver, registry: InstanceRegistry(driver: driver, memory: memory), memory: memory)
+        let join = try XCTUnwrap(MCPTools.definition(named: "join_reading_session"))
+
+        _ = try await tools.call(
+            tool: join,
+            arguments: .object([
+                "app": .string("iphone17"),
+                "token": .string("https://rishi.fidexa.org/sharing/session?token=abc%2F123"),
+            ])
+        )
+
+        XCTAssertEqual(driver.openedURLs, ["rishi://sharing/session?token=abc%2F123"])
+    }
+
+    func testJoinReadingSessionRejectsNonCanonicalOrAmbiguousInviteURLs() async throws {
+        let invalidInvites = [
+            "https://example.com/sharing/session?token=value",
+            "https://rishi.fidexa.org/other?token=value",
+            "https://rishi.fidexa.org/sharing/%73ession?token=value",
+            "http://rishi.fidexa.org/sharing/session?token=value",
+            "https://user@rishi.fidexa.org/sharing/session?token=value",
+            "https://rishi.fidexa.org:443/sharing/session?token=value",
+            "rishi://example.com/session?token=value",
+            "rishi://sharing/other?token=value",
+            "https://rishi.fidexa.org/sharing/session?token=first&token=second",
+            "https://rishi.fidexa.org/sharing/session?token=value&source=invite",
+            "https://rishi.fidexa.org/sharing/session?%74oken=value",
+            "https://rishi.fidexa.org/sharing/session?token=value#fragment",
+            "https://rishi.fidexa.org/sharing/session?token=value#",
+            "https://rishi.fidexa.org/sharing/session?token=",
+            "https://rishi.fidexa.org/sharing/session?token=%20",
+        ]
+        let driver = ReadingSessionDriver()
+        let memory = EmptyMemory()
+        let tools = AppTools(driver: driver, registry: InstanceRegistry(driver: driver, memory: memory), memory: memory)
+        let join = try XCTUnwrap(MCPTools.definition(named: "join_reading_session"))
+
+        for invite in invalidInvites {
+            do {
+                _ = try await tools.call(
+                    tool: join,
+                    arguments: .object([
+                        "app": .string("iphone17"),
+                        "token": .string(invite),
+                    ])
+                )
+                XCTFail("non-canonical or ambiguous invite must be rejected: \(invite)")
+            } catch let error as RegistryError {
+                XCTAssertEqual(error.code, .actionNotSupported, invite)
+            }
+        }
+
+        XCTAssertTrue(driver.openedURLs.isEmpty)
+    }
+
+    func testJoinReadingSessionPreservesRawTokenInput() async throws {
+        let driver = ReadingSessionDriver()
+        let memory = EmptyMemory()
+        let tools = AppTools(driver: driver, registry: InstanceRegistry(driver: driver, memory: memory), memory: memory)
+        let join = try XCTUnwrap(MCPTools.definition(named: "join_reading_session"))
+
+        _ = try await tools.call(
+            tool: join,
+            arguments: .object([
+                "app": .string("iphone17"),
+                "token": .string("raw/token"),
+            ])
+        )
+
+        XCTAssertEqual(driver.openedURLs, ["rishi://sharing/session?token=raw%2Ftoken"])
+    }
+
     func testCreateReadingSessionRejectsInviteThatWasAlreadyVisibleBeforeFlow() async throws {
         let stale = "rishi://sharing/session?token=stale"
         let driver = SemanticStateDriver(states: [

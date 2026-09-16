@@ -291,6 +291,23 @@ public final class ManagedProcess: @unchecked Sendable {
     #endif
 }
 
+private final class CommandTimeoutState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func markTimedOut() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    var didTimeOut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 public struct ProcessRunner: Sendable {
     public init() {}
 
@@ -319,6 +336,7 @@ public struct ProcessRunner: Sendable {
         // The run path reads both pipes into bounded buffers below; long-lived
         // sessions use the default discarding drains from start() instead.
         let managed = try start(executable, arguments: arguments, environment: environment, drainOutput: false)
+        let timeoutState = CommandTimeoutState()
         return try await withThrowingTaskGroup(of: CommandResult.self) { group in
             group.addTask {
                 // Drain both pipes while xcodebuild is running. Waiting for
@@ -336,6 +354,9 @@ public struct ProcessRunner: Sendable {
                     throw RegistryError(.driverUnavailable, "command cleanup did not finish: \(executable)")
                 }
                 managed.closePipes()
+                if timeoutState.didTimeOut {
+                    throw RegistryError(.waitTimeout, "command timed out: \(executable)")
+                }
                 let result = CommandResult(
                     status: managed.process.terminationStatus,
                     stdout: String(data: await stdoutTask.value, encoding: .utf8) ?? "",
@@ -345,6 +366,7 @@ public struct ProcessRunner: Sendable {
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
+                timeoutState.markTimedOut()
                 managed.killProcessGroup()
                 let cleaned = await managed.waitForExitAndCleanup(timeout: .seconds(3))
                 managed.closePipes()

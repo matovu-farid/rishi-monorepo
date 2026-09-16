@@ -258,13 +258,20 @@ public struct AppTools: MCPToolHandling, Sendable {
     static func inviteToken(from value: String) -> String? {
         guard let url = URL(string: value),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.scheme?.caseInsensitiveCompare("rishi") == .orderedSame,
-              components.host?.caseInsensitiveCompare("sharing") == .orderedSame,
-              components.path == "/session",
+              let scheme = components.scheme else { return nil }
+        let isCustomInvite = scheme.caseInsensitiveCompare("rishi") == .orderedSame
+            && components.host?.caseInsensitiveCompare("sharing") == .orderedSame
+            && components.percentEncodedPath == "/session"
+        let isCanonicalHTTPSInvite = scheme.caseInsensitiveCompare("https") == .orderedSame
+            && components.host?.caseInsensitiveCompare("rishi.fidexa.org") == .orderedSame
+            && components.percentEncodedPath == "/sharing/session"
+        guard (isCustomInvite || isCanonicalHTTPSInvite),
               components.user == nil,
               components.password == nil,
               components.port == nil,
-              components.fragment == nil,
+              components.percentEncodedFragment == nil,
+              let percentEncodedQuery = components.percentEncodedQuery,
+              percentEncodedQuery.hasPrefix("token="),
               let queryItems = components.queryItems,
               queryItems.count == 1,
               queryItems[0].name == "token",

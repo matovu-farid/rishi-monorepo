@@ -17,6 +17,13 @@ struct ActiveReadingSessionsView: View {
     @State private var activeCoordinator: SharedReadingSessionCoordinator?
     @State private var activeTransport: SharedReadingSignalingClient?
 
+    private var wireUserID: String {
+        if let persisted = try? Keychain.load(.userId), !persisted.isEmpty {
+            return persisted
+        }
+        return userId.uuidString
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -54,6 +61,7 @@ struct ActiveReadingSessionsView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("shared-reading-active-session-\(session.sessionId)")
                         .disabled(busySessionId != nil)
                     }
                     .refreshable { await refresh() }
@@ -74,7 +82,7 @@ struct ActiveReadingSessionsView: View {
                     coordinator: activeCoordinator,
                     transport: activeTransport,
                     join: join,
-                    localParticipantUserId: userId.uuidString
+                    localParticipantUserId: wireUserID
                 )
             } else {
                 ProgressView("Preparing reading session…")
@@ -128,7 +136,7 @@ struct ActiveReadingSessionsView: View {
                 }
                 let coordinator = SharedReadingSessionCoordinator(
                     transport: transport,
-                    localParticipantUserId: userId.uuidString,
+                    localParticipantUserId: wireUserID,
                     refreshAdmission: refreshAdmission,
                     refreshBearerToken: { try await api.refreshBearerToken() }
                 )

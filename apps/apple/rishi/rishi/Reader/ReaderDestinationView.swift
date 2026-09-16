@@ -11,6 +11,7 @@ struct ReaderDestinationView: View {
     var sharedReadingCoordinator: SharedReadingSessionCoordinator? = nil
     var sharedReadingJoin: SharedReadingJoin? = nil
     var sharedReadingPeerMesh: SharedReadingPeerMesh? = nil
+    var sharedReadingLocalUserID: String? = nil
 
     @Environment(AppRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
@@ -52,7 +53,8 @@ struct ReaderDestinationView: View {
                         readerWindowCloseHandle: readerWindowCloseHandle,
                         sharedReadingCoordinator: sharedReadingCoordinator,
                         sharedReadingJoin: sharedReadingJoin,
-                        sharedReadingPeerMesh: sharedReadingPeerMesh
+                        sharedReadingPeerMesh: sharedReadingPeerMesh,
+                        sharedReadingLocalUserID: sharedReadingLocalUserID
                     )
                     // The transient tour request is consumed when this
                     // destination appears. Recreate the destination subtree

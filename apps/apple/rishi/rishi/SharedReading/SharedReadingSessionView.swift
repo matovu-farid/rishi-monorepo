@@ -26,18 +26,24 @@ struct SharedReadingSessionView: View {
                     .foregroundStyle(.tint)
                 Text(join.admission.status == .active ? "Reading session" : "Waiting room")
                     .font(.title2.bold())
+                    .accessibilityIdentifier("shared-reading-session-title")
+                    .accessibilityValue(join.response.sessionId)
                 Text(currentStatus == .active
                      ? "The session is active. Your book is ready to read locally."
                      : "Your book is ready. The initial sharer has not started reading yet.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("shared-reading-session-state")
+                    .accessibilityValue(currentStatus.rawValue)
                 Label(message, systemImage: isConnected ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
                     .foregroundStyle(isConnected ? .green : .secondary)
+                    .accessibilityIdentifier("shared-reading-status")
                 let participants = visibleParticipants
                 if !participants.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Readers \(participants.count)/\(roomStatus?.maxParticipants ?? 5)")
                             .font(.headline)
+                            .accessibilityIdentifier("shared-reading-readers")
                         ForEach(participants) { participant in
                             HStack {
                                 Label(
@@ -79,17 +85,20 @@ struct SharedReadingSessionView: View {
                             onRequestPaywall: { _ in },
                             sharedReadingCoordinator: coordinator,
                             sharedReadingJoin: join,
-                            sharedReadingPeerMesh: peerMesh
+                            sharedReadingPeerMesh: peerMesh,
+                            sharedReadingLocalUserID: localParticipantUserId
                         )
                     } label: {
                         Label("Open book", systemImage: "book.pages")
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("shared-reading-open-book")
                 }
                 if currentStatus == .waiting && isLocalController {
-                    Button("Start reading") { start() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isBusy)
+                        Button("Start reading") { start() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isBusy)
+                            .accessibilityIdentifier("shared-reading-start")
                 } else if currentStatus == .waiting {
                     Label("Waiting for the initial sharer to start", systemImage: "hourglass")
                         .foregroundStyle(.secondary)
@@ -103,9 +112,11 @@ struct SharedReadingSessionView: View {
                 if isLocalController {
                     Button("Leave session", role: .destructive) { showControllerLeaveDialog = true }
                         .disabled(isBusy)
+                        .accessibilityIdentifier("shared-reading-leave")
                 } else {
                     Button("Leave session", role: .destructive) { leave() }
                         .disabled(isBusy)
+                        .accessibilityIdentifier("shared-reading-leave")
                 }
             }
             .padding(24)

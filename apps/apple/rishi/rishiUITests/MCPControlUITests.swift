@@ -19,9 +19,57 @@ final class MCPControlUITests: XCTestCase {
     }
 
     private static var bridgeConfigPath: String {
-        URL(fileURLWithPath: "/private/tmp")
-            .appendingPathComponent("rishi-mcp-\(bridgeTarget)-bridge.json")
-            .path
+        if let configured = ProcessInfo.processInfo.environment["RISHI_MCP_BRIDGE_CONFIG"], !configured.isEmpty {
+            return configured
+        }
+        return ""
+    }
+
+    func testInviteURLExtractionRecognizesWebAndDeepLinkInvites() {
+        let webInvite = "https://rishi.fidexa.org/sharing/session?token=web-invite"
+        let deepLinkInvite = "rishi://sharing/session?token=deep-link-invite"
+
+        XCTAssertEqual(
+            MCPControlSemanticState.rishiURLs(in: "Join at \(webInvite) or \(deepLinkInvite)."),
+            [webInvite, deepLinkInvite]
+        )
+    }
+
+    func testInviteURLExtractionDeduplicatesAccessibilityLabelsButKeepsDistinctCandidates() {
+        let firstInvite = "https://rishi.fidexa.org/sharing/session?token=first-candidate"
+        let secondInvite = "rishi://sharing/session?token=second-candidate"
+        let parentLabel = "Invitation link: \(firstInvite)"
+        let childLabel = firstInvite
+        let otherCandidateLabel = "Another invitation: \(secondInvite)"
+
+        XCTAssertEqual(
+            MCPControlSemanticState.inviteURLs(in: [parentLabel, childLabel, otherCandidateLabel]),
+            [firstInvite, secondInvite]
+        )
+    }
+
+    func testSemanticSessionIDsReadAndDeduplicateTheLiveSessionValue() {
+        let liveSessionID = "session-for-current-reader"
+
+        XCTAssertEqual(
+            MCPControlSemanticState.sessionIDs(from: [
+                (identifier: "shared-reading-session-title", value: liveSessionID),
+                (identifier: "shared-reading-session-title", value: liveSessionID),
+                (identifier: "shared-reading-active-session-\(liveSessionID)", value: nil),
+                (identifier: "shared-reading-active-session-stale-list-row", value: nil),
+            ]),
+            [liveSessionID]
+        )
+    }
+
+    func testSemanticSessionIDsKeepDistinctActiveSessionCandidates() {
+        XCTAssertEqual(
+            MCPControlSemanticState.sessionIDs(from: [
+                (identifier: "shared-reading-active-session-first", value: nil),
+                (identifier: "shared-reading-active-session-second", value: nil),
+            ]),
+            ["first", "second"]
+        )
     }
 
     @MainActor
@@ -157,7 +205,15 @@ final class MCPControlUITests: XCTestCase {
             // screencapture. XCTest only provides the accessibility tree here;
             // externally launched apps are not valid XCUIApplication screenshot
             // targets and asking XCTest to capture one terminates the bridge.
-            return ["ok": true, "debugDescription": app.debugDescription]
+            let envelope: [String: Any] = [
+                "accessibilityTree": app.debugDescription,
+                "semantic": semanticSnapshot(for: app),
+            ]
+            let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+            guard let snapshot = String(data: data, encoding: .utf8) else {
+                throw BridgeError.message("Could not encode semantic accessibility snapshot.")
+            }
+            return ["ok": true, "debugDescription": snapshot]
         case "tap":
             guard let requestedIdentifier = request["identifier"] as? String else { throw BridgeError.message("Missing element identifier.") }
             let components = requestedIdentifier.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
@@ -258,6 +314,75 @@ final class MCPControlUITests: XCTestCase {
         }
     }
 
+    private func semanticSnapshot(for app: XCUIApplication) -> [String: Any] {
+        let accessibilityElements = app.descendants(matching: .any).allElementsBoundByIndex
+        var snapshot: [String: Any] = [
+            "schema": "rishi.mcp.semantic.v1",
+            "inviteURLs": MCPControlSemanticState.inviteURLs(in: accessibilityElements.map(\.label)),
+            "sessionIDs": MCPControlSemanticState.sessionIDs(from: accessibilityElements.map {
+                (identifier: $0.identifier, value: $0.value as? String)
+            }),
+        ]
+
+        let rosterSignals = app.descendants(matching: .any)
+            .matching(identifier: "shared-reading-readers")
+            .allElementsBoundByIndex
+            .compactMap(Self.rosterSignal)
+        snapshot["participantRoster"] = rosterSignals
+
+        var reader: [String: Any] = [:]
+        let pageElements = app.descendants(matching: .any)
+            .matching(identifier: "reader.pdf.pageIndicator")
+            .allElementsBoundByIndex
+        if pageElements.count == 1, let page = Self.pageState(from: pageElements[0].label) {
+            reader["page"] = page
+        }
+
+        let progressValues = app.descendants(matching: .any).allElementsBoundByIndex.compactMap { element -> Double? in
+            guard let match = Self.firstMatch(in: element.label, pattern: #"^(\d{1,3}) percent$"#),
+                  let percent = Double(match) else { return nil }
+            return min(max(percent / 100, 0), 1)
+        }
+        if progressValues.count == 1 {
+            reader["progress"] = progressValues[0]
+        }
+
+        let chapterElements = app.descendants(matching: .any)
+            .matching(identifier: "reader.chapter")
+            .allElementsBoundByIndex
+        if chapterElements.count == 1, !chapterElements[0].label.isEmpty {
+            reader["chapter"] = chapterElements[0].label
+        }
+        snapshot["reader"] = reader
+        return snapshot
+    }
+
+    private static func rosterSignal(_ element: XCUIElement) -> [String: Any]? {
+        guard let match = try? NSRegularExpression(pattern: #"^Readers (\d+)/(\d+)$"#),
+              let range = Range(NSRange(location: 0, length: element.label.utf16.count), in: element.label),
+              let result = match.firstMatch(in: element.label, range: NSRange(range, in: element.label)),
+              let countRange = Range(result.range(at: 1), in: element.label),
+              let capacityRange = Range(result.range(at: 2), in: element.label),
+              let count = Int(element.label[countRange]),
+              let capacity = Int(element.label[capacityRange]) else { return nil }
+        return ["count": count, "capacity": capacity, "signal": count > 1]
+    }
+
+    private static func pageState(from value: String) -> [String: Any]? {
+        guard let current = firstMatch(in: value, pattern: #"^Page (\d+) of (\d+)$"#),
+              let total = value.split(separator: " ").last,
+              let currentValue = Int(current),
+              let totalValue = Int(total) else { return nil }
+        return ["current": currentValue, "total": totalValue]
+    }
+
+    private static func firstMatch(in value: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+              let range = Range(match.range(at: 1), in: value) else { return nil }
+        return String(value[range])
+    }
+
     @MainActor
     private func performContextClick(_ target: XCUIElement) {
         #if targetEnvironment(macCatalyst)
@@ -286,6 +411,49 @@ final class MCPControlUITests: XCTestCase {
     }
 
     #endif
+}
+
+private enum MCPControlSemanticState {
+    private static let liveSessionAccessibilityIdentifier = "shared-reading-session-title"
+    private static let activeSessionAccessibilityPrefix = "shared-reading-active-session-"
+
+    static func inviteURLs(in labels: [String]) -> [String] {
+        var seen = Set<String>()
+        return labels
+            .flatMap(rishiURLs(in:))
+            .filter { seen.insert($0).inserted }
+    }
+
+    static func rishiURLs(in value: String) -> [String] {
+        let invitePattern = #"(?:https://rishi\.fidexa\.org/sharing/session|rishi://sharing/session)\?token=[^\s'"<>]+"#
+        guard let regex = try? NSRegularExpression(pattern: invitePattern) else { return [] }
+        let range = NSRange(value.startIndex..., in: value)
+        var seen = Set<String>()
+        return regex.matches(in: value, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: value) else { return nil }
+            let url = String(value[swiftRange]).trimmingCharacters(in: CharacterSet(charactersIn: "),.;"))
+            return seen.insert(url).inserted ? url : nil
+        }
+    }
+
+    static func sessionIDs(from elements: [(identifier: String, value: String?)]) -> [String] {
+        var seen = Set<String>()
+        let liveSessionIDs = elements.compactMap { element -> String? in
+            guard element.identifier == liveSessionAccessibilityIdentifier,
+                  let value = element.value,
+                  !value.isEmpty,
+                  seen.insert(value).inserted else { return nil }
+            return value
+        }
+        if !liveSessionIDs.isEmpty { return liveSessionIDs }
+
+        return elements.compactMap { element in
+            guard element.identifier.hasPrefix(activeSessionAccessibilityPrefix) else { return nil }
+            let sessionID = String(element.identifier.dropFirst(activeSessionAccessibilityPrefix.count))
+            guard !sessionID.isEmpty, seen.insert(sessionID).inserted else { return nil }
+            return sessionID
+        }
+    }
 }
 
 private enum BridgeError: LocalizedError {

@@ -91,6 +91,7 @@ struct ReaderDestination: View {
     let sharedReadingCoordinator: SharedReadingSessionCoordinator?
     let sharedReadingJoin: SharedReadingJoin?
     let sharedReadingPeerMesh: SharedReadingPeerMesh?
+    let sharedReadingLocalUserID: String?
 
     @State private var readAloudStartTask: Task<Void, Never>?
     @State private var readAloudStartRequest = UUID()
@@ -125,7 +126,8 @@ struct ReaderDestination: View {
         readerWindowCloseHandle: ReaderWindowCloseHandle? = nil,
         sharedReadingCoordinator: SharedReadingSessionCoordinator? = nil,
         sharedReadingJoin: SharedReadingJoin? = nil,
-        sharedReadingPeerMesh: SharedReadingPeerMesh? = nil
+        sharedReadingPeerMesh: SharedReadingPeerMesh? = nil,
+        sharedReadingLocalUserID: String? = nil
     ) {
         let peeked = dependencies.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? dependencies.readerDefaults.theme
@@ -141,6 +143,7 @@ struct ReaderDestination: View {
         self.sharedReadingCoordinator = sharedReadingCoordinator
         self.sharedReadingJoin = sharedReadingJoin
         self.sharedReadingPeerMesh = sharedReadingPeerMesh
+        self.sharedReadingLocalUserID = sharedReadingLocalUserID
         let tour = startReaderTour ? ReaderOnboardingTourCoordinator() : nil
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: dependencies.voicePresenter,
@@ -454,6 +457,10 @@ struct ReaderDestination: View {
         vm.book.formatType == .epub ? Self.playerReservationHeight : 0
     }
 
+    private var sharedReadingWireUserID: String {
+        sharedReadingLocalUserID ?? userId.uuidString
+    }
+
     @MainActor
     private func runSharedReadingIntegration() async {
         guard let sharedReadingCoordinator, let sharedReadingJoin else { return }
@@ -471,7 +478,7 @@ struct ReaderDestination: View {
                     speakerUserId: snapshot.speakerUserId
                 )
             )
-            let floorGranted = snapshot.speakerUserId == userId.uuidString
+            let floorGranted = snapshot.speakerUserId == sharedReadingWireUserID
             sharedMicrophonePolicy = SharedReadingMicrophonePolicy.setSpeakerFloorGranted(floorGranted, in: sharedMicrophonePolicy)
             if !isTTSPlaying, floorGranted {
                 try? await sharedReadingCoordinator.releaseSpeaker()
@@ -479,7 +486,7 @@ struct ReaderDestination: View {
             await sharedReadingPeerMesh?.setMicrophoneEnabled(
                 sharedMicrophonePolicy.microphoneEnabled(isTTSPlaying: isTTSPlaying)
             )
-            if snapshot.currentParticipantUserId != userId.uuidString,
+            if snapshot.currentParticipantUserId != sharedReadingWireUserID,
                let progress = snapshot.latestProgress,
                progress.sequence > lastRemoteSequence,
                progress.bookId == sharedReadingJoin.response.book.bookId,
@@ -494,7 +501,7 @@ struct ReaderDestination: View {
             }
 
             if snapshot.status == .active,
-               snapshot.currentParticipantUserId == userId.uuidString,
+               snapshot.currentParticipantUserId == sharedReadingWireUserID,
                let locator = vm.latestLocator,
                let position = try? ReaderPositionLocator(locator: locator).encodedJSONString() {
                 let isPlaying = isTTSPlaying

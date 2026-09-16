@@ -238,7 +238,7 @@ struct RootView: View {
                 coordinator: presentation.coordinator,
                 transport: presentation.transport,
                 join: presentation.join,
-                localParticipantUserId: signedInUserID?.uuidString ?? ""
+                localParticipantUserId: signedInWireUserID ?? ""
             )
         }
         .alert(
@@ -294,6 +294,14 @@ struct RootView: View {
         return user.id
     }
 
+    private var signedInWireUserID: String? {
+        guard signedInUserID != nil else { return nil }
+        if let persisted = try? Keychain.load(.userId), !persisted.isEmpty {
+            return persisted
+        }
+        return signedInUserID?.uuidString
+    }
+
     private func redeemPendingSharesIfEligible(deps: AppDependencies) async {
         guard currentUserBox.isSigned else {
             Log.event("sharing.pending_redeem.skipped", data: ["reason": "signed_out"])
@@ -338,7 +346,7 @@ struct RootView: View {
             }
             let coordinator = SharedReadingSessionCoordinator(
                 transport: transport,
-                localParticipantUserId: userID.uuidString,
+                localParticipantUserId: signedInWireUserID ?? userID.uuidString,
                 refreshAdmission: refreshAdmission,
                 refreshBearerToken: { try await sessionAPI.refreshBearerToken() }
             )
