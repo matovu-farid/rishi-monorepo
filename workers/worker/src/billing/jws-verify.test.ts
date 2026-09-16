@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import {
   verifyAppleJWS,
   JWSInvalid,
@@ -39,6 +39,37 @@ describe("verifyAppleJWS — happy path", () => {
       rootCa: kit.rootDer,
     });
     expect(payload.sub).toBe("tx-pitfall1");
+  });
+
+  it("uses ArrayBuffer-backed values at Web Crypto verification boundaries", async () => {
+    const jws = await kit.signFixture({ sub: "tx-web-bytes" });
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    const verifySpy = vi
+      .spyOn(crypto.subtle, "verify")
+      .mockImplementation(async (...args) => {
+        expect(ArrayBuffer.isView(args[2]) || args[2] instanceof ArrayBuffer).toBe(
+          true,
+        );
+        expect(ArrayBuffer.isView(args[3]) || args[3] instanceof ArrayBuffer).toBe(
+          true,
+        );
+        if (ArrayBuffer.isView(args[2])) {
+          expect(args[2].buffer).toBeInstanceOf(ArrayBuffer);
+        }
+        if (ArrayBuffer.isView(args[3])) {
+          expect(args[3].buffer).toBeInstanceOf(ArrayBuffer);
+        }
+        return originalVerify(...args);
+      });
+
+    try {
+      await expect(
+        verifyAppleJWS(jws, { rootCa: kit.rootDer }),
+      ).resolves.toMatchObject({ sub: "tx-web-bytes" });
+      expect(verifySpy).toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

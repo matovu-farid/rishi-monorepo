@@ -1,3 +1,5 @@
+import { webBytes } from "../utils/web-bytes";
+
 /**
  * APNs silent (background) push sender for entitlement invalidation.
  *
@@ -88,7 +90,7 @@ export async function signApnsJwt(cfg: {
 
   const key = await crypto.subtle.importKey(
     "pkcs8",
-    pemToPkcs8Der(cfg.keyP8),
+    webBytes(pemToPkcs8Der(cfg.keyP8)),
     { name: "ECDSA", namedCurve: "P-256" },
     false,
     ["sign"],
@@ -96,7 +98,7 @@ export async function signApnsJwt(cfg: {
   const sig = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     key,
-    new TextEncoder().encode(signingInput),
+    webBytes(new TextEncoder().encode(signingInput)),
   );
 
   return `${signingInput}.${base64UrlEncode(new Uint8Array(sig))}`;

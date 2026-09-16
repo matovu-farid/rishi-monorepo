@@ -54,6 +54,45 @@ describe("signApnsJwt", () => {
     expect(payload.iat).toBeGreaterThanOrEqual(nowSec - 60);
     expect(payload.iat).toBeLessThanOrEqual(nowSec + 60);
   });
+
+  it("copies signing bytes before passing them to Web Crypto", async () => {
+    const keyP8 = await generateP8Pem();
+    const OriginalTextEncoder = TextEncoder;
+    class SharedBufferTextEncoder {
+      encode(value: string): Uint8Array<ArrayBufferLike> {
+        const bytes = new Uint8Array(new SharedArrayBuffer(value.length));
+        for (let index = 0; index < value.length; index += 1) {
+          bytes[index] = value.charCodeAt(index);
+        }
+        return bytes;
+      }
+    }
+
+    const originalSign = crypto.subtle.sign.bind(crypto.subtle);
+    const signSpy = vi
+      .spyOn(crypto.subtle, "sign")
+      .mockImplementation(async (...args) => {
+        const data = args[2];
+        expect(ArrayBuffer.isView(data)).toBe(true);
+        if (ArrayBuffer.isView(data)) {
+          expect(data.buffer).toBeInstanceOf(ArrayBuffer);
+        }
+        return originalSign(...args);
+      });
+    vi.stubGlobal("TextEncoder", SharedBufferTextEncoder);
+
+    try {
+      await signApnsJwt({
+        keyP8,
+        keyId: "ABC1234567",
+        teamId: "TEAM123456",
+      });
+      expect(signSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.stubGlobal("TextEncoder", OriginalTextEncoder);
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("createApnsSender", () => {

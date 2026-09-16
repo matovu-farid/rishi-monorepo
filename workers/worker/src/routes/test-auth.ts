@@ -9,7 +9,7 @@ import {
   user,
   session,
   account,
-} from "@rishi/shared/schema";
+} from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { createAuth } from "../auth";
 

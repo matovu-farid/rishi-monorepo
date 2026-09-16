@@ -1,7 +1,10 @@
 import { and, desc, eq } from "drizzle-orm";
 import { allowancePeriod, appleSubscriptions, usageAuditLog } from "../db/schema";
 import { createDb } from "../db/drizzle";
-import { PLAN_ALLOWANCES, type ApplePlan } from "./apple-product-plans";
+import {
+  PLAN_ALLOWANCES,
+  type PersistedAllowancePlan,
+} from "./apple-product-plans";
 
 /**
  * Advances a calendar date by exactly one UTC month (JS `Date` handles
@@ -133,7 +136,9 @@ export async function rollAllowancePeriodsForward(
       const validityEndMs = anchorSub.currentPeriodEnd.getTime();
 
       let priorPeriodId = mostRecentPeriod.id;
-      let plan: ApplePlan = mostRecentPeriod.plan;
+      let plan: PersistedAllowancePlan = mostRecentPeriod.plan;
+      let narrationSecondsTotal = mostRecentPeriod.narrationSecondsTotal;
+      let voiceChatSecondsTotal = mostRecentPeriod.voiceChatSecondsTotal;
       let periodEndMs = mostRecentPeriod.periodEnd.getTime();
 
       for (
@@ -141,7 +146,10 @@ export async function rollAllowancePeriodsForward(
         i < MAX_ROLLOVER_ITERATIONS && periodEndMs <= nowMs && nowMs < validityEndMs;
         i++
       ) {
-        const allowances = PLAN_ALLOWANCES[plan];
+        const allowances =
+          plan === "combined"
+            ? { narrationSecondsTotal, voiceChatSecondsTotal }
+            : PLAN_ALLOWANCES[plan];
         const periodId = crypto.randomUUID();
         const periodStartMs = periodEndMs;
         const periodStart = new Date(periodStartMs);
@@ -165,9 +173,7 @@ export async function rollAllowancePeriodsForward(
             sourceTransactionId: anchorTransactionId,
             createdAt,
           })
-          .onConflictDoNothing({
-            target: [allowancePeriod.userId, allowancePeriod.periodStart],
-          })
+          .onConflictDoNothing()
           .run();
 
         const inserted =
@@ -190,6 +196,8 @@ export async function rollAllowancePeriodsForward(
           });
 
           priorPeriodId = periodId;
+          narrationSecondsTotal = allowances.narrationSecondsTotal;
+          voiceChatSecondsTotal = allowances.voiceChatSecondsTotal;
           periodEndMs = periodEndDate.getTime();
           continue;
         }
@@ -210,6 +218,8 @@ export async function rollAllowancePeriodsForward(
 
         priorPeriodId = winner.id;
         plan = winner.plan;
+        narrationSecondsTotal = winner.narrationSecondsTotal;
+        voiceChatSecondsTotal = winner.voiceChatSecondsTotal;
         periodEndMs = winner.periodEnd.getTime();
       }
     }

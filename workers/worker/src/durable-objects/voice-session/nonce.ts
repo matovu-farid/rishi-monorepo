@@ -1,3 +1,5 @@
+import { webBytes } from "../../utils/web-bytes";
+
 const enc = new TextEncoder();
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -17,7 +19,7 @@ function fromBase64Url(s: string): Uint8Array {
 async function importNonceKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
-    enc.encode(secret),
+    webBytes(enc.encode(secret)),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"],
@@ -43,7 +45,7 @@ export async function mintRegistrationNonce(
   issuedAtMs: number = Date.now(),
 ): Promise<MintedNonce> {
   const key = await importNonceKey(secret);
-  const signature = await crypto.subtle.sign("HMAC", key, nonceMessage(rishiSessionId, userId, issuedAtMs));
+  const signature = await crypto.subtle.sign("HMAC", key, webBytes(nonceMessage(rishiSessionId, userId, issuedAtMs)));
   const signatureB64Url = toBase64Url(new Uint8Array(signature));
   return { nonce: `${issuedAtMs}.${signatureB64Url}`, issuedAtMs, signatureB64Url };
 }
@@ -72,7 +74,7 @@ export async function verifyRegistrationNonce(
   return crypto.subtle.verify(
     "HMAC",
     key,
-    fromBase64Url(signatureB64Url),
-    nonceMessage(rishiSessionId, userId, issuedAtMs),
+    webBytes(fromBase64Url(signatureB64Url)),
+    webBytes(nonceMessage(rishiSessionId, userId, issuedAtMs)),
   );
 }

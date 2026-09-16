@@ -1,4 +1,4 @@
-import type { ApplePlan } from "./apple-product-plans";
+import type { ApplePlan, PersistedAllowancePlan } from "./apple-product-plans";
 
 /**
  * A minimal view of the user's most recent allowance-period D1 row, as far
@@ -10,7 +10,7 @@ import type { ApplePlan } from "./apple-product-plans";
  */
 export interface CurrentPeriodInfo {
   id: string;
-  plan: ApplePlan;
+  plan: PersistedAllowancePlan;
   /**
    * Apple product ID that produced this period, resolved via its
    * `sourceTransactionId`. Null only for a legacy row created before this
@@ -23,7 +23,11 @@ export interface CurrentPeriodInfo {
   periodEnd: number; // epoch ms
 }
 
-const PLAN_TIER: Record<ApplePlan, number> = { reader: 1, voice: 2 };
+const PLAN_TIER: Record<PersistedAllowancePlan, number> = {
+  reader: 1,
+  voice: 2,
+  combined: 2,
+};
 
 export type TransitionClassification =
   | { kind: "first_period" }

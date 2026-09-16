@@ -9,6 +9,7 @@ import {
   APPLE_PRODUCT_PLAN_MAP,
   PLAN_ALLOWANCES,
   type ApplePlan,
+  type PersistedAllowancePlan,
 } from "./apple-product-plans";
 import type { EntitlementSnapshot } from "../durable-objects/user-usage-ledger/types";
 import {
@@ -338,7 +339,7 @@ export async function applyAppleTransaction(
           ((insertResult as { meta?: { changes?: number } })?.meta?.changes ?? 0) > 0;
 
         let resolvedId: string = periodId;
-        let resolvedPlan: ApplePlan = tx.plan;
+        let resolvedPlan: PersistedAllowancePlan = tx.plan;
         let resolvedStart = periodStart;
         let resolvedEnd = periodEnd;
         let resolvedNarrationTotal = allowances.narrationSecondsTotal;
