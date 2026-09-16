@@ -23,7 +23,7 @@ async function roots() {
 
 function manifest(): ReleaseManifest {
   const categories = [
-    ["worker", "Worker"], ["sharing", "sharing-worker"], ["mcp", "Swift MCP"], ["host", "Swift E2E host"], ["apple", "Apple UI acceptance"],
+    ["worker", "Worker"], ["sharing", "sharing-worker"], ["mcp", "Swift MCP"], ["apple", "Apple UI acceptance"],
   ] as const;
   return {
     version: 1,

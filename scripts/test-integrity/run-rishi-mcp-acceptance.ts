@@ -17,7 +17,7 @@ const ALLOWED_TOOLS = new Set([
 const E2E_ASSERTIONS = ["owner-create-share", "participant-join", "progress-sync", "owner-end", "rejoin-invalidation", "library-interaction"] as const;
 const STABLE_EVIDENCE_STRINGS = new Set(["host", "catalyst", "iphone17", "open", "select_to_share", "close", "next_page", "Leave session", "Leave and end for everyone", "Cancel", "<redacted>", "stable"]);
 
-type CallRecord = { timestamp: string; target: string; tool: string; arguments: JsonObject; success: boolean; label: string };
+type CallRecord = { timestamp: string; target: string; tool: string; arguments: JsonObject; success: boolean; label: string; observedInstanceCount?: number };
 type MCPReport = { version: 1; sha: string; startedAt: string; finishedAt: string; targets: string[]; peakInstances: number; calls: CallRecord[]; cleanup: { zeroInstances: boolean; memoryChecked: boolean }; redaction: { version: 1; arbitraryTextStored: false } };
 type E2EReport = { version: 1; sha: string; startedAt: string; finishedAt: string; targets: string[]; failed: number; assertions: Array<{ id: string; passed: boolean }> };
 
@@ -113,17 +113,18 @@ function instanceTarget(value: unknown): string | undefined {
 }
 
 function progressFingerprint(value: unknown): string {
-  const found: JsonObject = {};
-  const visit = (item: unknown): void => {
-    if (Array.isArray(item)) { for (const child of item) visit(child); return; }
-    if (!isRecord(item)) return;
-    for (const [key, child] of Object.entries(item)) {
-      if (/^(chapter|page|progress|currentPage|currentChapter|location|percent|percentage)$/i.test(key) && ["string", "number", "boolean"].includes(typeof child)) found[key] = child;
-      visit(child);
-    }
-  };
-  visit(value);
-  return Object.keys(found).length ? stableJson(found) : visibleText(value);
+  const object = isRecord(value) ? value : {};
+  const semantic = isRecord(object.semanticState) ? object.semanticState
+    : isRecord(object.state) && isRecord(object.state.semantic) ? object.state.semantic
+    : undefined;
+  const reader = semantic && isRecord(semantic.reader) ? semantic.reader : undefined;
+  if (!reader) throw new Error("structured reader progress is missing");
+  const page = isRecord(reader.page) ? reader.page : undefined;
+  const current = page?.current;
+  const total = page?.total;
+  if (!Number.isSafeInteger(current) || !Number.isSafeInteger(total) || (current as number) < 0 || (total as number) <= 0) throw new Error("structured reader page is malformed");
+  if (typeof reader.progress !== "number" || !Number.isFinite(reader.progress)) throw new Error("structured reader progress is malformed");
+  return stableJson({ chapter: typeof reader.chapter === "string" ? reader.chapter : "", page: { current, total }, progress: reader.progress });
 }
 
 function hasActiveSession(value: unknown): boolean {
@@ -135,25 +136,31 @@ function hasActiveSession(value: unknown): boolean {
   return /leave session|end for everyone|shared reading session|participant/i.test(text) && !/no active session|library/i.test(text);
 }
 
-function memoryFloor(): number {
-  const raw = process.env.RISHI_MCP_MIN_AVAILABLE_MEMORY_GIB ?? process.env.RISHI_E2E_MIN_FREE_MEMORY_GB ?? "0";
-  const floor = Number(raw);
-  if (!Number.isFinite(floor) || floor < 0) throw new Error("memory reserve must be a non-negative number");
-  return floor;
+function assertMemory(value: unknown): void {
+  if (!isRecord(value) || !isRecord(value.host)) throw new Error("malformed memory snapshot");
+  const available = value.host.availableMemoryBytes;
+  const minimum = value.host.configuredMinimumMemoryBytes;
+  if (!Number.isSafeInteger(available) || !Number.isSafeInteger(minimum) || (available as number) < 0 || (minimum as number) <= 0) throw new Error("malformed memory snapshot");
+  if ((available as number) < (minimum as number)) throw new Error("memory reserve fell below the configured floor");
 }
 
-function assertMemory(value: unknown): void {
-  const floor = memoryFloor();
-  const candidates: unknown[] = [];
-  const collect = (item: unknown): void => {
-    if (isRecord(item)) {
-      for (const key of ["availableMemoryGiB", "availableMemoryGB", "freeMemoryGiB", "freeMemoryGB"]) if (typeof item[key] === "number") candidates.push(item[key]);
-      for (const child of Object.values(item)) collect(child);
-    } else if (Array.isArray(item)) for (const child of item) collect(child);
-  };
-  collect(value);
-  if (candidates.length === 0 || candidates.some((candidate) => !Number.isFinite(candidate) || (candidate as number) < 0)) throw new Error("malformed memory snapshot");
-  if (candidates.some((candidate) => (candidate as number) < floor)) throw new Error("memory reserve fell below the configured floor");
+export class MCPRequestError extends Error {
+  constructor(public readonly rpcCode: number | string, public readonly toolCode: string | undefined, message: string) { super(toolCode ? `${toolCode}: ${message}` : message); }
+}
+
+export function decodeMCPResponseLine(line: string, expectedID: number): MCPResponse | undefined {
+  let response: unknown;
+  try { response = JSON.parse(line); } catch { throw new Error("malformed MCP JSON-RPC response"); }
+  if (!isRecord(response) || response.id !== expectedID) return undefined;
+  if (response.error) {
+    if (!isRecord(response.error)) throw new Error("malformed MCP JSON-RPC error");
+    const data = isRecord(response.error.data) ? response.error.data : undefined;
+    const message = typeof response.error.message === "string" ? response.error.message : "MCP request failed";
+    const rpcCode = typeof response.error.code === "number" || typeof response.error.code === "string" ? response.error.code : "error";
+    const toolCode = typeof data?.code === "string" ? data.code : undefined;
+    throw new MCPRequestError(rpcCode, toolCode, message);
+  }
+  return response;
 }
 
 function ensureNoMoreThanTwo(value: unknown): number {
@@ -196,10 +203,8 @@ class StdioMCPClient implements MCPTransport {
     this.child.stdin.write(`${payload}\n`);
     await this.child.stdin.flush();
     for (;;) {
-      let response: unknown;
-      try { response = JSON.parse(await this.line()); } catch { throw new Error("malformed MCP JSON-RPC response"); }
-      if (!isRecord(response) || response.id !== id) continue;
-      if (response.error) throw new Error(`MCP request failed: ${typeof (response.error as JsonObject).code === "number" ? (response.error as JsonObject).code : "error"}`);
+      const response = decodeMCPResponseLine(await this.line(), id);
+      if (!response) continue;
       return response;
     }
   }
@@ -240,8 +245,8 @@ export async function runAcceptance(options: AcceptanceOptions, dependencies: Ac
   const secrets: string[] = [];
   const startedTargets = new Set<string>();
   let peakInstances = 0;
-  const record = (target: string, tool: string, args: JsonObject, success: boolean, assertionId: string) => {
-    calls.push({ timestamp: now().toISOString(), target: target || "host", tool, arguments: redactArguments(args, secrets), success, label: assertionId });
+  const record = (target: string, tool: string, args: JsonObject, success: boolean, assertionId: string, observedInstanceCount?: number) => {
+    calls.push({ timestamp: now().toISOString(), target: target || "host", tool, arguments: redactArguments(args, secrets), success, label: assertionId, ...(observedInstanceCount === undefined ? {} : { observedInstanceCount }) });
   };
   const call = async (target: string, tool: string, args: JsonObject, assertionId: string): Promise<unknown> => {
     if (!ALLOWED_TOOLS.has(tool)) throw new Error(`undeclared MCP tool: ${tool}`);
@@ -250,9 +255,10 @@ export async function runAcceptance(options: AcceptanceOptions, dependencies: Ac
       const response = await client.request("tools/call", { name: tool, arguments: args });
       throwIfToolError(response);
       const value = findStructured(response);
-      if (tool === "list_app_instances") { const count = ensureNoMoreThanTwo(value); peakInstances = Math.max(peakInstances, count); }
+      const observedInstanceCount = tool === "list_app_instances" ? ensureNoMoreThanTwo(value) : undefined;
+      if (observedInstanceCount !== undefined) peakInstances = Math.max(peakInstances, observedInstanceCount);
       if (tool === "memory_snapshot") assertMemory(value);
-      record(target, tool, args, true, assertionId);
+      record(target, tool, args, true, assertionId, observedInstanceCount);
       return value;
     } catch (error) {
       record(target, tool, args, false, assertionId);
@@ -286,14 +292,14 @@ export async function runAcceptance(options: AcceptanceOptions, dependencies: Ac
 
   try {
     await ensureTools(client);
-    const initialInstances = await call("", "list_app_instances", {}, "library-interaction");
+    const initialInstances = await call("", "list_app_instances", {}, "initial-instances");
     if (instanceList(initialInstances).length !== 0) throw new Error("acceptance requires no pre-existing app instances");
     const initialMemory = await call("", "memory_snapshot", {}, "library-interaction");
     assertMemory(initialMemory);
     await call(options.owner, "start_app", { app: options.owner }, "owner-create-share"); startedTargets.add(options.owner);
     await call(options.participant, "start_app", { app: options.participant }, "participant-join"); startedTargets.add(options.participant);
     await call("", "memory_snapshot", {}, "participant-join");
-    const running = await call("", "list_app_instances", {}, "participant-join");
+    const running = await call("", "list_app_instances", {}, "running-instances");
     if (instanceList(running).length !== 2 || new Set(instanceList(running).map(instanceTarget).filter(Boolean)).size !== 2) throw new Error("acceptance did not reach exactly two declared targets");
     const ownerInitial = await inspect(options.owner, "owner-create-share");
     await inspect(options.participant, "participant-join");
@@ -348,7 +354,7 @@ export async function runAcceptance(options: AcceptanceOptions, dependencies: Ac
     await call(options.owner, "capture_screenshot", { app: options.owner }, "library-interaction");
     await call(options.owner, "stop_app", { app: options.owner }, "owner-end"); startedTargets.delete(options.owner);
     await call(options.participant, "stop_app", { app: options.participant }, "owner-end"); startedTargets.delete(options.participant);
-    const finalInstances = await call("", "list_app_instances", {}, "owner-end");
+    const finalInstances = await call("", "list_app_instances", {}, "final-instances");
     const finalMemory = await call("", "memory_snapshot", {}, "owner-end");
     if (instanceList(finalInstances).length !== 0) throw new Error("server-owned app instances remained after cleanup");
     assertMemory(finalMemory);
@@ -364,7 +370,7 @@ export async function runAcceptance(options: AcceptanceOptions, dependencies: Ac
       catch (cleanupError) { cleanupErrors.push(errorMessage(cleanupError)); }
     }
     try {
-      const finalInstances = await call("", "list_app_instances", {}, "owner-end");
+      const finalInstances = await call("", "list_app_instances", {}, "final-instances");
       if (instanceList(finalInstances).length !== 0) throw new Error("cleanup left app instances running");
       const finalMemory = await call("", "memory_snapshot", {}, "owner-end");
       assertMemory(finalMemory);

@@ -11,7 +11,7 @@ export type VerificationOptions = { manifest: ReleaseManifest; evidenceRoot: str
 export type VerificationResult = { ok: true; sha: string; artifacts: string[] };
 type JsonObject = Record<string, unknown>;
 
-const REQUIRED_CATEGORIES = ["Worker", "sharing-worker", "Swift MCP", "Swift E2E host", "Apple UI acceptance"];
+const REQUIRED_CATEGORIES = ["Worker", "sharing-worker", "Swift MCP", "Apple UI acceptance"];
 const REQUIRED_E2E_ASSERTIONS = ["owner-create-share", "participant-join", "progress-sync", "owner-end", "rejoin-invalidation", "library-interaction"];
 const REQUIRED_MCP_TOOLS = ["list_app_instances", "memory_snapshot", "start_app", "stop_app", "inspect_app_state", "select_book", "send_reader_action", "create_reading_session", "join_reading_session", "wait_for_participant", "click_text", "capture_screenshot"];
 const STABLE_EVIDENCE_STRINGS = new Set(["host", "catalyst", "iphone17", "open", "select_to_share", "close", "next_page", "Leave session", "Leave and end for everyone", "Cancel", "<redacted>", "stable"]);
@@ -47,7 +47,7 @@ async function digestPath(path: string): Promise<string> {
 }
 
 export function validateManifest(manifest: ReleaseManifest): void {
-  if (!isRecord(manifest) || manifest.version !== 1 || !Array.isArray(manifest.required) || manifest.required.length !== 5) fail("malformed release manifest");
+  if (!isRecord(manifest) || manifest.version !== 1 || !Array.isArray(manifest.required) || manifest.required.length !== REQUIRED_CATEGORIES.length) fail("malformed release manifest");
   const ids = new Set<string>(); const stepIds = new Set<string>(); const categories = new Set<string>();
   for (const entry of manifest.required) {
     if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.category !== "string" || typeof entry.command !== "string" || !relativePath(entry.artifact) || !Array.isArray(entry.testIds) || !Array.isArray(entry.steps) || entry.steps.length === 0) fail("malformed release manifest entry");
@@ -80,15 +80,48 @@ function collectStrings(value: unknown, output: string[] = []): string[] { if (t
 
 function validateMcpEvidence(value: JsonObject, sha: string): void {
   validateContentHash(value, "MCP evidence");
-  if (value.version !== 1 || value.sha !== sha || stableJson(value.targets) !== stableJson(["catalyst", "iphone17"]) || !isRecord(value.cleanup) || value.cleanup.zeroInstances !== true || value.cleanup.memoryChecked !== true || !isRecord(value.redaction) || value.redaction.version !== 1 || value.redaction.arbitraryTextStored !== false || !Array.isArray(value.calls) || value.calls.length === 0) fail("malformed or stale MCP evidence");
-  const seen = new Set<string>(); const starts = new Set<string>(); const stops = new Set<string>();
-  for (const call of value.calls) {
+  if (value.version !== 1 || value.sha !== sha || stableJson(value.targets) !== stableJson(["catalyst", "iphone17"]) || value.peakInstances !== 2 || !isRecord(value.cleanup) || value.cleanup.zeroInstances !== true || value.cleanup.memoryChecked !== true || !isRecord(value.redaction) || value.redaction.version !== 1 || value.redaction.arbitraryTextStored !== false || !Array.isArray(value.calls) || value.calls.length === 0) fail("malformed or stale MCP evidence");
+  const seen = new Set<string>();
+  const starts = new Map<string, number>();
+  const stops = new Map<string, number>();
+  const startIndexes: number[] = [];
+  const stopIndexes: number[] = [];
+  const observations = new Map<string, { expectedCount: number; calls: number; index?: number }>([
+    ["initial-instances", { expectedCount: 0, calls: 0 }],
+    ["running-instances", { expectedCount: 2, calls: 0 }],
+    ["final-instances", { expectedCount: 0, calls: 0 }],
+  ]);
+  for (const [callIndex, call] of value.calls.entries()) {
     if (!isRecord(call) || typeof call.tool !== "string" || !REQUIRED_MCP_TOOLS.includes(call.tool) || !["host", "catalyst", "iphone17"].includes(call.target as string) || call.success !== true || !isRecord(call.arguments) || typeof call.label !== "string") fail("malformed MCP call evidence");
-    seen.add(call.tool); if (call.tool === "start_app") starts.add(call.target as string); if (call.tool === "stop_app") stops.add(call.target as string);
+    seen.add(call.tool);
+    if (call.tool === "start_app" || call.tool === "stop_app") {
+      if (call.target === "host" || call.arguments.app !== call.target) fail(`MCP ${call.tool} target does not match its app argument`);
+      const counts = call.tool === "start_app" ? starts : stops;
+      counts.set(call.target as string, (counts.get(call.target as string) ?? 0) + 1);
+      (call.tool === "start_app" ? startIndexes : stopIndexes).push(callIndex);
+    }
+    const observation = observations.get(call.label);
+    const hasObservedInstanceCount = Object.prototype.hasOwnProperty.call(call, "observedInstanceCount");
+    if (observation) {
+      if (call.tool !== "list_app_instances" || call.target !== "host") fail(`invalid MCP instance observation: ${call.label}`);
+      if (!Number.isSafeInteger(call.observedInstanceCount) || (call.observedInstanceCount as number) < 0) fail(`malformed MCP observed instance count: ${call.label}`);
+      if (call.observedInstanceCount !== observation.expectedCount) fail(`unexpected MCP observed instance count: ${call.label}`);
+      observation.calls += 1;
+      observation.index = callIndex;
+    } else if (hasObservedInstanceCount) {
+      fail("MCP observed instance count appears on an unrelated call");
+    }
     for (const text of collectStrings(call.arguments)) if (!STABLE_EVIDENCE_STRINGS.has(text)) fail("MCP evidence violates redaction contract");
   }
   for (const tool of REQUIRED_MCP_TOOLS) if (!seen.has(tool)) fail(`missing required MCP call: ${tool}`);
-  if (stableJson([...starts].sort()) !== stableJson(["catalyst", "iphone17"]) || stableJson([...stops].sort()) !== stableJson(["catalyst", "iphone17"])) fail("MCP evidence does not prove exactly two targets");
+  for (const target of ["catalyst", "iphone17"]) if (starts.get(target) !== 1 || stops.get(target) !== 1) fail(`MCP evidence must start and stop ${target} exactly once`);
+  if (starts.size !== 2 || stops.size !== 2) fail("MCP evidence contains an unexpected app start or stop target");
+  for (const [label, observation] of observations) if (observation.calls !== 1) fail(`MCP evidence must contain exactly one successful ${label} list observation`);
+  if (value.calls.filter((call) => isRecord(call) && call.tool === "list_app_instances").length !== observations.size) fail("MCP evidence contains an unlabeled or duplicate app-instance observation");
+  const initialIndex = observations.get("initial-instances")!.index!;
+  const runningIndex = observations.get("running-instances")!.index!;
+  const finalIndex = observations.get("final-instances")!.index!;
+  if (initialIndex >= Math.min(...startIndexes) || Math.max(...startIndexes) >= runningIndex || runningIndex >= Math.min(...stopIndexes) || Math.max(...stopIndexes) >= finalIndex) fail("MCP instance lifecycle calls are out of order");
 }
 
 function validateE2eEvidence(value: JsonObject, sha: string): void {
