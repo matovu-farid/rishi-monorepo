@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "required": [
+    {
+      "id": "worker-release-gate",
+      "category": "Worker",
+      "command": "cd workers/worker && bun run test && bun run type-check && bun run verify:migrations",
+      "artifact": "worker.json",
+      "testIds": ["worker.test", "worker.type-check", "worker.migrations"],
+      "steps": [
+        { "id": "worker.test", "kind": "test", "format": "vitest-json", "cwd": "workers/worker", "command": ["bun", "run", "test"], "result": "normalized/worker-test.json" },
+        { "id": "worker.type-check", "kind": "check", "format": "command", "cwd": "workers/worker", "command": ["bun", "run", "type-check"], "result": "normalized/worker-type-check.json" },
+        { "id": "worker.migrations", "kind": "check", "format": "command", "cwd": "workers/worker", "command": ["bun", "run", "verify:migrations"], "result": "normalized/worker-migrations.json" }
+      ]
+    },
+    {
+      "id": "sharing-worker-release-gate",
+      "category": "sharing-worker",
+      "command": "cd workers/sharing-worker && bun run test && bunx tsc --noEmit",
+      "artifact": "sharing-worker.json",
+      "testIds": ["sharing-worker.test", "sharing-worker.type-check"],
+      "steps": [
+        { "id": "sharing-worker.test", "kind": "test", "format": "vitest-json", "cwd": "workers/sharing-worker", "command": ["bun", "run", "test"], "result": "normalized/sharing-worker-test.json" },
+        { "id": "sharing-worker.type-check", "kind": "check", "format": "command", "cwd": "workers/sharing-worker", "command": ["bunx", "tsc", "--noEmit"], "result": "normalized/sharing-worker-type-check.json" }
+      ]
+    },
+    {
+      "id": "swift-mcp-release-gate",
+      "category": "Swift MCP",
+      "command": "swift build --package-path apps/apple/rishi-mcp --jobs 1 && swift test --package-path apps/apple/rishi-mcp --jobs 1",
+      "artifact": "swift-mcp.json",
+      "testIds": ["swift-mcp.build", "swift-mcp.test"],
+      "steps": [
+        { "id": "swift-mcp.build", "kind": "check", "format": "command", "cwd": ".", "command": ["swift", "build", "--package-path", "apps/apple/rishi-mcp", "--jobs", "1"], "result": "normalized/swift-mcp-build.json" },
+        { "id": "swift-mcp.test", "kind": "test", "format": "swift-output", "cwd": ".", "command": ["swift", "test", "--package-path", "apps/apple/rishi-mcp", "--jobs", "1"], "result": "normalized/swift-mcp-test.json" }
+      ]
+    },
+    {
+      "id": "swift-e2e-host-release-gate",
+      "category": "Swift E2E host",
+      "command": "swift build --package-path apps/apple/rishi-e2e-host --jobs 1 && swift test --package-path apps/apple/rishi-e2e-host --jobs 1",
+      "artifact": "swift-e2e-host.json",
+      "testIds": ["swift-e2e-host.build", "swift-e2e-host.test"],
+      "steps": [
+        { "id": "swift-e2e-host.build", "kind": "check", "format": "command", "cwd": ".", "command": ["swift", "build", "--package-path", "apps/apple/rishi-e2e-host", "--jobs", "1"], "result": "normalized/swift-e2e-host-build.json" },
+        { "id": "swift-e2e-host.test", "kind": "test", "format": "swift-output", "cwd": ".", "command": ["swift", "test", "--package-path", "apps/apple/rishi-e2e-host", "--jobs", "1"], "result": "normalized/swift-e2e-host-test.json" }
+      ]
+    },
+    {
+      "id": "apple-ui-release-gate",
+      "category": "Apple UI acceptance",
+      "command": "set -euo pipefail; xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath \"$RISHI_RELEASE_ROOT/apple-iphone.xcresult\" -only-testing:rishiUITests/SharedReadingOwnerUITests -only-testing:rishiUITests/SharedReadingParticipantUITests -only-testing:rishiUITests/SharedReadingInviteURLTests && xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -resultBundlePath \"$RISHI_RELEASE_ROOT/apple-catalyst.xcresult\" -only-testing:rishiUITests/SharedReadingOwnerUITests -only-testing:rishiUITests/SharedReadingParticipantUITests -only-testing:rishiUITests/SharedReadingInviteURLTests && apps/apple/rishi-e2e-host/Scripts/run-shared-reading-acceptance.sh --mcp-binary \"$(pwd)/apps/apple/rishi-mcp/.build/debug/rishi-apple-mcp\" --mcp-client \"$(pwd)/scripts/test-integrity/run-rishi-mcp-acceptance.ts\" --owner catalyst --participant iphone17 --sync-timeout-ms 120000 --sha \"$RISHI_RELEASE_SHA\" --evidence-root \"$RISHI_RELEASE_ROOT\"",
+      "artifact": "apple-ui.json",
+      "testIds": ["apple-ui.iphone", "apple-ui.catalyst", "apple-ui.acceptance"],
+      "steps": [
+        { "id": "apple-ui.iphone", "kind": "test", "format": "xcresult", "cwd": ".", "command": ["xcodebuild", "test", "-project", "apps/apple/rishi/rishi.xcodeproj", "-scheme", "rishi", "-configuration", "Debug", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro", "-resultBundlePath", "$RISHI_RELEASE_ROOT/apple-iphone.xcresult", "-only-testing:rishiUITests/SharedReadingOwnerUITests", "-only-testing:rishiUITests/SharedReadingParticipantUITests", "-only-testing:rishiUITests/SharedReadingInviteURLTests"], "result": "normalized/apple-iphone.json", "xcresult": "apple-iphone.xcresult" },
+        { "id": "apple-ui.catalyst", "kind": "test", "format": "xcresult", "cwd": ".", "command": ["xcodebuild", "test", "-project", "apps/apple/rishi/rishi.xcodeproj", "-scheme", "rishi", "-configuration", "Debug", "-destination", "platform=macOS,variant=Mac Catalyst", "-resultBundlePath", "$RISHI_RELEASE_ROOT/apple-catalyst.xcresult", "-only-testing:rishiUITests/SharedReadingOwnerUITests", "-only-testing:rishiUITests/SharedReadingParticipantUITests", "-only-testing:rishiUITests/SharedReadingInviteURLTests"], "result": "normalized/apple-catalyst.json", "xcresult": "apple-catalyst.xcresult" },
+        { "id": "apple-ui.acceptance", "kind": "check", "format": "command", "cwd": ".", "command": ["apps/apple/rishi-e2e-host/Scripts/run-shared-reading-acceptance.sh", "--mcp-binary", "apps/apple/rishi-mcp/.build/debug/rishi-apple-mcp", "--mcp-client", "scripts/test-integrity/run-rishi-mcp-acceptance.ts", "--owner", "catalyst", "--participant", "iphone17", "--sync-timeout-ms", "120000", "--sha", "$RISHI_RELEASE_SHA", "--evidence-root", "$RISHI_RELEASE_ROOT"], "result": "normalized/apple-acceptance.json" }
+      ],
+      "auxiliary": ["apple-iphone.xcresult", "apple-catalyst.xcresult", "shared-reading-mcp-evidence.json", "shared-reading-apple-e2e-evidence.json"]
+    }
+  ]
+}

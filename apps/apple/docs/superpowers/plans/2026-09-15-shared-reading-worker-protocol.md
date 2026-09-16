@@ -930,7 +930,13 @@ inserted lower IDs are discovered, lease losers cannot enter the cascade,
 deleted accounts cannot reopen membership or rejoin a room, discovered `> 0`,
 skipped/failed `0`, exits `0`.
 
-- [ ] **Step 5: Commit deletion-owned files**
+- [ ] **Step 5: Commit deletion-owned files — BLOCKED / NON-EXECUTABLE**
+
+Do **not** run the commands below until the authoritative
+"Remaining execution and completion matrix" gate has recorded W4R's deployed
+minute trigger, full production traversal/checkpoint wrap, and required
+failure/retry evidence as passing. Until then this is a future command recipe,
+not authorization to stage or commit W4.
 
 ```bash
 git add workers/worker/src/account-deletion.ts workers/worker/src/account-deletion.integration.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts workers/worker/src/routes/session-shares.ts workers/worker/src/routes/session-shares.test.ts workers/worker/src/routes/user.ts workers/worker/src/routes/user.test.ts workers/worker/src/routes/auth-compat.ts workers/worker/src/routes/auth-compat.test.ts workers/sharing-worker/src/AppleSessionRoom.ts workers/sharing-worker/src/index.ts workers/sharing-worker/test/AppleSessionRoom.recovery.test.ts workers/sharing-worker/test/versioned-apple-route.test.ts scripts/test-integrity/verify-required-tests.ts scripts/test-integrity/verify-required-tests.test.ts apps/apple/docs/superpowers/reviews/shared-reading-w4-required-tests.txt
@@ -1462,3 +1468,303 @@ or paid capacity is authorized, deploy the latest clean commit containing
 `411eb7220` and require the minute trigger plus before/after checkpoint evidence
 for both prefixes through full wrap. Require failure/retry recovery evidence only
 in local/staging or when a natural production failure is actually observed.
+
+## Remaining execution and completion matrix
+
+This matrix is the authoritative remaining-work boundary for PR #256 and issue
+#255. The user's earlier authorization permits an eventual merge and deployment;
+it does **not** authorize merging now. PR #256 remains merge-blocked until every
+gate below passes.
+
+| Workstream | Current state | Next action | Completion evidence | Commit/merge gate |
+| --- | --- | --- | --- | --- |
+| W4R production reconciliation | The committed reconciler is independently code-reviewed and locally verified. Safety commit `411eb7220` is **not deployed**. Cloudflare Free cron capacity is 5/5, so the separate minute trigger cannot be added without user authorization to free a slot or upgrade. The existing daily trigger remains active. | Obtain explicit capacity authorization; deploy the latest clean W4R commit with the daily trigger preserved and the separate minute trigger enabled. | Deployed version/commit, both triggers present, before/after checkpoint bodies and ETags for both prefixes, a full traversal/checkpoint wrap, and local/staging failure-and-retry evidence (plus production evidence if a natural failure occurs). | Blocks W4 rollout and PR merge. Do not remove or consolidate another workload's trigger or purchase capacity implicitly. |
+| W4 account deletion, upload, and session sharing | The changes are dirty and depend on W4R proving late-upload cleanup in production. | Keep them uncommitted and undeployed until W4R completes a full production traversal/checkpoint wrap and failure/retry verification; then run an independent review and clean gates. | W4R evidence above, zero open Critical/High findings on the exact W4 revision, focused deletion/upload/session-sharing tests, full Worker tests, typecheck, and migration verification. | Commit boundary (d), only after the W4R production gate; blocks merge and deployment until satisfied. |
+| Test-auth | Dirty changes were independently rejected with High findings: production gating, deletion-state handling, non-atomic rollback, and duplicate-user race. | Exclude them from this PR; preserve for a separate redesign and review. | PR diff contains none of the rejected test-auth implementation; future work has its own specification and independent review. | Separate future commit/PR only; never bundled into PR #256. |
+| Apple two-account E2E | Real end-to-end acceptance has not yet been completed. | Run exactly two app instances: iPhone 17 Pro simulator and Mac Catalyst, signed into two different accounts, and require every scenario below to pass. | Timestamped `apps/apple/docs/superpowers/reviews/shared-reading-apple-e2e-evidence.json` with both targets/account aliases, redacted identifiers, per-scenario assertions, screenshots/log references, `failed: 0`, and reviewer verdict. | Blocks merge. Monitor memory, close prior instances before launch, and never exceed two app instances. |
+| Swift MCP and `rishi-e2e-host` | The Swift rewrite and host are uncommitted and not yet accepted as the tested Codex control path. | Execute the reproducible MCP procedure below, connect the built server to Codex, and drive the real two-instance acceptance flow. | Package build/test artifacts plus `apps/apple/docs/superpowers/reviews/shared-reading-mcp-evidence.json`, with config location/name but no secrets, ordered calls/results, app-visible assertions, and cleanup/memory proof. | Commit boundary (b); blocks merge until real-action proof passes. |
+| Apple shared-reading UI/E2E support | Uncommitted Apple auth, import, UI, and test changes are mixed. | Classify every changed path as required shared-reading/MCP support or unrelated. Independently review and commit only required files; leave unrelated changes out. | Path-by-path classification, focused Apple tests, clean Apple build, real E2E evidence, and zero open Critical/High findings for the exact revision. | Commit boundary (c); unrelated artifacts block merge if present. |
+| Required-test integrity | The release-wide manifest/runner/verifier do not yet exist. | Before the final gate, implement the exact tooling task below and independently review it. | Versioned manifest and tooling tests plus normalized artifacts for all five categories; verifier exits zero only for the final clean `HEAD`. | Plan/docs/tooling boundary (a); blocks merge. |
+| Final review, CI, and PR boundary | PR #256 is open and currently includes committed shared-reading work; Electron is out of scope. | After the scoped commits, run one independent reviewer per artifact/scope/revision, then clean committed-state tests, types, migrations, and latest branch CI; inspect the final PR diff. | Zero open Critical/High findings; all required local gates and latest CI green; diff contains no Electron, rejected test-auth, or unrelated artifacts. | Final merge gate. Electron extraction/removal is a separate repository/PR and cannot modify this PR. |
+
+### Required Apple E2E assertions
+
+Every assertion is mandatory; a missing observation is a failure, not a skip:
+
+1. **Owner create/share:** Catalyst owner selects the fixture book, creates one
+   session, and exposes one valid redacted invite token/URL while the owner UI
+   visibly shows the active session.
+2. **Participant join:** iPhone participant opens that invite and both instances
+   visibly show the participant in the same session.
+3. **Progress synchronization:** a semantic `next_page` on one instance causes
+   the other instance to show the same new chapter/page/progress value within
+   the declared timeout; equality before and after is recorded.
+4. **Owner end:** the owner ends the session; both instances visibly leave or
+   mark it ended, and neither lists it as active.
+5. **Rejoin invalidation:** reopening the same invite is rejected as ended or
+   invalid and cannot recreate membership.
+6. **Library interaction:** a single tap opens the book. On Catalyst, a
+   two-finger click opens the context actions without opening the book.
+
+### Reproducible Swift MCP proof
+
+Run package gates from the repository root and retain normalized command output
+under a private evidence root referenced by the final JSON:
+
+```bash
+set -euo pipefail
+swift build --package-path apps/apple/rishi-mcp --jobs 1
+swift test --package-path apps/apple/rishi-mcp --jobs 1
+swift build --package-path apps/apple/rishi-e2e-host --jobs 1
+swift test --package-path apps/apple/rishi-e2e-host --jobs 1
+RISHI_MCP_SWIFT_BIN="$(pwd)/apps/apple/rishi-mcp/.build/debug/rishi-apple-mcp"
+RISHI_MCP_BACKUP="/private/tmp/rishi-mcp-before.json"
+bun scripts/test-integrity/replace-codex-mcp.ts snapshot \
+  --name rishi-apple --backup "$RISHI_MCP_BACKUP"
+restore_rishi_mcp() {
+  bun scripts/test-integrity/replace-codex-mcp.ts restore \
+    --name rishi-apple --backup "$RISHI_MCP_BACKUP"
+}
+trap restore_rishi_mcp ERR INT TERM
+bun scripts/test-integrity/replace-codex-mcp.ts install \
+  --name rishi-apple --command "$RISHI_MCP_SWIFT_BIN" --backup "$RISHI_MCP_BACKUP"
+codex mcp get rishi-apple --json | jq -e --arg command "$RISHI_MCP_SWIFT_BIN" \
+  '.enabled == true and .transport.type == "stdio" and .transport.command == $command and (.transport.args | length == 0)'
+codex mcp list
+trap - ERR INT TERM
+```
+
+The initial `get` is the inspect branch for the already-registered deprecated
+Node server. `replace-codex-mcp.ts` must use `codex mcp get --json`, preserve the
+complete stdio command/args/environment in the backup, remove/add the requested
+entry, verify the installed JSON, and automatically restore the prior entry if
+install fails. Its `restore` subcommand must reconstruct command, args, and each
+environment entry from the backup and verify byte-equivalent normalized JSON.
+Unit tests cover absent, Node-existing, Swift-existing, install-failure, and
+restore-failure cases. Save redacted pre/post JSON in the MCP evidence. The
+remove/add replacement is permitted only after Swift package gates pass. The
+JSON assertion—not server-name presence—is the registration gate, and `set -e`
+makes an assertion failure fail the block before `codex mcp list`. Failure,
+interrupt, or termination restores the exact prior entry. Success deliberately
+clears the traps and retains the verified Swift registration because that is the
+accepted Codex control-path deliverable; the evidence records that committed
+configuration transition.
+
+Record the actual Codex MCP configuration file path and server name
+`rishi-apple` in `apps/apple/docs/superpowers/reviews/shared-reading-mcp-evidence.json`;
+record no credentials, tokens, or account identifiers. Through the connected
+server, the minimum accepted call sequence is: `list_app_instances` and
+`memory_snapshot`; `start_app` for only `catalyst` and `iphone17`; and
+`inspect_app_state` on both. On Catalyst call `select_book(action: open)`, prove
+the reader is visible, call `send_reader_action(action: close)`, and prove the
+library is visible again. Then call `select_book(action: select_to_share)`,
+prove the selection/share UI appears, dismiss it, and call
+`create_reading_session`. On iPhone call `join_reading_session` with the returned
+token. Call `wait_for_participant(timeoutMs: 120000)` on both using the exact
+participant/session text captured after join. Call
+`send_reader_action(action: next_page)` and require equal visible progress on
+both within 120 seconds. On the owner call `click_text(text: "Leave session")`
+then `click_text(text: "Leave and end for everyone")`; require both instances
+to show no active session within 120 seconds. Attempt the same token with
+`join_reading_session` and require `SESSION_ENDED`/invalid rejection. Finally
+call `capture_screenshot`, `stop_app` for both, `list_app_instances`, and
+`memory_snapshot`. Each call records timestamp, target, redacted arguments,
+success/failure, and the matching app-visible assertion from the E2E list.
+Completion requires exactly two instances at peak, zero server-owned instances
+after cleanup, no orphaned XCTest/xcodebuild/Rishi process, and memory above the
+configured reserve throughout.
+
+### Required-test manifest and fail-closed verifier task
+
+Before any final use, add and independently review:
+
+- manifest: `apps/apple/docs/superpowers/reviews/shared-reading-release-required-tests.json`;
+- runner: `scripts/test-integrity/run-shared-reading-release.ts`;
+- verifier: `scripts/test-integrity/verify-shared-reading-release.ts`;
+- tests: `scripts/test-integrity/verify-shared-reading-release.test.ts`.
+- release-runner tests: `scripts/test-integrity/run-shared-reading-release.test.ts`;
+- transactional Codex registration helper and tests:
+  `scripts/test-integrity/replace-codex-mcp.ts` and
+  `scripts/test-integrity/replace-codex-mcp.test.ts`;
+- deterministic stdio MCP client:
+  `scripts/test-integrity/run-rishi-mcp-acceptance.ts`, which initializes the
+  built server, checks `tools/list`, performs the exact `tools/call` sequence,
+  validates each JSON-RPC response/app assertion, and refuses any undeclared
+  tool or third app instance; tests live in
+  `scripts/test-integrity/run-rishi-mcp-acceptance.test.ts`;
+- acceptance driver:
+  `apps/apple/rishi-e2e-host/Scripts/run-shared-reading-acceptance.sh`, which
+  invokes that deterministic client and writes the E2E and MCP JSON evidence
+  stamped with the supplied SHA. Its exact runner contract is:
+
+```bash
+apps/apple/rishi-e2e-host/Scripts/run-shared-reading-acceptance.sh \
+  --mcp-binary "$(pwd)/apps/apple/rishi-mcp/.build/debug/rishi-apple-mcp" \
+  --mcp-client "$(pwd)/scripts/test-integrity/run-rishi-mcp-acceptance.ts" \
+  --owner catalyst --participant iphone17 --sync-timeout-ms 120000 \
+  --sha "$RISHI_RELEASE_SHA" --evidence-root "$RISHI_RELEASE_ROOT"
+```
+
+The wrapper rejects a SHA different from `git rev-parse HEAD`, missing/nonempty
+pre-existing target artifacts, a server that does not expose the required tool
+set, or any nonzero MCP/app assertion. It writes
+`shared-reading-mcp-evidence.json` and
+`shared-reading-apple-e2e-evidence.json` beneath the evidence root atomically.
+
+The manifest assigns globally unique IDs and the exact command to these artifact
+categories:
+
+| Category | Exact command | Required artifact |
+| --- | --- | --- |
+| Worker | `cd workers/worker && bun run test && bun run type-check && bun run verify:migrations` | normalized Worker test/type/migration JSON |
+| sharing-worker | `cd workers/sharing-worker && bun run test && bunx tsc --noEmit` | normalized sharing test/type JSON |
+| Swift MCP | `swift build --package-path apps/apple/rishi-mcp --jobs 1 && swift test --package-path apps/apple/rishi-mcp --jobs 1` | normalized Swift build/test JSON |
+| Swift E2E host | `swift build --package-path apps/apple/rishi-e2e-host --jobs 1 && swift test --package-path apps/apple/rishi-e2e-host --jobs 1` | normalized Swift build/test JSON |
+| Apple UI acceptance | `xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath "$RISHI_RELEASE_ROOT/apple-iphone.xcresult" -only-testing:rishiUITests/SharedReadingOwnerUITests -only-testing:rishiUITests/SharedReadingParticipantUITests -only-testing:rishiUITests/SharedReadingInviteURLTests`; then `xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' -resultBundlePath "$RISHI_RELEASE_ROOT/apple-catalyst.xcresult" -only-testing:rishiUITests/SharedReadingOwnerUITests -only-testing:rishiUITests/SharedReadingParticipantUITests -only-testing:rishiUITests/SharedReadingInviteURLTests`; then invoke `run-shared-reading-acceptance.sh` with the exact arguments above. | both `.xcresult` bundles, normalized test JSON, and final-SHA MCP plus real two-account E2E JSON |
+
+The runner must execute the manifest commands, including the acceptance driver
+after all build/test commands, and stamp every artifact with the
+exact `git rev-parse HEAD`, command, category, unique test IDs, discovered,
+passed, failed, skipped, start/end UTC times, and content hash. The verifier must
+fail on a missing manifest entry/artifact/test ID, zero discovery, any skip or
+failure, nonzero command status, stale or mixed SHA, duplicate ID, malformed
+artifact, missing/hash-mismatched `.xcresult`, or missing/failed E2E assertion.
+Its own tests must prove every rejection case. Final invocation:
+
+```bash
+RISHI_RELEASE_ROOT=$(mktemp -d /private/tmp/rishi-release.XXXXXX)
+export RISHI_RELEASE_ROOT
+export RISHI_RELEASE_SHA="$(git rev-parse HEAD)"
+bun scripts/test-integrity/run-shared-reading-release.ts --manifest apps/apple/docs/superpowers/reviews/shared-reading-release-required-tests.json --evidence-root "$RISHI_RELEASE_ROOT" --sha "$RISHI_RELEASE_SHA"
+bun test scripts/test-integrity/verify-shared-reading-release.test.ts
+bun scripts/test-integrity/verify-shared-reading-release.ts --manifest apps/apple/docs/superpowers/reviews/shared-reading-release-required-tests.json --evidence-root "$RISHI_RELEASE_ROOT" --sha "$RISHI_RELEASE_SHA"
+```
+
+### Path allowlists and staged-diff gates
+
+Create these reviewed, one-path-per-line allowlists in the plan/docs/tooling
+boundary before staging any implementation boundary:
+
+- `(a)` `apps/apple/docs/superpowers/reviews/shared-reading-boundary-a.txt`:
+  this plan, the release manifest, all four integrity runner/verifier files
+  above, `scripts/test-integrity/replace-codex-mcp.ts`,
+  `scripts/test-integrity/replace-codex-mcp.test.ts`,
+  `scripts/test-integrity/run-rishi-mcp-acceptance.ts`, and their
+  `scripts/test-integrity/run-rishi-mcp-acceptance.test.ts`,
+  `scripts/test-integrity/run-shared-reading-release.test.ts`, and their
+  review/evidence documents only.
+- `(b)` `apps/apple/docs/superpowers/reviews/shared-reading-boundary-b.txt`:
+  `apps/apple/rishi-mcp/**`, `apps/apple/rishi-e2e-host/**`, and only its own
+  `shared-reading-boundary-b-hunks.md` and
+  `shared-reading-boundary-b-approved.sha256` review evidence.
+- `(c)` `apps/apple/docs/superpowers/reviews/shared-reading-boundary-c.txt`:
+  only reviewed required paths selected from
+  `apps/apple/rishi/rishi/{Account,Auth,Library,Reader,SharedReading,SystemIntegration}/**`,
+  `apps/apple/rishi/rishi/{RootView.swift,ServiceGraphFactory.swift,rishiApp.swift}`,
+  `apps/apple/rishi/rishi/Modules/RishiCore/**`,
+  `apps/apple/rishi/rishi/Modules/RishiLibrary/**`,
+  `apps/apple/rishi/rishi/Modules/RishiReader/**`,
+  `apps/apple/rishi/rishiTests/**`, and
+  `apps/apple/rishi/rishiUITests/{MCPControlUITests.swift,SharedReadingInviteURLTests.swift,SharedReadingOwnerUITests.swift,SharedReadingParticipantUITests.swift,SharedReadingTestSupport.swift}`.
+  Classification must remove every unrelated auth/import/account path rather
+  than treating these candidate prefixes as blanket approval. This boundary may
+  additionally contain only its own `shared-reading-boundary-c-hunks.md` and
+  `shared-reading-boundary-c-approved.sha256` review evidence.
+- `(d)` `apps/apple/docs/superpowers/reviews/shared-reading-boundary-d.txt`:
+  only the exact W4 files listed in W4 Step 5 plus reviewed
+  `workers/worker/src/{r2-presign.ts,r2-presign.test.ts}` and
+  `workers/worker/src/routes/{upload.ts,upload-url.test.ts}`, plus only its own
+  `shared-reading-boundary-d-hunks.md` and
+  `shared-reading-boundary-d-approved.sha256` review evidence.
+
+For each boundary, stage only literal paths from its reviewed allowlist. A file
+with both in-scope and unrelated edits is a **mixed file** and must never be
+staged wholesale: either reconstruct only the accepted edits in a clean
+worktree at the current `HEAD`, or use `git add -p` after a line-by-line hunk
+review. Export the resulting staged patch, record its SHA-256 and each accepted
+hunk header/purpose in
+`apps/apple/docs/superpowers/reviews/shared-reading-boundary-BOUNDARY-hunks.md`,
+and require an independent reviewer verdict bound to that patch hash. The
+reviewer writes the approved implementation-patch hash alone to
+`apps/apple/docs/superpowers/reviews/shared-reading-boundary-BOUNDARY-approved.sha256`.
+Evidence/manifest files are excluded from the implementation patch so adding
+the approval record does not create a recursive hash. Any unclassified hunk
+fails the boundary even when its filename is allowed. Then run this fail-closed
+check before commit (replace `BOUNDARY`):
+
+```bash
+set -euo pipefail
+git diff --cached --name-only | LC_ALL=C sort -u > /private/tmp/rishi-staged.txt
+LC_ALL=C sort -u "apps/apple/docs/superpowers/reviews/shared-reading-boundary-BOUNDARY.txt" > /private/tmp/rishi-allowed.txt
+comm -23 /private/tmp/rishi-staged.txt /private/tmp/rishi-allowed.txt > /private/tmp/rishi-unexpected.txt
+test -s /private/tmp/rishi-staged.txt
+test ! -s /private/tmp/rishi-unexpected.txt
+git diff --cached --check
+grep -v '^apps/apple/docs/superpowers/reviews/' \
+  "apps/apple/docs/superpowers/reviews/shared-reading-boundary-BOUNDARY.txt" \
+  > "/private/tmp/rishi-boundary-BOUNDARY-implementation-paths.txt"
+tr '\n' '\0' < "/private/tmp/rishi-boundary-BOUNDARY-implementation-paths.txt" \
+  | xargs -0 git diff --cached --binary -- \
+  > "/private/tmp/rishi-boundary-BOUNDARY.patch"
+RISHI_ACTUAL_PATCH_SHA=$(shasum -a 256 "/private/tmp/rishi-boundary-BOUNDARY.patch" | awk '{print $1}')
+RISHI_APPROVED_PATCH_SHA=$(tr -d '[:space:]' < "apps/apple/docs/superpowers/reviews/shared-reading-boundary-BOUNDARY-approved.sha256")
+test -n "$RISHI_APPROVED_PATCH_SHA"
+test "$RISHI_ACTUAL_PATCH_SHA" = "$RISHI_APPROVED_PATCH_SHA"
+git diff --cached --name-only
+```
+
+Any staged path under `apps/rishi-electron/`,
+`workers/worker/src/routes/test-auth*`, any other rejected test-auth file,
+screenshots, `.pnpm-store/`, `.vite/`, derived/build/cache output,
+`apps/apple/marketing/iphone-preview/mcp_render.py`, or an unrelated Worker file
+fails regardless of allowlist membership. Before merge, concatenate and sort
+the four allowlists, then fail closed against the complete branch:
+
+```bash
+git diff --name-only origin/main...HEAD | LC_ALL=C sort -u > /private/tmp/rishi-pr-paths.txt
+LC_ALL=C sort -u apps/apple/docs/superpowers/reviews/shared-reading-boundary-{a,b,c,d}.txt > /private/tmp/rishi-pr-allowed.txt
+comm -23 /private/tmp/rishi-pr-paths.txt /private/tmp/rishi-pr-allowed.txt > /private/tmp/rishi-pr-unexpected.txt
+test ! -s /private/tmp/rishi-pr-unexpected.txt
+! rg -n '^(apps/rishi-electron/|workers/worker/src/routes/test-auth|.*(^|/)(screenshots?|\.pnpm-store|\.vite|\.build|DerivedData|cache)(/|$)|apps/apple/marketing/iphone-preview/mcp_render\.py$)' /private/tmp/rishi-pr-paths.txt
+git diff --check origin/main...HEAD
+```
+
+### Intended commit boundaries
+
+1. **Plan/docs/tooling:** this matrix, reviewed evidence/allowlists, required-test
+   manifest, release runner/verifier and tests, transactional Codex registration
+   helper and tests, and deterministic MCP acceptance client only.
+2. **Swift MCP/E2E host:** the Swift MCP rewrite and `rishi-e2e-host`, after
+   independent review, build/test, Codex connection, and real-action proof.
+3. **Apple shared-reading UI/E2E support:** only classified, reviewed Apple
+   changes required for shared reading and its acceptance tests.
+4. **W4 account deletion/upload:** only after the W4R production traversal and
+   failure/retry gates, followed by review and clean Worker verification.
+5. **Separate future work:** test-auth redesign. Electron repository extraction
+   and monorepo removal are also a separate PR and never part of PR #256.
+
+### Ordered critical path
+
+1. Implement, independently review, and commit the plan/docs/tooling boundary,
+   including release manifest, verifier, verifier tests, and path allowlists.
+2. Classify the dirty Apple, Swift MCP/host, W4, test-auth, Electron, and
+   unrelated changes without staging across boundaries.
+3. Independently review, fix, build, and test the Swift MCP/host; connect it to
+   Codex and prove that it drives real app actions while respecting the
+   two-instance memory limit.
+4. Independently review and fix only required Apple shared-reading UI/E2E
+   support, then run the real iPhone 17 Pro plus Mac Catalyst two-account flow.
+5. Obtain explicit Cloudflare cron-capacity authorization, deploy the latest
+   W4R safety revision, and collect full-wrap plus retry evidence.
+6. Only after W4R passes, independently review, verify, commit, and roll out W4
+   account-deletion/upload/session-sharing changes.
+7. After the last implementation commit (including W4), run the release runner
+   from the final clean `HEAD`. It must rebuild/retest every category and rerun
+   the exact MCP two-account acceptance driver so the E2E/MCP JSON and every
+   normalized artifact carry that final SHA. Then run the verifier, migration
+   checks, independent final reviews, and latest branch CI; require zero open
+   Critical/High findings. Earlier E2E evidence is diagnostic only and cannot
+   satisfy this final-SHA gate.
+8. Inspect PR #256's final diff for scope purity, update issue #255 evidence,
+   and only then merge and deploy. Until all preceding gates pass, merge remains
+   unauthorized.
