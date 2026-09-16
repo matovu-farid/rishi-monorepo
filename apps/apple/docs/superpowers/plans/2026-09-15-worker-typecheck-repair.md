@@ -391,6 +391,22 @@ Wrangler dry-run exited 0, and `git diff --check` passed. The branch diff has no
 Electron paths. The standalone submodule request-body test also passed (1/1)
 after commit `c969a0d`.
 
+GitHub CI initially failed to resolve the now-explicit submodule because the
+Worker typecheck checkout did not initialize the dependency. The Worker
+deployment job had the same latent checkout defect. A broad recursive checkout
+is unsafe because the repository also contains an unrelated unmapped gitlink at
+`apps/apple/wokerUrl`; therefore both Worker-specific jobs now initialize only
+`workers/worker/src/app-store-server-library-node`. Unrelated jobs and gitlinks
+remain unchanged. Completion requires a fresh-clone proof of that targeted
+command and a green rerun of PR CI. This workflow correction does not authorize
+or perform a Worker deployment.
+
+Fresh-clone proof passed: the targeted command initialized only the Worker
+submodule and checked out the exact pinned SHA. Luna first rejected the broad
+recursive approach because of the unmapped gitlink, then independently
+re-reviewed the targeted correction and returned **PASS** with zero findings at
+80% confidence. Green PR CI remains the external completion gate.
+
 ## Task T4: Review, commit, and upstream before feature-only work
 
 **Files:** Exact T0-T3 files only
