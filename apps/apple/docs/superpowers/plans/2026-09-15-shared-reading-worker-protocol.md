@@ -12,7 +12,7 @@
 
 ## File ownership map
 
-- Migration owner only: `workers/worker/src/db/schema.ts`, `workers/worker/drizzle/**`, `workers/worker/scripts/verify-migration-pattern.ts`, `workers/worker/src/test-utils/d1.ts`, both primary `wrangler*.jsonc` migration patterns.
+- Migration owner only: `workers/worker/src/db/schema.ts`, `workers/worker/drizzle/**`, `workers/worker/scripts/verify-migration-pattern.ts`, `workers/worker/src/test-utils/d1.ts`, and the canonical primary `workers/worker/wrangler.jsonc` migration pattern.
 - Sharing owner only: `packages/sharing-protocol/src/{schemas,sync}.ts`, `workers/sharing-worker/src/{AppleSessionRoom,index,tokens,wsCreds,appleTopology,auth,health,hmac}.ts`, matching tests.
 - Primary API owner: W3 exclusively owns `workers/worker/src/routes/session-shares.ts`, `workers/worker/src/session-sharing-service.ts`, `workers/worker/src/{index,api-version}.ts`, and matching tests until its commit/review completes.
 - Deletion owner: after the serialized W3→W4 handoff, W4 may modify only the `revokeAccountReferences` client/decoder methods in `workers/worker/src/session-sharing-service.ts` and their exact tests, plus `workers/worker/src/account-deletion.ts` and `workers/worker/src/account-deletion.integration.test.ts`; every other primary API section remains W3-owned.
@@ -117,23 +117,17 @@ git commit -m "docs: record shared reading worker baseline"
 - Create: `workers/worker/src/db/session-sharing-migration.test.ts`
 - Generate: `workers/worker/drizzle/migrations/**`
 - Modify: `workers/worker/wrangler.jsonc`
-- Modify: `workers/worker/wrangler.dev.jsonc`
 
 - [ ] **Step 1: Write staged-predecessor tests**
 
-Add table-driven cases with these exact expectations:
+Add staged-predecessor cases with these exact expectations:
 
 ```ts
-it.each([
-  ["fresh", 0],
-  ["first-empty", 0],
-  ["first-populated", 3],
-] as const)("migrates %s predecessor without data loss", async (fixture, rows) => {
-  const db = await createD1AtSessionInvitePredecessor(fixture);
-  await applySelectedSessionInviteMigrations(db);
-  expect(await countRows(db, "session_invites")).toBe(rows);
-  expect(await countNulls(db, "session_invites", "idempotency_key")).toBe(0);
-  expect(await duplicateOwnerIdempotencyPairs(db)).toBe(0);
+it("migrates a fresh database to the final schema", async () => { /* ... */ });
+it("migrates an empty first-stage predecessor", async () => { /* ... */ });
+it("blocks a populated first-stage predecessor without data loss", async () => {
+  // The immutable second migration adds a NOT NULL column without a default.
+  // It must fail before mutating the three predecessor rows.
 });
 ```
 
@@ -142,11 +136,12 @@ Run:
 ```bash
 cd workers/worker
 RISHI_W1_RED_ROOT=$(mktemp -d /private/tmp/rishi-W1-red.XXXXXX)
-bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "migrates populated intermediate predecessor without data loss" --owned-output-root "$RISHI_W1_RED_ROOT" --artifact "$RISHI_W1_RED_ROOT/migration.json" --cwd . -- bun run test -- src/db/session-sharing-migration.test.ts
+bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect fail --require-failure-id "blocks a populated intermediate predecessor without data loss" --owned-output-root "$RISHI_W1_RED_ROOT" --artifact "$RISHI_W1_RED_ROOT/migration.json" --cwd . -- bun run test -- src/db/session-sharing-migration.test.ts
 ```
 
-Expected red: current nested-directory replay or non-null alteration fails at
-least one exact predecessor.
+Expected red: the repository initially lacks explicit evidence that fresh and
+empty predecessors succeed while a populated half-migrated predecessor fails
+closed without mutating its rows.
 
 - [ ] **Step 2: Make the selected canonical schema state explicit**
 
@@ -168,9 +163,9 @@ that disagrees with the live canonical file.
 
 - [ ] **Step 3: Execute only the selected migration branch**
 
-For `fresh-canonical`, keep both historical directories as quarantined evidence,
-remove them from `migrations_pattern`, and generate from the `origin/main`
-snapshot to the complete non-null schema:
+For `fresh-canonical`, retain both historical directories in
+`migrations_pattern` as immutable append-only history and generate from the
+`origin/main` snapshot to the complete non-null schema:
 
 ```bash
 cd workers/worker
@@ -212,52 +207,59 @@ finishes with zero nulls/duplicates. Only after that proof, change canonical
 bunx drizzle-kit generate --config=drizzle.config.ts --name=session_invites_idempotency_constraint
 ```
 
-For `physical-reconciliation`, pull a schema-only isolated clone exactly as
-above. If physical column/nullability/index/rows match the final target, preserve
-the pulled baseline as metadata evidence and run this exact canonical no-op
-proof:
+For `physical-reconciliation`, the read-only W0 inspection is the physical
+baseline. If its column/nullability/index/row evidence matches the final target,
+retain both already-applied historical migrations in the canonical chain and
+hash-lock their generated SQL and snapshots. D1 production skips them by their
+exact recorded names; fresh and local databases must replay them in order. Run
+this canonical no-change proof:
 
 ```bash
 cd workers/worker
 RISHI_W1_PHYSICAL_ROOT=$(mktemp -d /private/tmp/rishi-W1-physical.XXXXXX)
 bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_PHYSICAL_ROOT" --artifact "$RISHI_W1_PHYSICAL_ROOT/snapshot-command.json" --cwd . -- bun run scripts/verify-migration-pattern.ts --snapshot-before "$RISHI_W1_PHYSICAL_ROOT/before.json"
-bunx drizzle-kit generate --config=drizzle.config.ts --name=session_invites_physical_noop
+bunx drizzle-kit generate --config=drizzle.config.ts --name=session_invites_physical_noop # may report that the old snapshot format cannot generate an artifact
 bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_PHYSICAL_ROOT" --artifact "$RISHI_W1_PHYSICAL_ROOT/noop.json" --cwd . -- bun run scripts/verify-migration-pattern.ts --assert-noop --before "$RISHI_W1_PHYSICAL_ROOT/before.json" --generated-name session_invites_physical_noop --expect-executable-statements 0
 ```
 
-The verifier requires either no new canonical artifacts or a generated artifact
+If Drizzle Kit reports that the historical snapshot format is outdated and
+emits no artifact, record that output and use the unchanged before/after
+snapshot as the no-change proof. The verifier requires either no new canonical
+artifacts or a generated artifact
 whose parsed executable-statement count is exactly zero; it rejects DDL/DML,
 journal mutation, missing/malformed before-state, and reconciliation-directory
 output. If any
 physical property differs, select `nullable-backfill` instead—never force-mark a
 migration applied and never hand-edit SQL or snapshots.
 
-For both generated deltas, verify the generated SQL/snapshot/metadata are under
-the canonical `drizzle/` directory, both `wrangler.jsonc` migration patterns
-include those exact files in order, and no
+For generated deltas, verify the generated SQL/snapshot/metadata are under
+the canonical `drizzle/` directory, the canonical `wrangler.jsonc` migration
+pattern includes those exact files in order, and no
 `drizzle/reconciliation/session-invites/**` path matches either deployment
 pattern. Record reconciliation hashes and canonical generated paths separately
 in the reviewed migration-files evidence.
 
-All fixture setup and assertions use Drizzle. Tests execute only SQL emitted by
-the selected Drizzle generation output; quarantined historical SQL is never fed
-to the test migrator or deployment pattern.
+All fixture setup and assertions use Drizzle. The test migrator and deployment
+pattern retain the exact generated historical chain. The verifier hash-locks
+already-applied SQL and snapshots so they cannot drift after production has
+recorded their names.
 
 - [ ] **Step 4: Verify generated files and migration allowlists**
 
 ```bash
 RISHI_W1_VERIFY_ROOT=$(mktemp -d /private/tmp/rishi-W1-verify.XXXXXX)
 bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_VERIFY_ROOT" --artifact "$RISHI_W1_VERIFY_ROOT/migrations.json" --cwd . -- bun run verify:migrations
-git status --porcelain=v2 -- workers/worker/drizzle workers/worker/src/db/schema.ts workers/worker/wrangler.jsonc workers/worker/wrangler.dev.jsonc
+git status --porcelain=v2 -- workers/worker/drizzle workers/worker/src/db/schema.ts workers/worker/wrangler.jsonc
 git diff --name-only -- workers/worker/drizzle
 ```
 
-Expected: generated SQL and snapshots appear together; both Wrangler patterns
-name only the selected deployable chain. Create
+Expected: any generated SQL and snapshot appear together; the canonical
+Wrangler pattern names the append-only deployable chain. Create
 `apps/apple/docs/superpowers/reviews/shared-reading-generated-migration-files.txt`
 with `apply_patch`, listing each generated SQL/snapshot/metadata path verbatim
 from this output, one repository-relative path per line. Review that file before
-staging; it may not contain either quarantined historical directory.
+staging. For physical reconciliation with no generated artifact, it records
+that fact and separately lists the retained, hash-locked historical evidence.
 
 - [ ] **Step 5: Prove all local predecessor states**
 
@@ -267,14 +269,15 @@ bun ../../scripts/test-integrity/run-verified.ts --format vitest-json --expect p
 bun ../../scripts/test-integrity/run-verified.ts --format command --expect pass --owned-output-root "$RISHI_W1_GREEN_ROOT" --artifact "$RISHI_W1_GREEN_ROOT/migrate-local.json" --cwd . -- bun run migrate:local
 ```
 
-Expected green: fresh, empty-intermediate, and populated-intermediate pass;
-discovered `> 0`, skipped/failed `0`, exits `0`.
+Expected green: fresh and empty-intermediate migrations succeed; the populated
+intermediate test proves the immutable unsafe alteration fails closed and all
+predecessor rows remain; discovered `> 0`, skipped/failed `0`, exits `0`.
 
 - [ ] **Step 6: Commit only migration-owned files**
 
 ```bash
-git diff --name-only -- workers/worker/src/db/schema.ts workers/worker/src/test-utils/d1.ts workers/worker/src/db/session-sharing-migration.test.ts workers/worker/src/db/session-sharing-schema.test.ts workers/worker/scripts/verify-migration-pattern.ts workers/worker/drizzle.reconciliation.config.ts workers/worker/scripts/backfill-session-invite-idempotency.ts workers/worker/wrangler.jsonc workers/worker/wrangler.dev.jsonc
-git add workers/worker/src/db/schema.ts workers/worker/src/test-utils/d1.ts workers/worker/src/db/session-sharing-migration.test.ts workers/worker/src/db/session-sharing-schema.test.ts workers/worker/scripts/verify-migration-pattern.ts workers/worker/wrangler.jsonc workers/worker/wrangler.dev.jsonc
+git diff --name-only -- workers/worker/src/db/schema.ts workers/worker/src/test-utils/d1.ts workers/worker/src/db/session-sharing-migration.test.ts workers/worker/src/db/session-sharing-schema.test.ts workers/worker/scripts/verify-migration-pattern.ts workers/worker/drizzle.reconciliation.config.ts workers/worker/scripts/backfill-session-invite-idempotency.ts workers/worker/wrangler.jsonc
+git add workers/worker/src/db/schema.ts workers/worker/src/test-utils/d1.ts workers/worker/src/db/session-sharing-migration.test.ts workers/worker/src/db/session-sharing-schema.test.ts workers/worker/scripts/verify-migration-pattern.ts workers/worker/wrangler.jsonc
 git add workers/worker/drizzle.reconciliation.config.ts workers/worker/scripts/backfill-session-invite-idempotency.ts
 git add --pathspec-from-file=apps/apple/docs/superpowers/reviews/shared-reading-generated-migration-files.txt
 git add -f apps/apple/docs/superpowers/reviews/shared-reading-generated-migration-files.txt
@@ -282,10 +285,9 @@ git diff --cached --name-status
 git commit -m "fix(worker): make session invite migration safe"
 ```
 
-The optional-file `git add` line is executed only for `nullable-backfill` or
-`physical-reconciliation`; for `fresh-canonical`, the reviewed generated-file
-manifest explicitly records that both paths are absent. In every branch this
-decision occurs before the cached-diff check and commit.
+The optional-file `git add` line is executed only when the selected path creates
+those files. The reviewed generated-file manifest always records whether a
+deployable artifact was generated before the cached-diff check and commit.
 
 Expected: cached paths exactly match the reviewed owner list and generated-file
 manifest; no whole migration/source directory is staged.
@@ -485,8 +487,8 @@ tests prove leases, capacity recovery, expiry, hibernation, replay, and fencing.
 - [ ] **Step 9: Commit sharing-owned files**
 
 ```bash
-git diff --name-only -- packages/sharing-protocol/src/schemas.ts packages/sharing-protocol/src/schemas.test.ts packages/sharing-protocol/src/sync.ts packages/sharing-protocol/src/sync.test.ts workers/sharing-worker/src/AppleSessionRoom.ts workers/sharing-worker/src/index.ts workers/sharing-worker/src/tokens.ts workers/sharing-worker/src/wsCreds.ts workers/sharing-worker/src/appleTopology.ts workers/sharing-worker/src/auth.ts workers/sharing-worker/src/health.ts workers/sharing-worker/src/hmac.ts workers/sharing-worker/test/versioned-apple-route.test.ts workers/sharing-worker/test/SessionRoom.appleTopology.test.ts workers/sharing-worker/test/tokens.test.ts workers/sharing-worker/test/wsCreds.test.ts workers/sharing-worker/test/AppleSessionRoom.recovery.test.ts workers/sharing-worker/wrangler.jsonc workers/sharing-worker/wrangler.dev.jsonc workers/sharing-worker/worker-configuration.d.ts
-git add packages/sharing-protocol/src/schemas.ts packages/sharing-protocol/src/schemas.test.ts packages/sharing-protocol/src/sync.ts packages/sharing-protocol/src/sync.test.ts workers/sharing-worker/src/AppleSessionRoom.ts workers/sharing-worker/src/index.ts workers/sharing-worker/src/tokens.ts workers/sharing-worker/src/wsCreds.ts workers/sharing-worker/src/appleTopology.ts workers/sharing-worker/src/auth.ts workers/sharing-worker/src/health.ts workers/sharing-worker/src/hmac.ts workers/sharing-worker/test/versioned-apple-route.test.ts workers/sharing-worker/test/SessionRoom.appleTopology.test.ts workers/sharing-worker/test/tokens.test.ts workers/sharing-worker/test/wsCreds.test.ts workers/sharing-worker/test/AppleSessionRoom.recovery.test.ts workers/sharing-worker/wrangler.jsonc workers/sharing-worker/wrangler.dev.jsonc workers/sharing-worker/worker-configuration.d.ts
+git diff --name-only -- packages/sharing-protocol/src/schemas.ts packages/sharing-protocol/src/schemas.test.ts packages/sharing-protocol/src/sync.ts packages/sharing-protocol/src/sync.test.ts workers/sharing-worker/src/AppleSessionRoom.ts workers/sharing-worker/src/index.ts workers/sharing-worker/src/tokens.ts workers/sharing-worker/src/wsCreds.ts workers/sharing-worker/src/appleTopology.ts workers/sharing-worker/src/auth.ts workers/sharing-worker/src/health.ts workers/sharing-worker/src/hmac.ts workers/sharing-worker/test/versioned-apple-route.test.ts workers/sharing-worker/test/SessionRoom.appleTopology.test.ts workers/sharing-worker/test/tokens.test.ts workers/sharing-worker/test/wsCreds.test.ts workers/sharing-worker/test/AppleSessionRoom.recovery.test.ts workers/sharing-worker/wrangler.jsonc workers/sharing-worker/worker-configuration.d.ts
+git add packages/sharing-protocol/src/schemas.ts packages/sharing-protocol/src/schemas.test.ts packages/sharing-protocol/src/sync.ts packages/sharing-protocol/src/sync.test.ts workers/sharing-worker/src/AppleSessionRoom.ts workers/sharing-worker/src/index.ts workers/sharing-worker/src/tokens.ts workers/sharing-worker/src/wsCreds.ts workers/sharing-worker/src/appleTopology.ts workers/sharing-worker/src/auth.ts workers/sharing-worker/src/health.ts workers/sharing-worker/src/hmac.ts workers/sharing-worker/test/versioned-apple-route.test.ts workers/sharing-worker/test/SessionRoom.appleTopology.test.ts workers/sharing-worker/test/tokens.test.ts workers/sharing-worker/test/wsCreds.test.ts workers/sharing-worker/test/AppleSessionRoom.recovery.test.ts workers/sharing-worker/wrangler.jsonc workers/sharing-worker/worker-configuration.d.ts
 git diff --cached --name-status
 git commit -m "fix(sharing): recover Apple session rooms"
 ```
@@ -502,7 +504,6 @@ git commit -m "fix(sharing): recover Apple session rooms"
 - Modify: `workers/worker/src/env.d.ts`
 - Modify: `workers/worker/worker-configuration.d.ts`
 - Modify: `workers/worker/wrangler.jsonc`
-- Modify: `workers/worker/wrangler.dev.jsonc`
 - Create: `workers/worker/src/routes/session-observations.ts`
 - Create: `workers/worker/src/routes/session-shares.test.ts`
 - Create: `workers/worker/src/routes/session-observations.test.ts`
@@ -567,7 +568,8 @@ Add this binding to canonical env/generated types:
 APPLE_SHARED_READING_CREATION_ENABLED: "true" | "false";
 ```
 
-Both production and development Wrangler configs default to `"false"`. At the
+The canonical production Wrangler config defaults to `"false"`; local tests
+inject the binding without creating a separate development Worker config. At the
 first line of the create handler, before any D1/DO mutation:
 
 ```ts
@@ -665,8 +667,8 @@ tests all pass; discovered `> 0`, skipped/failed `0`, exits `0`.
 - [ ] **Step 9: Commit API-owned files**
 
 ```bash
-git diff --name-only -- workers/worker/src/routes/session-shares.ts workers/worker/src/routes/session-shares.test.ts workers/worker/src/routes/session-observations.ts workers/worker/src/routes/session-observations.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts workers/worker/src/index.ts workers/worker/src/api-version.ts workers/worker/src/api-version.test.ts workers/worker/src/env.d.ts workers/worker/worker-configuration.d.ts workers/worker/wrangler.jsonc workers/worker/wrangler.dev.jsonc
-git add workers/worker/src/routes/session-shares.ts workers/worker/src/routes/session-shares.test.ts workers/worker/src/routes/session-observations.ts workers/worker/src/routes/session-observations.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts workers/worker/src/index.ts workers/worker/src/api-version.ts workers/worker/src/api-version.test.ts workers/worker/src/env.d.ts workers/worker/worker-configuration.d.ts workers/worker/wrangler.jsonc workers/worker/wrangler.dev.jsonc
+git diff --name-only -- workers/worker/src/routes/session-shares.ts workers/worker/src/routes/session-shares.test.ts workers/worker/src/routes/session-observations.ts workers/worker/src/routes/session-observations.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts workers/worker/src/index.ts workers/worker/src/api-version.ts workers/worker/src/api-version.test.ts workers/worker/src/env.d.ts workers/worker/worker-configuration.d.ts workers/worker/wrangler.jsonc
+git add workers/worker/src/routes/session-shares.ts workers/worker/src/routes/session-shares.test.ts workers/worker/src/routes/session-observations.ts workers/worker/src/routes/session-observations.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts workers/worker/src/index.ts workers/worker/src/api-version.ts workers/worker/src/api-version.test.ts workers/worker/src/env.d.ts workers/worker/worker-configuration.d.ts workers/worker/wrangler.jsonc
 git diff --cached --name-status
 git commit -m "fix(worker): recover shared reading sessions"
 ```

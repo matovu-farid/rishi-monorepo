@@ -16,8 +16,10 @@ const migrationDecision = {
 The production database already contains the complete non-null `session_invites`
 shape, all five expected indexes, both historical migration records, 22 rows,
 zero null idempotency keys, and zero duplicate owner/key pairs. No migration or
-deployment command was run. W1 must prove a generated canonical no-op against an
-isolated schema-only clone; it must not replay either historical migration.
+deployment command was run. W1 must prove the canonical artifacts are unchanged
+and retain both historical migrations as hash-locked append-only history.
+Production will not replay either migration because D1 records their exact
+names; fresh and local databases must replay them in order.
 
 ## Released HTTP contracts at `origin/main`
 
@@ -209,12 +211,12 @@ The three production-observed child tables are also `COMPATIBLE_DELTA`:
   historical nested migrations through
   `20260813110000_pregenerated_share_links/migration.sql` —
   `UNCHANGED_VERIFIED` as the released baseline. The current feature config
-  additionally names both `20260820...` session-invite migration files — an
-  **unsafe `COMPATIBLE_DELTA` pending W1**, because production already records
-  both as applied while a fresh repository/database still needs a canonical
-  generated chain. W1 must remove the two historical files from the deployable
-  pattern, preserve them only as hashed evidence, and produce the generated
-  canonical no-op proof. Neither historical file may be replayed.
+  additionally names both `20260820...` session-invite migration files — a
+  `COMPATIBLE_DELTA` requiring W1 verification. Append-only history requires
+  retaining both exact names in the deployable pattern for fresh databases,
+  while production skips them because it already records those names as
+  applied. W1 must hash-lock their generated SQL and snapshots and prove that
+  canonical generation introduces no DDL/DML or metadata change.
 - Sharing production `AUTH_BASE_URL=https://rishi.fidexa.org`, observability,
   and out-of-band `WORKER_HMAC_SECRET` — `UNCHANGED_VERIFIED`.
 - Sharing custom-domain route `sharing.fidexa.org`, TURN secrets `TURN_KEY_ID`
@@ -248,8 +250,11 @@ The three production-observed child tables are also `COMPATIBLE_DELTA`:
 ## Decision and deployment boundary
 
 Selected path: `physical-reconciliation`. The production physical schema and
-data already match the final target, but repository migration metadata does not
-yet provide the required generated canonical no-op proof. `deploymentAllowed`
+data already match the final target. W1 must retain and hash-lock the two
+already-applied historical artifacts, verify an unchanged canonical before/after
+snapshot (a generated no-op artifact is not required when Drizzle Kit reports
+the historical format as outdated and emits nothing), and prove that a populated
+half-migrated database fails closed without losing rows. `deploymentAllowed`
 therefore remains `false`. Do not apply migrations, force-mark them applied,
 edit generated SQL/snapshots, or deploy either Worker until W1–W5 and the final
 compatibility review pass.
