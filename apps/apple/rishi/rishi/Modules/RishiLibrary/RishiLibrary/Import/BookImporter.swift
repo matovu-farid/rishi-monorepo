@@ -102,8 +102,7 @@ struct BookImporter: Sendable {
         let deterministicID = DeterministicBookID.make(
             title: metadata.title,
             author: metadata.author,
-            format: format,
-            ownerId: ownerId
+            format: format
         )
         let bookId: BookID
         if let deterministicID,
@@ -118,16 +117,16 @@ struct BookImporter: Sendable {
                 "new_book_id": bookId.uuidString,
             ])
         } else if let deterministicID,
-                  let existing = try await bookStore.book(deterministicID),
-                  existing.userId == ownerId {
+                  let existing = try await bookStore.book(deterministicID) {
             // Deterministic metadata identity is only a fallback. If the
-            // content hash did not match above, do not overwrite another
-            // edition that happens to share its title and author.
+            // content hash did not match for this owner, do not overwrite
+            // another edition or another user's local record that happens to
+            // share its title and author.
             bookId = UUID()
             Log.event("library.import.identity.rotated", level: .info, data: [
                 "existing_book_id": existing.id.uuidString,
                 "new_book_id": bookId.uuidString,
-                "reason": "content_hash_mismatch",
+                "reason": existing.userId == ownerId ? "content_hash_mismatch" : "different_owner",
             ])
         } else {
             bookId = deterministicID ?? UUID()

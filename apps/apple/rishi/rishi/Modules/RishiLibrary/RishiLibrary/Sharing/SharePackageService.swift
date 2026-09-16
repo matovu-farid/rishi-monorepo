@@ -428,7 +428,7 @@ public actor SharePackageService {
             }
             let recordedLocalID = await pendingStore.bookID(token: token, userID: userID, packageID: packageID, itemID: item.id)
             var localID = recordedLocalID
-                ?? DeterministicBookID.make(title: item.title, author: item.author, format: format, ownerId: userID)
+                ?? DeterministicBookID.make(title: item.title, author: item.author, format: format)
                 ?? UUID()
             if let existingLocal = try await bookStore.book(localID),
                recordedLocalID == nil || existingLocal.userId != userID {

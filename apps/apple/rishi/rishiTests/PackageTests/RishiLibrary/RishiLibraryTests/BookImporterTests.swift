@@ -133,6 +133,28 @@ struct BookImporterTests {
         #expect((await store.snapshot()).count == 1)
     }
 
+    @Test("importBook preserves another user's deterministic book identity")
+    func deterministicIdentityCollisionAcrossUsersRotatesIdentity() async throws {
+        let root = makeTempRoot("import-cross-user-collision")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("import-cross-user-collision-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let source = srcDir.appendingPathComponent("shared.epub")
+        try await FixtureBuilders.writeTinyEPUB(to: source, withCover: true)
+
+        let store = InMemoryBookStore()
+        let importer = makeImporter(rootURL: root, bookStore: store)
+        let firstUser = UUID()
+        let secondUser = UUID()
+        let firstBook = try await importer.importBook(from: source, ownerId: firstUser)
+        let secondBook = try await importer.importBook(from: source, ownerId: secondUser)
+
+        #expect(secondBook.id != firstBook.id)
+        #expect(try await store.book(firstBook.id)?.userId == firstUser)
+        #expect(try await store.book(secondBook.id)?.userId == secondUser)
+        #expect((await store.snapshot()).count == 2)
+    }
+
     @Test("importBook deduplicates concurrent copies of the same content")
     func concurrentImports_sameContent_createOneBook() async throws {
         let root = makeTempRoot("import-concurrent-dedup")
