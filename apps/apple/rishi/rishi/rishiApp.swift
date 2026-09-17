@@ -8,6 +8,40 @@ import TipKit
 import SwiftData
 import StoreKit
 
+#if DEBUG
+enum RishiE2EConfiguration {
+    static var isRealAuth: Bool {
+        ProcessInfo.processInfo.arguments.contains("--rishi-e2e-real-auth")
+            || ProcessInfo.processInfo.environment["RISHI_E2E_REAL_AUTH"] == "1"
+    }
+
+    static var isReset: Bool {
+        ProcessInfo.processInfo.arguments.contains("--rishi-e2e-reset")
+    }
+
+    static var fixtureURL: URL? {
+        let prefix = "--rishi-e2e-fixture="
+        guard let value = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(prefix) })?.dropFirst(prefix.count), !value.isEmpty else { return nil }
+        return URL(fileURLWithPath: String(value), isDirectory: false)
+    }
+
+    static var manifestURL: URL? {
+        let prefix = "--rishi-e2e-manifest="
+        guard let value = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(prefix) })?.dropFirst(prefix.count), !value.isEmpty else { return nil }
+        return URL(fileURLWithPath: String(value), isDirectory: false)
+    }
+
+    static func clearAccountScopedPreferences(for userID: UUID) {
+        // This is the only account-keyed preference currently used by the
+        // library UI. Keep the reset narrow so a DEBUG/E2E run does not erase
+        // unrelated preferences belonging to other local accounts.
+        UserDefaults.standard.removeObject(
+            forKey: "rishi.library.firstBookPrompt.seen.\(userID.uuidString)"
+        )
+    }
+}
+#endif
+
 #if canImport(UIKit)
     import UIKit
     import UserNotifications
@@ -34,7 +68,29 @@ struct rishiApp: App {
     #endif
 
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
+           !RishiE2EConfiguration.isRealAuth {
+            let uiTestUserID = UUID(uuidString: "7F7B3D2A-8B8D-4D2E-9D1D-9B4C8F7E6A10")!
+            deps.userIdBox.value = uiTestUserID
+            currentUserBox.signIn(
+                user: User(
+                    id: uiTestUserID,
+                    email: "ui-test@rishi.invalid",
+                    name: "Rishi UI Test"
+                )
+            )
+        }
+        #endif
         SentryLaunchConfiguration.start()
+        #if DEBUG
+        if let sink = SimulatorDumpSink.make() {
+            Log.installSink(sink)
+            Log.event("diagnostics.sink.installed", data: ["path": sink.directory.path])
+        } else {
+            Log.error("diagnostics.sink.install_failed")
+        }
+        #endif
     
     }
 
@@ -50,13 +106,13 @@ struct rishiApp: App {
                     // URL events continue to propagate to existing deep-link
                     // handlers.
                     _ = GoogleSignInCoordinator.handle(url)
-                    if !AppRouter.enqueueShareToken(from: url) {
+                    if !AppRouter.enqueueShareOrSessionToken(from: url) {
                         router.handle(url: url, bookStore: nil, conversationStore: nil)
                     }
                 }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { userActivity in
                     guard let url = userActivity.webpageURL else { return }
-                    if !AppRouter.enqueueShareToken(from: url) {
+                    if !AppRouter.enqueueShareOrSessionToken(from: url) {
                         router.handle(url: url, bookStore: nil, conversationStore: nil)
                     }
                 }
@@ -80,7 +136,51 @@ struct rishiApp: App {
                         // AppDependencies instance during App.init.
                         appDelegate.dependencies = deps
                     #endif
+
+                    #if DEBUG
+                    // Clear persisted auth before service construction. A
+                    // previous Catalyst run may leave an identity in
+                    // Keychain; bootstrapping with that identity performs
+                    // launch-time entitlement/network work before the
+                    // reset task can show the login form.
+                    let e2eResetUserID: UUID? = if RishiE2EConfiguration.isReset {
+                        (try? Keychain.load(.userId)).map(DerivedUserID.from)
+                    } else {
+                        nil
+                    }
+                    if RishiE2EConfiguration.isReset {
+                        Keychain.delete(.accessToken)
+                        Keychain.delete(.refreshToken)
+                        Keychain.delete(.userId)
+                        try? await KeychainSessionStore().delete()
+                    }
+                    #endif
                     await deps.bootstrap()
+                    #if DEBUG
+                    if RishiE2EConfiguration.isReset {
+                        // Reset is intentionally local-only. Server-side
+                        // deletion belongs to the host account client after
+                        // both peer runs finish.
+                        let localIdentity = e2eResetUserID
+                            ?? deps.cachedUserId
+                            ?? (try? Keychain.load(.userId)).map(DerivedUserID.from)
+                            ?? UUID()
+                        RishiE2EConfiguration.clearAccountScopedPreferences(for: localIdentity)
+                        guard let localPurge = deps.services?.accountDeletionCoordinator(
+                            userId: localIdentity,
+                            signOut: {}
+                        ) else {
+                            fatalError("Rishi E2E reset could not initialize local account cleanup")
+                        }
+                        do {
+                            try await localPurge.purgeLocalOnly()
+                        } catch {
+                            fatalError("Rishi E2E reset failed: \(error.localizedDescription)")
+                        }
+                        await deps.performSignOut(currentUserBox: currentUserBox)
+                        await deps.services?.onboarding.state.setHasCompletedOnboarding(true)
+                    }
+                    #endif
                     #if os(iOS) && canImport(WatchConnectivity)
                     if let owner = deps.services?.audio.playbackOwner {
                         appDelegate.attachWatchServices(
@@ -100,6 +200,9 @@ struct rishiApp: App {
                         try Tips.configure([
                             .displayFrequency(.immediate)
                         ])
+                        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                            Tips.hideAllTipsForTesting()
+                        }
                         #else
                         try Tips.configure()
                         #endif

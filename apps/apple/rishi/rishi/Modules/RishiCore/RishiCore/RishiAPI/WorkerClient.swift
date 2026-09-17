@@ -44,6 +44,12 @@ public actor WorkerClient {
         return hasToken && hasConsent
     }
 
+    /// Refresh the bearer token for callers that use the same session
+    /// credentials outside of a `WorkerEndpoint` request.
+    public func refreshAuthentication() async throws {
+        try await refreshAccessToken()
+    }
+
     // MARK: - Non-streaming send
 
     /// Send a typed endpoint, retrying transient failures with exponential backoff.
@@ -285,20 +291,39 @@ public actor WorkerClient {
 
     private func performAttempt<E: WorkerEndpoint>(_ endpoint: E, attempt: Int) async throws -> E.Response {
         let request = try await buildRequest(for: endpoint)
-    
         let started = Date()
+        let requestID = request.value(forHTTPHeaderField: "X-Rishi-Request-ID") ?? "missing"
+        Log.event("worker.request.started", data: [
+            "method": endpoint.method.rawValue,
+            "path": endpoint.path,
+            "apiVersion": request.value(forHTTPHeaderField: "X-Rishi-API-Version") ?? "legacy",
+            "requestId": requestID,
+            "attempt": String(attempt),
+        ])
 
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch let urlError as URLError {
+            Log.event("worker.request.failed", level: .error, data: [
+                "path": endpoint.path,
+                "requestId": requestID,
+                "attempt": String(attempt),
+                "durationMs": String(Int(Date().timeIntervalSince(started) * 1_000)),
+                "error": urlError.localizedDescription,
+            ])
             throw RishiError.networkFailure(urlError)
         }
 
-        _ = Int(Date().timeIntervalSince(started) * 1000)
         let http = response as? HTTPURLResponse
         let status = http?.statusCode ?? -1
+        Log.event("worker.response.received", data: [
+            "path": endpoint.path,
+            "requestId": requestID,
+            "status": String(status),
+            "durationMs": String(Int(Date().timeIntervalSince(started) * 1_000)),
+        ])
 
         if endpoint.path == "/api/shares/redeem" {
             Log.event("sharing.worker.redeem.response", data: [
@@ -314,6 +339,11 @@ public actor WorkerClient {
             do {
                 return try decoder.decode(E.Response.self, from: data)
             } catch {
+                Log.event("worker.response.decode_failed", level: .error, data: [
+                    "path": endpoint.path,
+                    "requestId": requestID,
+                    "error": String(describing: error),
+                ])
                 throw RishiError.decoding("Failed to decode \(E.Response.self) at \(endpoint.path): \(error)")
             }
         case 401:
@@ -548,6 +578,7 @@ public actor WorkerClient {
         // session cookie would trip a 403 MISSING_OR_NULL_ORIGIN on Bearer requests.
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyRequestMetadata(for: endpoint.path, to: &request)
         try await applyDataUseConsentHeaderIfNeeded(
             endpoint.requiresDataUseConsent,
             to: &request
@@ -562,6 +593,11 @@ public actor WorkerClient {
         #if DEBUG
         if devBypassEnabled {
             request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
+        }
+        if endpoint.path == "/test/sign-in",
+           let testAuthSecret = ProcessInfo.processInfo.environment["RISHI_E2E_TEST_AUTH_SECRET"],
+           !testAuthSecret.isEmpty {
+            request.setValue(testAuthSecret, forHTTPHeaderField: "X-Test-Auth-Secret")
         }
         #endif
 
@@ -584,6 +620,7 @@ public actor WorkerClient {
         request.httpMethod = endpoint.method.rawValue
         // Native bearer-token client: never attach/store cookies (see buildRequest).
         request.httpShouldHandleCookies = false
+        applyRequestMetadata(for: endpoint.path, to: &request)
         try await applyDataUseConsentHeaderIfNeeded(
             endpoint.requiresDataUseConsent,
             to: &request
@@ -605,6 +642,12 @@ public actor WorkerClient {
             request.httpBody = try encoder.encode(AnyEncodable(bodied.body))
         }
         return request
+    }
+
+    private func applyRequestMetadata(for path: String, to request: inout URLRequest) {
+        let version = path.hasPrefix("/api/v1/") ? "v1" : "legacy"
+        request.setValue(version, forHTTPHeaderField: "X-Rishi-API-Version")
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Rishi-Request-ID")
     }
 
     private func applyDataUseConsentHeaderIfNeeded(

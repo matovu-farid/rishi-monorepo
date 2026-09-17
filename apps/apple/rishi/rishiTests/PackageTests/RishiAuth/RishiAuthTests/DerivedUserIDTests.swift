@@ -45,6 +45,14 @@ struct DerivedUserIDTests {
         #expect(DerivedUserID.from(raw) == UUID(uuidString: raw))
     }
 
+    @Test func derivesLocalIdentityForBetterAuthServerIdentifier() {
+        let serverIdentifier = "better-auth-user-1"
+        let localIdentity = DerivedUserID.from(serverIdentifier)
+
+        #expect(localIdentity != UUID(uuidString: serverIdentifier))
+        #expect(localIdentity == DerivedUserID.from(serverIdentifier))
+    }
+
     /// Determinism: same input always yields the same UUID.
     @Test func derivationIsDeterministic() {
         let id = "001234.abcdef0123456789.1234"

@@ -147,7 +147,11 @@ public final class CustomerEntitlements {
                 )
                 
                 do {
-                   let _ = try await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
+                   guard let workerClient = EntitlementSyncHooks.workerClient else {
+                       throw EntitlementSyncConfigurationError.workerClientUnavailable
+                   }
+                   let _ = try await VerifyEndPont(body: .init(transactionId: transaction.id))
+                       .send(using: workerClient)
                 }catch {
                     print(error)
                 }

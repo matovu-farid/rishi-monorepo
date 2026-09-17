@@ -1,0 +1,2 @@
+ALTER TABLE `session_invites` ADD `idempotency_key` text NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX `session_invites_owner_idempotency_uniq` ON `session_invites` (`owner_user_id`,`idempotency_key`);

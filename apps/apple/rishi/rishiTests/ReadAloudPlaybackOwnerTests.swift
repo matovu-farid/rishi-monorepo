@@ -25,6 +25,10 @@ private final class FakePlaybackOwner: ReadAloudPlaybackOwnering {
         stopForAccountChangeCalls += 1
         installedHosts.removeAll()
     }
+
+    func setVolume(_ volume: Float) async {
+        _ = volume
+    }
 }
 
 @Suite("Read aloud playback ownership")

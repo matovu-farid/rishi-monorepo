@@ -227,6 +227,141 @@ export const sharePackageRedemptions = sqliteTable(
 export type SharePackageRedemption = typeof sharePackageRedemptions.$inferSelect;
 export type NewSharePackageRedemption = typeof sharePackageRedemptions.$inferInsert;
 
+// ─── Multi-reader session sharing ────────────────────────────────────────────
+// Session invites have their own lifecycle. They are reusable for the live
+// session and must not share the one-time share-package status machine.
+export const sessionInvites = sqliteTable(
+  "session_invites",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    sessionId: text("session_id").notNull(),
+    sourceBookId: text("source_book_id")
+      .notNull()
+      .references(() => books.id, { onDelete: "cascade" }),
+    contentHash: text("content_hash").notNull(),
+    format: text("format", { enum: ["epub", "pdf"] }).notNull(),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status", { enum: ["open", "ended"] })
+      .notNull()
+      .default("open"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    endedAt: integer("ended_at", { mode: "timestamp" }),
+  },
+  (t) => ({
+    ownerStatus: index("session_invites_owner_status_idx").on(t.ownerUserId, t.status),
+    ownerIdempotency: uniqueIndex("session_invites_owner_idempotency_uniq").on(
+      t.ownerUserId,
+      t.idempotencyKey,
+    ),
+    sourceBook: index("session_invites_source_book_id_idx").on(t.sourceBookId),
+    session: uniqueIndex("session_invites_session_id_uniq").on(t.sessionId),
+    tokenHash: uniqueIndex("session_invites_token_hash_uniq").on(t.tokenHash),
+  }),
+);
+
+export const sessionInviteItems = sqliteTable(
+  "session_invite_items",
+  {
+    id: text("id").primaryKey(),
+    inviteId: text("invite_id")
+      .notNull()
+      .references(() => sessionInvites.id, { onDelete: "cascade" }),
+    // Immutable references to the owner's existing BOOK_STORAGE objects.
+    fileR2Key: text("file_r2_key").notNull(),
+    coverR2Key: text("cover_r2_key"),
+    fileHash: text("file_hash").notNull(),
+    fileSize: integer("file_size").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => ({
+    invite: uniqueIndex("session_invite_items_invite_id_uniq").on(t.inviteId),
+  }),
+);
+
+export const sessionInviteRedemptions = sqliteTable(
+  "session_invite_redemptions",
+  {
+    id: text("id").primaryKey(),
+    inviteId: text("invite_id")
+      .notNull()
+      .references(() => sessionInvites.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    bookStatus: text("book_status", { enum: ["pending", "ready", "failed"] })
+      .notNull()
+      .default("pending"),
+    membershipStatus: text("membership_status", {
+      enum: ["pending", "admitted", "left", "removed"],
+    })
+      .notNull()
+      .default("pending"),
+    lastAdmissionTicketId: text("last_admission_ticket_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => ({
+    inviteUser: uniqueIndex("session_invite_redemptions_invite_user_uniq").on(
+      t.inviteId,
+      t.userId,
+    ),
+    inviteStatus: index("session_invite_redemptions_invite_status_idx").on(
+      t.inviteId,
+      t.membershipStatus,
+    ),
+    userStatus: index("session_invite_redemptions_user_status_idx").on(
+      t.userId,
+      t.membershipStatus,
+    ),
+  }),
+);
+
+export const sessionInviteDeliveries = sqliteTable(
+  "session_invite_deliveries",
+  {
+    id: text("id").primaryKey(),
+    inviteId: text("invite_id")
+      .notNull()
+      .references(() => sessionInvites.id, { onDelete: "cascade" }),
+    recipientEmail: text("recipient_email").notNull(),
+    status: text("status", { enum: ["pending", "sent", "failed"] })
+      .notNull()
+      .default("pending"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    providerMessageId: text("provider_message_id"),
+    errorCode: text("error_code"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+  },
+  (t) => ({
+    inviteEmail: uniqueIndex("session_invite_deliveries_invite_email_uniq").on(
+      t.inviteId,
+      t.recipientEmail,
+    ),
+    inviteStatus: index("session_invite_deliveries_invite_status_idx").on(
+      t.inviteId,
+      t.status,
+    ),
+    idempotencyKey: uniqueIndex("session_invite_deliveries_idempotency_key_uniq").on(
+      t.idempotencyKey,
+    ),
+  }),
+);
+
+export type SessionInvite = typeof sessionInvites.$inferSelect;
+export type NewSessionInvite = typeof sessionInvites.$inferInsert;
+export type SessionInviteItem = typeof sessionInviteItems.$inferSelect;
+export type NewSessionInviteItem = typeof sessionInviteItems.$inferInsert;
+export type SessionInviteRedemption = typeof sessionInviteRedemptions.$inferSelect;
+export type NewSessionInviteRedemption = typeof sessionInviteRedemptions.$inferInsert;
+export type SessionInviteDelivery = typeof sessionInviteDeliveries.$inferSelect;
+export type NewSessionInviteDelivery = typeof sessionInviteDeliveries.$inferInsert;
+
 export const shareLinkSlots = sqliteTable(
   "share_link_slots",
   {

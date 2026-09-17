@@ -1,6 +1,6 @@
 export type WsCreds =
   | { valid: false; reason: string }
-  | { valid: true; jwt: string; reconnectToken?: string };
+  | { valid: true; jwt: string; reconnectToken?: string; admissionTicket?: string };
 
 /**
  * Decode a base64url-encoded string. Bearer tokens (JWTs, opaque tokens, test
@@ -34,6 +34,8 @@ export function parseSubprotocols(headerValue: string | null): WsCreds {
   if (!ok) return { valid: false, reason: "wrong protocol" };
   const jwtEncoded = parts.find((p) => p.startsWith("jwt."))?.slice(4);
   const reconnectEncoded = parts.find((p) => p.startsWith("reconnect."))?.slice(10);
+  const admissionTickets = parts.filter((p) => p.startsWith("admission."));
+  if (admissionTickets.length > 1) return { valid: false, reason: "multiple admission tickets" };
   if (!jwtEncoded) return { valid: false, reason: "missing jwt" };
   const jwt = decodeBase64Url(jwtEncoded);
   if (jwt === null) return { valid: false, reason: "invalid jwt encoding" };
@@ -43,5 +45,9 @@ export function parseSubprotocols(headerValue: string | null): WsCreds {
     if (decoded === null) return { valid: false, reason: "invalid reconnect encoding" };
     reconnectToken = decoded;
   }
-  return { valid: true, jwt, reconnectToken };
+  const admissionTicket = admissionTickets[0]?.slice("admission.".length);
+  if (admissionTickets.length === 1 && !admissionTicket) {
+    return { valid: false, reason: "missing admission ticket" };
+  }
+  return { valid: true, jwt, reconnectToken, admissionTicket };
 }

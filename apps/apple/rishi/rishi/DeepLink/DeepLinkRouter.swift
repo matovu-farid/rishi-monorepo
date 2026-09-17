@@ -37,6 +37,9 @@ struct DeepLinkRouter: Sendable {
         case ("sharing", "/join"):
             return .shareRedeem(token: queryToken(url) ?? "")
 
+        case ("sharing", "/session"):
+            return .sessionRedeem(token: queryToken(url) ?? "")
+
         case ("book", _):
             return parseUUIDPath(path).map(DeepLinkDestination.openBook) ?? .unknown
 
@@ -67,6 +70,9 @@ struct DeepLinkRouter: Sendable {
 
         case ["sharing", "join"]:
             return .shareRedeem(token: queryToken(url) ?? "")
+
+        case ["sharing", "session"]:
+            return .sessionRedeem(token: queryToken(url) ?? "")
 
         case _ where parts.count == 3 && parts[0] == "app" && parts[1] == "book":
             return UUID(uuidString: parts[2]).map(DeepLinkDestination.openBook) ?? .unknown

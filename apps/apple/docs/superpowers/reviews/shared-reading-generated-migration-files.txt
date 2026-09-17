@@ -1,0 +1,12 @@
+# W1 physical-reconciliation migration evidence
+#
+# No deployable SQL, snapshot, or metadata artifact was generated. Drizzle Kit
+# reported the historical snapshot format as outdated and emitted no files; the
+# verifier's unchanged before/after snapshot is the canonical no-change proof.
+#
+# Retained hash-locked append-only historical evidence (already applied in
+# production by these exact migration names):
+workers/worker/drizzle/migrations/20260820112725_session_invites_from_prod_session_only/migration.sql
+workers/worker/drizzle/migrations/20260820112725_session_invites_from_prod_session_only/snapshot.json
+workers/worker/drizzle/migrations/20260820121338_session_invites_idempotency/migration.sql
+workers/worker/drizzle/migrations/20260820121338_session_invites_idempotency/snapshot.json

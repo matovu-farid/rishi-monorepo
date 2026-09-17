@@ -59,7 +59,14 @@ import { estimateNarrationSeconds } from "./tts/reservation-estimate";
 import { getInsufficientAllowancePayload } from "./tts/allowance-error";
 import { purgeExpiredRetention, redactOwnerlessAppleNotificationLogs } from "./entitlement-retention";
 import { resolveCorsOrigin } from "./cors-origin";
+import { sessionSharesRoutes } from "./routes/session-shares";
+import { sharedReadingRoutePrefix } from "./api-version";
+import { workerMetadataHeaders } from "./health";
 import { webBytes } from "./utils/web-bytes";
+import {
+  ACCOUNT_R2_RECONCILIATION_PREFIXES,
+  reconcileAccountR2Page,
+} from "./account-r2-reconciliation";
 export { requireAuth } from "./middleware";
 export { UserUsageLedger } from "./durable-objects/user-usage-ledger/ledger";
 export { buildRealtimeClientSecretsBody } from "./realtime/client-secrets";
@@ -637,6 +644,7 @@ app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/api/user", userRoutes);
 app.route("/api/shares", sharesRoutes);
+app.route(sharedReadingRoutePrefix, sessionSharesRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
 // (declared inside each router). Parallel to the existing /api/sync mounts.
 app.route("/api/sync/conversations", conversationsRoutes);
@@ -824,11 +832,15 @@ app.post("/api/billing/realtime-usage", requireAuth, async (c) => {
 
 // // Health check endpoint
 app.get("/health", (c) => {
-  return c.json({
+  const response = c.json({
     status: "healthy",
     timestamp: new Date().toISOString(),
     service: "openai-tts-proxy",
   });
+  for (const [name, value] of Object.entries(workerMetadataHeaders(c.env, "rishi-worker"))) {
+    response.headers.set(name, value);
+  }
+  return response;
 });
 
 app.post("/api/audio/speech", requireAuth, requireAiDataConsent, async (c) => {
@@ -1676,8 +1688,21 @@ const sentryHandler = createTypedSentryHandler(honoHandler, (env) => {
   };
 });
 
-const scheduled = async (_controller: ScheduledController, env: Env): Promise<void> => {
+export const scheduled = async (controller: ScheduledController, env: Env): Promise<void> => {
   const db = createDb(env.DB);
+  if (controller.cron === "* * * * *") {
+    const nowMs = Date.now();
+    let firstFailure: unknown;
+    for (const prefix of ACCOUNT_R2_RECONCILIATION_PREFIXES) {
+      try {
+        await reconcileAccountR2Page(db, env.BOOK_STORAGE, prefix, nowMs);
+      } catch (error) {
+        firstFailure ??= error;
+      }
+    }
+    if (firstFailure !== undefined) throw firstFailure;
+    return;
+  }
   await retryPendingDeletions(db, env);
   await purgeExpiredShares(db, env.BOOK_STORAGE);
   await precreateShareLinks(db, env);

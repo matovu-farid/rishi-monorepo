@@ -21,6 +21,8 @@ struct LibraryTabDependencies {
     let readerDefaults: AppReaderDefaults
     let syncEngine: SyncEngine
     let sharePackageService: SharePackageService
+    let sharedReadingAPI: SharedReadingAPI
+    let sessionBookService: SessionBookService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
     let voicePresenter: VoiceSessionPresenter
@@ -62,6 +64,8 @@ struct LibraryTabView: View {
     @State private var trialReadyAfterDocumentPicker = false
     @State private var pendingSubscriptionConfirmation = false
     @State private var showSubscriptionConfirmation = false
+    @State private var showActiveReadingSessions = false
+    @State private var showConversations = false
 
     private var firstBookPromptSeenKey: String {
         "rishi.library.firstBookPrompt.seen.\(user.id.uuidString)"
@@ -130,6 +134,14 @@ struct LibraryTabView: View {
         if !successes.isEmpty {
             markFirstBookPromptSeen()
         }
+        #if DEBUG
+        // The native shared-reading owner test needs to remain on the library
+        // after the host-provided import so it can open the visible sharing
+        // composer. Normal imports retain their existing auto-open behavior.
+        if RishiE2EConfiguration.isRealAuth, RishiE2EConfiguration.fixtureURL != nil {
+            return
+        }
+        #endif
         if cameFromFirstPrompt,
            let book = successes.first(where: { book in
                book.formatType == .epub || book.formatType == .pdf
@@ -154,8 +166,35 @@ struct LibraryTabView: View {
                 onShowSettings: settingsHandler,
                 onImported: handleImported,
                 documentPickerPresented: $showDocumentPicker,
-                sharePackageService: dependencies.sharePackageService
+                sharePackageService: dependencies.sharePackageService,
+                sharedReadingAPI: dependencies.sharedReadingAPI,
+                sharedReadingRepair: { bookId in
+                    Log.event("sharing.book.repair.started", data: [
+                        "book_id": bookId.uuidString,
+                    ])
+                    let succeeded = await dependencies.syncEngine.repairBook(bookId)
+                    Log.event(
+                        succeeded ? "sharing.book.repair.completed" : "sharing.book.repair.failed",
+                        level: succeeded ? .info : .error,
+                        data: [
+                            "book_id": bookId.uuidString,
+                        ]
+                    )
+                    return succeeded
+                },
+                onShowChats: { showConversations = true }
             )
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showActiveReadingSessions = true
+                    } label: {
+                        Label("Active reading", systemImage: "person.3.fill")
+                    }
+                    .accessibilityIdentifier("shared-reading-active-sessions")
+                    .accessibilityHint("View and rejoin open shared reading sessions")
+                }
+            }
             .navigationDestination(for: ReaderRoute.self) { route in
                 ReaderDestinationView(
                     route: route,
@@ -176,6 +215,16 @@ struct LibraryTabView: View {
                     onSelect: { convo in model.present(conversation: convo) }
                 )
             }
+            .navigationDestination(isPresented: $showConversations) {
+                ConversationsListHost(
+                    vm: ConversationsListViewModel.make(
+                        conversationStore: dependencies.conversationStore,
+                        messageStore: dependencies.messageStore
+                    ),
+                    userId: user.id,
+                    onSelect: { convo in model.present(conversation: convo) }
+                )
+            }
             .task {
          
                 for await result in Transaction.currentEntitlements {
@@ -183,7 +232,8 @@ struct LibraryTabView: View {
                         
                         continue
                     }
-                    let _ = try? await VerifyEndPont(body: .init(transactionId: transaction.id)).send()
+                    let _ = try? await VerifyEndPont(body: .init(transactionId: transaction.id))
+                        .send(using: dependencies.settings.workerClient)
                     
                     
                     
@@ -193,6 +243,14 @@ struct LibraryTabView: View {
             
             .task(id: "\(user.id.uuidString)-\(dataUseConsentGranted)") {
                 hasSeenFirstBookPrompt = UserDefaults.standard.bool(forKey: firstBookPromptSeenKey)
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                    _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                    _ = await dependencies.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                    await vm.refresh()
+                    markFirstBookPromptSeen()
+                }
+                #endif
                 await model.performInitialLibrarySyncIfConsented(
                     consentGranted: dataUseConsentGranted,
                     refresh: { await vm.refresh() },
@@ -223,6 +281,13 @@ struct LibraryTabView: View {
             }
         }
         .environment(vm)
+        .sheet(isPresented: $showActiveReadingSessions) {
+            ActiveReadingSessionsView(
+                api: dependencies.sharedReadingAPI,
+                bookService: dependencies.sessionBookService,
+                userId: user.id
+            )
+        }
 
         .sheet(isPresented: $showFirstBookPrompt, onDismiss: {
             let shouldPresentPicker = presentDocumentPickerAfterPrompt

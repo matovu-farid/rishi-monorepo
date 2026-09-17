@@ -8,6 +8,14 @@ import SwiftUI
 
 struct RootView: View {
 
+    private struct PendingSessionPresentation: Identifiable {
+        let join: SharedReadingJoin
+        let coordinator: SharedReadingSessionCoordinator
+        let transport: SharedReadingSignalingClient
+
+        var id: String { join.id }
+    }
+
     @Environment(AppRouter.self) private var router
     @Environment(\.appDependencies) private var deps
 
@@ -15,6 +23,8 @@ struct RootView: View {
 
     @State private var showOnboarding = false
     @State private var pendingShareMessage: String?
+    @State private var pendingSessionToken: String?
+    @State private var pendingSessionPresentation: PendingSessionPresentation?
     @State private var showNoCardTrialIntro = false
     @State private var noCardTrialIntroCheckInFlight = false
     #if targetEnvironment(macCatalyst)
@@ -84,10 +94,19 @@ struct RootView: View {
             }
             .task {
                 guard case .signedOut = currentUserBox.state else { return }
+#if DEBUG
+                // A reused simulator may still contain a previous account's
+                // Keychain session. The app-level E2E reset task is purging
+                // that account locally; do not race it by restoring the old
+                // identity here or briefly starting its sync/session flows.
+                if RishiE2EConfiguration.isReset {
+                    currentUserBox.state = .signedOut
+                    return
+                }
+#endif
                 currentUserBox.state = .loading
-                if let userId = try? Keychain.load(.userId),
-                    let uuidUserId = UUID(uuidString: userId)
-                {
+                if let userId = try? Keychain.load(.userId), !userId.isEmpty {
+                    let uuidUserId = DerivedUserID.from(userId)
 
                     let workerClient = deps.services!.workerClient
                     do {
@@ -205,13 +224,31 @@ struct RootView: View {
             // it in an unstructured task instead of allowing a view rebuild to
             // cancel the network request halfway through.
             guard signedInUserID != nil else { return }
+            if let token = await PendingSessionInviteStore.anonymous.load() {
+                await MainActor.run { pendingSessionToken = token }
+            }
             Task { await redeemPendingSharesIfEligible(deps: deps) }
+            Task { await redeemPendingSessionIfEligible(deps: deps) }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareRedemptionReady)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppRouter.sessionTokenQueued)) { notification in
+            guard let token = notification.object as? String, !token.isEmpty else { return }
+            pendingSessionToken = token
+            Task { await redeemPendingSessionIfEligible(deps: deps) }
+        }
+        .sheet(item: $pendingSessionPresentation) { presentation in
+            SharedReadingSessionView(
+                api: deps.services!.sharedReadingAPI,
+                coordinator: presentation.coordinator,
+                transport: presentation.transport,
+                join: presentation.join,
+                localParticipantUserId: signedInWireUserID ?? ""
+            )
         }
         .alert(
             "Shared books",
@@ -231,6 +268,7 @@ struct RootView: View {
                     readerDefaults: deps.services!.settings.readerDefaults,
                     onCompleted: {
                         showOnboarding = false
+                        Task { await redeemPendingSessionIfEligible(deps: deps) }
                     }
                 )
             }
@@ -241,6 +279,7 @@ struct RootView: View {
                     readerDefaults: deps.services!.settings.readerDefaults,
                     onCompleted: {
                         showOnboarding = false
+                        Task { await redeemPendingSessionIfEligible(deps: deps) }
                     }
                 )
             }
@@ -255,6 +294,13 @@ struct RootView: View {
     /// surface; the library's first-book prompt is presented only after sign-in.
     @MainActor
     private func updateOnboardingPresentation(deps: AppDependencies) async {
+        #if DEBUG
+        if RishiE2EConfiguration.isRealAuth {
+            await deps.services!.onboarding.state.setHasCompletedOnboarding(true)
+            showOnboarding = false
+            return
+        }
+        #endif
         let completed = await deps.services!.onboarding.state.hasCompletedOnboarding()
         showOnboarding = !completed
     }
@@ -262,6 +308,14 @@ struct RootView: View {
     private var signedInUserID: UUID? {
         guard case .signedIn(let user) = currentUserBox.state else { return nil }
         return user.id
+    }
+
+    private var signedInWireUserID: String? {
+        guard signedInUserID != nil else { return nil }
+        if let persisted = try? Keychain.load(.userId), !persisted.isEmpty {
+            return persisted
+        }
+        return signedInUserID?.uuidString
     }
 
     private func redeemPendingSharesIfEligible(deps: AppDependencies) async {
@@ -293,10 +347,88 @@ struct RootView: View {
         }
     }
 
+    private func redeemPendingSessionIfEligible(deps: AppDependencies) async {
+        guard currentUserBox.isSigned, !showOnboarding, let token = pendingSessionToken else { return }
+        guard let sessionAPI = deps.services?.sharedReadingAPI else { return }
+        var stage = "redeem"
+        do {
+            Log.event("sharing.session.redeem.started")
+            let response = try await sessionAPI.redeem(token: token)
+            Log.event("sharing.session.redeem.completed", data: ["session_id": response.sessionId])
+            guard let userID = signedInUserID else { return }
+            let transport = SharedReadingSignalingClient()
+            let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
+                try await sessionAPI.markBookReady(sessionId: response.sessionId, token: token, contentHash: response.book.contentHash)
+            }
+            let coordinator = SharedReadingSessionCoordinator(
+                transport: transport,
+                localParticipantUserId: signedInWireUserID ?? userID.uuidString,
+                refreshAdmission: refreshAdmission,
+                refreshBearerToken: { try await sessionAPI.refreshBearerToken() }
+            )
+            stage = "prepare"
+            Log.event("sharing.session.prepare.started", data: ["session_id": response.sessionId])
+            let preparedBook = try await deps.services!.library.sessionBookService.prepare(book: response.book, ownerId: userID)
+            let importedHash = preparedBook.contentHash
+            Log.event("sharing.session.prepare.completed", data: ["session_id": response.sessionId])
+            guard importedHash.caseInsensitiveCompare(response.book.contentHash) == .orderedSame else {
+                throw SharedReadingError.from(code: .bookHashMismatch)
+            }
+            stage = "admission"
+            Log.event("sharing.session.admission.started", data: ["session_id": response.sessionId])
+            let admission = try await sessionAPI.markBookReady(
+                sessionId: response.sessionId,
+                token: token,
+                contentHash: importedHash
+            )
+            Log.event("sharing.session.admission.completed", data: ["session_id": response.sessionId])
+            await MainActor.run {
+                pendingSessionToken = nil
+                Task { await PendingSessionInviteStore.anonymous.clear() }
+                pendingSessionPresentation = PendingSessionPresentation(
+                    join: SharedReadingJoin(
+                        response: response,
+                        admission: admission,
+                        localBookId: preparedBook.book.id
+                    ),
+                    coordinator: coordinator,
+                    transport: transport
+                )
+            }
+        } catch let error as SharedReadingError {
+            Log.error("sharing.session.\(stage).failed", error: error)
+            await MainActor.run {
+                if !error.retryable {
+                    pendingSessionToken = nil
+                    Task { await PendingSessionInviteStore.anonymous.clear() }
+                }
+                #if DEBUG
+                pendingShareMessage = "Reading session failed during \(stage): \(error.code.rawValue) — \(error.message)"
+                #else
+                pendingShareMessage = error.message
+                #endif
+            }
+        } catch {
+            Log.error("sharing.session.\(stage).failed", error: error)
+            await MainActor.run { pendingShareMessage = "Rishi could not open this reading session. Please try again." }
+            #if DEBUG
+            await MainActor.run { pendingShareMessage = "Reading session failed during \(stage): \(String(describing: error))" }
+            #endif
+        }
+    }
+
     /// Shows the no-card trial explainer exactly once per account when the
     /// signed-in library reports that its first-book flow has settled.
     @MainActor
     private func presentNoCardTrialIntroIfNeeded(deps: AppDependencies) async {
+        #if DEBUG
+        // Shared-reading E2E owns the disposable-account lifecycle and is
+        // focused on the authenticated library/session path. Catalyst cannot
+        // reliably synthesize a tap through this full-screen first-run sheet,
+        // so keep that unrelated onboarding surface out of the real-auth UI
+        // test while leaving the production path unchanged.
+        guard !RishiE2EConfiguration.isRealAuth else { return }
+        #endif
         guard !noCardTrialIntroCheckInFlight else { return }
         noCardTrialIntroCheckInFlight = true
         defer { noCardTrialIntroCheckInFlight = false }

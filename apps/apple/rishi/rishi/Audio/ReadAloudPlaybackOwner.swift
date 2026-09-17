@@ -20,6 +20,7 @@ protocol ReadAloudPlaybackOwnering: AnyObject {
     func release(host: UUID) async
     func stop(host: UUID) async
     func stopForAccountChange() async
+    func setVolume(_ volume: Float) async
 }
 
 /// Owns the single active read-aloud controller shared by phone and CarPlay.
@@ -222,6 +223,10 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             await self.stopAndClear()
             self.generation &+= 1
         }
+    }
+
+    func setVolume(_ volume: Float) async {
+        await ttsEngine.setVolume(max(0, min(volume, 1)))
     }
 
     func stopForAccountChange() async {

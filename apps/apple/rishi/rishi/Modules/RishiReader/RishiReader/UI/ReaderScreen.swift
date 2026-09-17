@@ -67,6 +67,7 @@ public struct ReaderScreen: View {
 
     private let readAloudParagraph: String?
     private let readAloudLocator: Locator?
+    private let sharedPositionJSONString: String?
     private let reservedPlayerHeight: CGFloat
     private let pdfViewMode: PDFViewModeSetting
     private let pdfViewModeBinding: Binding<PDFViewModeSetting>?
@@ -154,6 +155,7 @@ public struct ReaderScreen: View {
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
+        sharedPositionJSONString: String? = nil,
         reservedPlayerHeight: CGFloat = 0,
         pdfViewMode: PDFViewModeSetting = .continuous,
         pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
@@ -172,6 +174,7 @@ public struct ReaderScreen: View {
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
+        self.sharedPositionJSONString = sharedPositionJSONString
         self.reservedPlayerHeight = max(0, reservedPlayerHeight)
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
@@ -340,6 +343,11 @@ public struct ReaderScreen: View {
 
                 applyPreferences()
             #endif
+            applySharedPosition()
+        }
+
+        .onChange(of: sharedPositionJSONString) { _, _ in
+            applySharedPosition()
         }
 
         .onReceive(
@@ -523,12 +531,14 @@ public struct ReaderScreen: View {
                     EPUBEdgeArrowButton(
                         systemName: "chevron.left",
                         label: "Previous page",
+                        identifier: "reader.previous-page",
                         action: goBackward
                     )
                     Spacer()
                     EPUBEdgeArrowButton(
                         systemName: "chevron.right",
                         label: "Next page",
+                        identifier: "reader.next-page",
                         action: goForward
                     )
                 }
@@ -548,12 +558,21 @@ public struct ReaderScreen: View {
         if chrome.isVisible {
             VStack {
                 Spacer()
-                EPUBProgressIndicator(
-                    totalProgression: viewModel.latestLocator?.locations
-                        .totalProgression
-                )
-                .padding(.bottom, RishiSpacing.m)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                if isEPUBReader {
+                    EPUBProgressIndicator(
+                        totalProgression: viewModel.latestLocator?.locations
+                            .totalProgression
+                    )
+                    .padding(.bottom, RishiSpacing.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if viewModel.book.formatType == .pdf {
+                    PDFPageIndicator(
+                        currentPage: viewModel.latestLocator?.locations.page ?? 1,
+                        totalPages: viewModel.publication?.metadata.numberOfPages ?? 1
+                    )
+                    .padding(.bottom, RishiSpacing.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
     }
@@ -896,6 +915,15 @@ public struct ReaderScreen: View {
         return nil
     }
 
+    private func applySharedPosition() {
+        guard let sharedPositionJSONString,
+              let locator = try? Locator(jsonString: sharedPositionJSONString)
+        else { return }
+        Task { @MainActor in
+            _ = await coordinatorRef.coordinator?.go(to: locator)
+        }
+    }
+
     #if canImport(UIKit)
 
         private var pageNavigator: ReaderPageNavigator {
@@ -1058,6 +1086,7 @@ public struct ReaderScreen: View {
     private struct EPUBEdgeArrowButton: View {
         let systemName: String
         let label: String
+        let identifier: String
         let action: () -> Void
         var body: some View {
             Button(action: action) {
@@ -1069,6 +1098,7 @@ public struct ReaderScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(label)
+            .accessibilityIdentifier(identifier)
         }
     }
 

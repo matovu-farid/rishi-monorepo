@@ -50,6 +50,7 @@ struct ReaderEngineTapGestureWiringTests {
         let coordinator = PDFReaderView.Coordinator(
             viewModel: makePDFViewModel(),
             onSelectionChange: { _ in },
+            onPageLocationChange: {},
             onTap: { _ in }
         )
         let tap = UITapGestureRecognizer()
@@ -67,6 +68,7 @@ struct ReaderEngineTapGestureWiringTests {
         let coordinator = PDFReaderView.Coordinator(
             viewModel: makePDFViewModel(),
             onSelectionChange: { _ in },
+            onPageLocationChange: {},
             onTap: { received = $0 }
         )
         let host = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
@@ -85,6 +87,7 @@ struct ReaderEngineTapGestureWiringTests {
         let coordinator = PDFReaderView.Coordinator(
             viewModel: makePDFViewModel(),
             onSelectionChange: { _ in },
+            onPageLocationChange: {},
             onTap: { _ in fireCount += 1 }
         )
         let host = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))

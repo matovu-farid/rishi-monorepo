@@ -8,6 +8,14 @@ import Testing
 @Suite("ImportCoordinator")
 struct ImportCoordinatorTests {
 
+    private actor ImportedBookRecorder {
+        var ids: [BookID] = []
+
+        func append(_ id: BookID) {
+            ids.append(id)
+        }
+    }
+
     static func makeRoot() -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ImportCoordinator-\(UUID().uuidString)", isDirectory: true)
@@ -50,6 +58,30 @@ struct ImportCoordinatorTests {
 
         let stored = try await store.books(for: userId)
         #expect(stored.count == 1)
+    }
+
+    @Test("successful imports invoke the normal outbound-sync hook")
+    func successfulImportInvokesSyncHook() async throws {
+        let root = Self.makeRoot()
+        let store = InMemoryBookStore()
+        let storage = BookFileStorage(rootURL: root, bookStore: store, coverExtractors: [:])
+        let userId = UUID()
+        let recorder = ImportedBookRecorder()
+        let coordinator = ImportCoordinator(
+            storage: storage,
+            currentUserId: { userId },
+            onBookImported: { id in await recorder.append(id) }
+        )
+
+        let source = root.appendingPathComponent("sync-hook.pdf")
+        try Data([0]).write(to: source)
+        let outcomes = await coordinator.importBooks([source])
+        guard let importedID = outcomes.first?.book?.id else {
+            Issue.record("expected the fixture book to be imported")
+            return
+        }
+
+        #expect(await recorder.ids == [importedID])
     }
 
     @Test("Missing user yields outcomes flagged 'no_user' with no DB writes")

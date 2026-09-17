@@ -66,6 +66,13 @@ public protocol AudioEngineProtocol: Sendable {
         where S.Element == PCMChunk, S: Sendable
     func pause()
     func resume()
+    func setOutputVolume(_ volume: Float)
+}
+
+public extension AudioEngineProtocol {
+    func setOutputVolume(_ volume: Float) {
+        _ = volume
+    }
 }
 
 // MARK: - Production
@@ -178,6 +185,10 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
 
     public func pause() {
         lock.withLock { playerNode.pause() }
+    }
+
+    public func setOutputVolume(_ volume: Float) {
+        playerNode.volume = max(0, min(volume, 1))
     }
 
     // MARK: - Test seam (offline manual rendering)

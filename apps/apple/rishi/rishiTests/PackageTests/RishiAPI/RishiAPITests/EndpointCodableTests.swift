@@ -88,6 +88,29 @@ struct EndpointCodableTests {
         #expect(GetSessionEndpoint().method == .GET)
     }
 
+    @Test func emailPasswordSignInEndpointEncodesCredentialsAndUsesBetterAuthPath() throws {
+        let endpoint = EmailPasswordSignInEndpoint(email: "reader@example.test", password: "secret")
+        let body = try JSONEncoder().encode(endpoint.body)
+        let json = String(decoding: body, as: UTF8.self)
+
+        #expect(endpoint.method == .POST)
+        #expect(endpoint.path == "/api/auth/sign-in/email")
+        #expect(json.contains("\"email\":\"reader@example.test\""))
+        #expect(json.contains("\"password\":\"secret\""))
+    }
+
+    @Test func emailPasswordSignInResponsePreservesNonUUIDServerIdentifier() throws {
+        let json = #"{"token":"token-1","user":{"id":"better-auth-user-1","email":"reader@example.test","name":"Reader"}}"#
+        let response = try JSONDecoder().decode(
+            EmailPasswordSignInEndpoint.Response.self,
+            from: Data(json.utf8)
+        )
+
+        #expect(response.token == "token-1")
+        #expect(response.user.id == "better-auth-user-1")
+        #expect(response.user.email == "reader@example.test")
+    }
+
     // MARK: - SignInSocial (Better Auth Apple provider)
     //
     // Phase 15 plan 07: the iOS coordinator stops POSTing to the legacy custom

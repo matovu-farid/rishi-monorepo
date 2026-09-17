@@ -147,6 +147,22 @@ struct SignedOutViewModelTests {
         #expect(!vm.isLoading)
     }
 
+    @Test func emailPasswordExchangePreservesServerUserIdentifier() async throws {
+        let exchange = EmailPasswordSignInExchange { email, password in
+            #expect(email == "reader@example.test")
+            #expect(password == "secret")
+            return EmailPasswordSignInEndpoint.Response(
+                token: "token-1",
+                user: .init(id: "better-auth-user-1", email: email, name: "Reader")
+            )
+        }
+
+        let response = try await exchange.run(email: "reader@example.test", password: "secret")
+
+        #expect(response.user.id == "better-auth-user-1")
+        #expect(response.user.id != DerivedUserID.from(response.user.id).uuidString)
+    }
+
     
     
     

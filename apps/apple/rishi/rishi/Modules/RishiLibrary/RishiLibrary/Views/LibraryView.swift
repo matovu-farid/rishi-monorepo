@@ -22,6 +22,7 @@ public struct LibraryView: View {
     public let onBeginSelection: (Book) -> Void
     public let onToggleSelection: (Book) -> Void
     public let onShareSingle: (Book) -> Void
+    public let onStartSharedReading: (Book) -> Void
 
     public init(books: [Book],
                 readingNow: [ReadingNowEntry] = [],
@@ -34,7 +35,8 @@ public struct LibraryView: View {
                 selectedBookIDs: Set<BookID> = [],
                 onBeginSelection: @escaping (Book) -> Void = { _ in },
                 onToggleSelection: @escaping (Book) -> Void = { _ in },
-                onShareSingle: @escaping (Book) -> Void = { _ in }) {
+                onShareSingle: @escaping (Book) -> Void = { _ in },
+                onStartSharedReading: @escaping (Book) -> Void = { _ in }) {
         self.books = books
         self.readingNow = readingNow
         self.libraryBookCount = libraryBookCount
@@ -47,6 +49,7 @@ public struct LibraryView: View {
         self.onBeginSelection = onBeginSelection
         self.onToggleSelection = onToggleSelection
         self.onShareSingle = onShareSingle
+        self.onStartSharedReading = onStartSharedReading
     }
 
     public static func shouldShowReadingNow(_ entries: [ReadingNowEntry]) -> Bool {
@@ -83,7 +86,8 @@ public struct LibraryView: View {
                                 selectedBookIDs: selectedBookIDs,
                                 onBeginSelection: onBeginSelection,
                                 onToggleSelection: onToggleSelection,
-                                onShareSingle: onShareSingle
+                                onShareSingle: onShareSingle,
+                                onStartSharedReading: onStartSharedReading
                             )
                         }
                     }

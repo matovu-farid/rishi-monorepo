@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createDb } from "../db/drizzle";
-import { books, sharePackageItems, sharePackages, user } from "../db/schema";
+import { books, sessionInviteItems, sessionInvites, sharePackageItems, sharePackages, user } from "../db/schema";
 import { createTestD1 } from "../test-utils/d1";
 import { deleteUnreferencedR2Objects } from "./shareReferences";
 
@@ -108,6 +108,60 @@ describe("share R2 storage", () => {
     await expect(deleteUnreferencedR2Objects(db, bucket as unknown as R2Bucket, [sourceKey]))
       .resolves.toEqual([sourceKey]);
     expect(bucket.has(sourceKey)).toBe(false);
+    d1.close();
+  });
+
+  it("[W4R-REFS] keeps a source object referenced by a session invite item", async () => {
+    const d1 = createTestD1();
+    const db = createDb(d1);
+    const sourceKey = "books/gone/session.epub";
+    const bucket = bucketWithObjects([sourceKey]);
+    await db.insert(user).values({
+      id: "alice",
+      name: "Alice",
+      email: "alice@example.com",
+      emailVerified: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await db.insert(books).values({
+      id: "book-1",
+      userId: "alice",
+      title: "Book",
+      author: "Author",
+      filePath: "book.epub",
+      format: "epub",
+      fileR2Key: "books/alice/book.epub",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      isDeleted: false,
+    });
+    await db.insert(sessionInvites).values({
+      id: "invite-1",
+      ownerUserId: "alice",
+      idempotencyKey: "invite-key",
+      sessionId: "session-1",
+      sourceBookId: "book-1",
+      contentHash: "hash",
+      format: "epub",
+      tokenHash: "token",
+      status: "open",
+      createdAt: new Date(),
+      endedAt: null,
+    });
+    await db.insert(sessionInviteItems).values({
+      id: "session-item-1",
+      inviteId: "invite-1",
+      fileR2Key: sourceKey,
+      coverR2Key: null,
+      fileHash: "hash",
+      fileSize: 1,
+      createdAt: new Date(),
+    });
+
+    await expect(deleteUnreferencedR2Objects(db, bucket as unknown as R2Bucket, [sourceKey]))
+      .resolves.toEqual([]);
+    expect(bucket.has(sourceKey)).toBe(true);
     d1.close();
   });
 });

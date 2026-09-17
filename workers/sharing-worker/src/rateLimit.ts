@@ -7,12 +7,16 @@ export class RateBucket {
     this.tokens = opts.capacity;
     this.lastRefillMs = Date.now();
   }
-  tryConsume(now = Date.now()): boolean {
+  tryConsume(amountOrNow = 1, now = Date.now()): boolean {
+    // Preserve the original `tryConsume(now)` test/helper signature while
+    // allowing byte buckets to consume more than one token.
+    const amount = amountOrNow > 10_000_000_000 ? 1 : amountOrNow;
+    if (amountOrNow > 10_000_000_000) now = amountOrNow;
     const elapsed = (now - this.lastRefillMs) / 1000;
     this.tokens = Math.min(this.opts.capacity, this.tokens + elapsed * this.opts.refillPerSec);
     this.lastRefillMs = now;
-    if (this.tokens < 1) return false;
-    this.tokens -= 1;
+    if (amount <= 0 || this.tokens < amount) return false;
+    this.tokens -= amount;
     return true;
   }
 }

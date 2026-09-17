@@ -9,5 +9,9 @@ declare global {
 		TEST_AUTH_SECRET?: string;
 		ENABLE_OPS_ADMIN?: string;
 		OPS_ADMIN_SECRET?: string;
+		// Optional compatibility/rotation inputs stay outside the production-required set.
+		APPLE_IDENTITY_RETENTION_SECRET_PREVIOUS?: string;
+		APPLE_TRANSACTION_HASH_SECRET_PREVIOUS?: string;
+		DEV_BYPASS_SECRET?: string;
 	}
 }

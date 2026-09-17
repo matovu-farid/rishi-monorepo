@@ -126,6 +126,71 @@ public struct SignInSocialEndpoint: WorkerEndpointWithBody {
     }
 }
 
+// MARK: - E2E email/password sign-in
+
+/// `POST /api/auth/sign-in/email` — the normal email/password contract.
+public struct EmailPasswordSignInEndpoint: WorkerEndpointWithBody {
+    public struct Body: Encodable, Sendable, Equatable {
+        public let email: String
+        public let password: String
+        public let rememberMe: Bool
+
+        public init(email: String, password: String, rememberMe: Bool = true) {
+            self.email = email
+            self.password = password
+            self.rememberMe = rememberMe
+        }
+    }
+
+    public struct Response: Decodable, Sendable, Equatable {
+        public struct User: Decodable, Sendable, Equatable {
+            public let id: String
+            public let email: String
+            public let name: String?
+
+            public init(id: String, email: String, name: String? = nil) {
+                self.id = id
+                self.email = email
+                self.name = name
+            }
+        }
+
+        public let token: String
+        public let user: User
+
+        public init(token: String, user: User) {
+            self.token = token
+            self.user = user
+        }
+    }
+
+    public let method: HTTPMethod = .POST
+    public let path: String = "/api/auth/sign-in/email"
+    public let body: Body
+
+    public init(email: String, password: String, rememberMe: Bool = true) {
+        self.body = Body(email: email, password: password, rememberMe: rememberMe)
+    }
+}
+
+/// `POST /test/sign-in` — the explicitly gated disposable-account login used
+/// by the native shared-reading E2E harness. It has the same visible form
+/// shape and response as the normal email/password endpoint, but the Worker
+/// authorizes it with the temporary test gate and never enables production
+/// password authentication.
+public struct TestEmailPasswordSignInEndpoint: WorkerEndpointWithBody {
+    public typealias Body = EmailPasswordSignInEndpoint.Body
+    public typealias Response = EmailPasswordSignInEndpoint.Response
+
+    public let method: HTTPMethod = .POST
+    public let path: String = "/test/sign-in"
+    public let body: Body
+
+    public init(email: String, password: String, rememberMe: Bool = true) {
+        self.body = Body(email: email, password: password, rememberMe: rememberMe)
+    }
+}
+
 // MARK: - Sign-out (Bearer-auth)
 
 /// `POST /api/auth/sign-out` — Better Auth sign-out.

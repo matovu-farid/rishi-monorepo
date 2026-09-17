@@ -25,6 +25,20 @@ struct AppleSignInExchange: Sendable {
     }
 }
 
+struct EmailPasswordSignInExchange: Sendable {
+    typealias Send = @Sendable (String, String) async throws -> EmailPasswordSignInEndpoint.Response
+
+    private let send: Send
+
+    init(send: @escaping Send) {
+        self.send = send
+    }
+
+    func run(email: String, password: String) async throws -> EmailPasswordSignInEndpoint.Response {
+        try await send(email, password)
+    }
+}
+
 @MainActor
 @Observable
 final class SignedOutViewModel {

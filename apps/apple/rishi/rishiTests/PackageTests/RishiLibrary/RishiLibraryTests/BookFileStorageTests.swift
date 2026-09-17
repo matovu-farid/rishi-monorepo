@@ -159,11 +159,10 @@ struct BookFileStorageTests {
         #expect(stored == nil)
     }
 
-    /// Core dedup guarantee: two source files with the SAME embedded
-    /// title+author+format but DIFFERENT filenames must produce the SAME
-    /// `Book.id` so they collapse to one library entry after sync upsert.
+    /// Two source files with the SAME embedded title+author+format but DIFFERENT
+    /// content must remain separate so one edition cannot overwrite another.
     @Test
-    func importSameMetadataDifferentFilenames_yieldsEqualBookIds() async throws {
+    func importSameMetadataDifferentContent_yieldsSeparateBookIds() async throws {
         let root = makeTempRoot("dedup-id")
         defer { try? FileManager.default.removeItem(at: root) }
         let srcDir = makeTempRoot("dedup-id-src")
@@ -173,6 +172,7 @@ struct BookFileStorageTests {
         let srcB = srcDir.appendingPathComponent("9876543_alice.pdf")
         try FixtureBuilders.writeTinyPDF(to: srcA)
         try FixtureBuilders.writeTinyPDF(to: srcB)
+        try Data("different edition".utf8).write(to: srcB, options: .atomic)
 
         let store = InMemoryBookStore()
         let storage = BookFileStorage(
@@ -188,7 +188,8 @@ struct BookFileStorageTests {
         let bookA = try await storage.importBook(from: srcA, ownerId: userId)
         let bookB = try await storage.importBook(from: srcB, ownerId: userId)
 
-        #expect(bookA.id == bookB.id)
+        #expect(bookA.id != bookB.id)
+        #expect((await store.snapshot()).count == 2)
     }
 
     /// A book with NO embedded title falls back to a random UUID id — import

@@ -35,11 +35,18 @@ enum ServiceGraphFactory {
         userIdBox: UserIdBox
     ) async -> BootstrappedServices {
 
-        let baseURLString =
-            ProcessInfo.processInfo.environment["RISHI_API_URL"]
-            ?? "https://api.fidexa.org"
-        let baseURL =
-            URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
+        guard let apiEnvironment = RishiAPIEnvironment.load() else {
+            fatalError("Rishi API endpoint configuration is missing or invalid")
+        }
+        let baseURL = apiEnvironment.httpBaseURL
+        Log.event(
+            "api.environment.selected",
+            data: [
+                "mode": apiEnvironment.mode.rawValue,
+                "httpHost": baseURL.host ?? "unknown",
+                "sharingWebSocketHost": apiEnvironment.sharingWebSocketURL.host ?? "unknown"
+            ]
+        )
 
         let keychain = KeychainSessionStore()
 
@@ -60,18 +67,28 @@ enum ServiceGraphFactory {
             dataUseConsentProvider: dataUseConsentProvider,
         )
 
-        let speechOptions = (try? await workerClient.send(SpeechOptionsEndpoint()))
-            ?? SpeechOptionsEndpoint.SpeechOptionsResponse(
-                provider: "openai",
-                voices: VoiceCatalog.all.map {
-                    .init(id: $0, name: VoiceCatalog.displayName(for: $0))
-                },
-                models: [
-                    .init(id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS")
-                ],
-                defaultVoiceID: VoiceCatalog.all.first ?? "marin",
-                defaultModelID: "gpt-4o-mini-tts"
-            )
+        #if DEBUG
+        let isRealAuthUITest = ProcessInfo.processInfo.environment["RISHI_E2E_REAL_AUTH"] == "1"
+        #else
+        let isRealAuthUITest = false
+        #endif
+        let fallbackSpeechOptions = SpeechOptionsEndpoint.SpeechOptionsResponse(
+            provider: "openai",
+            voices: VoiceCatalog.all.map {
+                .init(id: $0, name: VoiceCatalog.displayName(for: $0))
+            },
+            models: [
+                .init(id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS")
+            ],
+            defaultVoiceID: VoiceCatalog.all.first ?? "marin",
+            defaultModelID: "gpt-4o-mini-tts"
+        )
+        // The real-auth UI test signs in explicitly. Avoid blocking its
+        // signed-out screen on optional launch-time network requests; the
+        // normal production path still loads the server catalog here.
+        let speechOptions = isRealAuthUITest
+            ? fallbackSpeechOptions
+            : (try? await workerClient.send(SpeechOptionsEndpoint())) ?? fallbackSpeechOptions
         await MainActor.run {
             TTSPickerCatalogStore.shared.catalog = TTSPickerCatalog(
                 voiceChoices: speechOptions.voices.map {
@@ -81,7 +98,7 @@ enum ServiceGraphFactory {
             )
         }
 
-        let groupID = try? await GroupIDEndpoint().send()
+        let groupID = try? await GroupIDEndpoint().send(using: workerClient)
 
         let documentsURL = FileManager.default.urls(
             for: .documentDirectory,
@@ -165,6 +182,10 @@ enum ServiceGraphFactory {
             isTombstoned: { bookId in
                 (try? await syncMetadataStore.isTombstone(entityId: bookId, kind: .book)) ?? false
             }
+        )
+        let sessionBookService = SessionBookService(
+            fileStorage: bookFileStorage,
+            userIdProvider: { await userIdBox.value }
         )
         let syncQueue = SyncQueue(metadataStore: syncMetadataStore)
         let syncStatus = SyncStatus()
@@ -380,7 +401,35 @@ enum ServiceGraphFactory {
             await embedderForPrewarm.prewarm()
         }
 
-        let voiceSessionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+        #if DEBUG
+            let isUITest = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        #else
+            let isUITest = false
+        #endif
+
+        let voiceSessionCoordinator: any VoiceSessionCoordinating
+        let voiceClientFactory: @MainActor () -> any RealtimeClientAPI
+        let voiceControlSocketFactory: (@Sendable (String, @escaping @Sendable (ControlTerminalSignal) async -> Void) -> (any ControlSocketConnecting)?)?
+        let micPermissionGate: any MicPermissionGate
+        #if DEBUG
+            if isUITest {
+                voiceSessionCoordinator = UITestVoiceSessionCoordinator()
+                voiceClientFactory = { UITestRealtimeClient() }
+                voiceControlSocketFactory = { _, _ in nil }
+                micPermissionGate = UITestMicPermissionGate()
+            } else {
+                let productionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+                voiceSessionCoordinator = productionCoordinator
+                voiceClientFactory = { RealtimeAPIAdapter() }
+                voiceControlSocketFactory = nil
+                micPermissionGate = SystemMicPermissionGate()
+            }
+        #else
+            voiceSessionCoordinator = VoiceSessionAPIClient(workerClient: workerClient)
+            voiceClientFactory = { RealtimeAPIAdapter() }
+            voiceControlSocketFactory = nil
+            micPermissionGate = SystemMicPermissionGate()
+        #endif
         let chapterIndexCache = ServiceGraphChapterIndexCoordinatorCache()
         let chapterIndexContentVersionProvider: @Sendable (BookID) async -> String? = { bookId in
             guard let book = try? await bookStore.book(bookId) else { return nil }
@@ -444,11 +493,14 @@ enum ServiceGraphFactory {
                 conversationLookup: conversationLookup,
                 userIdProvider: { [userIdBox] in userIdBox.value },
                 dirtyHook: voiceDirtyAdapter,
+                micGate: micPermissionGate,
                 bookSearch: bookSearch,
                 embedderPrewarm: embedderPrewarm,
                 chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
                 chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
+                clientFactory: voiceClientFactory,
                 sessionCoordinatorFactory: { voiceSessionCoordinator },
+                controlSocketFactory: voiceControlSocketFactory,
                 sessionRegistry: voiceSessionRegistry,
             )
         }
@@ -489,6 +541,7 @@ enum ServiceGraphFactory {
         EntitlementSyncHooks.onSynced = { [entitlementRefreshCoordinator] in
             await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .foreground)
         }
+        EntitlementSyncHooks.workerClient = workerClient
         signposter.endInterval("storekit.ready", storekitState)
 
         let telemetryStore = await MainActor.run {
@@ -503,7 +556,7 @@ enum ServiceGraphFactory {
 
         let readerDefaults = await MainActor.run { AppReaderDefaults() }
 
-        if let userId = try? Keychain.load(.userId) {
+        if !isRealAuthUITest, let userId = try? Keychain.load(.userId) {
             await entitlementService.bindToUser(userId: userId)
             await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .launch)
         }
@@ -518,6 +571,11 @@ enum ServiceGraphFactory {
 
         return BootstrappedServices(
             workerClient: workerClient,
+            sharedReadingAPI: SharedReadingAPI(
+                baseURL: baseURL,
+                tokenProvider: tokenProvider,
+                refreshAuthentication: { try await workerClient.refreshAuthentication() }
+            ),
             dataUseConsentStore: dataUseConsentStore,
             library: LibraryRuntime(
                 dbStore: dbStore,
@@ -532,7 +590,8 @@ enum ServiceGraphFactory {
                 readerSettingsStore: readerSettingsStore,
                 bookSearch: bookSearch,
                 indexingHook: indexingHook,
-                sharePackageService: sharePackageService
+                sharePackageService: sharePackageService,
+                sessionBookService: sessionBookService
             ),
             audio: AudioRuntime(
                 coordinator: audioStack.coordinator,

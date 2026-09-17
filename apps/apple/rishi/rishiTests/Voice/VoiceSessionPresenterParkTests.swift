@@ -208,6 +208,7 @@ struct VoiceSessionPresenterParkTests {
         return VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: worker,
+            baseURL: URL(string: "https://example.invalid")!,
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: EmptyConversationStore()),
             userIdProvider: { userId },
@@ -237,6 +238,7 @@ struct VoiceSessionPresenterParkTests {
         return VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: worker,
+            baseURL: URL(string: "https://example.invalid")!,
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: EmptyConversationStore()),
             userIdProvider: { userId },

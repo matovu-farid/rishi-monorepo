@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { issueJoinToken, verifyJoinToken, issueReconnectToken, verifyReconnectToken } from "../src/tokens";
+import { issueAdmissionTicket, issueJoinToken, verifyAdmissionTicket, verifyJoinToken, issueReconnectToken, verifyReconnectToken } from "../src/tokens";
 
 const SECRET = "t";
 
@@ -25,5 +25,17 @@ describe("reconnectToken", () => {
   it("rejects past-reservedUntil", async () => {
     const t = await issueReconnectToken({ sessionId: "s_1", userId: "u_1", reservedUntil: Date.now() - 1_000 }, SECRET);
     await expect(verifyReconnectToken(t, SECRET)).rejects.toThrow(/expired/);
+  });
+});
+
+describe("admissionTicket", () => {
+  it("issues a bare signed ticket and rejects a wire-prefixed value", async () => {
+    const ticket = await issueAdmissionTicket({
+      sessionId: "s_1", inviteId: "i_1", userId: "u_1", ticketId: "t_1",
+      roomEpoch: 1, connectionGeneration: 1, ttlMs: 60_000,
+    }, SECRET);
+    expect(ticket.token.startsWith("admission.")).toBe(false);
+    await expect(verifyAdmissionTicket(ticket.token, SECRET)).resolves.toMatchObject({ ticketId: "t_1" });
+    await expect(verifyAdmissionTicket(`admission.${ticket.token}`, SECRET)).rejects.toThrow(/prefix/i);
   });
 });

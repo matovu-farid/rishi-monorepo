@@ -78,6 +78,9 @@ public actor PurchaseService: PurchaseUpdateForwarder {
     /// Production wires this to ``EntitlementService/refreshSnapshot()``.
     private let onEntitlementSynced: (@Sendable () async -> Void)?
     private let purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)
+    private let unfinishedTransactionStream:
+        (@Sendable () -> AsyncStream<VerificationResult<Transaction>>)?
+    private let transactionFinisher: (@Sendable (Transaction) async -> Void)?
 
     // MARK: State
 
@@ -108,30 +111,36 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         reconciler: EntitlementReconciler,
         entitlementSyncClient: (any EntitlementSyncing)? = nil,
         onEntitlementSynced: (@Sendable () async -> Void)? = nil,
-        purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil
+        purchaseClosure: (@Sendable (Product) async throws -> Product.PurchaseResult)? = nil,
+        unfinishedTransactionStream:
+            (@Sendable () -> AsyncStream<VerificationResult<Transaction>>)? = nil,
+        transactionFinisher: (@Sendable (Transaction) async -> Void)? = nil
     ) {
         self.productFetcher = productFetcher
         self.verifier = verifier
         self.reconciler = reconciler
-        self.entitlementSyncClient = entitlementSyncClient ?? Self.defaultEntitlementSyncClient()
+        self.entitlementSyncClient = entitlementSyncClient ?? UnconfiguredEntitlementSyncClient()
         self.onEntitlementSynced = onEntitlementSynced
+        self.unfinishedTransactionStream = unfinishedTransactionStream
+        self.transactionFinisher = transactionFinisher
         self.purchaseClosure = purchaseClosure ?? { product in
             let options = try await AppAccountToken.currentPurchaseOptions()
             return try await product.purchase(options: options)
         }
     }
 
-    /// Built the same way `WorkerEndpoint.send()` builds its own client:
-    /// `RISHI_API_URL` env var (falling back to the production API host) +
-    /// `KeychainSessionStore`-backed `RishiAuthTokenProvider`. Only used
-    /// when the caller does not inject a stub (tests always inject one via
-    /// `entitlementSyncClient:`).
-    private static func defaultEntitlementSyncClient() -> any EntitlementSyncing {
-        let baseURLString = ProcessInfo.processInfo.environment["RISHI_API_URL"]
-            ?? "https://api.fidexa.org"
-        let baseURL = URL(string: baseURLString) ?? URL(string: "https://api.fidexa.org")!
-        let tokenProvider = RishiAuthTokenProvider(keychain: KeychainSessionStore())
-        return EntitlementSyncClient(client: WorkerClient(baseURL: baseURL, tokenProvider: tokenProvider))
+    private struct UnconfiguredEntitlementSyncClient: EntitlementSyncing {
+        func sync(transactionJWS: String) async throws -> EntitlementSyncResult {
+            throw EntitlementSyncConfigurationError.workerClientUnavailable
+        }
+    }
+
+    private func finish(_ transaction: Transaction) async {
+        if let transactionFinisher {
+            await transactionFinisher(transaction)
+        } else {
+            await transaction.finish()
+        }
     }
 
     // MARK: - Purchase entry point
@@ -179,8 +188,29 @@ public actor PurchaseService: PurchaseUpdateForwarder {
     /// `TransactionListener` starts, so that any transaction whose worker
     /// verification failed last session gets a retry. Safe to re-call.
     public func replayUnfinished() async {
-        for await result in Transaction.unfinished {
-            await processUpdate(result, source: "unfinished")
+        // StoreKit keeps this sequence open for future unfinished
+        // transactions. Race the replay against a bounded idle window so the
+        // app's launch path does not wait forever after the currently
+        // available transactions have been drained.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { [weak self] in
+                guard let self else { return }
+                let stream = self.unfinishedTransactionStream?()
+                if let stream {
+                    for await result in stream {
+                        await self.processUpdate(result, source: "unfinished")
+                    }
+                    return
+                }
+                for await result in Transaction.unfinished {
+                    await self.processUpdate(result, source: "unfinished")
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+            }
+            _ = await group.next()
+            group.cancelAll()
         }
     }
 
@@ -214,7 +244,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
                     if !syncResult.verified {
                         // Business reject after verify-receipt succeeded —
                         // finish to break the loop; do not grant locally.
-                        await tx.finish()
+                        await finish(tx)
                         Log.event("iap.update.entitlement_sync_rejected_and_finished", level: .warning,
                                   data: [
                                       "tx": "\(tx.id)",
@@ -232,7 +262,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
                               ])
                     return
                 }
-                await tx.finish()
+                await finish(tx)
                 await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
                 await onEntitlementSynced?()
                 Log.event("iap.update.granted_and_finished", level: .info,
@@ -240,7 +270,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
             } else {
                 // Worker rejected — finish to break the loop; do not treat as
                 // entitlement-synced success (reconciler stays free).
-                await tx.finish()
+                await finish(tx)
                 _ = try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
                 Log.event("iap.update.rejected_and_finished", level: .warning,
                           data: [
@@ -303,7 +333,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
                     // Entitlement sync business reject after verify-receipt
                     // succeeded — finish like verify-receipt reject; do not
                     // set subscribed or treat as entitlement-synced success.
-                    await tx.finish()
+                    await finish(tx)
                     Log.event("iap.purchase.entitlement_sync_rejected", level: .warning,
                               data: [
                                   "tx": "\(tx.id)",
@@ -317,7 +347,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
                           data: ["tx": "\(tx.id)", "error": String(describing: error)])
                 throw PurchaseError.workerUnreachable(String(describing: error))
             }
-            await tx.finish()
+            await finish(tx)
             await MainActor.run { self.reconciler.setOnDevice(.subscribed) }
             await onEntitlementSynced?()
             Log.event("iap.purchase.granted", level: .info,
@@ -326,7 +356,7 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         } else {
             // Worker rejected — finish to break the loop; reconciler stays free.
             // Do not call onEntitlementSynced on verify-receipt reject.
-            await tx.finish()
+            await finish(tx)
             _ = try? await entitlementSyncClient.sync(transactionJWS: result.jwsRepresentation)
             Log.event("iap.purchase.worker_rejected", level: .warning,
                       data: ["tx": "\(tx.id)", "reason": resp.reason ?? "unknown"])

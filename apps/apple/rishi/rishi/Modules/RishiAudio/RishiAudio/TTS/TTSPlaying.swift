@@ -28,6 +28,7 @@ public protocol TTSPlaying: Sendable {
     func start(request: TTSStreamRequest) async
     func pause() async
     func resume() async
+    func setVolume(_ volume: Float) async
     func stop() async
     /// Stops the request only when it is still the active request. Engines
     /// that multiplex requests override this to fence late cancellation.
@@ -50,6 +51,9 @@ public protocol TTSPlaying: Sendable {
 }
 
 public extension TTSPlaying {
+    func setVolume(_ volume: Float) async {
+        _ = volume
+    }
     func stop(ifCurrent tokens: TTSPlaybackTokenSnapshot) async {
         _ = tokens
         await stop()

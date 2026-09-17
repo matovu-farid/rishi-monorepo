@@ -33,4 +33,9 @@ describe("parseSubprotocols", () => {
     // `*` is outside the base64url alphabet; atob will throw.
     expect(parseSubprotocols("rishi.sharing.v1, jwt.***").valid).toBe(false);
   });
+  it("extracts exactly one bare admission ticket from the wire prefix", () => {
+    const out = parseSubprotocols(`rishi.sharing.v1, jwt.${b64url("abc")}, admission.ticket-value`);
+    expect(out).toEqual({ valid: true, jwt: "abc", admissionTicket: "ticket-value" });
+    expect(parseSubprotocols(`rishi.sharing.v1, jwt.${b64url("abc")}, admission.one, admission.two`).valid).toBe(false);
+  });
 });

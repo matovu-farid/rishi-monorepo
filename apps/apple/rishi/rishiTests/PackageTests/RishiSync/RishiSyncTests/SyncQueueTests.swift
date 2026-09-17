@@ -90,4 +90,23 @@ struct SyncQueueTests {
         let count = await queue.pendingCount()
         #expect(count == 1)
     }
+
+    @Test("remove deletes only the matching entity and kind")
+    func removeMatchingItem() async throws {
+        let stub = StubMetadataStore()
+        let queue = SyncQueue(metadataStore: stub)
+        let target = UUID()
+        let other = UUID()
+        await queue.enqueue(SyncQueueItem(entityId: target, kind: .book))
+        await queue.enqueue(SyncQueueItem(entityId: target, kind: .position))
+        await queue.enqueue(SyncQueueItem(entityId: other, kind: .book))
+
+        await queue.remove(entityId: target, kind: .book)
+
+        let remaining = await queue._drainForTests()
+        #expect(remaining == [
+            SyncQueueItem(entityId: target, kind: .position),
+            SyncQueueItem(entityId: other, kind: .book),
+        ])
+    }
 }

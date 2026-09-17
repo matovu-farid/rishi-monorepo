@@ -8,6 +8,7 @@ import Foundation
 /// Production wires it to ``EntitlementService/refreshSnapshot()``.
 public enum EntitlementSyncHooks {
     nonisolated(unsafe) public static var onSynced: (@Sendable () async -> Void)?
+    nonisolated(unsafe) public static var workerClient: WorkerClient?
 }
 
 /// Outcome of a successful HTTP round-trip to entitlement-sync.
@@ -25,10 +26,8 @@ public struct EntitlementSyncResult: Sendable, Equatable {
 
 /// Awaits entitlement sync for call sites that are bare singletons with no
 /// dependency-injection surface today (``Store``, ``CustomerEntitlements``,
-/// ``RestoreService``). Builds its own throwaway `WorkerClient` per call via
-/// `EntitlementSyncEndpoint(...).send()` — the same pattern
-/// `VerifyEndPont(...).send()` already uses in
-/// `CustomerEntitlements.observeTransactionUpdates()`.
+/// ``RestoreService``). Uses the WorkerClient installed by the app composition
+/// root, so StoreKit callbacks cannot accidentally target a different API.
 ///
 /// On HTTP success with `verified: true`, invokes ``EntitlementSyncHooks/onSynced``
 /// so Settings/gates can refresh without waiting for paywall dismiss or the
@@ -41,9 +40,12 @@ public struct EntitlementSyncResult: Sendable, Equatable {
 /// graph (``EntitlementSyncClient``) and keeps using that for testability.
 func syncEntitlement(jws: String) async throws -> EntitlementSyncResult {
     do {
-        let response = try await EntitlementSyncEndpoint(
-            body: .init(transactionJWS: jws)
-        ).send()
+        guard let workerClient = EntitlementSyncHooks.workerClient else {
+            throw EntitlementSyncConfigurationError.workerClientUnavailable
+        }
+        let response = try await workerClient.send(
+            EntitlementSyncEndpoint(body: .init(transactionJWS: jws))
+        )
         Log.event("iap.entitlement_sync.done", level: .info,
                   data: ["verified": "\(response.verified)"])
         let result = EntitlementSyncResult(
@@ -59,4 +61,8 @@ func syncEntitlement(jws: String) async throws -> EntitlementSyncResult {
                   data: ["error": String(describing: error)])
         throw error
     }
+}
+
+enum EntitlementSyncConfigurationError: Error, Sendable, Equatable {
+    case workerClientUnavailable
 }

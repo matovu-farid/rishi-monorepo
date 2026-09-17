@@ -24,6 +24,21 @@ struct SignedOutView: View {
     @State private var signInInFlight = false
     @State private var appleAuthorizationConsumed = false
     @State private var googleSignInCoordinator = GoogleSignInCoordinator()
+    @State private var email = ""
+    @State private var password = ""
+    private enum EmailPasswordField: Hashable {
+        case email
+        case password
+    }
+    @FocusState private var focusedEmailPasswordField: EmailPasswordField?
+
+    private var showsEmailPasswordForm: Bool {
+        #if DEBUG
+        return RishiE2EConfiguration.isRealAuth
+        #else
+        return false
+        #endif
+    }
 
     var body: some View {
         NavigationStack{
@@ -105,8 +120,91 @@ struct SignedOutView: View {
     @ViewBuilder
     private var buttons: some View {
         VStack(spacing: RishiSpacing.m) {
+            if showsEmailPasswordForm {
+                emailPasswordForm
+            }
             appleButton
             googleButton
+        }
+    }
+
+    private var emailPasswordForm: some View {
+        VStack(spacing: RishiSpacing.s) {
+            TextField("Email", text: $email)
+                .textContentType(.username)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedEmailPasswordField, equals: .email)
+                .submitLabel(.next)
+                .onSubmit {
+                    focusedEmailPasswordField = .password
+                }
+                .accessibilityIdentifier("e2e-email-field")
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .focused($focusedEmailPasswordField, equals: .password)
+                .submitLabel(.go)
+                .onSubmit {
+                    signInWithEmailPassword()
+                }
+                .accessibilityIdentifier("e2e-password-field")
+            Button("Sign in with email") {
+                signInWithEmailPassword()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(signInInFlight || email.isEmpty || password.isEmpty)
+            .accessibilityIdentifier("e2e-email-password-submit")
+        }
+        .textFieldStyle(.roundedBorder)
+        #if DEBUG
+        // Catalyst UI tests can expose a visible login window as disabled to
+        // XCTest's event synthesizer. Giving the first field focus from
+        // inside the app makes the form usable without relying on a
+        // coordinate click to establish keyboard focus.
+        .task(id: showsEmailPasswordForm) {
+            guard showsEmailPasswordForm else { return }
+            try? await Task.sleep(for: .milliseconds(100))
+            // The native host still exercises the real email/password request
+            // through this visible form. Supplying the disposable values to
+            // the DEBUG-only form avoids Catalyst's flaky keyboard event
+            // synthesis while the window is reported as disabled.
+            if let e2eEmail = ProcessInfo.processInfo.environment["RISHI_E2E_EMAIL"],
+               let e2ePassword = ProcessInfo.processInfo.environment["RISHI_E2E_PASSWORD"],
+               !e2eEmail.isEmpty, !e2ePassword.isEmpty {
+                email = e2eEmail
+                password = e2ePassword
+            }
+            focusedEmailPasswordField = .email
+        }
+        #endif
+    }
+
+    private func signInWithEmailPassword() {
+        guard !signInInFlight, let deps, let workerClient = deps.services?.workerClient else {
+            viewModel.recordFailure(RishiError.network(
+                code: "email_sign_in_unavailable",
+                message: "Authentication is not available."
+            ))
+            return
+        }
+        signInInFlight = true
+        Task { @MainActor in
+            defer { signInInFlight = false }
+            do {
+                let auth: EmailPasswordSignInEndpoint.Response
+                if RishiE2EConfiguration.isRealAuth {
+                    auth = try await workerClient.send(
+                        TestEmailPasswordSignInEndpoint(email: email, password: password)
+                    )
+                } else {
+                    auth = try await workerClient.send(
+                        EmailPasswordSignInEndpoint(email: email, password: password)
+                    )
+                }
+                try await completeSignIn(auth, deps: deps)
+            } catch {
+                viewModel.recordFailure(error)
+            }
         }
     }
     func configure(_ request: ASAuthorizationAppleIDRequest) {
@@ -284,6 +382,52 @@ struct SignedOutView: View {
         await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
             reason: .signIn
         )
+    }
+
+    private func completeSignIn(
+        _ auth: EmailPasswordSignInEndpoint.Response,
+        deps: AppDependencies
+    ) async throws {
+        let userID = DerivedUserID.from(auth.user.id)
+        do {
+            try Keychain.save(auth.token, for: .accessToken)
+            Keychain.delete(.refreshToken)
+            try Keychain.save(auth.user.id, for: .userId)
+            try await KeychainSessionStore().save(
+                Session(token: auth.token, userId: auth.user.id, email: auth.user.email)
+            )
+        } catch {
+            Keychain.delete(.accessToken)
+            Keychain.delete(.refreshToken)
+            Keychain.delete(.userId)
+            try? await KeychainSessionStore().delete()
+            throw error
+        }
+
+        guard await deps.replaceUserId(userID) else {
+            Keychain.delete(.accessToken)
+            Keychain.delete(.refreshToken)
+            Keychain.delete(.userId)
+            try? await KeychainSessionStore().delete()
+            _ = await deps.replaceUserId(nil, allowDeferredCleanup: true)
+            throw RishiError.network(
+                code: "email_sign_in_transition_failed",
+                message: "Unable to switch to the signed-in account. Please try again."
+            )
+        }
+
+        let user = User(id: userID, email: auth.user.email, name: auth.user.name)
+        #if DEBUG
+        if RishiE2EConfiguration.isRealAuth {
+            await deps.services?.onboarding.state.setHasCompletedOnboarding(true)
+            await deps.services?.dataUseConsentStore.setCurrentUser(userID.uuidString)
+            await deps.services?.dataUseConsentStore.grant(for: userID.uuidString)
+        }
+        #endif
+        currentUser = user
+        currentUserBox.signIn(user: user)
+        isSignedIn = true
+        await deps.services?.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: .signIn)
     }
 
     private var appleButton: some View {

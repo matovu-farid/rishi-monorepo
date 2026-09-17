@@ -28,6 +28,7 @@ public struct LibraryRootView: View {
     public let onOpenBook: (Book) -> Void
 
     public let onShowSettings: (() -> Void)
+    public let onShowChats: (() -> Void)?
     
     private var importTip = ImportBooksTip()
 
@@ -35,6 +36,8 @@ public struct LibraryRootView: View {
         (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)?
 
     public let sharePackageService: SharePackageService?
+    let sharedReadingAPI: SharedReadingAPI?
+    let sharedReadingRepair: (@Sendable (BookID) async -> Bool)?
 
     ///
 
@@ -46,6 +49,12 @@ public struct LibraryRootView: View {
     @State private var showShareComposer = false
     @State private var shareKind: ShareKind = .selection
     @State private var shareBookIDs: [BookID] = []
+    @State private var showSharedReadingComposer = false
+    @State private var sharedReadingBook: Book?
+    @State private var pendingSharedReadingToken: String?
+    #if DEBUG
+    @State private var e2eFixtureImportStarted = false
+    #endif
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -59,7 +68,7 @@ public struct LibraryRootView: View {
         Task { await sharePackageService.prewarm(bookIDs: bookIDs) }
     }
 
-    public init(
+    init(
       
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
@@ -67,19 +76,25 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
-        sharePackageService: SharePackageService? = nil
+        sharePackageService: SharePackageService? = nil,
+        sharedReadingAPI: SharedReadingAPI? = nil,
+        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
+        onShowChats: (() -> Void)? = nil
     ) {
  
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onShowChats = onShowChats
         self.onImported = onImported
         self.sharePackageService = sharePackageService
+        self.sharedReadingAPI = sharedReadingAPI
+        self.sharedReadingRepair = sharedReadingRepair
         self.externalPath = nil
         self.externalDocumentPickerPresented = documentPickerPresented
     }
 
-    public init(
+    init(
      
         path: Binding<NavigationPath>,
         importCoordinator: ImportCoordinator,
@@ -88,14 +103,20 @@ public struct LibraryRootView: View {
         onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
-        sharePackageService: SharePackageService? = nil
+        sharePackageService: SharePackageService? = nil,
+        sharedReadingAPI: SharedReadingAPI? = nil,
+        sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
+        onShowChats: (() -> Void)? = nil
     ) {
        
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onShowChats = onShowChats
         self.onImported = onImported
         self.sharePackageService = sharePackageService
+        self.sharedReadingAPI = sharedReadingAPI
+        self.sharedReadingRepair = sharedReadingRepair
         self.externalPath = path
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -153,6 +174,9 @@ public struct LibraryRootView: View {
                 librarySignposter.endInterval("library.first-paint", state)
             }
             await refreshLibraryAndPrewarm(vm)
+            #if DEBUG
+            await importE2EFixtureIfNeeded(vm)
+            #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: SharePackageService.libraryDidChange)) { _ in
             Task { await refreshLibraryAndPrewarm(vm) }
@@ -176,6 +200,20 @@ public struct LibraryRootView: View {
             vm.searchText = ""
         }
     }
+
+    #if DEBUG
+    @MainActor
+    private func importE2EFixtureIfNeeded(_ vm: LibraryViewModel) async {
+        guard RishiE2EConfiguration.isRealAuth,
+              let fixtureURL = RishiE2EConfiguration.fixtureURL,
+              !e2eFixtureImportStarted,
+              vm.books.isEmpty else { return }
+        e2eFixtureImportStarted = true
+        let outcomes = await vm.importPicked([fixtureURL])
+        await refreshLibraryAndPrewarm(vm)
+        onImported?(outcomes)
+    }
+    #endif
 
     
     
@@ -205,8 +243,28 @@ public struct LibraryRootView: View {
             },
             onShareSingle: { book in
                 beginShare(ids: [book.id], kind: .single)
+            },
+            onStartSharedReading: { book in
+                beginSharedReading(ids: [book.id], books: [book])
             }
         )
+
+#if DEBUG
+        // Keep the E2E start action in the library content hierarchy instead
+        // of the Catalyst toolbar. Toolbar items can disappear from the
+        // accessibility tree when their state changes after an async import.
+        .overlay(alignment: .topTrailing) {
+            if RishiE2EConfiguration.isRealAuth {
+                Button("Start shared reading") {
+                    guard let firstBook = vm.books.first else { return }
+                    beginSharedReading(ids: [firstBook.id], books: vm.books)
+                }
+                .disabled(vm.books.isEmpty)
+                .accessibilityIdentifier("e2e-start-shared-reading")
+                .padding()
+            }
+        }
+#endif
 
         .librarySearchable(
             text: $vm.searchText,
@@ -216,19 +274,51 @@ public struct LibraryRootView: View {
             sharingToolbar(vm: vm)
 
 
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        documentPickerPresented.wrappedValue = true
-                    } label: {
-                        Label("Import", systemImage: "plus")
+            ToolbarItem(placement: .primaryAction) {
+                    #if DEBUG
+                    if RishiE2EConfiguration.isRealAuth {
+                        if RishiE2EConfiguration.fixtureURL != nil {
+                            Button("Import shared-reading book") {
+                                guard let fixtureURL = RishiE2EConfiguration.fixtureURL else { return }
+                                Task {
+                                    let outcomes = await vm.importPicked([fixtureURL])
+                                    await refreshLibraryAndPrewarm(vm)
+                                    onImported?(outcomes)
+                                }
+                            }
+                            .accessibilityIdentifier("e2e-import-shared-reading-book")
+                        }
                     }
-                    .popoverTip(importTip)
+                    #endif
+                    if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+                        Button {
+                            documentPickerPresented.wrappedValue = true
+                        } label: {
+                            Label("Import", systemImage: "plus")
+                        }
+                    } else {
+                        Button {
+                            documentPickerPresented.wrappedValue = true
+                        } label: {
+                            Label("Import", systemImage: "plus")
+                        }
+                        .popoverTip(importTip)
+                    }
 
 
 
-                }
+            }
 
             #if os(iOS) && !targetEnvironment(macCatalyst)
+
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onShowChats?()
+                    } label: {
+                        Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityIdentifier("library.toolbar.chats")
+                }
 
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -242,6 +332,28 @@ public struct LibraryRootView: View {
         }
         .sheet(isPresented: $showShareComposer) {
             shareComposerContent()
+        }
+        .sheet(isPresented: $showSharedReadingComposer, onDismiss: {
+            guard let token = pendingSharedReadingToken else { return }
+            pendingSharedReadingToken = nil
+            // The share composer is itself a sheet. Queue the creator's join
+            // only after it has gone away so SwiftUI never presents two
+            // sheets at the same time.
+            AppRouter.enqueueSessionToken(token)
+        }) {
+            if let sharedReadingAPI, let sharedReadingBook {
+                SharedReadingShareComposerView(
+                    api: sharedReadingAPI,
+                    bookId: sharedReadingBook.id.uuidString,
+                    bookTitle: sharedReadingBook.title,
+                    repairBook: sharedReadingRepair.map { repair in
+                        { await repair(sharedReadingBook.id) }
+                    },
+                    onCreated: { token in
+                        pendingSharedReadingToken = token
+                    }
+                )
+            }
         }
     }
 
@@ -270,6 +382,12 @@ public struct LibraryRootView: View {
                     selectedBookIDs.removeAll()
                 }
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Start reading") {
+                    beginSharedReading(ids: Array(selectedBookIDs), books: vm.books)
+                }
+                .disabled(selectedBookIDs.count != 1 || sharedReadingAPI == nil)
+            }
         }
     }
 
@@ -293,6 +411,12 @@ public struct LibraryRootView: View {
         shareBookIDs = ids
         shareKind = kind
         showShareComposer = true
+    }
+
+    private func beginSharedReading(ids: [BookID], books: [Book]) {
+        guard ids.count == 1, let id = ids.first, let book = books.first(where: { $0.id == id }), sharedReadingAPI != nil else { return }
+        sharedReadingBook = book
+        showSharedReadingComposer = true
     }
 
 }

@@ -38,6 +38,7 @@ export async function verify<T>(token: string, secret: string): Promise<T> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("invalid token format");
   const [headerB64, payloadB64, sigB64] = parts;
+  if (!headerB64 || !payloadB64 || !sigB64) throw new Error("invalid token format");
   const data = `${headerB64}.${payloadB64}`;
   const ok = await crypto.subtle.verify(
     "HMAC",

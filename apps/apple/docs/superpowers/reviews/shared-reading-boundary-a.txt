@@ -1,0 +1,15 @@
+apps/apple/docs/superpowers/plans/2026-09-15-shared-reading-worker-protocol.md
+apps/apple/docs/superpowers/reviews/shared-reading-release-required-tests.json
+apps/apple/docs/superpowers/reviews/shared-reading-boundary-a.txt
+apps/apple/docs/superpowers/reviews/shared-reading-boundary-a-hunks.md
+apps/apple/docs/superpowers/reviews/shared-reading-boundary-a-approved.sha256
+scripts/test-integrity/run-shared-reading-release.ts
+scripts/test-integrity/run-shared-reading-release.test.ts
+scripts/test-integrity/verify-shared-reading-release.ts
+scripts/test-integrity/verify-shared-reading-release.test.ts
+scripts/test-integrity/replace-codex-mcp.ts
+scripts/test-integrity/replace-codex-mcp.test.ts
+scripts/test-integrity/run-rishi-mcp-acceptance.ts
+scripts/test-integrity/run-rishi-mcp-acceptance.test.ts
+scripts/test-integrity/run-rishi-mcp-acceptance.test.ts
+scripts/test-integrity/run-shared-reading-release.test.ts

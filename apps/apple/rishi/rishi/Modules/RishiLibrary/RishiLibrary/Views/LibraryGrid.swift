@@ -13,6 +13,9 @@ struct LibraryGrid: View {
     public let onBeginSelection: (Book) -> Void
     public let onToggleSelection: (Book) -> Void
     public let onShareSingle: (Book) -> Void
+    public let onStartSharedReading: (Book) -> Void
+
+    static let startSharedReadingContextMenuTitle = "Start Shared Reading"
 
     @State private var pendingDelete: Book?
 
@@ -36,7 +39,8 @@ struct LibraryGrid: View {
         selectedBookIDs: Set<BookID> = [],
         onBeginSelection: @escaping (Book) -> Void = { _ in },
         onToggleSelection: @escaping (Book) -> Void = { _ in },
-        onShareSingle: @escaping (Book) -> Void = { _ in }
+        onShareSingle: @escaping (Book) -> Void = { _ in },
+        onStartSharedReading: @escaping (Book) -> Void = { _ in }
     ) {
         self.books = books
         self.positionLookup = positionLookup
@@ -48,6 +52,7 @@ struct LibraryGrid: View {
         self.onBeginSelection = onBeginSelection
         self.onToggleSelection = onToggleSelection
         self.onShareSingle = onShareSingle
+        self.onStartSharedReading = onStartSharedReading
     }
     
 
@@ -114,14 +119,26 @@ struct LibraryGrid: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
 
+        // Keep the long-standing identifier for existing UI tests and expose
+        // the stable local id in the value for semantic E2E diagnostics.
         .accessibilityIdentifier("library-book-cell")
+        .accessibilityValue("\(book.formatType.rawValue)|\(book.id.uuidString)")
         .accessibilityLabel(accessibilityText(for: book))
-        .accessibilityHint(selectionMode ? "Double-tap to select." : "Double-tap to open. Long-press for actions.")
+        .accessibilityHint(
+            selectionMode
+                ? "Double-tap to select."
+                : bookActionHint
+        )
         .contextMenu {
             Button {
                 onShareSingle(book)
             } label: {
                 Label("Share Book", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                onStartSharedReading(book)
+            } label: {
+                Label(Self.startSharedReadingContextMenuTitle, systemImage: "person.3.fill")
             }
             Button {
                 onBeginSelection(book)
@@ -143,6 +160,14 @@ struct LibraryGrid: View {
 
             .accessibilityLabel("Delete \(book.title)")
         }
+    }
+
+    private var bookActionHint: String {
+        #if targetEnvironment(macCatalyst)
+            return "Single tap to open. Two-finger click for actions."
+        #else
+            return "Double-tap to open. Long-press for actions."
+        #endif
     }
 
     private func accessibilityText(for book: Book) -> String {

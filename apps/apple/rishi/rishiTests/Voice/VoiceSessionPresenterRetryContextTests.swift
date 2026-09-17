@@ -47,6 +47,7 @@ struct VoiceSessionPresenterRetryContextTests {
         return VoiceSessionPresenter(
             coordinator: coordinator,
             workerClient: worker,
+            baseURL: URL(string: "https://example.invalid")!,
             messageStore: StubMessageStore(),
             conversationLookup: ConversationLookup(store: StubConversationStore()),
             userIdProvider: { nil },

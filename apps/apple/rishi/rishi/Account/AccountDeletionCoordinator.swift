@@ -31,4 +31,11 @@ struct AccountDeletionCoordinator: Sendable {
         }
         await signOut()
     }
+
+    /// DEBUG/E2E-only callers may need to reset a device without deleting a
+    /// server account. Keep this separate from `run()` so a local reset cannot
+    /// accidentally invoke the production deletion endpoint.
+    func purgeLocalOnly() async throws {
+        try await purgeLocal()
+    }
 }

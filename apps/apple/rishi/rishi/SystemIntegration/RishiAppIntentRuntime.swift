@@ -64,10 +64,10 @@ enum RishiAppIntentRuntime {
         guard !session.token.isEmpty,
               let keychainUserID = try? Keychain.load(.userId),
               session.userId == keychainUserID,
-              let identity = UUID(uuidString: keychainUserID) else {
+              !keychainUserID.isEmpty else {
             throw RishiAppIntentRuntimeError.signedOut
         }
-        return identity
+        return DerivedUserID.from(keychainUserID)
     }
 
     static func validateServerIdentity(
@@ -75,11 +75,14 @@ enum RishiAppIntentRuntime {
         userID: UserID
     ) async throws -> User {
         do {
-            let user = try await workerClient.send(UserGetEndpoint())
-            guard user.id == userID else {
+            guard let profile = try await workerClient.send(GetSessionEndpoint()) else {
                 throw RishiAppIntentRuntimeError.signedOut
             }
-            return user
+            let identity = DerivedUserID.from(profile.user.id)
+            guard identity == userID else {
+                throw RishiAppIntentRuntimeError.signedOut
+            }
+            return User(id: userID, email: profile.user.email, name: profile.user.displayName)
         } catch let error as RishiAppIntentRuntimeError {
             throw error
         } catch {
