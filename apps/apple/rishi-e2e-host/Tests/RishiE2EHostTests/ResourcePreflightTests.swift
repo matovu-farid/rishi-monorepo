@@ -2,19 +2,29 @@ import XCTest
 @testable import RishiE2EHost
 
 final class ResourcePreflightTests: XCTestCase {
-    func testDefaultMemoryFloorLeavesHostHeadroom() {
-        XCTAssertEqual(ResourcePreflight.defaultMinimumMemoryBytes, 8 * 1024 * 1024 * 1024)
+    func testSufficientDiskIsAcceptedRegardlessOfMemoryAndConfiguredMemoryFloor() throws {
+        try ResourcePreflight.requireSufficient(
+            for: FileManager.default.temporaryDirectory,
+            environment: ["RISHI_E2E_MIN_FREE_MEMORY_GB": "1024"],
+            capacityProvider: { _ in
+                ResourceCapacity(
+                    diskBytes: UInt64(40) * 1024 * 1024 * 1024,
+                    memoryBytes: 1
+                )
+            }
+        )
     }
 
-    func testConfiguredFloorCanLowerTheDefaultWhenExplicit() {
-        XCTAssertEqual(
-            ResourcePreflight.configuredMinimum(
-                key: "RISHI_E2E_MIN_FREE_MEMORY_GB",
-                defaultValue: ResourcePreflight.defaultMinimumMemoryBytes,
-                environment: ["RISHI_E2E_MIN_FREE_MEMORY_GB": "1"]
-            ),
-            1 * 1024 * 1024 * 1024
-        )
+    func testInsufficientDiskFailsEvenWhenMemoryIsAvailable() {
+        XCTAssertThrowsError(try ResourcePreflight.requireSufficient(
+            for: FileManager.default.temporaryDirectory,
+            environment: [:],
+            capacityProvider: { _ in
+                ResourceCapacity(diskBytes: 1, memoryBytes: UInt64.max)
+            }
+        )) { error in
+            XCTAssertTrue((error as? ResourcePreflightError)?.message.contains("Insufficient free disk for Apple E2E") == true)
+        }
     }
 
     func testConfiguredFloorCanRaiseTheDefault() {
@@ -25,21 +35,6 @@ final class ResourcePreflightTests: XCTestCase {
                 environment: ["RISHI_E2E_MIN_FREE_DISK_GB": "21"]
             ),
             21 * 1024 * 1024 * 1024
-        )
-    }
-
-    func testAvailableMemoryDoesNotDoubleCountPurgeablePages() throws {
-        let vmStat = """
-        Mach Virtual Memory Statistics: (page size of 16384 bytes)
-        Pages free:                             10.
-        Pages inactive:                         20.
-        Pages speculative:                       3.
-        Pages purgeable:                      1000.
-        """
-
-        XCTAssertEqual(
-            try ResourcePreflight.availableMemoryBytes(from: vmStat),
-            UInt64(33 * 16384)
         )
     }
 

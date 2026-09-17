@@ -103,16 +103,16 @@ peers. After
 the owner peer imports the book through the normal app path, the host polls the
 authenticated sync changes endpoint until the expected fixture hash has a
 non-empty server object and size; only then is the participant peer launched.
-The host also checks the resource floor every five seconds while the peers are
-active; if available memory or disk falls below the floor, it cancels the run
-and enters the same account/process cleanup path. The manifest stays
+The host checks free disk before any Xcode process starts and every five seconds
+while the peers are active. If disk falls below the configured floor, it cancels
+the run and enters the same account/process cleanup path. The manifest stays
 restrictive, and both accounts are deleted and verified in cleanup even if
 either peer fails. Set `RISHI_E2E_KEEP_ARTIFACTS=1` only when you intentionally
 need the result bundles for diagnosis.
 
 Before any Xcode process starts, the host requires at least 20 GiB of free
-disk and 8 GiB of available memory. These floors can only be raised with
-`RISHI_E2E_MIN_FREE_DISK_GB` and `RISHI_E2E_MIN_FREE_MEMORY_GB`.
+disk. This floor can only be raised with `RISHI_E2E_MIN_FREE_DISK_GB`.
+There is no memory reserve or memory-based start/cancellation gate.
 Incomplete runs are preserved for recovery, but the host refuses to start when
 the temporary root already contains three retained `rishi-shared-reading-*`
 directories. Set `RISHI_E2E_MAX_RETAINED_RUNS` only when an operator has an
