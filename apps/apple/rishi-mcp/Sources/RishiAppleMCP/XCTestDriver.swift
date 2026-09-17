@@ -112,6 +112,7 @@ public final class ManagedProcess: @unchecked Sendable {
     /// not sufficient to release memory, simulator, or pipe resources.
     @discardableResult
     public func waitForExitAndCleanup(timeout: Duration = .seconds(3)) async -> Bool {
+        defer { closePipes() }
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
             if !ownedProcessesAreAlive() {
@@ -360,10 +361,8 @@ public struct ProcessRunner: Sendable {
                 }
                 managed.process.waitUntilExit()
                 guard await managed.waitForExitAndCleanup() else {
-                    managed.closePipes()
                     throw RegistryError(.driverUnavailable, "command cleanup did not finish: \(executable)")
                 }
-                managed.closePipes()
                 let result = CommandResult(
                     status: managed.process.terminationStatus,
                     stdout: String(data: await stdoutTask.value, encoding: .utf8) ?? "",
@@ -376,7 +375,6 @@ public struct ProcessRunner: Sendable {
                 guard timeoutState.claimTimeout() else { return nil }
                 managed.killProcessGroup()
                 let cleaned = await managed.waitForExitAndCleanup(timeout: .seconds(3))
-                managed.closePipes()
                 if !cleaned {
                     throw RegistryError(.driverUnavailable, "timed-out command cleanup did not finish: \(executable)")
                 }

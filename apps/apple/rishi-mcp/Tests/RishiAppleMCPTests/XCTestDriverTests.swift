@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import RishiAppleMCP
 
@@ -126,6 +127,19 @@ final class XCTestDriverTests: XCTestCase {
         XCTAssertFalse(process.isRunning)
     }
 
+    func testProcessCleanupClosesPipeReadDescriptors() async throws {
+        let process = try ProcessRunner().start("/bin/sleep", arguments: ["30"], environment: [:])
+        let outputDescriptor = process.output.fileHandleForReading.fileDescriptor
+        let errorDescriptor = process.errors.fileHandleForReading.fileDescriptor
+
+        process.stop()
+        let cleaned = await process.waitForExitAndCleanup(timeout: .milliseconds(500))
+
+        XCTAssertTrue(cleaned)
+        XCTAssertEqual(fcntl(outputDescriptor, F_GETFD), -1)
+        XCTAssertEqual(fcntl(errorDescriptor, F_GETFD), -1)
+    }
+
     func testNormalRootExitCleansUpOwnedDescendant() async throws {
         let process = try ProcessRunner().start(
             "/bin/sh",
@@ -177,6 +191,57 @@ final class XCTestDriverTests: XCTestCase {
         )
 
         XCTAssertEqual(result.status, 0)
+    }
+
+    func testRunReturnsAfterCleanupWhenEscapedDescendantRetainsPipes() async throws {
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-pipe-reader-regression-\(UUID().uuidString).pid")
+        let script = """
+        my $marker = "rishi-pipe-reader-regression";
+        select undef, undef, undef, 0.3;
+        my $pid = fork();
+        die "fork failed" unless defined $pid;
+        if ($pid == 0) {
+            POSIX::setsid();
+            sleep 2;
+            exit 0;
+        }
+        open my $fh, ">", $ARGV[0] or die "pid file open failed: $!";
+        print {$fh} $pid;
+        close $fh;
+        exit 0;
+        """
+        defer {
+            if let value = try? String(contentsOf: pidFile, encoding: .utf8),
+               let pid = pid_t(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGKILL)
+            }
+            try? FileManager.default.removeItem(at: pidFile)
+        }
+
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+        let result = try await ProcessRunner().run(
+            "/usr/bin/perl",
+            arguments: ["-MPOSIX", "-e", script, pidFile.path],
+            environment: [:],
+            timeout: .seconds(5)
+        )
+        let elapsed = startedAt.duration(to: clock.now)
+        let escapedPID = try XCTUnwrap(
+            pid_t(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertLessThan(elapsed, .seconds(1))
+        XCTAssertEqual(Darwin.kill(escapedPID, 0), 0)
+
+        _ = Darwin.kill(escapedPID, SIGTERM)
+        let exitDeadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < exitDeadline, Darwin.kill(escapedPID, 0) == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(Darwin.kill(escapedPID, 0), -1)
     }
 
     func testStopCoordinatorReleasesOwnershipAfterExternalTargetDisappears() async throws {
