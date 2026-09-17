@@ -111,7 +111,7 @@ either peer fails. Set `RISHI_E2E_KEEP_ARTIFACTS=1` only when you intentionally
 need the result bundles for diagnosis.
 
 Before any Xcode process starts, the host requires at least 20 GiB of free
-disk. This floor can only be raised with `RISHI_E2E_MIN_FREE_DISK_GB`.
+disk by default. This threshold can be overridden with `RISHI_E2E_MIN_FREE_DISK_GB`.
 The host does not inspect available memory for admission or cancellation.
 Incomplete runs are preserved for recovery, but the host refuses to start when
 the temporary root already contains three retained `rishi-shared-reading-*`

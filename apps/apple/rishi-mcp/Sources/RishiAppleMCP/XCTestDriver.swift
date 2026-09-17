@@ -1050,10 +1050,13 @@ public actor XCTestDriver: AppleAppDriver {
     private func startResourceWatchdog(for session: Session, target: AppTarget, derivedDataPath: String) {
         session.resourceWatchdog?.cancel()
         let environment = configuration.environment
+        let sessionID = ObjectIdentifier(session)
         session.resourceWatchdog = Task { [weak self] in
             await ResourceWatchdog.run(
                 sleep: { duration in try await Task.sleep(for: duration) },
-                check: {
+                check: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    try await self.requireActiveResourceWatchdog(sessionID: sessionID, target: target)
                     try ResourcePreflight.requireSufficient(
                         for: URL(fileURLWithPath: derivedDataPath),
                         environment: environment
@@ -1066,6 +1069,14 @@ public actor XCTestDriver: AppleAppDriver {
                     )
                 }
             )
+        }
+    }
+
+    private func requireActiveResourceWatchdog(sessionID: ObjectIdentifier, target: AppTarget) throws {
+        guard let session = sessions[target],
+              ObjectIdentifier(session) == sessionID,
+              !session.stopping else {
+            throw CancellationError()
         }
     }
 
