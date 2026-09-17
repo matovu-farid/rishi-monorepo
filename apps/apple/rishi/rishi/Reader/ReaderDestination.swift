@@ -105,6 +105,8 @@ struct ReaderDestination: View {
     @State private var didScheduleReaderIndexBackfill = false
     @State private var sharedPositionJSONString: String?
     @State private var sharedSequence: Int64 = 0
+    @State private var sharedLastSentSequence: Int64 = 0
+    @State private var sharedRemoteSequence: Int64 = -1
     @State private var sharedMicrophonePolicy = SharedReadingMicrophonePolicyState()
     @State private var sharedTTSIsPlaying = false
 
@@ -362,6 +364,17 @@ struct ReaderDestination: View {
                     .padding(.top, RishiSpacing.m)
             }
         }
+        #if DEBUG
+        .overlay(alignment: .topLeading) {
+            if sharedReadingCoordinator != nil {
+                Text("Shared reading progress")
+                    .accessibilityIdentifier("shared-reading-progress")
+                    .accessibilityValue(sharedReadingProgressValue)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01)
+            }
+        }
+        #endif
         .sheet(isPresented: $showVoiceTextChat) {
             NavigationStack {
                 if let voiceTextVM {
@@ -490,8 +503,9 @@ struct ReaderDestination: View {
                let progress = snapshot.latestProgress,
                progress.sequence > lastRemoteSequence,
                progress.bookId == sharedReadingJoin.response.book.bookId,
-               progress.contentHash == sharedReadingJoin.response.book.contentHash {
+                progress.contentHash == sharedReadingJoin.response.book.contentHash {
                 lastRemoteSequence = progress.sequence
+                sharedRemoteSequence = progress.sequence
                 sharedPositionJSONString = progress.position
                 if progress.isPlaying, let locator = try? Locator(jsonString: progress.position) {
                     startReadAloud(from: locator)
@@ -520,6 +534,8 @@ struct ReaderDestination: View {
                     )
                     do {
                         try await sharedReadingCoordinator.sendControllerSyncFrame(progress)
+                        sharedPositionJSONString = position
+                        sharedLastSentSequence = sharedSequence
                         lastSentPosition = position
                         lastSentPlaying = isPlaying
                     } catch {
@@ -530,6 +546,11 @@ struct ReaderDestination: View {
             }
             try? await Task.sleep(for: .milliseconds(250))
         }
+    }
+
+    private var sharedReadingProgressValue: String {
+        let sequence = max(sharedLastSentSequence, sharedRemoteSequence)
+        return sequence > 0 ? "sequence-\(sequence)" : "pending"
     }
 
     @ViewBuilder

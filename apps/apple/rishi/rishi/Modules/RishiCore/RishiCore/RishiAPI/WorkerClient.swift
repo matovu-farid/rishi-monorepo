@@ -594,6 +594,11 @@ public actor WorkerClient {
         if devBypassEnabled {
             request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
         }
+        if endpoint.path == "/test/sign-in",
+           let testAuthSecret = ProcessInfo.processInfo.environment["RISHI_E2E_TEST_AUTH_SECRET"],
+           !testAuthSecret.isEmpty {
+            request.setValue(testAuthSecret, forHTTPHeaderField: "X-Test-Auth-Secret")
+        }
         #endif
 
         // Any non-GET request declares JSON, even bodyless ones (e.g. sign-out),

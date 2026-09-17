@@ -94,10 +94,19 @@ struct RootView: View {
             }
             .task {
                 guard case .signedOut = currentUserBox.state else { return }
+#if DEBUG
+                // A reused simulator may still contain a previous account's
+                // Keychain session. The app-level E2E reset task is purging
+                // that account locally; do not race it by restoring the old
+                // identity here or briefly starting its sync/session flows.
+                if RishiE2EConfiguration.isReset {
+                    currentUserBox.state = .signedOut
+                    return
+                }
+#endif
                 currentUserBox.state = .loading
-                if let userId = try? Keychain.load(.userId),
-                    let uuidUserId = UUID(uuidString: userId)
-                {
+                if let userId = try? Keychain.load(.userId), !userId.isEmpty {
+                    let uuidUserId = DerivedUserID.from(userId)
 
                     let workerClient = deps.services!.workerClient
                     do {
@@ -285,6 +294,13 @@ struct RootView: View {
     /// surface; the library's first-book prompt is presented only after sign-in.
     @MainActor
     private func updateOnboardingPresentation(deps: AppDependencies) async {
+        #if DEBUG
+        if RishiE2EConfiguration.isRealAuth {
+            await deps.services!.onboarding.state.setHasCompletedOnboarding(true)
+            showOnboarding = false
+            return
+        }
+        #endif
         let completed = await deps.services!.onboarding.state.hasCompletedOnboarding()
         showOnboarding = !completed
     }
@@ -405,6 +421,14 @@ struct RootView: View {
     /// signed-in library reports that its first-book flow has settled.
     @MainActor
     private func presentNoCardTrialIntroIfNeeded(deps: AppDependencies) async {
+        #if DEBUG
+        // Shared-reading E2E owns the disposable-account lifecycle and is
+        // focused on the authenticated library/session path. Catalyst cannot
+        // reliably synthesize a tap through this full-screen first-run sheet,
+        // so keep that unrelated onboarding surface out of the real-auth UI
+        // test while leaving the production path unchanged.
+        guard !RishiE2EConfiguration.isRealAuth else { return }
+        #endif
         guard !noCardTrialIntroCheckInFlight else { return }
         noCardTrialIntroCheckInFlight = true
         defer { noCardTrialIntroCheckInFlight = false }

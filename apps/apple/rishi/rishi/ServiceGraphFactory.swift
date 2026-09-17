@@ -67,18 +67,28 @@ enum ServiceGraphFactory {
             dataUseConsentProvider: dataUseConsentProvider,
         )
 
-        let speechOptions = (try? await workerClient.send(SpeechOptionsEndpoint()))
-            ?? SpeechOptionsEndpoint.SpeechOptionsResponse(
-                provider: "openai",
-                voices: VoiceCatalog.all.map {
-                    .init(id: $0, name: VoiceCatalog.displayName(for: $0))
-                },
-                models: [
-                    .init(id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS")
-                ],
-                defaultVoiceID: VoiceCatalog.all.first ?? "marin",
-                defaultModelID: "gpt-4o-mini-tts"
-            )
+        #if DEBUG
+        let isRealAuthUITest = ProcessInfo.processInfo.environment["RISHI_E2E_REAL_AUTH"] == "1"
+        #else
+        let isRealAuthUITest = false
+        #endif
+        let fallbackSpeechOptions = SpeechOptionsEndpoint.SpeechOptionsResponse(
+            provider: "openai",
+            voices: VoiceCatalog.all.map {
+                .init(id: $0, name: VoiceCatalog.displayName(for: $0))
+            },
+            models: [
+                .init(id: "gpt-4o-mini-tts", name: "GPT-4o mini TTS")
+            ],
+            defaultVoiceID: VoiceCatalog.all.first ?? "marin",
+            defaultModelID: "gpt-4o-mini-tts"
+        )
+        // The real-auth UI test signs in explicitly. Avoid blocking its
+        // signed-out screen on optional launch-time network requests; the
+        // normal production path still loads the server catalog here.
+        let speechOptions = isRealAuthUITest
+            ? fallbackSpeechOptions
+            : (try? await workerClient.send(SpeechOptionsEndpoint())) ?? fallbackSpeechOptions
         await MainActor.run {
             TTSPickerCatalogStore.shared.catalog = TTSPickerCatalog(
                 voiceChoices: speechOptions.voices.map {
@@ -546,7 +556,7 @@ enum ServiceGraphFactory {
 
         let readerDefaults = await MainActor.run { AppReaderDefaults() }
 
-        if let userId = try? Keychain.load(.userId) {
+        if !isRealAuthUITest, let userId = try? Keychain.load(.userId) {
             await entitlementService.bindToUser(userId: userId)
             await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .launch)
         }

@@ -98,6 +98,7 @@ struct SharedReadingShareComposerView: View {
                     Section {
                         Button("Create reading link") { createLink() }
                             .disabled(isBusy)
+                            .accessibilityIdentifier("shared-reading-create-link")
                     }
 
                     #if DEBUG

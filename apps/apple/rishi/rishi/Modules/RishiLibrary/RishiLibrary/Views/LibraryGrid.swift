@@ -119,8 +119,10 @@ struct LibraryGrid: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
 
+        // Keep the long-standing identifier for existing UI tests and expose
+        // the stable local id in the value for semantic E2E diagnostics.
         .accessibilityIdentifier("library-book-cell")
-        .accessibilityValue(book.formatType.rawValue)
+        .accessibilityValue("\(book.formatType.rawValue)|\(book.id.uuidString)")
         .accessibilityLabel(accessibilityText(for: book))
         .accessibilityHint(
             selectionMode

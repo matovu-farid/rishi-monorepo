@@ -531,12 +531,14 @@ public struct ReaderScreen: View {
                     EPUBEdgeArrowButton(
                         systemName: "chevron.left",
                         label: "Previous page",
+                        identifier: "reader.previous-page",
                         action: goBackward
                     )
                     Spacer()
                     EPUBEdgeArrowButton(
                         systemName: "chevron.right",
                         label: "Next page",
+                        identifier: "reader.next-page",
                         action: goForward
                     )
                 }
@@ -1084,6 +1086,7 @@ public struct ReaderScreen: View {
     private struct EPUBEdgeArrowButton: View {
         let systemName: String
         let label: String
+        let identifier: String
         let action: () -> Void
         var body: some View {
             Button(action: action) {
@@ -1095,6 +1098,7 @@ public struct ReaderScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(label)
+            .accessibilityIdentifier(identifier)
         }
     }
 

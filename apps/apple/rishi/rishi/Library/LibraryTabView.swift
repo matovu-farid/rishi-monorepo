@@ -134,6 +134,14 @@ struct LibraryTabView: View {
         if !successes.isEmpty {
             markFirstBookPromptSeen()
         }
+        #if DEBUG
+        // The native shared-reading owner test needs to remain on the library
+        // after the host-provided import so it can open the visible sharing
+        // composer. Normal imports retain their existing auto-open behavior.
+        if RishiE2EConfiguration.isRealAuth, RishiE2EConfiguration.fixtureURL != nil {
+            return
+        }
+        #endif
         if cameFromFirstPrompt,
            let book = successes.first(where: { book in
                book.formatType == .epub || book.formatType == .pdf
@@ -183,6 +191,7 @@ struct LibraryTabView: View {
                     } label: {
                         Label("Active reading", systemImage: "person.3.fill")
                     }
+                    .accessibilityIdentifier("shared-reading-active-sessions")
                     .accessibilityHint("View and rejoin open shared reading sessions")
                 }
             }

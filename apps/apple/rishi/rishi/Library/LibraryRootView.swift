@@ -52,6 +52,9 @@ public struct LibraryRootView: View {
     @State private var showSharedReadingComposer = false
     @State private var sharedReadingBook: Book?
     @State private var pendingSharedReadingToken: String?
+    #if DEBUG
+    @State private var e2eFixtureImportStarted = false
+    #endif
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -171,6 +174,9 @@ public struct LibraryRootView: View {
                 librarySignposter.endInterval("library.first-paint", state)
             }
             await refreshLibraryAndPrewarm(vm)
+            #if DEBUG
+            await importE2EFixtureIfNeeded(vm)
+            #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: SharePackageService.libraryDidChange)) { _ in
             Task { await refreshLibraryAndPrewarm(vm) }
@@ -194,6 +200,20 @@ public struct LibraryRootView: View {
             vm.searchText = ""
         }
     }
+
+    #if DEBUG
+    @MainActor
+    private func importE2EFixtureIfNeeded(_ vm: LibraryViewModel) async {
+        guard RishiE2EConfiguration.isRealAuth,
+              let fixtureURL = RishiE2EConfiguration.fixtureURL,
+              !e2eFixtureImportStarted,
+              vm.books.isEmpty else { return }
+        e2eFixtureImportStarted = true
+        let outcomes = await vm.importPicked([fixtureURL])
+        await refreshLibraryAndPrewarm(vm)
+        onImported?(outcomes)
+    }
+    #endif
 
     
     
@@ -229,6 +249,23 @@ public struct LibraryRootView: View {
             }
         )
 
+#if DEBUG
+        // Keep the E2E start action in the library content hierarchy instead
+        // of the Catalyst toolbar. Toolbar items can disappear from the
+        // accessibility tree when their state changes after an async import.
+        .overlay(alignment: .topTrailing) {
+            if RishiE2EConfiguration.isRealAuth {
+                Button("Start shared reading") {
+                    guard let firstBook = vm.books.first else { return }
+                    beginSharedReading(ids: [firstBook.id], books: vm.books)
+                }
+                .disabled(vm.books.isEmpty)
+                .accessibilityIdentifier("e2e-start-shared-reading")
+                .padding()
+            }
+        }
+#endif
+
         .librarySearchable(
             text: $vm.searchText,
             filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty
@@ -238,6 +275,21 @@ public struct LibraryRootView: View {
 
 
             ToolbarItem(placement: .primaryAction) {
+                    #if DEBUG
+                    if RishiE2EConfiguration.isRealAuth {
+                        if RishiE2EConfiguration.fixtureURL != nil {
+                            Button("Import shared-reading book") {
+                                guard let fixtureURL = RishiE2EConfiguration.fixtureURL else { return }
+                                Task {
+                                    let outcomes = await vm.importPicked([fixtureURL])
+                                    await refreshLibraryAndPrewarm(vm)
+                                    onImported?(outcomes)
+                                }
+                            }
+                            .accessibilityIdentifier("e2e-import-shared-reading-book")
+                        }
+                    }
+                    #endif
                     if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
                         Button {
                             documentPickerPresented.wrappedValue = true
