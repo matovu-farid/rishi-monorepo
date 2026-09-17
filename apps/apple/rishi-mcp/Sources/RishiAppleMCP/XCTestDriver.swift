@@ -43,22 +43,15 @@ public final class ManagedProcess: @unchecked Sendable {
         // group is established so children spawned in that small window and
         // left in the old group remain owned and cancellable.
         startOwnershipMonitor()
-        recordOwnedProcessTree()
         #endif
     }
     public var isRunning: Bool { process.isRunning }
-    public func stop() {
-        killProcessGroup()
+    public func stop() async {
+        await killProcessGroup()
         if process.isRunning { process.terminate() }
     }
-    public func killProcessGroup() {
-        lifecycleLock.lock()
-        guard !finished, !cancellationRequested else {
-            lifecycleLock.unlock()
-            return
-        }
-        cancellationRequested = true
-        lifecycleLock.unlock()
+    public func killProcessGroup() async {
+        guard claimCancellation() else { return }
         #if canImport(Darwin)
         if hasPrivateProcessGroup {
             let processGroup = process.processIdentifier
@@ -66,20 +59,31 @@ public final class ManagedProcess: @unchecked Sendable {
             // the output pipe. Signal the private group by its known group
             // leader rather than skipping cleanup because the root is gone.
             _ = Darwin.kill(-processGroup, SIGTERM)
-            terminateOwnedProcessTree(signal: SIGTERM)
+            await terminateOwnedProcessTree(signal: SIGTERM)
         } else {
             // setpgid can fail after Foundation has launched a short-lived
             // child. Do not signal an unowned group; record and terminate the
             // owned process tree. The bounded cleanup wait below performs the
             // force-kill after the final descendant sweep.
             let rootPID = process.processIdentifier
-            let initialPIDs = Self.processTree(root: rootPID)
+            let initialPIDs = await Self.processTree(root: rootPID)
             rememberOwned(initialPIDs)
             for pid in initialPIDs { _ = Darwin.kill(pid, SIGTERM) }
         }
         #else
         if process.isRunning { process.terminate() }
         #endif
+    }
+
+    private func claimCancellation() -> Bool {
+        lifecycleLock.lock()
+        guard !finished, !cancellationRequested else {
+            lifecycleLock.unlock()
+            return false
+        }
+        cancellationRequested = true
+        lifecycleLock.unlock()
+        return true
     }
 
     /// Close the read ends after process-tree cleanup. A descendant that was
@@ -115,7 +119,7 @@ public final class ManagedProcess: @unchecked Sendable {
         defer { closePipes() }
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
-            if !ownedProcessesAreAlive() {
+            if !(await ownedProcessesAreAlive()) {
                 stopOwnershipMonitor()
                 markFinished()
                 return true
@@ -130,14 +134,14 @@ public final class ManagedProcess: @unchecked Sendable {
         // an owned XCTest/simulator descendant behind, so request cancellation
         // before the force-kill sweep instead of allowing that child to live
         // past the build lock.
-        requestCancellationIfNeeded()
-        forceKillOwnedProcesses()
+        await requestCancellationIfNeeded()
+        await forceKillOwnedProcesses()
         let forcedDeadline = ContinuousClock.now.advanced(by: .seconds(10))
         while ContinuousClock.now < forcedDeadline {
-            if !ownedProcessesAreAlive() { break }
+            if !(await ownedProcessesAreAlive()) { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        let cleaned = !ownedProcessesAreAlive()
+        let cleaned = !(await ownedProcessesAreAlive())
         if cleaned {
             stopOwnershipMonitor()
             markFinished()
@@ -145,31 +149,24 @@ public final class ManagedProcess: @unchecked Sendable {
         return cleaned
     }
 
-    private func requestCancellationIfNeeded() {
-        lifecycleLock.lock()
-        let alreadyRequested = cancellationRequested
-        lifecycleLock.unlock()
-        if !alreadyRequested { killProcessGroup() }
+    private func requestCancellationIfNeeded() async {
+        if !isCancellationRequested { await killProcessGroup() }
     }
 
-    private func forceKillOwnedProcesses() {
-        lifecycleLock.lock()
-        let ownsCancellation = cancellationRequested
-        let processGroup = process.processIdentifier
-        let privateGroup = hasPrivateProcessGroup
-        lifecycleLock.unlock()
-        guard ownsCancellation else { return }
+    private func forceKillOwnedProcesses() async {
+        let state = cancellationState()
+        guard state.requested else { return }
         #if canImport(Darwin)
-        if privateGroup {
-            _ = Darwin.kill(-processGroup, SIGKILL)
-            terminateOwnedProcessTree(signal: SIGKILL)
+        if state.privateGroup {
+            _ = Darwin.kill(-state.processGroup, SIGKILL)
+            await terminateOwnedProcessTree(signal: SIGKILL)
         } else {
             var remaining = ownedPIDsSnapshot()
             if process.isRunning {
-                remaining.formUnion(Self.processTree(root: processGroup))
+                remaining.formUnion(await Self.processTree(root: state.processGroup))
             }
             for pid in Array(remaining) {
-                remaining.formUnion(Self.processTree(root: pid))
+                remaining.formUnion(await Self.processTree(root: pid))
             }
             rememberOwned(remaining)
             for pid in remaining {
@@ -179,6 +176,18 @@ public final class ManagedProcess: @unchecked Sendable {
         #else
         if process.isRunning { process.terminate() }
         #endif
+    }
+
+    private var isCancellationRequested: Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return cancellationRequested
+    }
+
+    private func cancellationState() -> (requested: Bool, processGroup: pid_t, privateGroup: Bool) {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return (cancellationRequested, process.processIdentifier, hasPrivateProcessGroup)
     }
 
     private var isFinished: Bool {
@@ -215,7 +224,7 @@ public final class ManagedProcess: @unchecked Sendable {
 
     private func recordOwnedProcessTree() {
         guard !isFinished else { return }
-        rememberOwned(Self.processTree(root: process.processIdentifier))
+        rememberOwned(Self.processTreeSynchronously(root: process.processIdentifier))
     }
 
     private func rememberOwned<S: Sequence>(_ pids: S) where S.Element == pid_t {
@@ -230,7 +239,7 @@ public final class ManagedProcess: @unchecked Sendable {
         return ownedPIDs
     }
 
-    private func ownedProcessesAreAlive() -> Bool {
+    private func ownedProcessesAreAlive() async -> Bool {
         if hasPrivateProcessGroup {
             let processGroup = process.processIdentifier
             if Darwin.kill(-processGroup, 0) == 0 || errno == EPERM { return true }
@@ -238,7 +247,7 @@ public final class ManagedProcess: @unchecked Sendable {
 
         var owned = ownedPIDsSnapshot()
         if process.isRunning {
-            owned.formUnion(Self.processTree(root: process.processIdentifier))
+            owned.formUnion(await Self.processTree(root: process.processIdentifier))
             rememberOwned(owned)
         }
         return owned.contains { pid in
@@ -246,24 +255,32 @@ public final class ManagedProcess: @unchecked Sendable {
         }
     }
 
-    private func terminateOwnedProcessTree(signal: Int32) {
+    private func terminateOwnedProcessTree(signal: Int32) async {
         var owned = ownedPIDsSnapshot()
         if process.isRunning {
-            owned.formUnion(Self.processTree(root: process.processIdentifier))
+            owned.formUnion(await Self.processTree(root: process.processIdentifier))
         }
         for pid in Array(owned) {
-            owned.formUnion(Self.processTree(root: pid))
+            owned.formUnion(await Self.processTree(root: pid))
         }
         rememberOwned(owned)
         for pid in owned { _ = Darwin.kill(pid, signal) }
     }
     #else
-    private func ownedProcessesAreAlive() -> Bool { process.isRunning }
+    private func ownedProcessesAreAlive() async -> Bool { process.isRunning }
     private func stopOwnershipMonitor() {}
     #endif
 
     #if canImport(Darwin)
-    private static func processTree(root: pid_t) -> [pid_t] {
+    private static func processTree(root: pid_t) async -> [pid_t] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: processTreeSynchronously(root: root))
+            }
+        }
+    }
+
+    private static func processTreeSynchronously(root: pid_t) -> [pid_t] {
         var pending = [root]
         var seen = Set<pid_t>()
         while let parent = pending.popLast() {
@@ -433,7 +450,7 @@ public struct ProcessRunner: Sendable {
             group.addTask {
                 try await Task.sleep(for: timeout)
                 guard timeoutState.claimTimeout() else { return nil }
-                managed.killProcessGroup()
+                await managed.killProcessGroup()
                 let cleaned = await managed.waitForExitAndCleanup(timeout: .seconds(3))
                 if !cleaned {
                     throw RegistryError(.driverUnavailable, "timed-out command cleanup did not finish: \(executable)")
@@ -743,7 +760,7 @@ public actor XCTestDriver: AppleAppDriver {
                 guard let self else { throw RegistryError(.driverUnavailable, "driver released while stopping \(targetName)") }
                 _ = try await self.request(targetName, payload: .object(["op": .string("stop")]), timeoutMs: 2_000)
             },
-            stopOwnedProcess: { session.process.stop() },
+            stopOwnedProcess: { await session.process.stop() },
             waitForOwnedProcessCleanup: { await session.process.waitForExitAndCleanup() },
             externalTargets: { [weak self] in
                 guard let self else { throw RegistryError(.driverUnavailable, "driver released while stopping \(targetName)") }

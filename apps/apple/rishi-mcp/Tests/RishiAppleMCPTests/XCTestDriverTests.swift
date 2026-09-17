@@ -122,7 +122,7 @@ final class XCTestDriverTests: XCTestCase {
 
     func testManagedProcessCleanupDoesNotLeaveRootRunning() async throws {
         let process = try ProcessRunner().start("/bin/sleep", arguments: ["30"], environment: [:])
-        process.stop()
+        await process.stop()
         await process.waitForExitAndCleanup(timeout: .milliseconds(500))
         XCTAssertFalse(process.isRunning)
     }
@@ -132,7 +132,7 @@ final class XCTestDriverTests: XCTestCase {
         let outputDescriptor = process.output.fileHandleForReading.fileDescriptor
         let errorDescriptor = process.errors.fileHandleForReading.fileDescriptor
 
-        process.stop()
+        await process.stop()
         let cleaned = await process.waitForExitAndCleanup(timeout: .milliseconds(500))
 
         XCTAssertTrue(cleaned)
@@ -152,17 +152,45 @@ final class XCTestDriverTests: XCTestCase {
     }
 
     func testTimedOutCommandCleansUpBeforeReturning() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-timeout-cleanup-\(UUID().uuidString)", isDirectory: true)
+        let rootPIDFile = directory.appendingPathComponent("root.pid")
+        let descendantPIDFile = directory.appendingPathComponent("descendant.pid")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            for file in [rootPIDFile, descendantPIDFile] {
+                if let pid = try? Self.readPID(from: file) {
+                    _ = Darwin.kill(pid, SIGKILL)
+                }
+            }
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let script = """
+        printf '%s' "$$" > "$1"
+        sleep 30 &
+        descendant_pid=$!
+        printf '%s' "$descendant_pid" > "$2"
+        wait "$descendant_pid"
+        """
         do {
             _ = try await ProcessRunner().run(
-                "/bin/sleep",
-                arguments: ["30"],
+                "/bin/sh",
+                arguments: ["-c", script, "rishi-timeout-cleanup", rootPIDFile.path, descendantPIDFile.path],
                 environment: [:],
-                timeout: .milliseconds(100)
+                timeout: .milliseconds(500)
             )
             XCTFail("expected the command to time out")
         } catch let error as RegistryError {
             XCTAssertEqual(error.code, .waitTimeout)
         }
+
+        let rootPID = try Self.readPID(from: rootPIDFile)
+        let descendantPID = try Self.readPID(from: descendantPIDFile)
+        XCTAssertEqual(Darwin.kill(rootPID, 0), -1, "timed-out root PID \(rootPID) is still alive")
+        XCTAssertEqual(errno, ESRCH)
+        XCTAssertEqual(Darwin.kill(descendantPID, 0), -1, "timed-out descendant PID \(descendantPID) is still alive")
+        XCTAssertEqual(errno, ESRCH)
     }
 
     func testRunHandlesImmediatelyExitingProcesses() async throws {
@@ -372,6 +400,12 @@ final class XCTestDriverTests: XCTestCase {
 
         let events = await fake.events
         XCTAssertFalse(events.contains(.releaseOwnership))
+    }
+
+    private static func readPID(from file: URL) throws -> pid_t {
+        let value = try String(contentsOf: file, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try XCTUnwrap(pid_t(value), "invalid PID in \(file.path): \(value)")
     }
 }
 
