@@ -319,16 +319,69 @@ final class CommandTimeoutState: @unchecked Sendable {
     }
 }
 
+final class ProcessTerminationLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasTerminated = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func signalTermination() {
+        lock.lock()
+        guard !hasTerminated else {
+            lock.unlock()
+            return
+        }
+        hasTerminated = true
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            guard !hasTerminated else {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            precondition(self.continuation == nil, "ProcessTerminationLatch supports one waiter")
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+}
+
 public struct ProcessRunner: Sendable {
     public init() {}
 
     public func start(_ executable: String, arguments: [String], environment: [String: String], drainOutput: Bool = true) throws -> ManagedProcess {
+        try startProcess(
+            executable,
+            arguments: arguments,
+            environment: environment,
+            drainOutput: drainOutput,
+            terminationLatch: nil
+        )
+    }
+
+    private func startProcess(
+        _ executable: String,
+        arguments: [String],
+        environment: [String: String],
+        drainOutput: Bool,
+        terminationLatch: ProcessTerminationLatch?
+    ) throws -> ManagedProcess {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
         let output = Pipe(); let errors = Pipe()
         process.standardOutput = output; process.standardError = errors
+        if let terminationLatch {
+            process.terminationHandler = { _ in terminationLatch.signalTermination() }
+        }
         try process.run()
         var hasPrivateProcessGroup = false
         #if canImport(Darwin)
@@ -346,7 +399,14 @@ public struct ProcessRunner: Sendable {
     public func run(_ executable: String, arguments: [String], environment: [String: String], timeout: Duration = .seconds(10)) async throws -> CommandResult {
         // The run path reads both pipes into bounded buffers below; long-lived
         // sessions use the default discarding drains from start() instead.
-        let managed = try start(executable, arguments: arguments, environment: environment, drainOutput: false)
+        let terminationLatch = ProcessTerminationLatch()
+        let managed = try startProcess(
+            executable,
+            arguments: arguments,
+            environment: environment,
+            drainOutput: false,
+            terminationLatch: terminationLatch
+        )
         let timeoutState = CommandTimeoutState()
         return try await withThrowingTaskGroup(of: CommandResult?.self) { group in
             group.addTask {
@@ -359,7 +419,7 @@ public struct ProcessRunner: Sendable {
                 let stderrTask = Task.detached {
                     readPipe(managed.errors.fileHandleForReading)
                 }
-                managed.process.waitUntilExit()
+                await terminationLatch.wait()
                 guard await managed.waitForExitAndCleanup() else {
                     throw RegistryError(.driverUnavailable, "command cleanup did not finish: \(executable)")
                 }

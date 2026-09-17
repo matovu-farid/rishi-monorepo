@@ -165,6 +165,63 @@ final class XCTestDriverTests: XCTestCase {
         }
     }
 
+    func testRunHandlesImmediatelyExitingProcesses() async throws {
+        let statuses = await withTaskGroup(of: Int32?.self, returning: [Int32?].self) { group in
+            for _ in 0..<128 {
+                group.addTask {
+                    try? await ProcessRunner().run(
+                        "/bin/sh",
+                        arguments: ["-c", "exit 17"],
+                        environment: [:],
+                        timeout: .seconds(5)
+                    ).status
+                }
+            }
+            var values: [Int32?] = []
+            for await value in group { values.append(value) }
+            return values
+        }
+
+        XCTAssertEqual(statuses.count, 128)
+        XCTAssertEqual(statuses.compactMap { $0 }, Array(repeating: 17, count: 128))
+    }
+
+    func testCommandExitRacingTimeoutProducesOneValidOutcome() async throws {
+        for _ in 0..<20 {
+            do {
+                let result = try await ProcessRunner().run(
+                    "/bin/sh",
+                    arguments: ["-c", "sleep 0.01; exit 19"],
+                    environment: [:],
+                    timeout: .milliseconds(10)
+                )
+                XCTAssertEqual(result.status, 19)
+            } catch let error as RegistryError {
+                XCTAssertEqual(error.code, .waitTimeout)
+            }
+        }
+    }
+
+    func testProcessTerminationLatchRemembersExitBeforeWait() async {
+        let latch = ProcessTerminationLatch()
+        latch.signalTermination()
+        await latch.wait()
+        latch.signalTermination()
+    }
+
+    func testProcessTerminationLatchHandlesConcurrentWaitAndDuplicateSignals() async {
+        for _ in 0..<100 {
+            let latch = ProcessTerminationLatch()
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await latch.wait() }
+                group.addTask {
+                    latch.signalTermination()
+                    latch.signalTermination()
+                }
+            }
+        }
+    }
+
     func testCommandTimeoutStateAllowsExactlyOneConcurrentOutcome() async {
         let state = CommandTimeoutState()
         let winners = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
