@@ -80,6 +80,22 @@ final class InstanceRegistryTests: XCTestCase {
         XCTAssertEqual(secondStop["reason"]?.stringValue, "not_owned")
     }
 
+    func testLifecyclePreservesSuccessfulMemoryTelemetry() async throws {
+        let memory = DistinctMemory()
+        let driver = FakeDriver(running: ["catalyst"])
+        let registry = InstanceRegistry(driver: driver, memory: memory)
+
+        let listed = try await registry.list()
+        let listedMemory = try XCTUnwrap(listed.arrayValue?.first?["memory"])
+        XCTAssertEqual(listedMemory, memory.value)
+
+        let started = try await registry.start("iphone17")
+        XCTAssertEqual(started["memory"], memory.value)
+
+        let stopped = try await registry.stop("iphone17")
+        XCTAssertEqual(stopped["memory"], memory.value)
+    }
+
     func testRejectsDuplicateCatalystProcessIdentities() async throws {
         let identities = [
             AppProcessIdentity(pid: 101, ppid: 1, pgid: 101, executable: "/Applications/rishi.app/Contents/MacOS/rishi"),
@@ -165,6 +181,16 @@ private struct FailingMemory: MemorySnapshotting, Sendable {
     func snapshot(match: String) async throws -> JSONValue {
         throw RegistryError(.stateChanged, "memory snapshot failed")
     }
+}
+
+private struct DistinctMemory: MemorySnapshotting, Sendable {
+    let value: JSONValue = .object([
+        "available": .bool(true),
+        "hostRssKb": .integer(12_345),
+        "source": .string("distinct-successful-telemetry"),
+    ])
+
+    func snapshot(match: String) async throws -> JSONValue { value }
 }
 
 private func assertThrowsAsync<T>(_ expression: @autoclosure () async throws -> T, _ check: (Error) -> Void) async {

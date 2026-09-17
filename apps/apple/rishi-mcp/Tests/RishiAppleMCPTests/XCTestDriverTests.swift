@@ -58,6 +58,120 @@ final class XCTestDriverTests: XCTestCase {
         XCTAssertTrue(XCTestDriver.shouldLaunchExternalTarget(for: .object(["op": .string("ping")])))
     }
 
+    func testInjectedDriverLaunchFailureCleansUpOnceAndPreservesOriginalError() async throws {
+        let events = LaunchLifecycleEvents()
+        let lifecycle = ExternalLaunchLifecycle()
+        let launchFailure = FBSShapedLaunchError()
+        let cleanupFailure = StopCoordinatorFakeError.stopRequestFailed
+
+        await events.record(.ping)
+        do {
+            try await lifecycle.launchIfNeeded {
+                await events.record(.launchExternalTarget)
+                throw launchFailure
+            }
+            XCTFail("expected injected external launch failure")
+        } catch {
+            do {
+                try await XCTestLaunchFailureRecovery.recover(originalError: error) {
+                    try await XCTestDriver.stopSession(
+                        target: "catalyst",
+                        requestStop: {
+                            await events.record(.requestStop)
+                            throw cleanupFailure
+                        },
+                        stopOwnedProcess: { await events.record(.stopOwnedProcess) },
+                        waitForOwnedProcessCleanup: {
+                            await events.record(.waitForOwnedProcessCleanup)
+                            return true
+                        },
+                        externalTargets: {
+                            await events.record(.externalTargetProbe)
+                            return []
+                        },
+                        releaseOwnership: { await events.record(.releaseOwnership) }
+                    )
+                }
+                XCTFail("the original launch failure must be rethrown")
+            } catch is FBSShapedLaunchError {}
+        }
+
+        let recorded = await events.values
+        XCTAssertEqual(recorded.filter { $0 == .launchExternalTarget }.count, 1)
+        XCTAssertEqual(recorded, [.ping, .launchExternalTarget, .requestStop, .stopOwnedProcess, .waitForOwnedProcessCleanup, .externalTargetProbe, .releaseOwnership])
+        XCTAssertFalse(XCTestDriver.shouldLaunchExternalTarget(for: .object(["op": .string("stop")])))
+    }
+
+    func testRecordedOwnedPIDOrProcessGroupSurvivorFailsCleanup() {
+        XCTAssertFalse(OwnedProcessCleanup.allOwnedProcessesExited(
+            processGroup: 501,
+            currentProcessGroup: 999,
+            recordedOwnedPIDs: [],
+            groupIsAlive: { $0 == 501 },
+            pidIsAlive: { _ in false }
+        ))
+        XCTAssertFalse(OwnedProcessCleanup.allOwnedProcessesExited(
+            processGroup: 0,
+            currentProcessGroup: 999,
+            recordedOwnedPIDs: [502],
+            groupIsAlive: { _ in false },
+            pidIsAlive: { $0 == 502 }
+        ))
+    }
+
+    func testCleanupNeverSignalsNonpositiveOrCurrentProcessGroups() {
+        var signaled: [pid_t] = []
+        for group in [pid_t(-1), 0, Darwin.getpgrp()] {
+            OwnedProcessCleanup.signalOwnedProcessGroup(
+                group,
+                currentProcessGroup: Darwin.getpgrp(),
+                signal: { signaled.append($0) }
+            )
+        }
+        XCTAssertTrue(signaled.isEmpty)
+    }
+
+    func testCleanupSignalsOnlyRecordedOwnedPIDs() {
+        var signaled: [pid_t] = []
+        let currentPID = Darwin.getpid()
+        let ownedPID: pid_t = 701
+        let unrelatedPID: pid_t = 702
+
+        OwnedProcessCleanup.signalRecordedOwnedPIDs(
+            [0, currentPID, ownedPID],
+            currentProcess: currentPID,
+            signal: { signaled.append($0) }
+        )
+
+        XCTAssertEqual(signaled, [ownedPID])
+        XCTAssertFalse(signaled.contains(unrelatedPID))
+    }
+
+    func testProcessIdentityJSONIsBoundedAndContainsOnlySafeFields() throws {
+        let executable = String(repeating: "x", count: 513)
+        let identities = (0..<10).map {
+            AppProcessIdentity(pid: Int32($0 + 1), ppid: 1, pgid: Int32($0 + 1), executable: executable)
+        }
+        let instance = AppInstance(
+            id: "catalyst",
+            displayName: "Rishi catalyst",
+            isRunning: true,
+            windowCount: 1,
+            processCount: identities.count,
+            processes: identities
+        )
+
+        let json = try XCTUnwrap(instance.json.objectValue)
+        XCTAssertEqual(json["processCount"]?.intValue, 10)
+        let processes = try XCTUnwrap(json["processes"]?.arrayValue)
+        XCTAssertEqual(processes.count, 8)
+        let identity = try XCTUnwrap(processes.first?.objectValue)
+        XCTAssertEqual(Set(identity.keys), Set(["pid", "ppid", "pgid", "executable"]))
+        XCTAssertNil(identity["arguments"])
+        XCTAssertNil(identity["command"])
+        XCTAssertEqual(identity["executable"]?.stringValue?.count, 512)
+    }
+
     func testFailedExternalLaunchIsAttemptedOnceAndOwnedCleanupReleasesOwnership() async throws {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-owned-launch-failure-\(UUID().uuidString).pid")
@@ -777,7 +891,7 @@ private struct FBSShapedLaunchError: LocalizedError, Sendable {
     var errorDescription: String? { "FBSOpenApplicationServiceErrorDomain error 4" }
 }
 
-private enum StopCoordinatorFakeError: Error, Equatable {
+private enum StopCoordinatorFakeError: Error, Equatable, Sendable {
     case probeFailed, stopRequestFailed
 }
 

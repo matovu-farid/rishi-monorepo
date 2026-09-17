@@ -28,6 +28,44 @@ enum ProcessTreeSnapshot {
     }
 }
 
+enum OwnedProcessCleanup {
+    static func signalOwnedProcessGroup(
+        _ processGroup: pid_t,
+        currentProcessGroup: pid_t,
+        signal: (pid_t) -> Void
+    ) {
+        guard processGroup > 0, processGroup != currentProcessGroup else { return }
+        signal(processGroup)
+    }
+
+    static func signalRecordedOwnedPIDs<S: Sequence>(
+        _ recordedOwnedPIDs: S,
+        currentProcess: pid_t,
+        signal: (pid_t) -> Void
+    ) where S.Element == pid_t {
+        for pid in recordedOwnedPIDs where pid > 0 && pid != currentProcess {
+            signal(pid)
+        }
+    }
+
+    static func allOwnedProcessesExited<S: Sequence>(
+        processGroup: pid_t,
+        currentProcessGroup: pid_t,
+        recordedOwnedPIDs: S,
+        groupIsAlive: (pid_t) -> Bool,
+        pidIsAlive: (pid_t) -> Bool
+    ) -> Bool where S.Element == pid_t {
+        if processGroup > 0,
+           processGroup != currentProcessGroup,
+           groupIsAlive(processGroup) {
+            return false
+        }
+        return !recordedOwnedPIDs.contains { pid in
+            pid > 0 && pidIsAlive(pid)
+        }
+    }
+}
+
 public final class ManagedProcess: @unchecked Sendable {
     public let processIdentifier: pid_t
     public let processGroupIdentifier: pid_t
@@ -195,7 +233,9 @@ public final class ManagedProcess: @unchecked Sendable {
             remaining.formUnion(await Self.processTree(root: pid))
         }
         rememberOwned(remaining)
-        for pid in remaining where pid > 0 && pid != Darwin.getpid() { _ = Darwin.kill(pid, SIGKILL) }
+        OwnedProcessCleanup.signalRecordedOwnedPIDs(remaining, currentProcess: Darwin.getpid()) {
+            _ = Darwin.kill($0, SIGKILL)
+        }
     }
 
     private var isCancellationRequested: Bool {
@@ -211,15 +251,16 @@ public final class ManagedProcess: @unchecked Sendable {
     }
 
     private func signalOwnedProcessGroup(_ signal: Int32) {
-        guard processGroupIdentifier > 0,
-              processGroupIdentifier != Darwin.getpgrp() else {
-            return
-        }
         // `ProcessRunner` creates this distinct group atomically with the
         // owned root. It remains the only cleanup route for a child that
         // inherited the group and outlived a fast-exiting root before the
         // ownership monitor could record that child by PID.
-        _ = Darwin.kill(-processGroupIdentifier, signal)
+        OwnedProcessCleanup.signalOwnedProcessGroup(
+            processGroupIdentifier,
+            currentProcessGroup: Darwin.getpgrp()
+        ) {
+            _ = Darwin.kill(-$0, signal)
+        }
     }
 
     private var isFinished: Bool {
@@ -271,20 +312,22 @@ public final class ManagedProcess: @unchecked Sendable {
     }
 
     private func ownedProcessesAreAlive() async -> Bool {
-        if processGroupIdentifier > 0,
-           processGroupIdentifier != Darwin.getpgrp(),
-           (Darwin.kill(-processGroupIdentifier, 0) == 0 || errno == EPERM) {
-            return true
-        }
-
         var owned = ownedPIDsSnapshot()
         if isRunning {
             owned.formUnion(await Self.processTree(root: processIdentifier))
             rememberOwned(owned)
         }
-        return owned.contains { pid in
-            Darwin.kill(pid, 0) == 0 || errno == EPERM
-        }
+        return !OwnedProcessCleanup.allOwnedProcessesExited(
+            processGroup: processGroupIdentifier,
+            currentProcessGroup: Darwin.getpgrp(),
+            recordedOwnedPIDs: owned,
+            groupIsAlive: { group in
+                Darwin.kill(-group, 0) == 0 || errno == EPERM
+            },
+            pidIsAlive: { pid in
+                Darwin.kill(pid, 0) == 0 || errno == EPERM
+            }
+        )
     }
 
     private func terminateOwnedProcessTree(signal: Int32) async {
@@ -296,7 +339,9 @@ public final class ManagedProcess: @unchecked Sendable {
             owned.formUnion(await Self.processTree(root: pid))
         }
         rememberOwned(owned)
-        for pid in owned where pid > 0 && pid != Darwin.getpid() { _ = Darwin.kill(pid, signal) }
+        OwnedProcessCleanup.signalRecordedOwnedPIDs(owned, currentProcess: Darwin.getpid()) {
+            _ = Darwin.kill($0, signal)
+        }
     }
 
     private static func processTree(root: pid_t) async -> [pid_t] {
@@ -726,6 +771,21 @@ public enum XCTestStopCoordinator {
     }
 }
 
+enum XCTestLaunchFailureRecovery {
+    static func recover(
+        originalError: Error,
+        cleanup: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        do {
+            try await cleanup()
+        } catch {
+            // The launch error is the user-visible failure. Cleanup continues
+            // through its own coordinator and must not replace that error.
+        }
+        throw originalError
+    }
+}
+
 public enum AppTarget: String, Sendable, CaseIterable {
     case catalyst, iphone17
 
@@ -999,7 +1059,12 @@ public actor XCTestDriver: AppleAppDriver {
             await reapExitedSession(target: target, process: process)
         }
         do { _ = try await request(target.rawValue, payload: .object(["op": .string("ping")]), timeoutMs: 120_000) }
-        catch { try? await terminate(targetName); throw error }
+        catch {
+            try await XCTestLaunchFailureRecovery.recover(originalError: error) { [weak self] in
+                guard let self else { return }
+                try await self.terminate(targetName)
+            }
+        }
         // The xcodebuild test process may still be compiling and launching
         // the test runner after Process.run() returns. Keep the cross-process
         // lock until the bridge handshake proves that the build/test process
@@ -1020,7 +1085,7 @@ public actor XCTestDriver: AppleAppDriver {
             active.0.resume(throwing: RegistryError(.instanceNotFound, "bridge stopped for \(targetName)"))
         }
         session.active.removeAll()
-        try await XCTestStopCoordinator.stop(
+        try await Self.stopSession(
             target: targetName,
             requestStop: { [weak self] in
                 guard let self else { throw RegistryError(.driverUnavailable, "driver released while stopping \(targetName)") }
@@ -1037,6 +1102,24 @@ public actor XCTestDriver: AppleAppDriver {
                 guard let self else { return }
                 await self.releaseSession(session, target: target)
             }
+        )
+    }
+
+    static func stopSession(
+        target: String,
+        requestStop: @escaping @Sendable () async throws -> Void,
+        stopOwnedProcess: @escaping @Sendable () async -> Void,
+        waitForOwnedProcessCleanup: @escaping @Sendable () async -> Bool,
+        externalTargets: @escaping ExternalTargetStopVerifier.TargetReader,
+        releaseOwnership: @escaping @Sendable () async -> Void
+    ) async throws {
+        try await XCTestStopCoordinator.stop(
+            target: target,
+            requestStop: requestStop,
+            stopOwnedProcess: stopOwnedProcess,
+            waitForOwnedProcessCleanup: waitForOwnedProcessCleanup,
+            externalTargets: externalTargets,
+            releaseOwnership: releaseOwnership
         )
     }
 
