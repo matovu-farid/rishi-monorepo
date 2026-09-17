@@ -19,15 +19,20 @@ public struct MemorySnapshot: MemorySnapshotting, Sendable {
     }
 
     public func snapshot(match: String) async throws -> JSONValue {
+        let processMatch = ["catalyst", "iphone17"].contains(match.lowercased()) ? "rishi.app" : match
         async let vm = runProcess("/usr/bin/env", ["vm_stat"], environment, .seconds(3))
-        async let ps = runProcess("/usr/bin/env", ["ps", "-axo", "pid=,rss=,command="], environment, .seconds(3))
         async let hostRSS = runProcess(
             "/usr/bin/env",
             ["ps", "-p", String(ProcessInfo.processInfo.processIdentifier), "-o", "rss="],
             environment,
             .seconds(3)
         )
-        let vmResult = try await vm; let psResult = try await ps; let hostRSSResult = try await hostRSS
+        async let processList: CommandResult? = processMatch.isEmpty
+            ? nil
+            : try await runProcess("/usr/bin/env", ["ps", "-axo", "pid=,rss=,command="], environment, .seconds(3))
+        let vmResult = try await vm
+        let hostRSSResult = try await hostRSS
+        let processListResult = try await processList
         let pageSize: Int
         if let regex = try? NSRegularExpression(pattern: #"page size of (\d+) bytes"#),
            let match = regex.firstMatch(in: vmResult.stdout, range: NSRange(vmResult.stdout.startIndex..., in: vmResult.stdout)),
@@ -41,8 +46,8 @@ public struct MemorySnapshot: MemorySnapshotting, Sendable {
         for (key, value) in Self.parsePageCounters(from: vmResult.stdout) {
             pages[key] = .integer(value)
         }
-        let processMatch = ["catalyst", "iphone17"].contains(match.lowercased()) ? "rishi.app" : match
-        let processes = psResult.stdout.split(separator: "\n").compactMap { line -> JSONValue? in
+        let processOutput = processListResult?.stdout ?? ""
+        let processes = processOutput.split(separator: "\n").compactMap { line -> JSONValue? in
             let value = String(line).trimmingCharacters(in: .whitespaces); guard !value.isEmpty, processMatch.isEmpty || value.localizedCaseInsensitiveContains(processMatch) else { return nil }
             let parts = value.split(separator: " ", maxSplits: 2); guard parts.count == 3, let pid = Int(parts[0]), let rss = Int(parts[1]) else { return nil }
             return .object(["pid": .integer(pid), "rssKb": .integer(rss), "command": .string(String(parts[2]))])
