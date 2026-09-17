@@ -1050,27 +1050,22 @@ public actor XCTestDriver: AppleAppDriver {
     private func startResourceWatchdog(for session: Session, target: AppTarget, derivedDataPath: String) {
         session.resourceWatchdog?.cancel()
         let environment = configuration.environment
-        session.resourceWatchdog = Task { [weak self, weak session] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(5))
-                } catch {
-                    return
-                }
-                guard let self, let session, !session.stopping else { return }
-                do {
+        session.resourceWatchdog = Task { [weak self] in
+            await ResourceWatchdog.run(
+                sleep: { duration in try await Task.sleep(for: duration) },
+                check: {
                     try ResourcePreflight.requireSufficient(
                         for: URL(fileURLWithPath: derivedDataPath),
                         environment: environment
                     )
-                } catch {
-                    await self.stopForResourcePressure(
+                },
+                onPressure: { [weak self] error in
+                    await self?.stopForResourcePressure(
                         target: target,
                         message: error.localizedDescription
                     )
-                    return
                 }
-            }
+            )
         }
     }
 
