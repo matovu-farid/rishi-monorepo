@@ -10,69 +10,100 @@ public struct CommandResult: Sendable {
     public let stderr: String
 }
 
+enum ProcessTreeSnapshot {
+    static func descendants(root: pid_t, relationships: () -> [(pid_t, pid_t)]) -> [pid_t] {
+        var childrenByParent: [pid_t: [pid_t]] = [:]
+        for (process, parent) in relationships() where process > 0 {
+            childrenByParent[parent, default: []].append(process)
+        }
+
+        var pending = [root]
+        var seen = Set<pid_t>()
+        while let parent = pending.popLast() {
+            guard seen.insert(parent).inserted else { continue }
+            pending.append(contentsOf: childrenByParent[parent, default: []])
+        }
+        return Array(seen)
+    }
+}
+
 public final class ManagedProcess: @unchecked Sendable {
-    public let process: Process
-    public let output: Pipe
-    public let errors: Pipe
-    private let hasPrivateProcessGroup: Bool
+    public let processIdentifier: pid_t
+    public let processGroupIdentifier: pid_t
+    public let output: FileHandle
+    public let errors: FileHandle
     private let lifecycleLock = NSLock()
     private let pipeLock = NSLock()
     private var pipesClosed = false
-    #if canImport(Darwin)
     private let ownershipLock = NSLock()
     private var ownedPIDs = Set<pid_t>()
     private var ownershipMonitor: DispatchSourceTimer?
-    #endif
     private var finished = false
     private var cancellationRequested = false
-    init(process: Process, output: Pipe, errors: Pipe, hasPrivateProcessGroup: Bool, drainOutput: Bool) {
-        self.process = process
+    private var terminationStatusStorage: Int32?
+    private var terminationHandlerStorage: (@Sendable (Int32) -> Void)?
+    private var terminationCallbackDelivered = false
+
+    init(processIdentifier: pid_t, processGroupIdentifier: pid_t, output: FileHandle, errors: FileHandle, drainOutput: Bool) {
+        self.processIdentifier = processIdentifier
+        self.processGroupIdentifier = processGroupIdentifier
         self.output = output
         self.errors = errors
-        self.hasPrivateProcessGroup = hasPrivateProcessGroup
         if drainOutput {
             DispatchQueue.global(qos: .utility).async {
-                Self.drainPipe(output.fileHandleForReading)
+                Self.drainPipe(output)
             }
             DispatchQueue.global(qos: .utility).async {
-                Self.drainPipe(errors.fileHandleForReading)
+                Self.drainPipe(errors)
             }
         }
-        #if canImport(Darwin)
-        // setpgid runs after Process.run(). Track the tree even when a private
-        // group is established so children spawned in that small window and
-        // left in the old group remain owned and cancellable.
         startOwnershipMonitor()
-        #endif
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.reapRootProcess()
+        }
     }
-    public var isRunning: Bool { process.isRunning }
+
+    public var isRunning: Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return terminationStatusStorage == nil
+    }
+
+    public var terminationStatus: Int32? {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return terminationStatusStorage
+    }
+
+    public var terminationHandler: (@Sendable (Int32) -> Void)? {
+        get {
+            lifecycleLock.lock()
+            defer { lifecycleLock.unlock() }
+            return terminationHandlerStorage
+        }
+        set {
+            var callback: (@Sendable (Int32) -> Void)?
+            var status: Int32?
+            lifecycleLock.lock()
+            terminationHandlerStorage = newValue
+            if let newValue, let terminationStatusStorage, !terminationCallbackDelivered {
+                terminationCallbackDelivered = true
+                callback = newValue
+                status = terminationStatusStorage
+            }
+            lifecycleLock.unlock()
+            if let callback, let status { callback(status) }
+        }
+    }
+
     public func stop() async {
         await killProcessGroup()
-        if process.isRunning { process.terminate() }
     }
+
     public func killProcessGroup() async {
         guard claimCancellation() else { return }
-        #if canImport(Darwin)
-        if hasPrivateProcessGroup {
-            let processGroup = process.processIdentifier
-            // The root may already have exited while a descendant still owns
-            // the output pipe. Signal the private group by its known group
-            // leader rather than skipping cleanup because the root is gone.
-            _ = Darwin.kill(-processGroup, SIGTERM)
-            await terminateOwnedProcessTree(signal: SIGTERM)
-        } else {
-            // setpgid can fail after Foundation has launched a short-lived
-            // child. Do not signal an unowned group; record and terminate the
-            // owned process tree. The bounded cleanup wait below performs the
-            // force-kill after the final descendant sweep.
-            let rootPID = process.processIdentifier
-            let initialPIDs = await Self.processTree(root: rootPID)
-            rememberOwned(initialPIDs)
-            for pid in initialPIDs { _ = Darwin.kill(pid, SIGTERM) }
-        }
-        #else
-        if process.isRunning { process.terminate() }
-        #endif
+        _ = Darwin.kill(-processGroupIdentifier, SIGTERM)
+        await terminateOwnedProcessTree(signal: SIGTERM)
     }
 
     private func claimCancellation() -> Bool {
@@ -97,17 +128,15 @@ public final class ManagedProcess: @unchecked Sendable {
         }
         pipesClosed = true
         pipeLock.unlock()
-        try? output.fileHandleForReading.close()
-        try? errors.fileHandleForReading.close()
+        try? output.close()
+        try? errors.close()
     }
 
     func markFinished() {
         lifecycleLock.lock()
         finished = true
         lifecycleLock.unlock()
-        #if canImport(Darwin)
         stopOwnershipMonitor()
-        #endif
     }
 
     /// Wait for the Xcode root for a bounded interval, then terminate any
@@ -156,26 +185,16 @@ public final class ManagedProcess: @unchecked Sendable {
     private func forceKillOwnedProcesses() async {
         let state = cancellationState()
         guard state.requested else { return }
-        #if canImport(Darwin)
-        if state.privateGroup {
-            _ = Darwin.kill(-state.processGroup, SIGKILL)
-            await terminateOwnedProcessTree(signal: SIGKILL)
-        } else {
-            var remaining = ownedPIDsSnapshot()
-            if process.isRunning {
-                remaining.formUnion(await Self.processTree(root: state.processGroup))
-            }
-            for pid in Array(remaining) {
-                remaining.formUnion(await Self.processTree(root: pid))
-            }
-            rememberOwned(remaining)
-            for pid in remaining {
-                _ = Darwin.kill(pid, SIGKILL)
-            }
+        _ = Darwin.kill(-state.processGroup, SIGKILL)
+        var remaining = ownedPIDsSnapshot()
+        if isRunning {
+            remaining.formUnion(await Self.processTree(root: processIdentifier))
         }
-        #else
-        if process.isRunning { process.terminate() }
-        #endif
+        for pid in Array(remaining) {
+            remaining.formUnion(await Self.processTree(root: pid))
+        }
+        rememberOwned(remaining)
+        for pid in remaining { _ = Darwin.kill(pid, SIGKILL) }
     }
 
     private var isCancellationRequested: Bool {
@@ -184,10 +203,10 @@ public final class ManagedProcess: @unchecked Sendable {
         return cancellationRequested
     }
 
-    private func cancellationState() -> (requested: Bool, processGroup: pid_t, privateGroup: Bool) {
+    private func cancellationState() -> (requested: Bool, processGroup: pid_t) {
         lifecycleLock.lock()
         defer { lifecycleLock.unlock() }
-        return (cancellationRequested, process.processIdentifier, hasPrivateProcessGroup)
+        return (cancellationRequested, processGroupIdentifier)
     }
 
     private var isFinished: Bool {
@@ -200,7 +219,6 @@ public final class ManagedProcess: @unchecked Sendable {
         while !handle.availableData.isEmpty {}
     }
 
-    #if canImport(Darwin)
     private func startOwnershipMonitor() {
         let monitor = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         // Process-tree discovery shells out to pgrep. A half-second cadence
@@ -224,7 +242,7 @@ public final class ManagedProcess: @unchecked Sendable {
 
     private func recordOwnedProcessTree() {
         guard !isFinished else { return }
-        rememberOwned(Self.processTreeSynchronously(root: process.processIdentifier))
+        rememberOwned(Self.processTreeSynchronously(root: processIdentifier))
     }
 
     private func rememberOwned<S: Sequence>(_ pids: S) where S.Element == pid_t {
@@ -240,14 +258,11 @@ public final class ManagedProcess: @unchecked Sendable {
     }
 
     private func ownedProcessesAreAlive() async -> Bool {
-        if hasPrivateProcessGroup {
-            let processGroup = process.processIdentifier
-            if Darwin.kill(-processGroup, 0) == 0 || errno == EPERM { return true }
-        }
+        if Darwin.kill(-processGroupIdentifier, 0) == 0 || errno == EPERM { return true }
 
         var owned = ownedPIDsSnapshot()
-        if process.isRunning {
-            owned.formUnion(await Self.processTree(root: process.processIdentifier))
+        if isRunning {
+            owned.formUnion(await Self.processTree(root: processIdentifier))
             rememberOwned(owned)
         }
         return owned.contains { pid in
@@ -257,8 +272,8 @@ public final class ManagedProcess: @unchecked Sendable {
 
     private func terminateOwnedProcessTree(signal: Int32) async {
         var owned = ownedPIDsSnapshot()
-        if process.isRunning {
-            owned.formUnion(await Self.processTree(root: process.processIdentifier))
+        if isRunning {
+            owned.formUnion(await Self.processTree(root: processIdentifier))
         }
         for pid in Array(owned) {
             owned.formUnion(await Self.processTree(root: pid))
@@ -266,12 +281,7 @@ public final class ManagedProcess: @unchecked Sendable {
         rememberOwned(owned)
         for pid in owned { _ = Darwin.kill(pid, signal) }
     }
-    #else
-    private func ownedProcessesAreAlive() async -> Bool { process.isRunning }
-    private func stopOwnershipMonitor() {}
-    #endif
 
-    #if canImport(Darwin)
     private static func processTree(root: pid_t) async -> [pid_t] {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -281,32 +291,88 @@ public final class ManagedProcess: @unchecked Sendable {
     }
 
     private static func processTreeSynchronously(root: pid_t) -> [pid_t] {
-        var pending = [root]
-        var seen = Set<pid_t>()
-        while let parent = pending.popLast() {
-            guard seen.insert(parent).inserted else { continue }
-            pending.append(contentsOf: childProcesses(of: parent))
-        }
-        return Array(seen)
+        ProcessTreeSnapshot.descendants(root: root, relationships: processParentRelationships)
     }
 
-    private static func childProcesses(of parent: pid_t) -> [pid_t] {
-        let lookup = Process()
-        lookup.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        lookup.arguments = ["-P", String(parent)]
-        let pipe = Pipe()
-        lookup.standardOutput = pipe
-        lookup.standardError = Pipe()
-        do {
-            try lookup.run()
-            lookup.waitUntilExit()
-        } catch {
-            return []
+    private static func processParentRelationships() -> [(pid_t, pid_t)] {
+        var capacity = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard capacity > 0 else { return [] }
+        for _ in 0..<3 {
+            let count = Int(capacity) / MemoryLayout<pid_t>.stride + 16
+            var pids = [pid_t](repeating: 0, count: count)
+            let bytes = pids.withUnsafeMutableBufferPointer { buffer in
+                proc_listpids(
+                    UInt32(PROC_ALL_PIDS),
+                    0,
+                    buffer.baseAddress,
+                    Int32(buffer.count * MemoryLayout<pid_t>.stride)
+                )
+            }
+            guard bytes > 0 else { return [] }
+            if bytes >= capacity {
+                capacity = bytes + Int32(16 * MemoryLayout<pid_t>.stride)
+                continue
+            }
+            let processCount = min(pids.count, Int(bytes) / MemoryLayout<pid_t>.stride)
+            return pids.prefix(processCount).compactMap { pid in
+                guard pid > 0 else { return nil }
+                var info = proc_bsdinfo()
+                let infoSize = proc_pidinfo(
+                    pid,
+                    PROC_PIDTBSDINFO,
+                    0,
+                    &info,
+                    Int32(MemoryLayout<proc_bsdinfo>.size)
+                )
+                guard infoSize == MemoryLayout<proc_bsdinfo>.size else { return nil }
+                return (pid, pid_t(info.pbi_ppid))
+            }
         }
-        let output = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap { pid_t($0) }
+        return []
     }
-    #endif
+
+    private func reapRootProcess() {
+        var waitStatus: Int32 = 0
+        var result: pid_t
+        repeat {
+            result = Darwin.waitpid(processIdentifier, &waitStatus, 0)
+        } while result == -1 && errno == EINTR
+
+        let status: Int32
+        if result == processIdentifier {
+            let terminationSignal = waitStatus & 0x7f
+            if terminationSignal == 0 {
+                status = (waitStatus >> 8) & 0xff
+            } else if terminationSignal != 0x7f {
+                status = 128 + terminationSignal
+            } else {
+                status = -1
+            }
+        } else {
+            status = -1
+        }
+        recordTermination(status)
+    }
+
+    private func recordTermination(_ status: Int32) {
+        var callback: (@Sendable (Int32) -> Void)?
+        lifecycleLock.lock()
+        guard terminationStatusStorage == nil else {
+            lifecycleLock.unlock()
+            return
+        }
+        terminationStatusStorage = status
+        if let terminationHandlerStorage, !terminationCallbackDelivered {
+            terminationCallbackDelivered = true
+            callback = terminationHandlerStorage
+        }
+        lifecycleLock.unlock()
+
+        ownershipLock.lock()
+        ownedPIDs.remove(processIdentifier)
+        ownershipLock.unlock()
+        callback?(status)
+    }
 }
 
 final class CommandTimeoutState: @unchecked Sendable {
@@ -373,44 +439,86 @@ final class ProcessTerminationLatch: @unchecked Sendable {
 public struct ProcessRunner: Sendable {
     public init() {}
 
+    private struct PipeEndpoints {
+        let read: FileHandle
+        let write: FileHandle
+    }
+
     public func start(_ executable: String, arguments: [String], environment: [String: String], drainOutput: Bool = true) throws -> ManagedProcess {
-        try startProcess(
-            executable,
-            arguments: arguments,
-            environment: environment,
-            drainOutput: drainOutput,
-            terminationLatch: nil
-        )
+        try startProcess(executable, arguments: arguments, environment: environment, drainOutput: drainOutput)
     }
 
     private func startProcess(
         _ executable: String,
         arguments: [String],
         environment: [String: String],
-        drainOutput: Bool,
-        terminationLatch: ProcessTerminationLatch?
+        drainOutput: Bool
     ) throws -> ManagedProcess {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
-        let output = Pipe(); let errors = Pipe()
-        process.standardOutput = output; process.standardError = errors
-        if let terminationLatch {
-            process.terminationHandler = { _ in terminationLatch.signalTermination() }
+        guard executable.hasPrefix("/"), !executable.utf8.contains(0) else {
+            throw Self.posixError(EINVAL)
         }
-        try process.run()
-        var hasPrivateProcessGroup = false
-        #if canImport(Darwin)
-        if process.isRunning {
-            let result = Darwin.setpgid(process.processIdentifier, process.processIdentifier)
-            // Foundation.Process may race a short-lived child or report EPERM
-            // after exec. Record ownership only when the group is confirmed;
-            // cancellation falls back to terminating this owned process.
-            hasPrivateProcessGroup = result == 0
+        guard !arguments.contains(where: { $0.utf8.contains(0) }),
+              environment.allSatisfy({ !$0.key.utf8.contains(0) && !$0.key.contains("=") && !$0.value.utf8.contains(0) }) else {
+            throw Self.posixError(EINVAL)
         }
-        #endif
-        return ManagedProcess(process: process, output: output, errors: errors, hasPrivateProcessGroup: hasPrivateProcessGroup, drainOutput: drainOutput)
+
+        let output = try makePipe()
+        var outputTransferred = false
+        defer {
+            try? output.write.close()
+            if !outputTransferred { try? output.read.close() }
+        }
+        let errors = try makePipe()
+        var errorsTransferred = false
+        defer {
+            try? errors.write.close()
+            if !errorsTransferred { try? errors.read.close() }
+        }
+
+        var actions: posix_spawn_file_actions_t?
+        let actionsError = posix_spawn_file_actions_init(&actions)
+        guard actionsError == 0 else { throw Self.posixError(actionsError) }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+
+        var attributes: posix_spawnattr_t?
+        let attributesError = posix_spawnattr_init(&attributes)
+        guard attributesError == 0 else { throw Self.posixError(attributesError) }
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        try Self.checkSpawnAction(posix_spawn_file_actions_adddup2(&actions, output.write.fileDescriptor, STDOUT_FILENO))
+        try Self.checkSpawnAction(posix_spawn_file_actions_adddup2(&actions, errors.write.fileDescriptor, STDERR_FILENO))
+        for descriptor in [output.read.fileDescriptor, errors.read.fileDescriptor, output.write.fileDescriptor, errors.write.fileDescriptor] {
+            try Self.checkSpawnAction(posix_spawn_file_actions_addclose(&actions, descriptor))
+        }
+        try Self.checkSpawnAction(posix_spawnattr_setpgroup(&attributes, 0))
+        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+        try Self.checkSpawnAction(posix_spawnattr_setflags(&attributes, Int16(spawnFlags)))
+
+        let mergedEnvironment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+        let environmentStrings = mergedEnvironment.keys.sorted().map { "\($0)=\(mergedEnvironment[$0]!)" }
+        let argumentStrings = [executable] + arguments
+        var processIdentifier: pid_t = 0
+        let spawnError = try Self.withCStringArray(argumentStrings) { argumentPointers in
+            try Self.withCStringArray(environmentStrings) { environmentPointers in
+                executable.withCString { path in
+                    posix_spawn(&processIdentifier, path, &actions, &attributes, argumentPointers, environmentPointers)
+                }
+            }
+        }
+        try? output.write.close()
+        try? errors.write.close()
+        guard spawnError == 0 else { throw Self.posixError(spawnError) }
+
+        let managed = ManagedProcess(
+            processIdentifier: processIdentifier,
+            processGroupIdentifier: processIdentifier,
+            output: output.read,
+            errors: errors.read,
+            drainOutput: drainOutput
+        )
+        outputTransferred = true
+        errorsTransferred = true
+        return managed
     }
 
     public func run(_ executable: String, arguments: [String], environment: [String: String], timeout: Duration = .seconds(10)) async throws -> CommandResult {
@@ -421,9 +529,9 @@ public struct ProcessRunner: Sendable {
             executable,
             arguments: arguments,
             environment: environment,
-            drainOutput: false,
-            terminationLatch: terminationLatch
+            drainOutput: false
         )
+        managed.terminationHandler = { _ in terminationLatch.signalTermination() }
         let timeoutState = CommandTimeoutState()
         return try await withThrowingTaskGroup(of: CommandResult?.self) { group in
             group.addTask {
@@ -431,17 +539,17 @@ public struct ProcessRunner: Sendable {
                 // exit before reading can deadlock once a verbose build fills
                 // either pipe's kernel buffer.
                 let stdoutTask = Task.detached {
-                    readPipe(managed.output.fileHandleForReading)
+                    readPipe(managed.output)
                 }
                 let stderrTask = Task.detached {
-                    readPipe(managed.errors.fileHandleForReading)
+                    readPipe(managed.errors)
                 }
                 await terminationLatch.wait()
                 guard await managed.waitForExitAndCleanup() else {
                     throw RegistryError(.driverUnavailable, "command cleanup did not finish: \(executable)")
                 }
                 let result = CommandResult(
-                    status: managed.process.terminationStatus,
+                    status: managed.terminationStatus ?? -1,
                     stdout: String(data: await stdoutTask.value, encoding: .utf8) ?? "",
                     stderr: String(data: await stderrTask.value, encoding: .utf8) ?? ""
                 )
@@ -477,6 +585,61 @@ public struct ProcessRunner: Sendable {
             }
         }
         return result
+    }
+
+    private func makePipe() throws -> PipeEndpoints {
+        var descriptors: [Int32] = [0, 0]
+        guard Darwin.pipe(&descriptors) == 0 else { throw Self.posixError(errno) }
+        let readDescriptor = fcntl(descriptors[0], F_DUPFD_CLOEXEC, STDERR_FILENO + 1)
+        guard readDescriptor >= 0 else {
+            let error = errno
+            _ = Darwin.close(descriptors[0])
+            _ = Darwin.close(descriptors[1])
+            throw Self.posixError(error)
+        }
+        let writeDescriptor = fcntl(descriptors[1], F_DUPFD_CLOEXEC, STDERR_FILENO + 1)
+        guard writeDescriptor >= 0 else {
+            let error = errno
+            _ = Darwin.close(descriptors[0])
+            _ = Darwin.close(descriptors[1])
+            _ = Darwin.close(readDescriptor)
+            throw Self.posixError(error)
+        }
+        _ = Darwin.close(descriptors[0])
+        _ = Darwin.close(descriptors[1])
+        return PipeEndpoints(
+            read: FileHandle(fileDescriptor: readDescriptor, closeOnDealloc: true),
+            write: FileHandle(fileDescriptor: writeDescriptor, closeOnDealloc: true)
+        )
+    }
+
+    private static func checkSpawnAction(_ result: Int32) throws {
+        guard result == 0 else { throw posixError(result) }
+    }
+
+    private static func withCStringArray<T>(
+        _ strings: [String],
+        body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) throws -> T
+    ) throws -> T {
+        var pointers: [UnsafeMutablePointer<CChar>?] = []
+        pointers.reserveCapacity(strings.count + 1)
+        for string in strings {
+            guard let pointer = string.withCString({ Darwin.strdup($0) }) else {
+                throw posixError(errno)
+            }
+            pointers.append(pointer)
+        }
+        defer {
+            for pointer in pointers { if let pointer { Darwin.free(pointer) } }
+        }
+        pointers.append(nil)
+        return try pointers.withUnsafeMutableBufferPointer { buffer in
+            try body(buffer.baseAddress!)
+        }
+    }
+
+    private static func posixError(_ code: Int32) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(code))
     }
 }
 
@@ -724,7 +887,7 @@ public actor XCTestDriver: AppleAppDriver {
             guard let self, let session else { close(connection) ; return }
             Task { await self.handleConnection(connection, session: session) }
         }
-        process.process.terminationHandler = { [weak self, weak process] _ in
+        process.terminationHandler = { [weak self, weak process] _ in
             guard let self, let process else { return }
             Task { await self.reapExitedSession(target: target, process: process) }
         }
@@ -1038,13 +1201,12 @@ public actor XCTestDriver: AppleAppDriver {
         let path = "/private/tmp/rishi-mcp-\(target)-screenshot-\(UUID().uuidString).png"
         guard let appTarget = AppTarget(rawValue: target) else { throw RegistryError(.actionNotSupported, "unsupported app target: \(target)") }
         let deviceID = appTarget == .iphone17 ? try await iPhone17DeviceIDs().first : nil
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = try Self.screenshotArguments(for: appTarget, deviceID: deviceID, path: path)
-        process.environment = ["DEVELOPER_DIR": developerDirectory]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
+        let result = try await runner.run(
+            "/usr/bin/env",
+            arguments: try Self.screenshotArguments(for: appTarget, deviceID: deviceID, path: path),
+            environment: ["DEVELOPER_DIR": developerDirectory]
+        )
+        guard result.status == 0 else {
             try? FileManager.default.removeItem(atPath: path)
             throw RegistryError(.stateChanged, "could not capture \(target) screenshot")
         }
@@ -1073,15 +1235,46 @@ public final class LocalBridgeServer: @unchecked Sendable {
     public func start() throws {
         #if canImport(Darwin)
         socket = Darwin.socket(AF_INET, SOCK_STREAM, 0); guard socket >= 0 else { throw RegistryError(.driverUnavailable, "could not create MCP bridge socket") }
+        guard Self.setCloseOnExec(socket) else {
+            Darwin.close(socket)
+            socket = -1
+            throw RegistryError(.driverUnavailable, "could not protect MCP bridge listener descriptor")
+        }
         var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); address.sin_family = sa_family_t(AF_INET); address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1")); address.sin_port = 0
         let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }; guard bound == 0 else { stop(); throw RegistryError(.driverUnavailable, "could not bind MCP bridge socket") }
         guard Darwin.listen(socket, 8) == 0 else { stop(); throw RegistryError(.driverUnavailable, "could not listen on MCP bridge socket") }
         var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size); getsockname(socket, withUnsafeMutablePointer(to: &actual) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 } }, &length); port = UInt16(bigEndian: actual.sin_port)
-        let fd = socket; DispatchQueue.global(qos: .utility).async { [weak self] in while true { let connection = Darwin.accept(fd, nil, nil); if connection < 0 { return }; self?.onConnection?(connection) } }
+        let fd = socket; DispatchQueue.global(qos: .utility).async { [weak self] in
+            while true {
+                let connection = Darwin.accept(fd, nil, nil)
+                if connection < 0 { return }
+                guard Self.setCloseOnExec(connection) else {
+                    Darwin.close(connection)
+                    continue
+                }
+                guard let self else {
+                    Darwin.close(connection)
+                    return
+                }
+                guard let onConnection = self.onConnection else {
+                    Darwin.close(connection)
+                    continue
+                }
+                onConnection(connection)
+            }
+        }
         #else
         throw RegistryError(.driverUnavailable, "MCP bridge sockets require Darwin")
         #endif
     }
+
+    #if canImport(Darwin)
+    private static func setCloseOnExec(_ descriptor: Int32) -> Bool {
+        let flags = fcntl(descriptor, F_GETFD)
+        return flags >= 0 && fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0
+    }
+    #endif
+
     public func stop() {
         lock.lock(); defer { lock.unlock() }
         if socket >= 0 {

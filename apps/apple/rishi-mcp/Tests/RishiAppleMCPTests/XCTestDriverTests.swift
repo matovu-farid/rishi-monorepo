@@ -120,6 +120,59 @@ final class XCTestDriverTests: XCTestCase {
         XCTAssertThrowsError(try BridgeCodec.request(from: Data(repeating: 65, count: 1_048_577)))
     }
 
+    func testAcceptedBridgeConnectionIsCloseOnExec() async throws {
+        let server = try LocalBridgeServer()
+        let acceptedFlags = LockedDescriptorFlags()
+        let acceptedConnection = DispatchSemaphore(value: 0)
+        server.onConnection = { descriptor in
+            acceptedFlags.value = fcntl(descriptor, F_GETFD)
+            Darwin.close(descriptor)
+            acceptedConnection.signal()
+        }
+        try server.start()
+        defer { server.stop() }
+
+        let client = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(client, 0)
+        defer { Darwin.close(client) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        address.sin_port = server.port.bigEndian
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connected, 0)
+        XCTAssertEqual(acceptedConnection.wait(timeout: .now() + 2), .success)
+
+        let flags = try XCTUnwrap(acceptedFlags.value)
+        XCTAssertNotEqual(flags & FD_CLOEXEC, 0, "accepted bridge descriptors must not leak across exec")
+    }
+
+    func testProcessTreeUsesOneParentRelationshipSnapshotForTraversal() {
+        let root: pid_t = 41
+        let relationships: [(pid_t, pid_t)] = [
+            (42, 41),
+            (43, 42),
+            (44, 41),
+            (42, 41),
+            (45, 99),
+        ]
+        var snapshotCalls = 0
+
+        let tree = ProcessTreeSnapshot.descendants(root: root) {
+            snapshotCalls += 1
+            return relationships
+        }
+
+        XCTAssertEqual(Set(tree), Set([41, 42, 43, 44]))
+        XCTAssertEqual(snapshotCalls, 1, "one process-tree walk must enumerate the system process list once")
+    }
+
     func testManagedProcessCleanupDoesNotLeaveRootRunning() async throws {
         let process = try ProcessRunner().start("/bin/sleep", arguments: ["30"], environment: [:])
         await process.stop()
@@ -129,8 +182,8 @@ final class XCTestDriverTests: XCTestCase {
 
     func testProcessCleanupClosesPipeReadDescriptors() async throws {
         let process = try ProcessRunner().start("/bin/sleep", arguments: ["30"], environment: [:])
-        let outputDescriptor = process.output.fileHandleForReading.fileDescriptor
-        let errorDescriptor = process.errors.fileHandleForReading.fileDescriptor
+        let outputDescriptor = process.output.fileDescriptor
+        let errorDescriptor = process.errors.fileDescriptor
 
         await process.stop()
         let cleaned = await process.waitForExitAndCleanup(timeout: .milliseconds(500))
@@ -141,14 +194,104 @@ final class XCTestDriverTests: XCTestCase {
     }
 
     func testNormalRootExitCleansUpOwnedDescendant() async throws {
+        let descendantPIDFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-initial-ownership-\(UUID().uuidString).pid")
+        defer {
+            if let pid = try? Self.readPID(from: descendantPIDFile) {
+                _ = Darwin.kill(pid, SIGKILL)
+            }
+            try? FileManager.default.removeItem(at: descendantPIDFile)
+        }
         let process = try ProcessRunner().start(
             "/bin/sh",
-            arguments: ["-c", "sleep 30 & exit 0"],
+            arguments: [
+                "-c",
+                "sleep 30 & descendant_pid=$!; printf '%s' \"$descendant_pid\" > \"$1\"; exit 0",
+                "rishi-initial-ownership",
+                descendantPIDFile.path,
+            ],
             environment: [:]
+        )
+        let descendantPID = try await Self.waitForPID(from: descendantPIDFile)
+        XCTAssertEqual(
+            Darwin.getpgid(descendantPID),
+            process.processIdentifier,
+            "the descendant must inherit the root's process group from its first instruction"
         )
         let cleaned = await process.waitForExitAndCleanup(timeout: .milliseconds(500))
         XCTAssertTrue(cleaned)
         XCTAssertFalse(process.isRunning)
+        XCTAssertEqual(Darwin.kill(descendantPID, 0), -1, "startup descendant PID \(descendantPID) is still alive")
+        XCTAssertEqual(errno, ESRCH)
+    }
+
+    func testRunCapturesBothStreamsAndNonzeroExitStatus() async throws {
+        let result = try await ProcessRunner().run(
+            "/bin/sh",
+            arguments: ["-c", "printf 'out'; printf 'err' >&2; exit 23"],
+            environment: [:]
+        )
+
+        XCTAssertEqual(result.stdout, "out")
+        XCTAssertEqual(result.stderr, "err")
+        XCTAssertEqual(result.status, 23)
+    }
+
+    func testSpawnClosesUnmappedDescriptorsEvenWithoutCloseOnExec() async throws {
+        var descriptors: [Int32] = [0, 0]
+        XCTAssertEqual(Darwin.pipe(&descriptors), 0)
+        defer {
+            Darwin.close(descriptors[0])
+            Darwin.close(descriptors[1])
+        }
+        let flags = fcntl(descriptors[0], F_GETFD)
+        XCTAssertGreaterThanOrEqual(flags, 0)
+        XCTAssertEqual(fcntl(descriptors[0], F_SETFD, flags & ~FD_CLOEXEC), 0)
+
+        let result = try await ProcessRunner().run(
+            "/bin/sh",
+            arguments: ["-c", "test ! -e /dev/fd/$1", "rishi-fd-probe", "\(descriptors[0])"],
+            environment: [:]
+        )
+
+        XCTAssertEqual(result.status, 0, "spawned command inherited unrelated descriptor \(descriptors[0])")
+    }
+
+    func testStartReportsSynchronousENOENTForMissingExecutable() {
+        let missingPath = "/private/tmp/rishi-missing-executable-\(UUID().uuidString)"
+
+        do {
+            _ = try ProcessRunner().start(missingPath, arguments: [], environment: [:])
+            XCTFail("expected posix_spawn to report ENOENT synchronously")
+        } catch {
+            let error = error as NSError
+            XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+            XCTAssertEqual(error.code, Int(ENOENT))
+        }
+    }
+
+    func testTerminationHandlerReceivesExitThatPrecedesHandlerInstallationExactlyOnce() async throws {
+        let process = try ProcessRunner().start(
+            "/bin/sh",
+            arguments: ["-c", "exit 17"],
+            environment: [:]
+        )
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while process.isRunning, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(process.isRunning, "the child should have exited before the handler is installed")
+
+        let recorder = TerminationRecorder()
+        let delivered = expectation(description: "late termination handler is called")
+        process.terminationHandler = { status in
+            recorder.record(status)
+            delivered.fulfill()
+        }
+
+        await fulfillment(of: [delivered], timeout: 1)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(recorder.statuses, [17])
     }
 
     func testTimedOutCommandCleansUpBeforeReturning() async throws {
@@ -321,12 +464,13 @@ final class XCTestDriverTests: XCTestCase {
         XCTAssertLessThan(elapsed, .seconds(1))
         XCTAssertEqual(Darwin.kill(escapedPID, 0), 0)
 
-        _ = Darwin.kill(escapedPID, SIGTERM)
-        let exitDeadline = clock.now.advanced(by: .seconds(1))
+        _ = Darwin.kill(escapedPID, SIGKILL)
+        let exitDeadline = clock.now.advanced(by: .seconds(2))
         while clock.now < exitDeadline, Darwin.kill(escapedPID, 0) == 0 {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(Darwin.kill(escapedPID, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
     }
 
     func testStopCoordinatorReleasesOwnershipAfterExternalTargetDisappears() async throws {
@@ -406,6 +550,52 @@ final class XCTestDriverTests: XCTestCase {
         let value = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try XCTUnwrap(pid_t(value), "invalid PID in \(file.path): \(value)")
+    }
+
+    private static func waitForPID(from file: URL) async throws -> pid_t {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if FileManager.default.fileExists(atPath: file.path) {
+                return try readPID(from: file)
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT))
+    }
+}
+
+private final class TerminationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Int32] = []
+
+    var statuses: [Int32] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+
+    func record(_ status: Int32) {
+        lock.lock()
+        values.append(status)
+        lock.unlock()
+    }
+}
+
+private final class LockedDescriptorFlags: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Int32?
+
+    var value: Int32? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedValue
+        }
+        set {
+            lock.lock()
+            storedValue = newValue
+            lock.unlock()
+        }
     }
 }
 
