@@ -17,13 +17,63 @@ public struct RegistryError: Error, LocalizedError, Sendable {
     public var errorDescription: String? { message }
 }
 
+public struct AppProcessIdentity: Sendable, Equatable {
+    public let pid: Int32
+    public let ppid: Int32
+    public let pgid: Int32
+    public let executable: String
+
+    public init(pid: Int32, ppid: Int32, pgid: Int32, executable: String) {
+        self.pid = pid
+        self.ppid = ppid
+        self.pgid = pgid
+        self.executable = String(executable.prefix(512))
+    }
+
+    public var json: JSONValue {
+        .object([
+            "pid": .integer(Int(pid)),
+            "ppid": .integer(Int(ppid)),
+            "pgid": .integer(Int(pgid)),
+            "executable": .string(executable),
+        ])
+    }
+}
+
 public struct AppInstance: Sendable, Equatable {
     public let id: String
     public let displayName: String
     public let isRunning: Bool
     public let windowCount: Int
-    public init(id: String, displayName: String, isRunning: Bool, windowCount: Int) { self.id = id; self.displayName = displayName; self.isRunning = isRunning; self.windowCount = windowCount }
-    public var json: JSONValue { .object(["id": .string(id), "displayName": .string(displayName), "isRunning": .bool(isRunning), "windows": .array(Array(repeating: .object(["id": .integer(1), "app": .string(id)]), count: windowCount))]) }
+    public let processCount: Int
+    public let processes: [AppProcessIdentity]
+
+    public init(
+        id: String,
+        displayName: String,
+        isRunning: Bool,
+        windowCount: Int,
+        processCount: Int? = nil,
+        processes: [AppProcessIdentity] = []
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.isRunning = isRunning
+        self.windowCount = windowCount
+        self.processCount = max(0, processCount ?? processes.count)
+        self.processes = Array(processes.prefix(8))
+    }
+
+    public var json: JSONValue {
+        .object([
+            "id": .string(id),
+            "displayName": .string(displayName),
+            "isRunning": .bool(isRunning),
+            "windows": .array(Array(repeating: .object(["id": .integer(1), "app": .string(id)]), count: windowCount)),
+            "processCount": .integer(processCount),
+            "processes": .array(processes.map(\.json)),
+        ])
+    }
 }
 
 public protocol AppleAppDriver: Sendable {
@@ -53,10 +103,10 @@ public actor InstanceRegistry {
     public func list() async throws -> JSONValue {
         let apps = try await driver.listApps()
         var result: [JSONValue] = []
-        for app in apps where app.id.range(of: "rishi", options: .caseInsensitive) != nil && app.isRunning && app.windowCount > 0 {
+        for app in apps where (app.id.range(of: "rishi", options: .caseInsensitive) != nil || app.displayName.range(of: "rishi", options: .caseInsensitive) != nil) && app.isRunning && app.windowCount > 0 {
             var value = app.json.objectValue ?? [:]
             value["owned"] = .bool(instances.values.contains { $0["app"]?.stringValue == app.id })
-            value["memory"] = try await memory.snapshot(match: app.id)
+            value["memory"] = await memoryTelemetry(for: app.id)
             result.append(.object(value))
         }
         return .array(result)
@@ -70,19 +120,15 @@ public actor InstanceRegistry {
             throw RegistryError(.instanceAlreadyRunning, "target already running: \(app)", data: ["app": .string(app), "existing": existing.json])
         }
         try await driver.launch(app)
-        let value: JSONValue
-        do {
-            value = .object(["id": .string("\(app):\(Int(Date().timeIntervalSince1970 * 1000))"), "app": .string(app), "owned": .bool(true), "memory": try await memory.snapshot(match: app)])
-        } catch {
-            // The driver may have launched a real XCTest/app process before
-            // the initial snapshot failed. Do not lose ownership of that
-            // process just because the bookkeeping response could not be
-            // produced.
-            try? await driver.terminate(app)
-            throw error
-        }
+        let value: JSONValue = .object([
+            "id": .string("\(app):\(Int(Date().timeIntervalSince1970 * 1000))"),
+            "app": .string(app),
+            "owned": .bool(true),
+        ])
         instances[app] = value
-        return value
+        var response = value.objectValue ?? [:]
+        response["memory"] = await memoryTelemetry(for: app)
+        return .object(response)
     }
 
     public func stop(_ app: String) async throws -> JSONValue {
@@ -91,7 +137,7 @@ public actor InstanceRegistry {
         instances.removeValue(forKey: app)
         var result = instance.objectValue ?? [:]
         result["stopped"] = .bool(true)
-        result["memory"] = try await memory.snapshot(match: app)
+        result["memory"] = await memoryTelemetry(for: app)
         return .object(result)
     }
 
@@ -110,5 +156,13 @@ public actor InstanceRegistry {
             catch { if firstError == nil { firstError = error } }
         }
         if let firstError { throw firstError }
+    }
+
+    private func memoryTelemetry(for app: String) async -> JSONValue {
+        do {
+            return try await memory.snapshot(match: app)
+        } catch {
+            return .object(["available": .bool(false)])
+        }
     }
 }

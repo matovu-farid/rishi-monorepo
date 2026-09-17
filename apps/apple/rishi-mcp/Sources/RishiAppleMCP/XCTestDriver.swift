@@ -12,6 +12,7 @@ public struct CommandResult: Sendable {
 
 enum ProcessTreeSnapshot {
     static func descendants(root: pid_t, relationships: () -> [(pid_t, pid_t)]) -> [pid_t] {
+        guard root > 0 else { return [] }
         var childrenByParent: [pid_t: [pid_t]] = [:]
         for (process, parent) in relationships() where process > 0 {
             childrenByParent[parent, default: []].append(process)
@@ -102,7 +103,7 @@ public final class ManagedProcess: @unchecked Sendable {
 
     public func killProcessGroup() async {
         guard claimCancellation() else { return }
-        _ = Darwin.kill(-processGroupIdentifier, SIGTERM)
+        signalOwnedProcessGroup(SIGTERM)
         await terminateOwnedProcessTree(signal: SIGTERM)
     }
 
@@ -185,7 +186,7 @@ public final class ManagedProcess: @unchecked Sendable {
     private func forceKillOwnedProcesses() async {
         let state = cancellationState()
         guard state.requested else { return }
-        _ = Darwin.kill(-state.processGroup, SIGKILL)
+        signalOwnedProcessGroup(SIGKILL)
         var remaining = ownedPIDsSnapshot()
         if isRunning {
             remaining.formUnion(await Self.processTree(root: processIdentifier))
@@ -194,7 +195,7 @@ public final class ManagedProcess: @unchecked Sendable {
             remaining.formUnion(await Self.processTree(root: pid))
         }
         rememberOwned(remaining)
-        for pid in remaining { _ = Darwin.kill(pid, SIGKILL) }
+        for pid in remaining where pid > 0 && pid != Darwin.getpid() { _ = Darwin.kill(pid, SIGKILL) }
     }
 
     private var isCancellationRequested: Bool {
@@ -207,6 +208,18 @@ public final class ManagedProcess: @unchecked Sendable {
         lifecycleLock.lock()
         defer { lifecycleLock.unlock() }
         return (cancellationRequested, processGroupIdentifier)
+    }
+
+    private func signalOwnedProcessGroup(_ signal: Int32) {
+        guard processGroupIdentifier > 0,
+              processGroupIdentifier != Darwin.getpgrp() else {
+            return
+        }
+        // `ProcessRunner` creates this distinct group atomically with the
+        // owned root. It remains the only cleanup route for a child that
+        // inherited the group and outlived a fast-exiting root before the
+        // ownership monitor could record that child by PID.
+        _ = Darwin.kill(-processGroupIdentifier, signal)
     }
 
     private var isFinished: Bool {
@@ -247,7 +260,7 @@ public final class ManagedProcess: @unchecked Sendable {
 
     private func rememberOwned<S: Sequence>(_ pids: S) where S.Element == pid_t {
         ownershipLock.lock()
-        ownedPIDs.formUnion(pids)
+        ownedPIDs.formUnion(pids.filter { $0 > 0 && $0 != Darwin.getpid() })
         ownershipLock.unlock()
     }
 
@@ -258,7 +271,11 @@ public final class ManagedProcess: @unchecked Sendable {
     }
 
     private func ownedProcessesAreAlive() async -> Bool {
-        if Darwin.kill(-processGroupIdentifier, 0) == 0 || errno == EPERM { return true }
+        if processGroupIdentifier > 0,
+           processGroupIdentifier != Darwin.getpgrp(),
+           (Darwin.kill(-processGroupIdentifier, 0) == 0 || errno == EPERM) {
+            return true
+        }
 
         var owned = ownedPIDsSnapshot()
         if isRunning {
@@ -279,7 +296,7 @@ public final class ManagedProcess: @unchecked Sendable {
             owned.formUnion(await Self.processTree(root: pid))
         }
         rememberOwned(owned)
-        for pid in owned { _ = Darwin.kill(pid, signal) }
+        for pid in owned where pid > 0 && pid != Darwin.getpid() { _ = Darwin.kill(pid, signal) }
     }
 
     private static func processTree(root: pid_t) async -> [pid_t] {
@@ -698,7 +715,6 @@ public enum XCTestStopCoordinator {
         guard await waitForOwnedProcessCleanup() else {
             throw RegistryError(.driverUnavailable, "owned XCTest process cleanup did not finish; build lock retained")
         }
-        if let stopRequestError { throw stopRequestError }
         try await ExternalTargetStopVerifier(
             timeout: timeout,
             pollInterval: pollInterval,
@@ -706,10 +722,70 @@ public enum XCTestStopCoordinator {
             sleeper: sleep
         ).waitUntilStopped(target)
         try await releaseOwnership()
+        if let stopRequestError { throw stopRequestError }
     }
 }
 
-public enum AppTarget: String, Sendable, CaseIterable { case catalyst, iphone17 }
+public enum AppTarget: String, Sendable, CaseIterable {
+    case catalyst, iphone17
+
+    public var bridgePort: UInt16 {
+        switch self {
+        case .catalyst: 57_421
+        case .iphone17: 57_422
+        }
+    }
+}
+
+public struct ExternalTargetObservation: Sendable, Equatable {
+    public let target: AppTarget
+    public let processCount: Int
+    public let processes: [AppProcessIdentity]
+
+    public init(target: AppTarget, processCount: Int? = nil, processes: [AppProcessIdentity] = []) {
+        self.target = target
+        self.processCount = max(0, processCount ?? processes.count)
+        self.processes = Array(processes.prefix(8))
+    }
+}
+
+public enum ExternalLaunchState: Sendable, Equatable {
+    case notAttempted
+    case launching
+    case running
+    case failed
+}
+
+actor ExternalLaunchLifecycle {
+    private var stateStorage: ExternalLaunchState = .notAttempted
+    private var failure: Error?
+
+    var state: ExternalLaunchState {
+        return stateStorage
+    }
+
+    func launchIfNeeded(_ launch: @escaping @Sendable () async throws -> Void) async throws {
+        switch stateStorage {
+        case .running:
+            return
+        case .launching:
+            throw RegistryError(.stateChanged, "external launch is already in progress")
+        case .failed:
+            throw failure ?? RegistryError(.driverUnavailable, "external launch previously failed")
+        case .notAttempted:
+            stateStorage = .launching
+        }
+
+        do {
+            try await launch()
+            stateStorage = .running
+        } catch {
+            stateStorage = .failed
+            failure = error
+            throw error
+        }
+    }
+}
 
 public struct SimulatorDevice: Sendable, Equatable {
     public let name: String; public let udid: String; public let state: String
@@ -785,7 +861,8 @@ public actor XCTestDriver: AppleAppDriver {
 
     private final class Session: @unchecked Sendable {
         let target: AppTarget; let temporaryDirectory: URL; let bridgeConfig: URL; let bridge: LocalBridgeServer; let process: ManagedProcess; let buildLock: BuildPathLock; let derivedDataPath: URL; let ownsDerivedData: Bool
-        var output = ""; var externalLaunch: Bool = false
+        var output = ""
+        let externalLaunchLifecycle = ExternalLaunchLifecycle()
         var stopping = false
         var resourceWatchdog: Task<Void, Never>?
         var pending: [(UUID, JSONValue, CheckedContinuation<JSONValue, Error>)] = []
@@ -797,14 +874,20 @@ public actor XCTestDriver: AppleAppDriver {
     private let configuration: Configuration
     private let developerDirectory: String
     private let runner = ProcessRunner()
-    private let externalTargetProvider: (@Sendable () async throws -> Set<String>)?
+    private let externalTargetProvider: (@Sendable () async throws -> [AppTarget: ExternalTargetObservation])?
+    private let externalTargetLauncher: (@Sendable (AppTarget) async throws -> Void)?
     private var sessions: [AppTarget: Session] = [:]
     private var ownedScreenshots: [AppTarget: [URL]] = [:]
 
-    public init(configuration: Configuration = XCTestDriver.defaultConfiguration(), externalTargetProvider: (@Sendable () async throws -> Set<String>)? = nil) throws {
+    public init(
+        configuration: Configuration = XCTestDriver.defaultConfiguration(),
+        externalTargetProvider: (@Sendable () async throws -> [AppTarget: ExternalTargetObservation])? = nil,
+        externalTargetLauncher: (@Sendable (AppTarget) async throws -> Void)? = nil
+    ) throws {
         self.configuration = configuration
         self.developerDirectory = try XcodeToolchain.resolveDeveloperDirectory(environment: configuration.environment)
         self.externalTargetProvider = externalTargetProvider
+        self.externalTargetLauncher = externalTargetLauncher
     }
 
     public static func defaultConfiguration() -> Configuration {
@@ -826,15 +909,35 @@ public actor XCTestDriver: AppleAppDriver {
 
     public func listApps() async throws -> [AppInstance] {
         await reapExitedSessions()
-        var targets = Set(sessions.keys.map(\.rawValue))
-        targets.formUnion(try await observedExternalTargets())
-        return targets.sorted().map { AppInstance(id: $0, displayName: "Rishi \($0)", isRunning: true, windowCount: 1) }
+        let observed = try await observedExternalTargets()
+        let targets = Set(sessions.keys).union(observed.keys)
+        return targets.sorted { $0.rawValue < $1.rawValue }.map { target in
+            let observation = observed[target]
+            return AppInstance(
+                id: target.rawValue,
+                displayName: "Rishi \(target.rawValue)",
+                isRunning: true,
+                windowCount: 1,
+                processCount: observation?.processCount ?? 0,
+                processes: observation?.processes ?? []
+            )
+        }
     }
 
     public func launch(_ targetName: String) async throws {
         guard let target = AppTarget(rawValue: targetName) else { throw RegistryError(.actionNotSupported, "unsupported app target: \(targetName)") }
         guard sessions[target] == nil else { throw RegistryError(.instanceAlreadyRunning, "target already running: \(targetName)") }
-        guard !(try await observedExternalTargets()).contains(targetName) else { throw RegistryError(.instanceAlreadyRunning, "target already running: \(targetName)", data: ["app": .string(targetName)]) }
+        if let existing = try await observedExternalTargets()[target] {
+            let instance = AppInstance(
+                id: targetName,
+                displayName: "Rishi \(targetName)",
+                isRunning: true,
+                windowCount: 1,
+                processCount: existing.processCount,
+                processes: existing.processes
+            )
+            throw RegistryError(.instanceAlreadyRunning, "target already running: \(targetName)", data: ["app": .string(targetName), "existing": instance.json])
+        }
         let deviceID = target == .iphone17 ? try await iPhone17DeviceIDs().first : nil
         if target == .iphone17 && deviceID == nil { throw RegistryError(.driverUnavailable, "no available iPhone 17 Pro simulator for external launch") }
         let derivedDataPath = configuration.derivedDataPath(for: target)
@@ -869,7 +972,7 @@ public actor XCTestDriver: AppleAppDriver {
         let temporaryDirectory = URL(fileURLWithPath: configuration.temporaryRoot).appendingPathComponent("rishi-mcp-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
         temp = temporaryDirectory
-        let localBridge = try LocalBridgeServer()
+        let localBridge = try LocalBridgeServer(port: target.bridgePort)
         try localBridge.start()
         bridge = localBridge
         let bridgeConfig = temporaryDirectory.appendingPathComponent("bridge.json")
@@ -927,7 +1030,8 @@ public actor XCTestDriver: AppleAppDriver {
             waitForOwnedProcessCleanup: { await session.process.waitForExitAndCleanup() },
             externalTargets: { [weak self] in
                 guard let self else { throw RegistryError(.driverUnavailable, "driver released while stopping \(targetName)") }
-                return try await self.observedExternalTargets()
+                let observed = try await self.observedExternalTargets()
+                return Set(observed.keys.map(\.rawValue))
             },
             releaseOwnership: { [weak self] in
                 guard let self else { return }
@@ -1112,21 +1216,55 @@ public actor XCTestDriver: AppleAppDriver {
         }
         return matching
     }
-    private func observedExternalTargets() async throws -> Set<String> {
+    private func observedExternalTargets() async throws -> [AppTarget: ExternalTargetObservation] {
         if let externalTargetProvider { return try await externalTargetProvider() }
         return try await externalTargets()
     }
 
-    private func externalTargets() async throws -> Set<String> {
-        let ps = try await run("ps", ["-axo", "pid=,command="]).stdout
-        let deviceIDs = try await iPhone17DeviceIDs().map { $0.lowercased() }
-        var result = Set<String>()
-        for line in ps.split(separator: "\n") {
-            let value = String(line)
-            if value.range(of: #"rishi\.app/Contents/MacOS/rishi(?:\s|$)"#, options: [.regularExpression, .caseInsensitive]) != nil { result.insert("catalyst") }
-            if deviceIDs.contains(where: { value.lowercased().contains("/devices/\($0)/") }) && value.range(of: #"rishi\.app/rishi(?:\s|$)"#, options: [.regularExpression, .caseInsensitive]) != nil { result.insert("iphone17") }
+    private func externalTargets() async throws -> [AppTarget: ExternalTargetObservation] {
+        let ps = try await run("ps", ["-axo", "pid=,ppid=,pgid=,comm="]).stdout
+        return try Self.parseExternalTargetObservations(ps, deviceIDs: await iPhone17DeviceIDs())
+    }
+
+    static func parseExternalTargetObservations(
+        _ output: String,
+        deviceIDs: [String]
+    ) throws -> [AppTarget: ExternalTargetObservation] {
+        var counts: [AppTarget: Int] = [:]
+        var identities: [AppTarget: [AppProcessIdentity]] = [:]
+        let normalizedDeviceIDs = deviceIDs.map { $0.lowercased() }
+
+        for line in output.split(separator: "\n") {
+            let fields = line.split(maxSplits: 3, whereSeparator: { $0 == " " || $0 == "\t" })
+            guard fields.count == 4,
+                  let pid = Int32(fields[0]), pid > 0,
+                  let ppid = Int32(fields[1]), ppid > 0,
+                  let pgid = Int32(fields[2]), pgid > 0 else {
+                continue
+            }
+            let executable = String(fields[3])
+            let lowercasedExecutable = executable.lowercased()
+            let target: AppTarget?
+            if lowercasedExecutable.range(of: #"rishi\.app/contents/macos/rishi$"#, options: .regularExpression) != nil {
+                target = .catalyst
+            } else if normalizedDeviceIDs.contains(where: { lowercasedExecutable.contains("/devices/\($0)/") }),
+                      lowercasedExecutable.range(of: #"rishi\.app/rishi$"#, options: .regularExpression) != nil {
+                target = .iphone17
+            } else {
+                target = nil
+            }
+            guard let target else { continue }
+            counts[target, default: 0] += 1
+            if identities[target, default: []].count < 8 {
+                identities[target, default: []].append(
+                    AppProcessIdentity(pid: pid, ppid: ppid, pgid: pgid, executable: executable)
+                )
+            }
         }
-        return result
+
+        return Dictionary(uniqueKeysWithValues: counts.map { target, count in
+            (target, ExternalTargetObservation(target: target, processCount: count, processes: identities[target] ?? []))
+        })
     }
 
     private func releaseSession(_ session: Session, target: AppTarget) {
@@ -1174,8 +1312,11 @@ public actor XCTestDriver: AppleAppDriver {
         let pending = session.pending.remove(at: index)
         session.active[pending.0] = (pending.2, tracked)
         do {
-            if !session.externalLaunch {
-                try await launchExternalTarget(session); session.externalLaunch = true
+            if Self.shouldLaunchExternalTarget(for: pending.1) {
+                try await session.externalLaunchLifecycle.launchIfNeeded { [weak self, weak session] in
+                    guard let self, let session else { throw RegistryError(.driverUnavailable, "driver released during external launch") }
+                    try await self.launchExternalTarget(session)
+                }
             }
             try BridgeCodec.write(pending.1, to: tracked.fd)
             let response = try await Task.detached(priority: .utility) {
@@ -1194,7 +1335,15 @@ public actor XCTestDriver: AppleAppDriver {
         }
         tracked.close()
     }
+
+    static func shouldLaunchExternalTarget(for payload: JSONValue) -> Bool {
+        payload["op"]?.stringValue != "stop"
+    }
+
     private func launchExternalTarget(_ session: Session) async throws {
+        if let externalTargetLauncher {
+            return try await externalTargetLauncher(session.target)
+        }
         if session.target == .catalyst {
             let path = configuration.derivedDataPath(for: .catalyst) + "/Build/Products/Debug-maccatalyst/rishi.app"
             let result = try await run("open", [path]); guard result.status == 0 else { throw RegistryError(.driverUnavailable, "could not launch Catalyst app externally: \(result.stderr)") }
@@ -1235,9 +1384,10 @@ public actor XCTestDriver: AppleAppDriver {
 public final class LocalBridgeServer: @unchecked Sendable {
     private var socket: Int32 = -1
     private let lock = NSLock()
+    private let requestedPort: UInt16
     public var onConnection: (@Sendable (Int32) -> Void)?
     public private(set) var port: UInt16 = 0
-    public init() throws {}
+    public init(port: UInt16 = 0) throws { requestedPort = port }
     public func start() throws {
         #if canImport(Darwin)
         socket = Darwin.socket(AF_INET, SOCK_STREAM, 0); guard socket >= 0 else { throw RegistryError(.driverUnavailable, "could not create MCP bridge socket") }
@@ -1246,7 +1396,7 @@ public final class LocalBridgeServer: @unchecked Sendable {
             socket = -1
             throw RegistryError(.driverUnavailable, "could not protect MCP bridge listener descriptor")
         }
-        var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); address.sin_family = sa_family_t(AF_INET); address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1")); address.sin_port = 0
+        var address = sockaddr_in(); address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); address.sin_family = sa_family_t(AF_INET); address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1")); address.sin_port = requestedPort.bigEndian
         let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }; guard bound == 0 else { stop(); throw RegistryError(.driverUnavailable, "could not bind MCP bridge socket") }
         guard Darwin.listen(socket, 8) == 0 else { stop(); throw RegistryError(.driverUnavailable, "could not listen on MCP bridge socket") }
         var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size); getsockname(socket, withUnsafeMutablePointer(to: &actual) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 } }, &length); port = UInt16(bigEndian: actual.sin_port)

@@ -39,37 +39,109 @@ final class InstanceRegistryTests: XCTestCase {
         _ = try await first.value
     }
 
-    func testCleansUpWhenInitialMemorySnapshotFailsAfterLaunch() async throws {
+    func testListSucceedsWhenMemoryTelemetryFails() async throws {
+        let driver = FakeDriver(running: ["catalyst"])
+        let registry = InstanceRegistry(driver: driver, memory: FailingMemory())
+
+        let listed = try await registry.list()
+
+        let app = try XCTUnwrap(listed.arrayValue?.first?.objectValue)
+        XCTAssertEqual(app["app"]?.stringValue, nil)
+        XCTAssertEqual(app["id"]?.stringValue, "catalyst")
+        XCTAssertEqual(app["memory"]?["available"]?.boolValue, false)
+    }
+
+    func testStartKeepsOwnershipWhenPostLaunchMemoryTelemetryFails() async throws {
         let driver = FakeDriver()
         let registry = InstanceRegistry(driver: driver, memory: FailingMemory())
 
-        await assertThrowsAsync(try await registry.start("catalyst")) { error in
-            XCTAssertEqual((error as? RegistryError)?.code, .stateChanged)
-        }
+        let started = try await registry.start("catalyst")
 
         let terminated = await driver.terminated
-        XCTAssertTrue(terminated.contains("catalyst"))
+        XCTAssertFalse(terminated.contains("catalyst"))
+        XCTAssertTrue(started["owned"]?.boolValue == true)
+        XCTAssertEqual(started["memory"]?["available"]?.boolValue, false)
         let listed = try await registry.list()
-        XCTAssertEqual(listed, .array([]))
+        XCTAssertEqual(listed.arrayValue?.count, 1)
+    }
+
+    func testStopSucceedsWhenPostStopMemoryTelemetryFails() async throws {
+        let driver = FakeDriver()
+        let registry = InstanceRegistry(driver: driver, memory: FailingMemory())
+
+        _ = try await registry.start("catalyst")
+        let stopped = try await registry.stop("catalyst")
+
+        XCTAssertTrue(stopped["stopped"]?.boolValue == true)
+        XCTAssertEqual(stopped["memory"]?["available"]?.boolValue, false)
+        let terminated = await driver.terminated
+        XCTAssertTrue(terminated.contains("catalyst"))
+        let secondStop = try await registry.stop("catalyst")
+        XCTAssertEqual(secondStop["reason"]?.stringValue, "not_owned")
+    }
+
+    func testRejectsDuplicateCatalystProcessIdentities() async throws {
+        let identities = [
+            AppProcessIdentity(pid: 101, ppid: 1, pgid: 101, executable: "/Applications/rishi.app/Contents/MacOS/rishi"),
+            AppProcessIdentity(pid: 102, ppid: 1, pgid: 102, executable: "/Applications/rishi.app/Contents/MacOS/rishi"),
+        ]
+        let driver = FakeDriver(instances: [
+            AppInstance(id: "catalyst", displayName: "Rishi catalyst", isRunning: true, windowCount: 1, processCount: identities.count, processes: identities),
+        ])
+        let registry = InstanceRegistry(driver: driver, memory: FakeMemory())
+
+        await assertThrowsAsync(try await registry.start("catalyst")) { error in
+            let registryError = error as? RegistryError
+            XCTAssertEqual(registryError?.code, .instanceAlreadyRunning)
+            XCTAssertEqual(registryError?.data["existing"]?["processCount"]?.intValue, 2)
+            XCTAssertEqual(registryError?.data["existing"]?["processes"]?.arrayValue?.count, 2)
+        }
+        let launchCount = await driver.launchCount
+        XCTAssertEqual(launchCount, 0)
+    }
+
+    func testRejectsDuplicateIPhoneProcessIdentities() async throws {
+        let identities = [
+            AppProcessIdentity(pid: 201, ppid: 1, pgid: 201, executable: "/Users/me/Library/Developer/CoreSimulator/Devices/PHONE/data/Containers/Bundle/Application/A/rishi.app/rishi"),
+            AppProcessIdentity(pid: 202, ppid: 1, pgid: 202, executable: "/Users/me/Library/Developer/CoreSimulator/Devices/PHONE/data/Containers/Bundle/Application/B/rishi.app/rishi"),
+        ]
+        let driver = FakeDriver(instances: [
+            AppInstance(id: "iphone17", displayName: "Rishi iphone17", isRunning: true, windowCount: 1, processCount: identities.count, processes: identities),
+        ])
+        let registry = InstanceRegistry(driver: driver, memory: FakeMemory())
+
+        await assertThrowsAsync(try await registry.start("iphone17")) { error in
+            let registryError = error as? RegistryError
+            XCTAssertEqual(registryError?.code, .instanceAlreadyRunning)
+            XCTAssertEqual(registryError?.data["existing"]?["processCount"]?.intValue, 2)
+            XCTAssertEqual(registryError?.data["existing"]?["processes"]?.arrayValue?.map { $0["executable"]?.stringValue }.count, 2)
+        }
+        let launchCount = await driver.launchCount
+        XCTAssertEqual(launchCount, 0)
     }
 }
 
 private actor FakeDriver: AppleAppDriver {
     var running: Set<String>
+    let configuredInstances: [AppInstance]?
     var terminated: Set<String> = []
+    var launchCount = 0
     let blockLaunch: Bool
     var launchStarted = false
     var release: CheckedContinuation<Void, Never>?
 
-    init(running: Set<String> = [], blockLaunch: Bool = false) {
+    init(running: Set<String> = [], instances: [AppInstance]? = nil, blockLaunch: Bool = false) {
         self.running = running
+        self.configuredInstances = instances
         self.blockLaunch = blockLaunch
     }
 
     func listApps() async throws -> [AppInstance] {
-        running.map { AppInstance(id: $0, displayName: "Rishi \($0)", isRunning: true, windowCount: 1) }
+        if let configuredInstances { return configuredInstances }
+        return running.map { AppInstance(id: $0, displayName: "Rishi \($0)", isRunning: true, windowCount: 1) }
     }
     func launch(_ target: String) async throws {
+        launchCount += 1
         launchStarted = true
         if blockLaunch { await withCheckedContinuation { release = $0 } }
         running.insert(target)

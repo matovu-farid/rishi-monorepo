@@ -3,6 +3,135 @@ import XCTest
 @testable import RishiAppleMCP
 
 final class XCTestDriverTests: XCTestCase {
+    func testTargetsUseDistinctStableBridgePorts() {
+        XCTAssertEqual(AppTarget.catalyst.bridgePort, 57_421)
+        XCTAssertEqual(AppTarget.iphone17.bridgePort, 57_422)
+        XCTAssertNotEqual(AppTarget.catalyst.bridgePort, AppTarget.iphone17.bridgePort)
+    }
+
+    func testBridgeServerBindsAnEphemeralPort() throws {
+        let server = try LocalBridgeServer(port: 0)
+        try server.start()
+        defer { server.stop() }
+
+        XCTAssertNotEqual(server.port, 0)
+    }
+
+    func testExternalTargetParserPreservesDuplicateCatalystIdentities() throws {
+        let observations = try XCTestDriver.parseExternalTargetObservations(
+            """
+              101 1 101 /Applications/Rishi.app/Contents/MacOS/rishi
+              102 1 102 /Applications/Rishi.app/Contents/MacOS/rishi
+            """,
+            deviceIDs: []
+        )
+
+        let catalyst = try XCTUnwrap(observations[.catalyst])
+        XCTAssertEqual(catalyst.processCount, 2)
+        XCTAssertEqual(catalyst.processes.map(\.pid), [101, 102])
+        XCTAssertEqual(catalyst.processes.map(\.executable), [
+            "/Applications/Rishi.app/Contents/MacOS/rishi",
+            "/Applications/Rishi.app/Contents/MacOS/rishi",
+        ])
+    }
+
+    func testExternalTargetParserPreservesDuplicateIPhoneIdentities() throws {
+        let observations = try XCTestDriver.parseExternalTargetObservations(
+            """
+              201 1 201 /Users/me/Library/Developer/CoreSimulator/Devices/PHONE-17/data/Containers/Bundle/Application/A/rishi.app/rishi
+              202 1 202 /Users/me/Library/Developer/CoreSimulator/Devices/PHONE-17/data/Containers/Bundle/Application/B/rishi.app/rishi
+            """,
+            deviceIDs: ["PHONE-17"]
+        )
+
+        let iphone = try XCTUnwrap(observations[.iphone17])
+        XCTAssertEqual(iphone.processCount, 2)
+        XCTAssertEqual(iphone.processes.map(\.pid), [201, 202])
+        XCTAssertEqual(iphone.processes.map(\.executable), [
+            "/Users/me/Library/Developer/CoreSimulator/Devices/PHONE-17/data/Containers/Bundle/Application/A/rishi.app/rishi",
+            "/Users/me/Library/Developer/CoreSimulator/Devices/PHONE-17/data/Containers/Bundle/Application/B/rishi.app/rishi",
+        ])
+    }
+
+    func testStopBridgeOperationNeverInitiatesExternalLaunch() {
+        XCTAssertFalse(XCTestDriver.shouldLaunchExternalTarget(for: .object(["op": .string("stop")])))
+        XCTAssertTrue(XCTestDriver.shouldLaunchExternalTarget(for: .object(["op": .string("ping")])))
+    }
+
+    func testFailedExternalLaunchIsAttemptedOnceAndOwnedCleanupReleasesOwnership() async throws {
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-owned-launch-failure-\(UUID().uuidString).pid")
+        let script = """
+        my $pid = fork();
+        die "fork failed" unless defined $pid;
+        if ($pid == 0) { POSIX::setsid(); sleep 30; exit 0; }
+        open my $fh, ">", $ARGV[0] or die "pid file open failed: $!";
+        print {$fh} $pid;
+        close $fh;
+        sleep 1;
+        exit 0;
+        """
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        let process = try ProcessRunner().start(
+            "/usr/bin/perl",
+            arguments: ["-MPOSIX", "-e", script, pidFile.path],
+            environment: [:]
+        )
+        let descendant = try await Self.waitForPID(from: pidFile)
+        let events = LaunchLifecycleEvents()
+        let lifecycle = ExternalLaunchLifecycle()
+        let expected = FBSShapedLaunchError()
+
+        await events.record(.ping)
+        do {
+            try await lifecycle.launchIfNeeded {
+                await events.record(.launchExternalTarget)
+                throw expected
+            }
+            XCTFail("expected external launch failure")
+        } catch is FBSShapedLaunchError {}
+
+        do {
+            try await lifecycle.launchIfNeeded {
+                await events.record(.launchExternalTarget)
+            }
+            XCTFail("a failed external launch must be terminal")
+        } catch is FBSShapedLaunchError {}
+
+        try await XCTestStopCoordinator.stop(
+            target: "catalyst",
+            requestStop: { await events.record(.requestStop) },
+            stopOwnedProcess: {
+                await events.record(.stopOwnedProcess)
+                await process.stop()
+            },
+            waitForOwnedProcessCleanup: {
+                await events.record(.waitForOwnedProcessCleanup)
+                return await process.waitForExitAndCleanup()
+            },
+            externalTargets: {
+                await events.record(.externalTargetProbe)
+                return []
+            },
+            releaseOwnership: {
+                XCTAssertEqual(Darwin.kill(process.processIdentifier, 0), -1)
+                XCTAssertEqual(errno, ESRCH)
+                XCTAssertEqual(Darwin.kill(descendant, 0), -1)
+                XCTAssertEqual(errno, ESRCH)
+                await events.record(.releaseOwnership)
+            },
+            timeout: .seconds(1),
+            pollInterval: .milliseconds(1),
+            sleep: { _ in }
+        )
+
+        let recorded = await events.values
+        XCTAssertEqual(recorded.filter { $0 == .launchExternalTarget }.count, 1)
+        XCTAssertEqual(recorded, [.ping, .launchExternalTarget, .requestStop, .stopOwnedProcess, .waitForOwnedProcessCleanup, .externalTargetProbe, .releaseOwnership])
+        let launchState = await lifecycle.state
+        XCTAssertEqual(launchState, .failed)
+    }
+
     func testFallsBackFromCommandLineToolsToInstalledXcode() throws {
         let result = try XcodeToolchain.resolveDeveloperDirectory(
             environment: ["DEVELOPER_DIR": "/Library/Developer/CommandLineTools"],
@@ -546,6 +675,33 @@ final class XCTestDriverTests: XCTestCase {
         XCTAssertFalse(events.contains(.releaseOwnership))
     }
 
+    func testStopCoordinatorReleasesOwnershipWhenStopRequestFailsButTargetIsGone() async throws {
+        let fake = StopCoordinatorFake(targetResponses: [[]])
+        let expected = StopCoordinatorFakeError.stopRequestFailed
+
+        do {
+            try await XCTestStopCoordinator.stop(
+                target: "catalyst",
+                requestStop: { await fake.record(.requestStop); throw expected },
+                stopOwnedProcess: { await fake.record(.stopOwnedProcess) },
+                waitForOwnedProcessCleanup: { await fake.record(.waitForOwnedProcessCleanup); return true },
+                externalTargets: { await fake.nextExternalTargets() },
+                releaseOwnership: { await fake.record(.releaseOwnership) },
+                timeout: .seconds(1),
+                pollInterval: .milliseconds(1),
+                sleep: { _ in await fake.record(.sleep) }
+            )
+            XCTFail("expected the original stop request failure")
+        } catch let error as StopCoordinatorFakeError {
+            XCTAssertEqual(error, expected)
+        }
+
+        let events = await fake.events
+        let probeCount = await fake.externalTargetProbeCount
+        XCTAssertEqual(events, [.requestStop, .stopOwnedProcess, .waitForOwnedProcessCleanup, .releaseOwnership])
+        XCTAssertEqual(probeCount, 1)
+    }
+
     private static func readPID(from file: URL) throws -> pid_t {
         let value = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -603,8 +759,26 @@ private enum StopCoordinatorEvent: Equatable, Sendable {
     case requestStop, stopOwnedProcess, waitForOwnedProcessCleanup, sleep, releaseOwnership
 }
 
+private enum LaunchLifecycleEvent: Equatable, Sendable {
+    case ping, launchExternalTarget, requestStop, stopOwnedProcess, waitForOwnedProcessCleanup, externalTargetProbe, releaseOwnership
+}
+
+private actor LaunchLifecycleEvents {
+    private var events: [LaunchLifecycleEvent] = []
+
+    var values: [LaunchLifecycleEvent] { events }
+
+    func record(_ event: LaunchLifecycleEvent) {
+        events.append(event)
+    }
+}
+
+private struct FBSShapedLaunchError: LocalizedError, Sendable {
+    var errorDescription: String? { "FBSOpenApplicationServiceErrorDomain error 4" }
+}
+
 private enum StopCoordinatorFakeError: Error, Equatable {
-    case probeFailed
+    case probeFailed, stopRequestFailed
 }
 
 private actor StopCoordinatorFake {
