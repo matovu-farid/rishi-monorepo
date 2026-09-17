@@ -112,7 +112,7 @@ need the result bundles for diagnosis.
 
 Before any Xcode process starts, the host requires at least 20 GiB of free
 disk. This floor can only be raised with `RISHI_E2E_MIN_FREE_DISK_GB`.
-There is no memory reserve or memory-based start/cancellation gate.
+The host does not inspect available memory for admission or cancellation.
 Incomplete runs are preserved for recovery, but the host refuses to start when
 the temporary root already contains three retained `rishi-shared-reading-*`
 directories. Set `RISHI_E2E_MAX_RETAINED_RUNS` only when an operator has an
