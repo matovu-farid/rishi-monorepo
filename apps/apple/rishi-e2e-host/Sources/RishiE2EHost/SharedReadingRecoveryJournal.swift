@@ -58,6 +58,36 @@ public struct PendingCatalystLaunch: Codable, Hashable, Sendable {
         self.baselineIdentities = baselineIdentities
         self.registeredIdentity = registeredIdentity
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case role, kind, bundleIdentifier, baselineIdentities, registeredIdentity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(TestAccountRole.self, forKey: .role)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        bundleIdentifier = try container.decode(String.self, forKey: .bundleIdentifier)
+        let identities = try container.decode([OwnedProcessIdentity].self, forKey: .baselineIdentities)
+        baselineIdentities = Set(identities)
+        guard baselineIdentities.count == identities.count else {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath, debugDescription: "Duplicate baseline process identity."))
+        }
+        registeredIdentity = try container.decodeIfPresent(OwnedProcessIdentity.self, forKey: .registeredIdentity)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(bundleIdentifier, forKey: .bundleIdentifier)
+        try container.encode(baselineIdentities.sorted { left, right in
+            if left.pid != right.pid { return left.pid < right.pid }
+            if left.birthTimeSeconds != right.birthTimeSeconds { return left.birthTimeSeconds < right.birthTimeSeconds }
+            return left.birthTimeMicroseconds < right.birthTimeMicroseconds
+        }, forKey: .baselineIdentities)
+        try container.encodeIfPresent(registeredIdentity, forKey: .registeredIdentity)
+    }
 }
 
 public protocol OwnedProcessRecording: Sendable {
@@ -133,21 +163,49 @@ public enum SharedReadingRecoveryJournalError: Error, Equatable {
 public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccountLifecycleRecording, OwnedProcessRecording {
     public let url: URL
 
+    private static let inProcessInterprocessLock = NSLock()
     private let lock = NSLock()
+    private let rootDirectoryFD: Int32
+    private let runDirectoryFD: Int32
+    private let lockFD: Int32
+    private let runDirectoryName: String
+    private let journalFilename: String
+    private let runDirectoryDevice: dev_t
+    private let runDirectoryInode: ino_t
     private var state: RecoveryState
 
     public init(url: URL, runID: String) throws {
-        self.url = url
-
-        if FileManager.default.fileExists(atPath: url.path) {
-            let decoded = try Self.decodeState(from: url)
-            guard decoded.runID == runID else {
-                throw SharedReadingRecoveryJournalError.runIDMismatch
+        let storage = try Self.openStorage(for: url)
+        do {
+            let decoded = try Self.withInterprocessLock(storage.lockFD) {
+                try Self.validateRunDirectory(storage)
+                return try Self.loadState(
+                    from: storage.runDirectoryFD,
+                    filename: storage.journalFilename,
+                    runID: runID
+                )
             }
-            state = decoded
-        } else {
-            state = RecoveryState(runID: runID)
+            self.url = url
+            self.rootDirectoryFD = storage.rootDirectoryFD
+            self.runDirectoryFD = storage.runDirectoryFD
+            self.lockFD = storage.lockFD
+            self.runDirectoryName = storage.runDirectoryName
+            self.journalFilename = storage.journalFilename
+            self.runDirectoryDevice = storage.runDirectoryDevice
+            self.runDirectoryInode = storage.runDirectoryInode
+            self.state = decoded
+        } catch {
+            close(storage.lockFD)
+            close(storage.runDirectoryFD)
+            close(storage.rootDirectoryFD)
+            throw error
         }
+    }
+
+    deinit {
+        close(lockFD)
+        close(runDirectoryFD)
+        close(rootDirectoryFD)
     }
 
     public func recordProvisioningAddress(_ email: String, role: TestAccountRole) throws {
@@ -318,67 +376,113 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
 
     public func finalizeAfterSuccessfulCleanup() throws {
         try lock.withLock {
-            guard state.isEmpty else {
-                throw SharedReadingRecoveryJournalError.cleanupIncomplete
-            }
-            guard FileManager.default.fileExists(atPath: url.path) else { return }
-            try FileManager.default.removeItem(at: url)
-            guard !FileManager.default.fileExists(atPath: url.path) else {
-                throw SharedReadingRecoveryJournalError.journalRemovalFailed
+            try Self.withInterprocessLock(lockFD) {
+                try validateRunDirectory()
+                let current = try Self.loadState(from: runDirectoryFD, filename: journalFilename, runID: state.runID)
+                guard current.isEmpty else {
+                    throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                }
+                guard let kind = try Self.fileKind(at: journalFilename, directoryFD: runDirectoryFD) else {
+                    state = current
+                    return
+                }
+                guard kind == S_IFREG else {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
+                guard unlinkat(runDirectoryFD, journalFilename, 0) == 0 else {
+                    throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                }
+                guard fsync(runDirectoryFD) == 0 else {
+                    throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                }
+                state = current
             }
         }
     }
 
     public static func unresolvedArtifact(in root: URL) throws -> URL? {
-        guard FileManager.default.fileExists(atPath: root.path) else { return nil }
-        let children = try FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )
-
-        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where child.lastPathComponent.hasPrefix("rishi-shared-reading-") {
-            guard try Self.fileKind(at: child) == S_IFDIR else {
-                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
-            }
-            for name in ["recovery.json", "manifest.json"] {
-                let enumeratedCandidate = child.appendingPathComponent(name)
-                guard let kind = try Self.fileKind(at: enumeratedCandidate) else { continue }
-                guard kind == S_IFREG else {
+        let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        if rootFD < 0 {
+            if errno == ENOENT { return nil }
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        defer { close(rootFD) }
+        return try Self.withDirectoryEntries(rootFD) { names in
+            for name in names where name.hasPrefix("rishi-shared-reading-") {
+                guard try fileKind(at: name, directoryFD: rootFD) == S_IFDIR else {
                     throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
                 }
-                return root.appendingPathComponent(child.lastPathComponent).appendingPathComponent(name)
+                let childFD = openat(rootFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+                guard childFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                defer { close(childFD) }
+                for candidate in ["recovery.json", "manifest.json"] {
+                    guard let kind = try fileKind(at: candidate, directoryFD: childFD) else { continue }
+                    guard kind == S_IFREG else {
+                        throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                    }
+                    return root.appendingPathComponent(name).appendingPathComponent(candidate)
+                }
             }
+            return nil
         }
-        return nil
     }
 
     private func mutate(_ update: (inout RecoveryState) throws -> Void) throws {
         try lock.withLock {
-            var candidate = state
-            try update(&candidate)
-            try Self.write(candidate, to: url)
-            state = candidate
+            try Self.withInterprocessLock(lockFD) {
+                try validateRunDirectory()
+                var candidate = try Self.loadState(from: runDirectoryFD, filename: journalFilename, runID: state.runID)
+                try update(&candidate)
+                try Self.writeAtomically(candidate, to: runDirectoryFD, filename: journalFilename)
+                state = candidate
+            }
         }
     }
 
-    private static func decodeState(from url: URL) throws -> RecoveryState {
-        do {
-            return try JSONDecoder().decode(RecoveryState.self, from: Data(contentsOf: url))
-        } catch {
-            throw SharedReadingRecoveryJournalError.malformedArtifact
-        }
+    private func validateRunDirectory() throws {
+        try Self.validateRunDirectory(Storage(
+            rootDirectoryFD: rootDirectoryFD,
+            runDirectoryFD: runDirectoryFD,
+            lockFD: lockFD,
+            runDirectoryName: runDirectoryName,
+            journalFilename: journalFilename,
+            runDirectoryDevice: runDirectoryDevice,
+            runDirectoryInode: runDirectoryInode
+        ))
     }
 
-    private static func write(_ state: RecoveryState, to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    // Data.write(options: [.atomic]) cannot target an already-open directory descriptor.
+    // This is its race-safe equivalent: fchmod + fsync a no-follow temp file, then renameat.
+    private static func writeAtomically(_ state: RecoveryState, to directoryFD: Int32, filename: String) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(state)
-        try data.write(to: url, options: [.atomic])
-        guard chmod(url.path, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+        if let existing = try fileKind(at: filename, directoryFD: directoryFD), existing != S_IFREG {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let temporaryName = ".\(filename).\(UUID().uuidString).tmp"
+        let fileFD = openat(
+            directoryFD,
+            temporaryName,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
+            mode_t(S_IRUSR | S_IWUSR)
+        )
+        guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.permissionsNotApplied }
+        var shouldRemoveTemporary = true
+        defer {
+            close(fileFD)
+            if shouldRemoveTemporary { _ = unlinkat(directoryFD, temporaryName, 0) }
+        }
+        guard fchmod(fileFD, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
             throw SharedReadingRecoveryJournalError.permissionsNotApplied
         }
+        try writeAll(data, to: fileFD)
+        guard fsync(fileFD) == 0 else { throw SharedReadingRecoveryJournalError.permissionsNotApplied }
+        guard renameat(directoryFD, temporaryName, directoryFD, filename) == 0 else {
+            throw SharedReadingRecoveryJournalError.permissionsNotApplied
+        }
+        shouldRemoveTemporary = false
+        guard fsync(directoryFD) == 0 else { throw SharedReadingRecoveryJournalError.permissionsNotApplied }
     }
 
     private static func isSafeRelativePath(_ path: String) -> Bool {
@@ -387,13 +491,168 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             && !path.split(separator: "/").contains("..")
     }
 
-    private static func fileKind(at url: URL) throws -> mode_t? {
+    private static func fileKind(at name: String, directoryFD: Int32) throws -> mode_t? {
         var details = stat()
-        guard lstat(url.path, &details) == 0 else {
+        guard fstatat(directoryFD, name, &details, AT_SYMLINK_NOFOLLOW) == 0 else {
             if errno == ENOENT { return nil }
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
         return details.st_mode & S_IFMT
+    }
+
+    private static func writeAll(_ data: Data, to fileDescriptor: Int32) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            var offset = 0
+            while offset < rawBuffer.count {
+                let written = write(fileDescriptor, rawBuffer.baseAddress!.advanced(by: offset), rawBuffer.count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw SharedReadingRecoveryJournalError.permissionsNotApplied
+                }
+                offset += Int(written)
+            }
+        }
+    }
+
+    private static func readAll(from fileDescriptor: Int32) throws -> Data {
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 8_192)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { read(fileDescriptor, $0.baseAddress, $0.count) }
+            if count == 0 { return result }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+            result.append(contentsOf: buffer.prefix(Int(count)))
+        }
+    }
+
+    private static func loadState(from directoryFD: Int32, filename: String, runID: String) throws -> RecoveryState {
+        guard let kind = try fileKind(at: filename, directoryFD: directoryFD) else {
+            return RecoveryState(runID: runID)
+        }
+        guard kind == S_IFREG else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        let fileFD = openat(directoryFD, filename, O_RDONLY | O_NOFOLLOW)
+        guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(fileFD) }
+        var details = stat()
+        guard fstat(fileFD, &details) == 0, details.st_mode & S_IFMT == S_IFREG else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        do {
+            let decoded = try JSONDecoder().decode(RecoveryState.self, from: try readAll(from: fileFD))
+            guard decoded.runID == runID else { throw SharedReadingRecoveryJournalError.runIDMismatch }
+            return decoded
+        } catch let error as SharedReadingRecoveryJournalError {
+            throw error
+        } catch {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+    }
+
+    private static func withInterprocessLock<T>(_ lockFD: Int32, _ operation: () throws -> T) throws -> T {
+        try inProcessInterprocessLock.withLock {
+            guard flock(lockFD, LOCK_EX) == 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { _ = flock(lockFD, LOCK_UN) }
+            return try operation()
+        }
+    }
+
+    private static func withDirectoryEntries<T>(_ directoryFD: Int32, _ operation: ([String]) throws -> T) throws -> T {
+        let duplicateFD = dup(directoryFD)
+        guard duplicateFD >= 0, let directory = fdopendir(duplicateFD) else {
+            if duplicateFD >= 0 { close(duplicateFD) }
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        defer { closedir(directory) }
+        var names: [String] = []
+        while let entry = readdir(directory) {
+            let name = withUnsafeBytes(of: entry.pointee.d_name) {
+                String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return try operation(names.sorted())
+    }
+
+    private static func openStorage(for url: URL) throws -> Storage {
+        try inProcessInterprocessLock.withLock {
+            try openStorageUnlocked(for: url)
+        }
+    }
+
+    private static func openStorageUnlocked(for url: URL) throws -> Storage {
+        let runDirectory = url.deletingLastPathComponent()
+        let rootDirectory = runDirectory.deletingLastPathComponent()
+        let runName = runDirectory.lastPathComponent
+        let filename = url.lastPathComponent
+        guard !runName.isEmpty, runName != ".", !filename.isEmpty, filename != "." else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let rootFD = open(rootDirectory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        do {
+            if mkdirat(rootFD, runName, mode_t(S_IRWXU)) != 0 && errno != EEXIST {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            let runFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            do {
+                var details = stat()
+                guard fstat(runFD, &details) == 0, details.st_mode & S_IFMT == S_IFDIR else {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
+                let lockName = ".\(filename).lock"
+                let lockFD = openat(runFD, lockName, O_RDWR | O_CREAT | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
+                guard lockFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                do {
+                    var lockDetails = stat()
+                    guard fstat(lockFD, &lockDetails) == 0, lockDetails.st_mode & S_IFMT == S_IFREG,
+                          fchmod(lockFD, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+                        throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                    }
+                    return Storage(
+                        rootDirectoryFD: rootFD,
+                        runDirectoryFD: runFD,
+                        lockFD: lockFD,
+                        runDirectoryName: runName,
+                        journalFilename: filename,
+                        runDirectoryDevice: details.st_dev,
+                        runDirectoryInode: details.st_ino
+                    )
+                } catch {
+                    close(lockFD)
+                    throw error
+                }
+            } catch {
+                close(runFD)
+                throw error
+            }
+        } catch {
+            close(rootFD)
+            throw error
+        }
+    }
+
+    private static func validateRunDirectory(_ storage: Storage) throws {
+        var details = stat()
+        guard fstatat(storage.rootDirectoryFD, storage.runDirectoryName, &details, AT_SYMLINK_NOFOLLOW) == 0,
+              details.st_mode & S_IFMT == S_IFDIR,
+              details.st_dev == storage.runDirectoryDevice,
+              details.st_ino == storage.runDirectoryInode else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+    }
+
+    private struct Storage {
+        let rootDirectoryFD: Int32
+        let runDirectoryFD: Int32
+        let lockFD: Int32
+        let runDirectoryName: String
+        let journalFilename: String
+        let runDirectoryDevice: dev_t
+        let runDirectoryInode: ino_t
     }
 }
 
@@ -407,6 +666,42 @@ private struct RecoveryState: Codable, Equatable {
     var secretArtifactRelativePaths: Set<String> = []
     var buildLock: AppleXcodeBuildLockOwnership?
 
+    init(runID: String) {
+        self.runID = runID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runID, accounts, processGroups, processes, simulatorDevices
+        case pendingCatalystLaunches, secretArtifactRelativePaths, buildLock
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        runID = try container.decode(String.self, forKey: .runID)
+        accounts = try container.decode([RecordedAccount].self, forKey: .accounts)
+        processGroups = try Self.unique(try container.decode([OwnedProcessGroup].self, forKey: .processGroups), codingPath: container.codingPath)
+        processes = try Self.unique(try container.decode([OwnedProcessIdentity].self, forKey: .processes), codingPath: container.codingPath)
+        simulatorDevices = try Self.unique(try container.decode([OwnedSimulatorDevice].self, forKey: .simulatorDevices), codingPath: container.codingPath)
+        pendingCatalystLaunches = try Self.unique(try container.decode([PendingCatalystLaunch].self, forKey: .pendingCatalystLaunches), codingPath: container.codingPath)
+        secretArtifactRelativePaths = try Self.unique(try container.decode([String].self, forKey: .secretArtifactRelativePaths), codingPath: container.codingPath)
+        buildLock = try container.decodeIfPresent(AppleXcodeBuildLockOwnership.self, forKey: .buildLock)
+        guard Set(accounts.map(\.email)).count == accounts.count else {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath, debugDescription: "Duplicate account recovery entry."))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(runID, forKey: .runID)
+        try container.encode(accounts.sorted(by: Self.accountsInOrder), forKey: .accounts)
+        try container.encode(processGroups.sorted(by: Self.processGroupsInOrder), forKey: .processGroups)
+        try container.encode(processes.sorted(by: Self.processesInOrder), forKey: .processes)
+        try container.encode(simulatorDevices.sorted(by: Self.simulatorDevicesInOrder), forKey: .simulatorDevices)
+        try container.encode(pendingCatalystLaunches.sorted(by: Self.launchesInOrder), forKey: .pendingCatalystLaunches)
+        try container.encode(secretArtifactRelativePaths.sorted(), forKey: .secretArtifactRelativePaths)
+        try container.encodeIfPresent(buildLock, forKey: .buildLock)
+    }
+
     var isEmpty: Bool {
         accounts.isEmpty
             && processGroups.isEmpty
@@ -415,6 +710,60 @@ private struct RecoveryState: Codable, Equatable {
             && pendingCatalystLaunches.isEmpty
             && secretArtifactRelativePaths.isEmpty
             && buildLock == nil
+    }
+
+    private static func unique<T: Hashable>(_ values: [T], codingPath: [any CodingKey]) throws -> Set<T> {
+        let set = Set(values)
+        guard set.count == values.count else {
+            throw DecodingError.dataCorrupted(.init(codingPath: codingPath, debugDescription: "Duplicate recovery entry."))
+        }
+        return set
+    }
+
+    private static func accountsInOrder(_ lhs: RecordedAccount, _ rhs: RecordedAccount) -> Bool {
+        if lhs.email != rhs.email { return lhs.email < rhs.email }
+        if lhs.role.rawValue != rhs.role.rawValue { return lhs.role.rawValue < rhs.role.rawValue }
+        return lhs.outcome.rawValue < rhs.outcome.rawValue
+    }
+
+    private static func processesInOrder(_ lhs: OwnedProcessIdentity, _ rhs: OwnedProcessIdentity) -> Bool {
+        if lhs.pid != rhs.pid { return lhs.pid < rhs.pid }
+        if lhs.birthTimeSeconds != rhs.birthTimeSeconds { return lhs.birthTimeSeconds < rhs.birthTimeSeconds }
+        return lhs.birthTimeMicroseconds < rhs.birthTimeMicroseconds
+    }
+
+    private static func processGroupsInOrder(_ lhs: OwnedProcessGroup, _ rhs: OwnedProcessGroup) -> Bool {
+        if lhs.processGroupID != rhs.processGroupID { return lhs.processGroupID < rhs.processGroupID }
+        return processesInOrder(lhs.leader, rhs.leader)
+    }
+
+    private static func simulatorDevicesInOrder(_ lhs: OwnedSimulatorDevice, _ rhs: OwnedSimulatorDevice) -> Bool {
+        if lhs.udid != rhs.udid {
+            switch (lhs.udid, rhs.udid) {
+            case (nil, .some): return true
+            case (.some, nil): return false
+            case let (.some(left), .some(right)): return left < right
+            case (nil, nil): break
+            }
+        }
+        if lhs.name != rhs.name { return lhs.name < rhs.name }
+        if lhs.deviceTypeIdentifier != rhs.deviceTypeIdentifier { return lhs.deviceTypeIdentifier < rhs.deviceTypeIdentifier }
+        return lhs.runtimeIdentifier < rhs.runtimeIdentifier
+    }
+
+    private static func launchesInOrder(_ lhs: PendingCatalystLaunch, _ rhs: PendingCatalystLaunch) -> Bool {
+        if lhs.role.rawValue != rhs.role.rawValue { return lhs.role.rawValue < rhs.role.rawValue }
+        if lhs.kind.rawValue != rhs.kind.rawValue { return lhs.kind.rawValue < rhs.kind.rawValue }
+        if lhs.bundleIdentifier != rhs.bundleIdentifier { return lhs.bundleIdentifier < rhs.bundleIdentifier }
+        let leftBaseline = lhs.baselineIdentities.sorted(by: processesInOrder)
+        let rightBaseline = rhs.baselineIdentities.sorted(by: processesInOrder)
+        if leftBaseline != rightBaseline { return leftBaseline.lexicographicallyPrecedes(rightBaseline, by: processesInOrder) }
+        switch (lhs.registeredIdentity, rhs.registeredIdentity) {
+        case (nil, .some): return true
+        case (.some, nil): return false
+        case let (.some(left), .some(right)): return processesInOrder(left, right)
+        case (nil, nil): return false
+        }
     }
 }
 

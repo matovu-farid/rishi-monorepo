@@ -124,6 +124,182 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         }
     }
 
+    func testJournalReloadsDiskStateBeforeInterleavedCrossInstanceMutations() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        let first = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        let second = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        let process = OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+
+        try first.recordProvisioningAddress("owner@example.test", role: .owner)
+        try second.recordOwnedProcess(process)
+        try first.recordSecretArtifact(relativePath: "secret.xctestrun")
+        try second.recordProvisioningAddress("participant@example.test", role: .participant)
+
+        let state = try readJSONState(at: url)
+        XCTAssertEqual((state["accounts"] as? [[String: Any]])?.count, 2)
+        XCTAssertEqual((state["processes"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((state["secretArtifactRelativePaths"] as? [String])?.sorted(), ["secret.xctestrun"])
+    }
+
+    func testJournalConcurrentInstancesPreserveEveryUniqueMutation() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        let errors = ConcurrentErrorRecorder()
+        let group = DispatchGroup()
+
+        for index in 0..<80 {
+            group.enter()
+            DispatchQueue.global().async {
+                defer { group.leave() }
+                do {
+                    let journal = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+                    try journal.recordOwnedProcess(OwnedProcessIdentity(
+                        pid: Int32(index + 1),
+                        birthTimeSeconds: UInt64(index),
+                        birthTimeMicroseconds: UInt64(index)
+                    ))
+                } catch {
+                    errors.append(error)
+                }
+            }
+        }
+        group.wait()
+
+        XCTAssertTrue(errors.values.isEmpty, "\(errors.values)")
+        let state = try readJSONState(at: url)
+        XCTAssertEqual((state["processes"] as? [[String: Any]])?.count, 80)
+    }
+
+    func testJournalRejectsRunDirectorySwapBeforeMutationOrFinalization() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runDirectory = root.appendingPathComponent("rishi-shared-reading-run")
+        let url = runDirectory.appendingPathComponent("recovery.json")
+        let journal = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        try journal.recordProvisioningAddress("owner@example.test", role: .owner)
+        XCTAssertEqual(try SharedReadingRecoveryJournal.unresolvedArtifact(in: root), url)
+
+        let externalRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: externalRoot) }
+        let sentinel = externalRoot.appendingPathComponent("recovery.json")
+        let sentinelData = Data("{\"external\":true}".utf8)
+        try sentinelData.write(to: sentinel)
+        try FileManager.default.moveItem(at: runDirectory, to: root.appendingPathComponent("parked-run"))
+        try FileManager.default.createSymbolicLink(at: runDirectory, withDestinationURL: externalRoot)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.unresolvedArtifact(in: root))
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal(url: url, runID: "run-1"))
+        XCTAssertThrowsError(try journal.recordOwnedProcess(OwnedProcessIdentity(
+            pid: 42,
+            birthTimeSeconds: 1,
+            birthTimeMicroseconds: 2
+        )))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertEqual(try Data(contentsOf: sentinel), sentinelData)
+    }
+
+    func testJournalRejectsRunDirectorySwapBeforeFinalRemoval() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runDirectory = root.appendingPathComponent("rishi-shared-reading-run")
+        let url = runDirectory.appendingPathComponent("recovery.json")
+        let journal = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        try journal.recordProvisioningAddress("owner@example.test", role: .owner)
+        try journal.recordVerifiedDeletion("owner@example.test")
+
+        let externalRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: externalRoot) }
+        let sentinel = externalRoot.appendingPathComponent("recovery.json")
+        let sentinelData = Data("{\"external\":true}".utf8)
+        try sentinelData.write(to: sentinel)
+        try FileManager.default.moveItem(at: runDirectory, to: root.appendingPathComponent("parked-run"))
+        try FileManager.default.createSymbolicLink(at: runDirectory, withDestinationURL: externalRoot)
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertEqual(try Data(contentsOf: sentinel), sentinelData)
+    }
+
+    func testJournalEncodesLogicallyIdenticalSetStateAsIdenticalBytes() throws {
+        let firstRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: firstRoot) }
+        let secondRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: secondRoot) }
+        let first = try SharedReadingRecoveryJournal(
+            url: firstRoot.appendingPathComponent("rishi-shared-reading-run/recovery.json"),
+            runID: "run-1"
+        )
+        let second = try SharedReadingRecoveryJournal(
+            url: secondRoot.appendingPathComponent("rishi-shared-reading-run/recovery.json"),
+            runID: "run-1"
+        )
+        let processes = [
+            OwnedProcessIdentity(pid: 43, birthTimeSeconds: 3, birthTimeMicroseconds: 4),
+            OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2),
+        ]
+        let groups = processes.map { OwnedProcessGroup(processGroupID: $0.pid, leader: $0) }
+        let devices = [
+            OwnedSimulatorDevice(udid: "simulator-b", name: "B", deviceTypeIdentifier: "type", runtimeIdentifier: "runtime"),
+            OwnedSimulatorDevice(udid: "simulator-a", name: "A", deviceTypeIdentifier: "type", runtimeIdentifier: "runtime"),
+        ]
+        let launches = [
+            PendingCatalystLaunch(role: .participant, kind: .app, bundleIdentifier: "bundle-b", baselineIdentities: [processes[0], processes[1]], registeredIdentity: nil),
+            PendingCatalystLaunch(role: .owner, kind: .runner, bundleIdentifier: "bundle-a", baselineIdentities: [processes[1], processes[0]], registeredIdentity: processes[1]),
+        ]
+
+        for index in processes.indices {
+            try first.recordOwnedProcess(processes[index])
+            try first.recordOwnedProcessGroup(groups[index])
+            try first.recordOwnedSimulatorDevice(devices[index])
+            try first.recordCatalystLaunchIntent(launches[index])
+            try first.recordSecretArtifact(relativePath: "secret-\(index).xctestrun")
+        }
+        for index in processes.indices.reversed() {
+            try second.recordOwnedProcess(processes[index])
+            try second.recordOwnedProcessGroup(groups[index])
+            try second.recordOwnedSimulatorDevice(devices[index])
+            try second.recordCatalystLaunchIntent(launches[index])
+            try second.recordSecretArtifact(relativePath: "secret-\(index).xctestrun")
+        }
+
+        XCTAssertEqual(try Data(contentsOf: first.url), try Data(contentsOf: second.url))
+    }
+
+    func testJournalConcurrentReadersNeverObservePartialJSONDuringAtomicWrites() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = try SharedReadingRecoveryJournal(
+            url: root.appendingPathComponent("rishi-shared-reading-run/recovery.json"),
+            runID: "run-1"
+        )
+        try journal.recordProvisioningAddress("initial@example.test", role: .owner)
+        let readerDone = DispatchSemaphore(value: 0)
+        let writing = LockedBoolean(true)
+        let errors = ConcurrentErrorRecorder()
+
+        DispatchQueue.global().async {
+            while writing.value {
+                do {
+                    let data = try Data(contentsOf: journal.url)
+                    if !data.isEmpty {
+                        _ = try JSONSerialization.jsonObject(with: data)
+                    }
+                } catch {
+                    errors.append(error)
+                }
+            }
+            readerDone.signal()
+        }
+        for index in 0..<256 {
+            try journal.recordProvisioningAddress("writer-\(index)@example.test", role: .participant)
+        }
+        writing.value = false
+        XCTAssertEqual(readerDone.wait(timeout: .now() + 5), .success)
+        XCTAssertTrue(errors.values.isEmpty)
+    }
+
     func testJournalFinalizesOnlyAfterExactVerifiedProcessGroupAbsence() throws {
         let journal = try makeJournal()
         let group = OwnedProcessGroup(
@@ -389,5 +565,34 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         ]
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]).write(to: url)
+    }
+
+    private func readJSONState(at url: URL) throws -> [String: Any] {
+        try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+}
+
+private final class ConcurrentErrorRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [Error] = []
+
+    var values: [Error] { lock.withLock { storedValues } }
+
+    func append(_ error: Error) {
+        lock.withLock { storedValues.append(error) }
+    }
+}
+
+private final class LockedBoolean: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Bool
+
+    init(_ value: Bool) {
+        storedValue = value
+    }
+
+    var value: Bool {
+        get { lock.withLock { storedValue } }
+        set { lock.withLock { storedValue = newValue } }
     }
 }
