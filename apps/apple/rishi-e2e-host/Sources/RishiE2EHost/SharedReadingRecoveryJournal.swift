@@ -117,10 +117,14 @@ public enum SharedReadingRecoveryJournalError: Error, Equatable {
     case missingRecordedProcess
     case missingRecordedSimulatorDevice
     case missingCatalystLaunchIntent
+    case ambiguousCatalystLaunchIntent
+    case conflictingCatalystLaunchIntent
+    case catalystLaunchAlreadyRegistered
     case missingRecordedSecretArtifact
     case missingRecordedBuildLock
     case invalidRealizedSimulatorDevice
     case invalidSecretArtifactPath
+    case unsafeRecoveryArtifact
     case cleanupIncomplete
     case journalRemovalFailed
     case permissionsNotApplied
@@ -227,7 +231,21 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     }
 
     public func recordCatalystLaunchIntent(_ intent: PendingCatalystLaunch) throws {
-        try mutate { $0.pendingCatalystLaunches.insert(intent) }
+        try mutate { state in
+            let matching = state.pendingCatalystLaunches.filter {
+                $0.role == intent.role && $0.kind == intent.kind
+            }
+            guard matching.count <= 1 else {
+                throw SharedReadingRecoveryJournalError.ambiguousCatalystLaunchIntent
+            }
+            if let existing = matching.first {
+                guard existing == intent else {
+                    throw SharedReadingRecoveryJournalError.conflictingCatalystLaunchIntent
+                }
+                return
+            }
+            state.pendingCatalystLaunches.insert(intent)
+        }
     }
 
     public func recordCatalystRegisteredIdentity(
@@ -236,10 +254,20 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         kind: PendingCatalystLaunch.Kind
     ) throws {
         try mutate { state in
-            guard let intent = state.pendingCatalystLaunches.first(where: {
-                $0.role == role && $0.kind == kind && $0.registeredIdentity == nil
-            }) else {
+            let matching = state.pendingCatalystLaunches.filter {
+                $0.role == role && $0.kind == kind
+            }
+            guard matching.count == 1 else {
+                if matching.isEmpty {
+                    throw SharedReadingRecoveryJournalError.missingCatalystLaunchIntent
+                }
+                throw SharedReadingRecoveryJournalError.ambiguousCatalystLaunchIntent
+            }
+            guard let intent = matching.first else {
                 throw SharedReadingRecoveryJournalError.missingCatalystLaunchIntent
+            }
+            guard intent.registeredIdentity == nil else {
+                throw SharedReadingRecoveryJournalError.catalystLaunchAlreadyRegistered
             }
             state.pendingCatalystLaunches.remove(intent)
             state.pendingCatalystLaunches.insert(PendingCatalystLaunch(
@@ -305,16 +333,20 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         guard FileManager.default.fileExists(atPath: root.path) else { return nil }
         let children = try FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
+            includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
 
         for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where child.lastPathComponent.hasPrefix("rishi-shared-reading-") {
-            guard try child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
+            guard try Self.fileKind(at: child) == S_IFDIR else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
             for name in ["recovery.json", "manifest.json"] {
                 let enumeratedCandidate = child.appendingPathComponent(name)
-                guard FileManager.default.fileExists(atPath: enumeratedCandidate.path) else { continue }
-                guard try enumeratedCandidate.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
+                guard let kind = try Self.fileKind(at: enumeratedCandidate) else { continue }
+                guard kind == S_IFREG else {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
                 return root.appendingPathComponent(child.lastPathComponent).appendingPathComponent(name)
             }
         }
@@ -353,6 +385,15 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         !path.isEmpty
             && !path.hasPrefix("/")
             && !path.split(separator: "/").contains("..")
+    }
+
+    private static func fileKind(at url: URL) throws -> mode_t? {
+        var details = stat()
+        guard lstat(url.path, &details) == 0 else {
+            if errno == ENOENT { return nil }
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        return details.st_mode & S_IFMT
     }
 }
 

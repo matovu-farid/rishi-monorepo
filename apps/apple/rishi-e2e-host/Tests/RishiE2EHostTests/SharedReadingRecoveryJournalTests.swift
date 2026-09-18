@@ -55,6 +55,58 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertThrowsError(try SharedReadingRecoveryJournal(url: url, runID: "run-1"))
     }
 
+    func testUnresolvedArtifactRejectsSymlinkedRunDirectoryWithoutTouchingExternalData() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let externalRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: externalRoot) }
+        let externalArtifact = externalRoot.appendingPathComponent("recovery.json")
+        let externalData = Data("{\"external\":true}".utf8)
+        try externalData.write(to: externalArtifact)
+        let symlink = root.appendingPathComponent("rishi-shared-reading-link")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: externalRoot)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.unresolvedArtifact(in: root))
+        XCTAssertEqual(try Data(contentsOf: externalArtifact), externalData)
+    }
+
+    func testUnresolvedArtifactRejectsSymlinkedCandidateWithoutTouchingExternalData() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let externalRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: externalRoot) }
+        let externalArtifact = externalRoot.appendingPathComponent("outside.json")
+        let externalData = Data("{\"external\":true}".utf8)
+        try externalData.write(to: externalArtifact)
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-run")
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: runRoot.appendingPathComponent("recovery.json"),
+            withDestinationURL: externalArtifact
+        )
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.unresolvedArtifact(in: root))
+        XCTAssertEqual(try Data(contentsOf: externalArtifact), externalData)
+    }
+
+    func testUnresolvedArtifactRejectsUnexpectedMatchingChildAndCandidateTypes() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("not a directory".utf8).write(to: root.appendingPathComponent("rishi-shared-reading-file"))
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.unresolvedArtifact(in: root))
+
+        let candidateRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: candidateRoot) }
+        let runRoot = candidateRoot.appendingPathComponent("rishi-shared-reading-run")
+        try FileManager.default.createDirectory(
+            at: runRoot.appendingPathComponent("recovery.json"),
+            withIntermediateDirectories: true
+        )
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.unresolvedArtifact(in: candidateRoot))
+    }
+
     func testJournalUpdateNeverLeavesPartialJSON() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -170,6 +222,73 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         try journal.finalizeAfterSuccessfulCleanup()
     }
 
+    func testJournalRejectsConflictingCatalystLaunchIntentAndRetainsOriginal() throws {
+        let journal = try makeJournal()
+        let original = PendingCatalystLaunch(
+            role: .owner,
+            kind: .runner,
+            bundleIdentifier: "com.example.owner",
+            baselineIdentities: [OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)],
+            registeredIdentity: nil
+        )
+        let conflicting = PendingCatalystLaunch(
+            role: original.role,
+            kind: original.kind,
+            bundleIdentifier: "com.example.other",
+            baselineIdentities: original.baselineIdentities,
+            registeredIdentity: nil
+        )
+        let registered = OwnedProcessIdentity(pid: 43, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let registeredOriginal = PendingCatalystLaunch(
+            role: original.role,
+            kind: original.kind,
+            bundleIdentifier: original.bundleIdentifier,
+            baselineIdentities: original.baselineIdentities,
+            registeredIdentity: registered
+        )
+        try journal.recordCatalystLaunchIntent(original)
+        try journal.recordCatalystLaunchIntent(original)
+
+        XCTAssertThrowsError(try journal.recordCatalystLaunchIntent(conflicting))
+        try journal.recordCatalystRegisteredIdentity(registered, role: original.role, kind: original.kind)
+        XCTAssertThrowsError(try journal.recordVerifiedCatalystLaunchAbsence(original))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedCatalystLaunchAbsence(registeredOriginal)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testJournalRefusesToRegisterAmbiguousPersistedCatalystLaunchesWithoutClearingEither() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        let first = PendingCatalystLaunch(
+            role: .owner,
+            kind: .app,
+            bundleIdentifier: "com.example.one",
+            baselineIdentities: [],
+            registeredIdentity: nil
+        )
+        let second = PendingCatalystLaunch(
+            role: first.role,
+            kind: first.kind,
+            bundleIdentifier: "com.example.two",
+            baselineIdentities: [],
+            registeredIdentity: nil
+        )
+        try writeRecoveryState(at: url, pendingLaunches: [first, second])
+        let journal = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+
+        XCTAssertThrowsError(try journal.recordCatalystRegisteredIdentity(
+            OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2),
+            role: .owner,
+            kind: .app
+        ))
+        try journal.recordVerifiedCatalystLaunchAbsence(first)
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedCatalystLaunchAbsence(second)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
     func testJournalFinalizesOnlyAfterExactVerifiedSecretArtifactDeletion() throws {
         let journal = try makeJournal()
         try journal.recordSecretArtifact(relativePath: "credentials.xctestrun")
@@ -251,5 +370,24 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
     private func writeArtifact(at url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: url)
+    }
+
+    private func writeRecoveryState(at url: URL, pendingLaunches: [PendingCatalystLaunch]) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let launchData = try encoder.encode(pendingLaunches)
+        let launches = try JSONSerialization.jsonObject(with: launchData)
+        let state: [String: Any] = [
+            "runID": "run-1",
+            "accounts": [],
+            "processGroups": [],
+            "processes": [],
+            "simulatorDevices": [],
+            "pendingCatalystLaunches": launches,
+            "secretArtifactRelativePaths": [],
+            "buildLock": NSNull(),
+        ]
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]).write(to: url)
     }
 }
