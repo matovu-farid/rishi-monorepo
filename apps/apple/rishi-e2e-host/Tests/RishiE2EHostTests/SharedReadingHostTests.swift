@@ -903,7 +903,25 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
     }
 
-    func testCLIProductionSourceCreatesDurableJournalAndDelegatesLockOwnershipToHost() throws {
+    func testCanonicalLiveXCTestDelegatesToSharedRunnerAndWritesSortedPrivateEvidence() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot.appendingPathComponent("Tests/RishiE2EHostTests/SharedReadingLiveEndToEndTests.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("try await SharedReadingLiveRun.execute()"))
+        XCTAssertTrue(source.contains("XCTAssertFalse(evidence.runID.isEmpty)"))
+        XCTAssertTrue(source.contains("XCTAssertGreaterThanOrEqual(evidence.participantProgressSequence, 2)"))
+        XCTAssertTrue(source.contains("XCTAssertEqual(evidence.deletedAccountCount, 2)"))
+        XCTAssertTrue(source.contains("encoder.outputFormatting = [.sortedKeys]"))
+        XCTAssertTrue(source.contains("RISHI_E2E_EVIDENCE "))
+        XCTAssertTrue(source.contains(".posixPermissions: 0o600"))
+        XCTAssertFalse(source.contains("XCTFail("))
+    }
+
+    func testCLIOnlyRoutesToSharedRunnerAndCompleteRecovery() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -911,15 +929,40 @@ final class SharedReadingHostTests: XCTestCase {
         let sourceURL = packageRoot.appendingPathComponent("Sources/RishiE2EHostCLI/main.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("SharedReadingRecoveryJournal("))
-        XCTAssertTrue(source.contains("SharedReadingHost.withPreparedBuildLockForHost("))
-        XCTAssertTrue(source.contains("preparedBuildLock: preparedBuildLock"))
-        XCTAssertFalse(source.contains("keepBuildLockForRecovery"))
-        XCTAssertFalse(source.contains("let buildLock = try AppleXcodeBuildLock.acquire()"))
+        XCTAssertTrue(source.contains("try await SharedReadingLiveRun.preflight(environment: environment)"))
+        XCTAssertTrue(source.contains("try await SharedReadingLiveRun.execute(environment: environment)"))
+        XCTAssertTrue(source.contains("try await SharedReadingRecoveryJournal.recover("))
+        XCTAssertTrue(source.contains("configuredBuildLockURL: configuration.buildLockURL"))
+        XCTAssertFalse(source.contains("RendezvousRelayServer("))
+        XCTAssertFalse(source.contains("XCTestPeerProcessRunner("))
+        XCTAssertFalse(source.contains("SharedReadingHost.withPreparedBuildLockForHost("))
+        XCTAssertFalse(source.contains("installRunCancellationSignals"))
+    }
 
-        let prepareIndex = try XCTUnwrap(source.range(of: "SharedReadingHost.withPreparedBuildLockForHost(")?.lowerBound)
-        let relayStartIndex = try XCTUnwrap(source.range(of: "let relayConfiguration = try relay.start()")?.lowerBound)
-        XCTAssertLessThan(prepareIndex, relayStartIndex)
+    func testCLIRecoveryConfigurationDoesNotParseLiveScenarioSettings() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot.appendingPathComponent("Sources/RishiE2EHostCLI/main.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private static func recoveryConfiguration(")?.lowerBound)
+        let end = try XCTUnwrap(source.range(of: "private static func printEvidence(")?.lowerBound)
+        let recoverySource = String(source[start..<end])
+
+        for required in [
+            "RISHI_E2E_ALLOW_NETWORK", "RISHI_E2E_API_BASE_URL",
+            "RISHI_E2E_TEST_AUTH_SECRET", "RISHI_E2E_TEST_DOMAIN",
+            "RISHI_E2E_TEMP_ROOT", "RISHI_APPLE_XCODE_BUILD_LOCK_PATH",
+        ] {
+            XCTAssertTrue(recoverySource.contains(required), "missing recovery setting \(required)")
+        }
+        for forbidden in [
+            "RISHI_E2E_RUN_LIVE", "RISHI_E2E_ALLOW_SIMULATOR_RESET",
+            "RISHI_E2E_PROJECT", "RISHI_E2E_FIXTURE", "RISHI_E2E_IPHONE17_UDID",
+        ] {
+            XCTAssertFalse(recoverySource.contains(forbidden), "recovery must not parse \(forbidden)")
+        }
     }
 
     func testPreparedBuildLockFactoryIsScopedAndReturnsOnlyTheConsumingHost() throws {
