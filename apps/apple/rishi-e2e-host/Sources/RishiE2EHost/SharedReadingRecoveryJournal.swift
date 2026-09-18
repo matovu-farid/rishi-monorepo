@@ -174,24 +174,50 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     private let runDirectoryDevice: dev_t
     private let runDirectoryInode: ino_t
     private var state: RecoveryState
-    private var hasObservedJournal: Bool
     private var finalized = false
 
-    public init(url: URL, runID: String) throws {
-        let storage = try Self.openStorage(for: url)
+    /// Owns creation of the run directory containing `url`.
+    ///
+    /// Callers may create the parent root, but must not precreate this exact run directory.
+    public convenience init(url: URL, runID: String) throws {
+        try self.init(url: url, runID: runID, beforeInitialDirectoryLock: nil)
+    }
+
+#if DEBUG
+    convenience init(
+        url: URL,
+        runID: String,
+        beforeInitialDirectoryLockForTesting: @escaping () -> Void
+    ) throws {
+        try self.init(url: url, runID: runID, beforeInitialDirectoryLock: beforeInitialDirectoryLockForTesting)
+    }
+#endif
+
+    private init(
+        url: URL,
+        runID: String,
+        beforeInitialDirectoryLock: (() -> Void)?
+    ) throws {
+        let storage = try Self.openStorage(for: url, runID: runID)
         do {
-            let (decoded, hasObservedJournal) = try Self.withInterprocessLock(storage.runDirectoryFD) {
+            beforeInitialDirectoryLock?()
+            let (decoded, finalized) = try Self.withInterprocessLock(storage.runDirectoryFD) {
                 try Self.validateRunDirectory(storage)
                 let hasJournal = try Self.fileKind(
                     at: storage.journalFilename,
                     directoryFD: storage.runDirectoryFD
                 ) != nil
-                let state = try Self.loadState(
-                    from: storage.runDirectoryFD,
-                    filename: storage.journalFilename,
-                    runID: runID
-                )
-                return (state, hasJournal)
+                if hasJournal {
+                    return (
+                        try Self.loadState(
+                            from: storage.runDirectoryFD,
+                            filename: storage.journalFilename,
+                            runID: runID
+                        ),
+                        false
+                    )
+                }
+                return (RecoveryState(runID: runID), true)
             }
             self.url = url
             self.rootDirectoryFD = storage.rootDirectoryFD
@@ -201,7 +227,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             self.runDirectoryDevice = storage.runDirectoryDevice
             self.runDirectoryInode = storage.runDirectoryInode
             self.state = decoded
-            self.hasObservedJournal = hasObservedJournal
+            self.finalized = finalized
         } catch {
             close(storage.runDirectoryFD)
             close(storage.rootDirectoryFD)
@@ -442,14 +468,14 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             try Self.withInterprocessLock(runDirectoryFD) {
                 try validateRunDirectory()
                 let journalExists = try Self.fileKind(at: journalFilename, directoryFD: runDirectoryFD) != nil
-                guard journalExists || !hasObservedJournal else {
+                guard journalExists else {
+                    finalized = true
                     throw SharedReadingRecoveryJournalError.journalFinalized
                 }
                 var candidate = try Self.loadState(from: runDirectoryFD, filename: journalFilename, runID: state.runID)
                 try update(&candidate)
                 try Self.writeAtomically(candidate, to: runDirectoryFD, filename: journalFilename)
                 state = candidate
-                hasObservedJournal = true
             }
         }
     }
@@ -606,13 +632,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         return try operation(names.sorted())
     }
 
-    private static func openStorage(for url: URL) throws -> Storage {
-        try inProcessInterprocessLock.withLock {
-            try openStorageUnlocked(for: url)
-        }
-    }
-
-    private static func openStorageUnlocked(for url: URL) throws -> Storage {
+    private static func openStorage(for url: URL, runID: String) throws -> Storage {
         let runDirectory = url.deletingLastPathComponent()
         let rootDirectory = runDirectory.deletingLastPathComponent()
         let runName = runDirectory.lastPathComponent
@@ -623,32 +643,59 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         let rootFD = open(rootDirectory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
         do {
-            if mkdirat(rootFD, runName, mode_t(S_IRWXU)) != 0 && errno != EEXIST {
-                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
-            }
-            let runFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-            do {
-                var details = stat()
-                guard fstat(runFD, &details) == 0, details.st_mode & S_IFMT == S_IFDIR else {
+            return try Self.withInterprocessLock(rootFD) {
+                let didCreateRunDirectory: Bool
+                if mkdirat(rootFD, runName, mode_t(S_IRWXU)) == 0 {
+                    didCreateRunDirectory = true
+                } else if errno == EEXIST {
+                    didCreateRunDirectory = false
+                } else {
                     throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
                 }
-                return Storage(
-                    rootDirectoryFD: rootFD,
-                    runDirectoryFD: runFD,
-                    runDirectoryName: runName,
-                    journalFilename: filename,
-                    runDirectoryDevice: details.st_dev,
-                    runDirectoryInode: details.st_ino
-                )
-            } catch {
-                close(runFD)
-                throw error
+                let runFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                do {
+                    var details = stat()
+                    guard fstat(runFD, &details) == 0, details.st_mode & S_IFMT == S_IFDIR else {
+                        throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                    }
+                    if didCreateRunDirectory {
+                        try Self.withDirectoryLockAlreadySerialized(runFD) {
+                            try Self.writeAtomically(
+                                RecoveryState(runID: runID),
+                                to: runFD,
+                                filename: filename
+                            )
+                        }
+                    }
+                    return Storage(
+                        rootDirectoryFD: rootFD,
+                        runDirectoryFD: runFD,
+                        runDirectoryName: runName,
+                        journalFilename: filename,
+                        runDirectoryDevice: details.st_dev,
+                        runDirectoryInode: details.st_ino
+                    )
+                } catch {
+                    close(runFD)
+                    throw error
+                }
             }
         } catch {
             close(rootFD)
             throw error
         }
+    }
+
+    private static func withDirectoryLockAlreadySerialized<T>(
+        _ directoryFD: Int32,
+        _ operation: () throws -> T
+    ) throws -> T {
+        guard flock(directoryFD, LOCK_EX) == 0 else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        defer { _ = flock(directoryFD, LOCK_UN) }
+        return try operation()
     }
 
     private static func validateRunDirectory(_ storage: Storage) throws {

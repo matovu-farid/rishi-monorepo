@@ -342,6 +342,114 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
+    func testObserverOpeningFinalizedRunDirectoryCannotRecreateJournal() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        let creator = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        try creator.recordProvisioningAddress("owner@example.test", role: .owner)
+        try creator.recordVerifiedDeletion("owner@example.test")
+        try creator.finalizeAfterSuccessfulCleanup()
+
+        let observer = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        XCTAssertThrowsError(try observer.recordOwnedProcess(OwnedProcessIdentity(
+            pid: 42,
+            birthTimeSeconds: 1,
+            birthTimeMicroseconds: 2
+        )))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testBlockedObserverDoesNotRecreateJournalAfterCreatorFinalizes() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        let creator = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        try creator.recordProvisioningAddress("owner@example.test", role: .owner)
+        try creator.recordVerifiedDeletion("owner@example.test")
+
+        let observerOpenedRunDirectory = DispatchSemaphore(value: 0)
+        let allowObserverToLock = DispatchSemaphore(value: 0)
+        let observerFinished = DispatchSemaphore(value: 0)
+        let initializationErrors = ConcurrentErrorRecorder()
+        let mutationErrors = ConcurrentErrorRecorder()
+        DispatchQueue.global().async {
+            defer { observerFinished.signal() }
+            do {
+                let observer = try SharedReadingRecoveryJournal(
+                    url: url,
+                    runID: "run-1",
+                    beforeInitialDirectoryLockForTesting: {
+                        observerOpenedRunDirectory.signal()
+                        allowObserverToLock.wait()
+                    }
+                )
+                do {
+                    try observer.recordOwnedProcess(OwnedProcessIdentity(
+                        pid: 42,
+                        birthTimeSeconds: 1,
+                        birthTimeMicroseconds: 2
+                    ))
+                } catch {
+                    mutationErrors.append(error)
+                }
+            } catch {
+                initializationErrors.append(error)
+            }
+        }
+
+        XCTAssertEqual(observerOpenedRunDirectory.wait(timeout: .now() + 5), .success)
+        try creator.finalizeAfterSuccessfulCleanup()
+        allowObserverToLock.signal()
+        XCTAssertEqual(observerFinished.wait(timeout: .now() + 5), .success)
+
+        XCTAssertTrue(initializationErrors.values.isEmpty, "\(initializationErrors.values)")
+        XCTAssertEqual(mutationErrors.values.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testObserverLoadsCreatorJournalWhenCreatorWritesBeforeObserverLocks() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        let creator = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        let observerOpenedRunDirectory = DispatchSemaphore(value: 0)
+        let allowObserverToLock = DispatchSemaphore(value: 0)
+        let observerFinished = DispatchSemaphore(value: 0)
+        let errors = ConcurrentErrorRecorder()
+
+        DispatchQueue.global().async {
+            defer { observerFinished.signal() }
+            do {
+                let observer = try SharedReadingRecoveryJournal(
+                    url: url,
+                    runID: "run-1",
+                    beforeInitialDirectoryLockForTesting: {
+                        observerOpenedRunDirectory.signal()
+                        allowObserverToLock.wait()
+                    }
+                )
+                try observer.recordOwnedProcess(OwnedProcessIdentity(
+                    pid: 42,
+                    birthTimeSeconds: 1,
+                    birthTimeMicroseconds: 2
+                ))
+            } catch {
+                errors.append(error)
+            }
+        }
+
+        XCTAssertEqual(observerOpenedRunDirectory.wait(timeout: .now() + 5), .success)
+        try creator.recordProvisioningAddress("owner@example.test", role: .owner)
+        allowObserverToLock.signal()
+        XCTAssertEqual(observerFinished.wait(timeout: .now() + 5), .success)
+
+        XCTAssertTrue(errors.values.isEmpty, "\(errors.values)")
+        let state = try readJSONState(at: url)
+        XCTAssertEqual((state["accounts"] as? [[String: Any]])?.map { $0["email"] as? String }, ["owner@example.test"])
+        XCTAssertEqual((state["processes"] as? [[String: Any]])?.count, 1)
+    }
+
     func testOversizedSparseRecoveryArtifactFailsClosed() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
