@@ -810,8 +810,14 @@ struct RecoveryArtifactValidation: Sendable {
     let appBundleIdentifier: String
 }
 
+struct RecoveryArtifactFileIdentity: Sendable, Equatable {
+    let device: dev_t
+    let inode: ino_t
+}
+
 struct RecoveryArtifact: Sendable {
     let url: URL
+    let fileIdentity: RecoveryArtifactFileIdentity
     let runID: String
     let accounts: [RecordedAccount]
     let processGroups: Set<OwnedProcessGroup>
@@ -838,6 +844,11 @@ struct RecoveryOperations: Sendable {
 private struct RecoveryTreeBudget {
     var entries = 0
     var bytes: UInt64 = 0
+}
+
+private struct RecoveryArtifactRead {
+    let data: Data
+    let identity: RecoveryArtifactFileIdentity
 }
 
 private struct RecoveryTreeNode {
@@ -923,7 +934,8 @@ extension SharedReadingRecoveryJournal {
                 try finalizeProductionArtifactAndBuildLock(
                     at: url,
                     temporaryRoot: temporaryRoot,
-                    buildLock: buildLock
+                    buildLock: buildLock,
+                    expectedArtifactIdentity: artifact.fileIdentity
                 )
             }
         )
@@ -941,7 +953,8 @@ extension SharedReadingRecoveryJournal {
         validation: RecoveryArtifactValidation
     ) throws -> RecoveryArtifact {
         do {
-            let data = try readRecoveryArtifactData(at: artifactURL, temporaryRoot: temporaryRoot)
+            let read = try readRecoveryArtifactData(at: artifactURL, temporaryRoot: temporaryRoot)
+            let data = read.data
             guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw SharedReadingRecoveryJournalError.malformedArtifact
             }
@@ -967,6 +980,7 @@ extension SharedReadingRecoveryJournal {
                 artifact = try normalizedJournal(
                     state,
                     at: artifactURL,
+                    fileIdentity: read.identity,
                     configuredBuildLockURL: configuredBuildLockURL,
                     validation: validation
                 )
@@ -980,6 +994,7 @@ extension SharedReadingRecoveryJournal {
                         RecordedAccount(email: manifest.participantEmail, role: .participant, outcome: .recoverable),
                     ],
                     at: artifactURL,
+                    fileIdentity: read.identity,
                     validation: validation
                 )
             } else if keys == persistedKeys {
@@ -994,6 +1009,7 @@ extension SharedReadingRecoveryJournal {
                         RecordedAccount(email: manifest.participant.email, role: manifest.participant.role, outcome: .recoverable),
                     ],
                     at: artifactURL,
+                    fileIdentity: read.identity,
                     validation: validation
                 )
             } else {
@@ -1106,8 +1122,8 @@ extension SharedReadingRecoveryJournal {
         at artifactURL: URL,
         temporaryRoot: URL
     ) throws -> Set<String> {
-        let data = try readRecoveryArtifactData(at: artifactURL, temporaryRoot: temporaryRoot)
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let read = try readRecoveryArtifactData(at: artifactURL, temporaryRoot: temporaryRoot)
+        guard let object = try JSONSerialization.jsonObject(with: read.data) as? [String: Any],
               let devices = object["simulatorDevices"] as? [[String: Any]] else {
             return []
         }
@@ -1481,6 +1497,7 @@ extension SharedReadingRecoveryJournal {
         at artifactURL: URL,
         temporaryRoot: URL,
         buildLock: AppleXcodeBuildLockOwnership?,
+        expectedArtifactIdentity: RecoveryArtifactFileIdentity? = nil,
         afterBuildLockReconciliation: () throws -> Void = {},
         removeRunDirectory: (Int32, String) throws -> Void = { rootFD, name in
             guard unlinkat(rootFD, name, AT_REMOVEDIR) == 0 else {
@@ -1532,21 +1549,31 @@ extension SharedReadingRecoveryJournal {
 
                 let artifactFD = openat(runFD, filename, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
                 guard artifactFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                defer { close(artifactFD) }
                 var artifactDetails = stat()
+                var namedArtifactDetails = stat()
                 let rawData: Data
-                do {
-                    guard fstat(artifactFD, &artifactDetails) == 0,
-                          artifactDetails.st_mode & S_IFMT == S_IFREG,
-                          artifactDetails.st_size >= 0,
-                          artifactDetails.st_size <= off_t(maximumEncodedJournalBytes) else {
-                        throw SharedReadingRecoveryJournalError.malformedArtifact
-                    }
-                    rawData = try readAll(from: artifactFD, maximumBytes: maximumEncodedJournalBytes)
-                } catch {
-                    close(artifactFD)
-                    throw error
+                guard fstat(artifactFD, &artifactDetails) == 0,
+                      fstatat(runFD, filename, &namedArtifactDetails, AT_SYMLINK_NOFOLLOW) == 0,
+                      artifactDetails.st_mode & S_IFMT == S_IFREG,
+                      namedArtifactDetails.st_mode & S_IFMT == S_IFREG,
+                      artifactDetails.st_nlink == 1,
+                      namedArtifactDetails.st_nlink == 1,
+                      artifactDetails.st_dev == namedArtifactDetails.st_dev,
+                      artifactDetails.st_ino == namedArtifactDetails.st_ino,
+                      artifactDetails.st_size >= 0,
+                      artifactDetails.st_size <= off_t(maximumEncodedJournalBytes) else {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
                 }
-                close(artifactFD)
+                let artifactIdentity = RecoveryArtifactFileIdentity(
+                    device: artifactDetails.st_dev,
+                    inode: artifactDetails.st_ino
+                )
+                if let expectedArtifactIdentity,
+                   expectedArtifactIdentity != artifactIdentity {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
+                rawData = try readAll(from: artifactFD, maximumBytes: maximumEncodedJournalBytes)
 
                 var runDirectoryRemoved = false
                 do {
@@ -1565,7 +1592,19 @@ extension SharedReadingRecoveryJournal {
                             runDevice: runDetails.st_dev
                         )
                     }
+                    var finalOpenedDetails = stat()
+                    var finalNamedDetails = stat()
                     guard fsync(runFD) == 0,
+                          fstat(artifactFD, &finalOpenedDetails) == 0,
+                          fstatat(runFD, filename, &finalNamedDetails, AT_SYMLINK_NOFOLLOW) == 0,
+                          finalOpenedDetails.st_mode & S_IFMT == S_IFREG,
+                          finalNamedDetails.st_mode & S_IFMT == S_IFREG,
+                          finalOpenedDetails.st_nlink == 1,
+                          finalNamedDetails.st_nlink == 1,
+                          finalOpenedDetails.st_dev == artifactIdentity.device,
+                          finalOpenedDetails.st_ino == artifactIdentity.inode,
+                          finalNamedDetails.st_dev == artifactIdentity.device,
+                          finalNamedDetails.st_ino == artifactIdentity.inode,
                           unlinkat(runFD, filename, 0) == 0,
                           fsync(runFD) == 0,
                           try withDirectoryEntries(runFD, { $0 }).isEmpty else {
@@ -1645,7 +1684,10 @@ extension SharedReadingRecoveryJournal {
         }
     }
 
-    private static func readRecoveryArtifactData(at artifactURL: URL, temporaryRoot: URL) throws -> Data {
+    private static func readRecoveryArtifactData(
+        at artifactURL: URL,
+        temporaryRoot: URL
+    ) throws -> RecoveryArtifactRead {
         let root = temporaryRoot.standardizedFileURL
         let runDirectory = artifactURL.deletingLastPathComponent().standardizedFileURL
         guard runDirectory.deletingLastPathComponent().path == root.path,
@@ -1667,13 +1709,23 @@ extension SharedReadingRecoveryJournal {
         guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
         defer { close(fileFD) }
         var details = stat()
+        var namedDetails = stat()
         guard fstat(fileFD, &details) == 0,
+              fstatat(runFD, artifactURL.lastPathComponent, &namedDetails, AT_SYMLINK_NOFOLLOW) == 0,
               details.st_mode & S_IFMT == S_IFREG,
+              namedDetails.st_mode & S_IFMT == S_IFREG,
+              details.st_nlink == 1,
+              namedDetails.st_nlink == 1,
+              details.st_dev == namedDetails.st_dev,
+              details.st_ino == namedDetails.st_ino,
               details.st_size >= 0,
               details.st_size <= off_t(maximumEncodedJournalBytes) else {
-            throw SharedReadingRecoveryJournalError.malformedArtifact
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
-        return try readAll(from: fileFD, maximumBytes: maximumEncodedJournalBytes)
+        return RecoveryArtifactRead(
+            data: try readAll(from: fileFD, maximumBytes: maximumEncodedJournalBytes),
+            identity: RecoveryArtifactFileIdentity(device: details.st_dev, inode: details.st_ino)
+        )
     }
 
     private static func validateArtifactLocation(
@@ -1693,6 +1745,7 @@ extension SharedReadingRecoveryJournal {
     private static func normalizedJournal(
         _ state: RecoveryState,
         at artifactURL: URL,
+        fileIdentity: RecoveryArtifactFileIdentity,
         configuredBuildLockURL: URL,
         validation: RecoveryArtifactValidation
     ) throws -> RecoveryArtifact {
@@ -1752,6 +1805,7 @@ extension SharedReadingRecoveryJournal {
         }
         return RecoveryArtifact(
             url: artifactURL,
+            fileIdentity: fileIdentity,
             runID: state.runID,
             accounts: state.accounts,
             processGroups: state.processGroups,
@@ -1768,11 +1822,13 @@ extension SharedReadingRecoveryJournal {
         runID: String,
         accounts: [RecordedAccount],
         at artifactURL: URL,
+        fileIdentity: RecoveryArtifactFileIdentity,
         validation: RecoveryArtifactValidation
     ) throws -> RecoveryArtifact {
         try validateAccounts(accounts, validation: validation)
         return RecoveryArtifact(
             url: artifactURL,
+            fileIdentity: fileIdentity,
             runID: runID,
             accounts: accounts,
             processGroups: [],

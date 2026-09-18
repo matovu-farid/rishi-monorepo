@@ -1635,6 +1635,74 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
     }
 
+    func testFinalizationRejectsRecoveryArtifactReplacementAfterValidationAndRestoresOriginal() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-artifact-replacement")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try Data(contentsOf: fixture.artifactURL)
+        let parked = fixture.root.appendingPathComponent("parked-recovery.json")
+        let replacement = Data("replacement must not be accepted".utf8)
+        let externalReplacement = fixture.root.appendingPathComponent("external-replacement.json")
+        try replacement.write(to: externalReplacement)
+        let replacementAttempted = LockedBoolean(false)
+        let lockReconciled = LockedBoolean(false)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            afterBuildLockReconciliation: {
+                try FileManager.default.moveItem(at: fixture.artifactURL, to: parked)
+                try FileManager.default.linkItem(at: externalReplacement, to: fixture.artifactURL)
+                replacementAttempted.value = true
+            },
+            reconcileBuildLock: { _ in lockReconciled.value = true }
+        ))
+
+        XCTAssertTrue(lockReconciled.value)
+        XCTAssertTrue(replacementAttempted.value)
+        XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
+        XCTAssertEqual(try Data(contentsOf: parked), original)
+        XCTAssertEqual(try Data(contentsOf: externalReplacement), replacement)
+    }
+
+    func testRecoveryArtifactHardLinkFailsBeforeLockReconciliationAndLeavesExternalLinkUntouched() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-artifact-hardlink")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try Data(contentsOf: fixture.artifactURL)
+        let externalLink = fixture.root.appendingPathComponent("external-recovery-link.json")
+        try FileManager.default.linkItem(at: fixture.artifactURL, to: externalLink)
+        let lockReconciled = LockedBoolean(false)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            reconcileBuildLock: { _ in lockReconciled.value = true }
+        ))
+
+        XCTAssertFalse(lockReconciled.value)
+        XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
+        XCTAssertEqual(try Data(contentsOf: externalLink), original)
+    }
+
+    func testRecoveryDecoderRejectsHardLinkedRecoveryArtifact() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-artifact-hardlink-decode")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let externalLink = fixture.root.appendingPathComponent("external-decoder-link.json")
+        let original = try Data(contentsOf: fixture.artifactURL)
+        try FileManager.default.linkItem(at: fixture.artifactURL, to: externalLink)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: URL(fileURLWithPath: fixture.lock.path),
+            validation: recoveryValidation
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
+        XCTAssertEqual(try Data(contentsOf: externalLink), original)
+    }
+
     func testOwnedTreeRemovalRejectsSymlinkAndLeavesExternalTargetUntouched() throws {
         let fixture = try makeFinalizationFixture(runID: "run-tree-symlink")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
