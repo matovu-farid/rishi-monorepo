@@ -210,6 +210,52 @@ final class ResourcePreflightTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: lockPath.path))
     }
 
+    func testCrossProcessCoordinationClosesValidationRemovalReplacementWindow() throws {
+        let lockPath = temporaryLockPath()
+        let coordinationURL = try AppleXcodeBuildLock.coordinationURLForTesting(lockPath: lockPath)
+        defer {
+            try? FileManager.default.removeItem(at: lockPath)
+            try? FileManager.default.removeItem(at: coordinationURL)
+        }
+        let environment = lockEnvironment(lockPath)
+        let original = try AppleXcodeBuildLock.acquire(environment: environment)
+        let staleOwnership = original.ownership
+
+        try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: staleOwnership,
+            liveIdentity: { _ in nil },
+            afterValidationBeforeRemoval: {
+                let contender = Process()
+                contender.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                contender.arguments = [
+                    "-c",
+                    "import fcntl, os, sys; fd=os.open(sys.argv[1], os.O_RDWR | os.O_NOFOLLOW); "
+                        + "blocked=False; "
+                        + "\ntry: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)"
+                        + "\nexcept BlockingIOError: blocked=True"
+                        + "\nsys.exit(0 if blocked else 1)",
+                    coordinationURL.path,
+                ]
+                do {
+                    try contender.run()
+                } catch {
+                    XCTFail("Could not start cross-process lock contender: \(error)")
+                    return
+                }
+                contender.waitUntilExit()
+                XCTAssertEqual(contender.terminationStatus, 0, "another process must not acquire coordination during validation/removal")
+            }
+        )
+
+        let replacement = try AppleXcodeBuildLock.acquire(environment: environment)
+        XCTAssertThrowsError(try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: staleOwnership,
+            liveIdentity: { _ in nil }
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacement.ownership.path))
+        try replacement.release()
+    }
+
     private func temporaryLockPath() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-build-lock-\(UUID().uuidString)", isDirectory: true)

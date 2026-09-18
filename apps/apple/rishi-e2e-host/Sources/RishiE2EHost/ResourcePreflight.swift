@@ -85,22 +85,40 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
     }
 
     public static func acquire(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> AppleXcodeBuildLock {
-        try coordinationLock.withLock {
-            try acquireWhileCoordinated(environment: environment)
+        let lockURL = try configuredLockURL(environment: environment)
+        return try coordinationLock.withLock {
+            try withCrossProcessCoordination(at: lockURL) {
+                try acquireWhileCoordinated(at: lockURL)
+            }
         }
     }
 
-    private static func acquireWhileCoordinated(environment: [String: String]) throws -> AppleXcodeBuildLock {
+    private static func configuredLockURL(environment: [String: String]) throws -> URL {
         let configured = environment["RISHI_APPLE_XCODE_BUILD_LOCK_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lockURL: URL
+        let path: String
         if let configured, !configured.isEmpty {
-            lockURL = URL(fileURLWithPath: configured, isDirectory: true)
+            path = configured
         } else {
             // Keep this path identical to the standalone capture helper and
             // Swift MCP. NSTemporaryDirectory() is process/environment
             // dependent and would silently create separate lock domains.
-            lockURL = URL(fileURLWithPath: "/private/tmp/rishi-apple-xcode-build.lock", isDirectory: true)
+            path = "/private/tmp/rishi-apple-xcode-build.lock"
         }
+        guard path.hasPrefix("/"),
+              path != "/",
+              path.utf8.count < Int(PATH_MAX),
+              URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path == path else {
+            throw ResourcePreflightError("Apple build lock path must be an absolute, normalized, bounded path: \(path)")
+        }
+        let lockURL = URL(fileURLWithPath: path, isDirectory: true)
+        let coordinationURL = try coordinationURL(for: lockURL)
+        guard coordinationURL.path.utf8.count < Int(PATH_MAX) else {
+            throw ResourcePreflightError("Apple build lock coordination path is too long: \(coordinationURL.path)")
+        }
+        return lockURL
+    }
+
+    private static func acquireWhileCoordinated(at lockURL: URL) throws -> AppleXcodeBuildLock {
         do {
             try FileManager.default.createDirectory(at: lockURL, withIntermediateDirectories: false)
         } catch {
@@ -150,7 +168,9 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
                 throw ResourcePreflightError("Apple build lock was transferred to recovery: \(lockURL.path)")
             }
             try Self.coordinationLock.withLock {
-                try Self.removePresentLock(at: lockURL, matching: ownership)
+                try Self.withCrossProcessCoordination(at: lockURL) {
+                    try Self.removePresentLock(at: lockURL, matching: ownership)
+                }
             }
             released = true
         }
@@ -174,13 +194,32 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         ownership: AppleXcodeBuildLockOwnership,
         liveIdentity: (Int32) -> OwnedProcessIdentity?
     ) throws {
+        try reconcileRetainedLock(
+            ownership: ownership,
+            liveIdentity: liveIdentity,
+            afterValidationBeforeRemoval: {}
+        )
+    }
+
+    static func reconcileRetainedLock(
+        ownership: AppleXcodeBuildLockOwnership,
+        liveIdentity: (Int32) -> OwnedProcessIdentity?,
+        afterValidationBeforeRemoval: () -> Void
+    ) throws {
+        let lockURL = try validatedLockURL(path: ownership.path)
+        guard pathExistsNoFollow(lockURL.path) else { return }
         try coordinationLock.withLock {
-            let lockURL = URL(fileURLWithPath: ownership.path, isDirectory: true)
-            guard FileManager.default.fileExists(atPath: lockURL.path) else { return }
-            guard liveIdentity(ownership.owner.pid) != ownership.owner else {
-                throw ResourcePreflightError("Apple build lock owner is still running: \(lockURL.path)")
+            try withCrossProcessCoordination(at: lockURL) {
+                guard pathExistsNoFollow(lockURL.path) else { return }
+                guard liveIdentity(ownership.owner.pid) != ownership.owner else {
+                    throw ResourcePreflightError("Apple build lock owner is still running: \(lockURL.path)")
+                }
+                try removePresentLock(
+                    at: lockURL,
+                    matching: ownership,
+                    afterValidationBeforeRemoval: afterValidationBeforeRemoval
+                )
             }
-            try removePresentLock(at: lockURL, matching: ownership)
         }
     }
 
@@ -198,12 +237,14 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
 
     private static func removePresentLock(
         at lockURL: URL,
-        matching ownership: AppleXcodeBuildLockOwnership
+        matching ownership: AppleXcodeBuildLockOwnership,
+        afterValidationBeforeRemoval: () -> Void = {}
     ) throws {
         guard lockURL.path == ownership.path,
               try persistedOwnership(at: lockURL) == ownership else {
             throw ResourcePreflightError("Apple build lock ownership changed; refusing to remove \(lockURL.path)")
         }
+        afterValidationBeforeRemoval()
         // Re-read immediately before removal so a cooperative replacement
         // cannot be mistaken for the generation validated above.
         guard try persistedOwnership(at: lockURL) == ownership else {
@@ -214,13 +255,81 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
 
     private static func persistedOwnership(at lockURL: URL) throws -> AppleXcodeBuildLockOwnership {
         do {
+            var directoryInfo = stat()
+            guard lstat(lockURL.path, &directoryInfo) == 0,
+                  directoryInfo.st_mode & S_IFMT == S_IFDIR else {
+                throw ResourcePreflightError("Apple build lock path is not a real directory: \(lockURL.path)")
+            }
+            let metadataURL = lockURL.appendingPathComponent(metadataFilename)
+            var metadataInfo = stat()
+            guard lstat(metadataURL.path, &metadataInfo) == 0,
+                  metadataInfo.st_mode & S_IFMT == S_IFREG else {
+                throw ResourcePreflightError("Apple build lock metadata is missing or unsafe: \(lockURL.path)")
+            }
             return try JSONDecoder().decode(
                 AppleXcodeBuildLockOwnership.self,
-                from: Data(contentsOf: lockURL.appendingPathComponent(metadataFilename))
+                from: Data(contentsOf: metadataURL)
             )
         } catch {
             throw ResourcePreflightError("Apple build lock metadata is missing or malformed: \(lockURL.path)")
         }
+    }
+
+    private static func validatedLockURL(path: String) throws -> URL {
+        try configuredLockURL(environment: ["RISHI_APPLE_XCODE_BUILD_LOCK_PATH": path])
+    }
+
+    private static func coordinationURL(for lockURL: URL) throws -> URL {
+        let name = lockURL.lastPathComponent
+        guard !name.isEmpty, name != ".", name != ".." else {
+            throw ResourcePreflightError("Invalid Apple build lock path: \(lockURL.path)")
+        }
+        return lockURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(name).coordination", isDirectory: false)
+    }
+
+    static func coordinationURLForTesting(lockPath: URL) throws -> URL {
+        try coordinationURL(for: try validatedLockURL(path: lockPath.path))
+    }
+
+    private static func withCrossProcessCoordination<T>(
+        at lockURL: URL,
+        _ operation: () throws -> T
+    ) throws -> T {
+        let coordinationURL = try coordinationURL(for: lockURL)
+        let descriptor = open(
+            coordinationURL.path,
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+            mode_t(0o600)
+        )
+        guard descriptor >= 0 else {
+            throw ResourcePreflightError("Could not open Apple build lock coordination file: \(coordinationURL.path)")
+        }
+        defer { close(descriptor) }
+
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_mode & S_IFMT == S_IFREG,
+              info.st_uid == geteuid(),
+              info.st_nlink == 1 else {
+            throw ResourcePreflightError("Apple build lock coordination file is unsafe: \(coordinationURL.path)")
+        }
+        guard fchmod(descriptor, mode_t(0o600)) == 0 else {
+            throw ResourcePreflightError("Could not secure Apple build lock coordination file: \(coordinationURL.path)")
+        }
+        while flock(descriptor, LOCK_EX) == -1 {
+            guard errno == EINTR else {
+                throw ResourcePreflightError("Could not coordinate Apple build lock: \(coordinationURL.path)")
+            }
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try operation()
+    }
+
+    private static func pathExistsNoFollow(_ path: String) -> Bool {
+        var info = stat()
+        if lstat(path, &info) == 0 { return true }
+        return errno != ENOENT ? true : false
     }
 
     deinit {

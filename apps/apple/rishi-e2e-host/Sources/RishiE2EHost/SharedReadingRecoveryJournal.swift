@@ -152,6 +152,7 @@ public enum SharedReadingRecoveryJournalError: Error, Equatable {
     case catalystLaunchAlreadyRegistered
     case missingRecordedSecretArtifact
     case missingRecordedBuildLock
+    case conflictingBuildLock
     case invalidRealizedSimulatorDevice
     case invalidSecretArtifactPath
     case unsafeRecoveryArtifact
@@ -394,7 +395,15 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     }
 
     public func recordBuildLock(_ ownership: AppleXcodeBuildLockOwnership) throws {
-        try mutate { $0.buildLock = ownership }
+        try mutate { state in
+            if let recorded = state.buildLock {
+                guard recorded == ownership else {
+                    throw SharedReadingRecoveryJournalError.conflictingBuildLock
+                }
+                return
+            }
+            state.buildLock = ownership
+        }
     }
 
     public func recordVerifiedBuildLockRelease(_ ownership: AppleXcodeBuildLockOwnership) throws {

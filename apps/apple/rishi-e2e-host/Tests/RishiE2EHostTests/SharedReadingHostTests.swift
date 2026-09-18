@@ -305,6 +305,106 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertTrue(events.values.contains("account:wait-book:cancelled"))
     }
 
+    func testBuildLockOwnershipIsRecordedBeforeAnyHostActionAndClearedAfterVerifiedRelease() async throws {
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events)
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = makeHost(
+            events: events,
+            manifestURL: manifestURL,
+            buildLockRecorder: recorder,
+            acquireBuildLock: {
+                events.append("lock:acquire")
+                return lock
+            }
+        )
+
+        try await host.run()
+
+        XCTAssertEqual(Array(events.values.prefix(3)), [
+            "lock:acquire", "journal:record-lock", "account:preflight",
+        ])
+        XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "journal:clear-lock"])
+        XCTAssertEqual(recorder.recordedOwnership, nil)
+    }
+
+    func testBuildLockJournalFailureReleasesExactLockBeforeHostActionsAndFails() async throws {
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events, failFirstRecord: true)
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = makeHost(
+            events: events,
+            manifestURL: manifestURL,
+            buildLockRecorder: recorder,
+            acquireBuildLock: {
+                events.append("lock:acquire")
+                return lock
+            }
+        )
+
+        let report = await host.runReport()
+
+        XCTAssertNotNil(report.primaryFailure)
+        XCTAssertEqual(Array(events.values.prefix(3)), ["lock:acquire", "journal:record-lock", "lock:release"])
+        XCTAssertFalse(events.values.contains("account:preflight"))
+        XCTAssertFalse(events.values.contains("preflight"))
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("reset:") }))
+        XCTAssertFalse(events.values.contains("lock:transfer"))
+    }
+
+    func testUnprovenCleanupTransfersOnlyAfterJournalConfirmsSameOwnership() async throws {
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events)
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = makeHost(
+            events: events,
+            manifestURL: manifestURL,
+            accounts: FakeAccounts(events: events, deleteErrorRole: .owner),
+            buildLockRecorder: recorder,
+            acquireBuildLock: {
+                events.append("lock:acquire")
+                return lock
+            }
+        )
+
+        let report = await host.runReport()
+
+        XCTAssertTrue(report.cleanupFailed)
+        XCTAssertEqual(Array(events.values.suffix(2)), ["journal:record-lock", "lock:transfer"])
+        XCTAssertFalse(events.values.contains("lock:release"))
+        XCTAssertEqual(recorder.recordedOwnership, lock.ownership)
+    }
+
+    func testReleaseFailureRetainsJournalThenTransfersOwnership() async throws {
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events, failRelease: true)
+        let recorder = FakeBuildLockRecorder(events: events)
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = makeHost(
+            events: events,
+            manifestURL: manifestURL,
+            buildLockRecorder: recorder,
+            acquireBuildLock: {
+                events.append("lock:acquire")
+                return lock
+            }
+        )
+
+        let report = await host.runReport()
+
+        XCTAssertTrue(report.cleanupFailed)
+        XCTAssertEqual(Array(events.values.suffix(3)), ["lock:release", "journal:record-lock", "lock:transfer"])
+        XCTAssertFalse(events.values.contains("journal:clear-lock"))
+        XCTAssertEqual(recorder.recordedOwnership, lock.ownership)
+    }
+
     func testRedactedManifestContainsNoCredentialsOrSourcePath() throws {
         let fixturePath = "/private/user/book.pdf"
         let fixture = RealBookFixture.Manifest(role: .owner, format: .pdf, basename: "book.pdf", sha256: String(repeating: "a", count: 64), byteSize: 10)
@@ -362,6 +462,95 @@ final class SharedReadingHostTests: XCTestCase {
         private let lock = NSLock()
         private(set) var values: [String] = []
         func append(_ value: String) { lock.lock(); values.append(value); lock.unlock() }
+    }
+
+    private func makeHost(
+        events: EventRecorder,
+        manifestURL: URL,
+        accounts: (any TestAccountManaging)? = nil,
+        buildLockRecorder: any BuildLockOwnershipRecording,
+        acquireBuildLock: @escaping @Sendable () throws -> any AppleXcodeBuildLockHolding
+    ) -> SharedReadingHost {
+        SharedReadingHost(
+            configuration: .init(
+                runID: "run-build-lock",
+                fixture: .init(role: .owner, format: .pdf, basename: "book.pdf", sha256: String(repeating: "d", count: 64), byteSize: 10),
+                manifestURL: manifestURL,
+                ownerDestination: .catalyst,
+                participantDestination: .iPhone17Pro
+            ),
+            accounts: accounts ?? FakeAccounts(events: events),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events),
+            buildLockRecorder: buildLockRecorder,
+            acquireBuildLock: acquireBuildLock
+        )
+    }
+
+    private final class FakeBuildLock: AppleXcodeBuildLockHolding, @unchecked Sendable {
+        let ownership = AppleXcodeBuildLockOwnership(
+            path: "/private/tmp/rishi-host-test.lock",
+            token: "token",
+            generation: "generation",
+            owner: OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        )
+        private let events: EventRecorder
+        private let failRelease: Bool
+
+        init(events: EventRecorder, failRelease: Bool = false) {
+            self.events = events
+            self.failRelease = failRelease
+        }
+
+        func release() throws {
+            events.append("lock:release")
+            if failRelease { throw ResourcePreflightError("release failed") }
+        }
+
+        func transferToRecovery() -> AppleXcodeBuildLockOwnership {
+            events.append("lock:transfer")
+            return ownership
+        }
+    }
+
+    private final class FakeBuildLockRecorder: BuildLockOwnershipRecording, @unchecked Sendable {
+        private let events: EventRecorder
+        private let lock = NSLock()
+        private var ownership: AppleXcodeBuildLockOwnership?
+        private var shouldFailRecord: Bool
+
+        init(events: EventRecorder, failFirstRecord: Bool = false) {
+            self.events = events
+            self.shouldFailRecord = failFirstRecord
+        }
+
+        var recordedOwnership: AppleXcodeBuildLockOwnership? {
+            lock.withLock { ownership }
+        }
+
+        func recordBuildLock(_ ownership: AppleXcodeBuildLockOwnership) throws {
+            events.append("journal:record-lock")
+            try lock.withLock {
+                if shouldFailRecord {
+                    shouldFailRecord = false
+                    throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                }
+                guard self.ownership == nil || self.ownership == ownership else {
+                    throw SharedReadingRecoveryJournalError.conflictingBuildLock
+                }
+                self.ownership = ownership
+            }
+        }
+
+        func recordVerifiedBuildLockRelease(_ ownership: AppleXcodeBuildLockOwnership) throws {
+            events.append("journal:clear-lock")
+            try lock.withLock {
+                guard self.ownership == ownership else {
+                    throw SharedReadingRecoveryJournalError.missingRecordedBuildLock
+                }
+                self.ownership = nil
+            }
+        }
     }
 
     private struct FakeAccounts: TestAccountManaging {

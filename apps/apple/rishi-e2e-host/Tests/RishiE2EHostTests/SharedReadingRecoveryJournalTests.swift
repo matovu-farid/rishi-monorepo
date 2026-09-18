@@ -842,6 +842,31 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         try journal.finalizeAfterSuccessfulCleanup()
     }
 
+    func testBuildLockRecordingIsIdempotentAndRejectsDifferentUnresolvedOwnership() throws {
+        let journal = try makeJournal()
+        let original = AppleXcodeBuildLockOwnership(
+            path: "/private/tmp/rishi-lock",
+            token: "token-1",
+            generation: "generation-1",
+            owner: OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        )
+        let replacement = AppleXcodeBuildLockOwnership(
+            path: original.path,
+            token: "token-2",
+            generation: "generation-2",
+            owner: original.owner
+        )
+
+        try journal.recordBuildLock(original)
+        try journal.recordBuildLock(original)
+        XCTAssertThrowsError(try journal.recordBuildLock(replacement)) { error in
+            XCTAssertEqual(error as? SharedReadingRecoveryJournalError, .conflictingBuildLock)
+        }
+        XCTAssertThrowsError(try journal.recordVerifiedBuildLockRelease(replacement))
+        try journal.recordVerifiedBuildLockRelease(original)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
     func testPublicRecoveryValueInitializersConstructValues() {
         let process = OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
         let group = OwnedProcessGroup(processGroupID: 41, leader: process)
