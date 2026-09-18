@@ -5,11 +5,22 @@ public struct OwnedProcessIdentity: Codable, Hashable, Sendable {
     public let pid: Int32
     public let birthTimeSeconds: UInt64
     public let birthTimeMicroseconds: UInt64
+
+    public init(pid: Int32, birthTimeSeconds: UInt64, birthTimeMicroseconds: UInt64) {
+        self.pid = pid
+        self.birthTimeSeconds = birthTimeSeconds
+        self.birthTimeMicroseconds = birthTimeMicroseconds
+    }
 }
 
 public struct OwnedProcessGroup: Codable, Hashable, Sendable {
     public let processGroupID: Int32
     public let leader: OwnedProcessIdentity
+
+    public init(processGroupID: Int32, leader: OwnedProcessIdentity) {
+        self.processGroupID = processGroupID
+        self.leader = leader
+    }
 }
 
 public struct OwnedSimulatorDevice: Codable, Hashable, Sendable {
@@ -17,6 +28,13 @@ public struct OwnedSimulatorDevice: Codable, Hashable, Sendable {
     public let name: String
     public let deviceTypeIdentifier: String
     public let runtimeIdentifier: String
+
+    public init(udid: String?, name: String, deviceTypeIdentifier: String, runtimeIdentifier: String) {
+        self.udid = udid
+        self.name = name
+        self.deviceTypeIdentifier = deviceTypeIdentifier
+        self.runtimeIdentifier = runtimeIdentifier
+    }
 }
 
 public struct PendingCatalystLaunch: Codable, Hashable, Sendable {
@@ -26,6 +44,20 @@ public struct PendingCatalystLaunch: Codable, Hashable, Sendable {
     public let bundleIdentifier: String
     public let baselineIdentities: Set<OwnedProcessIdentity>
     public let registeredIdentity: OwnedProcessIdentity?
+
+    public init(
+        role: TestAccountRole,
+        kind: Kind,
+        bundleIdentifier: String,
+        baselineIdentities: Set<OwnedProcessIdentity>,
+        registeredIdentity: OwnedProcessIdentity?
+    ) {
+        self.role = role
+        self.kind = kind
+        self.bundleIdentifier = bundleIdentifier
+        self.baselineIdentities = baselineIdentities
+        self.registeredIdentity = registeredIdentity
+    }
 }
 
 public protocol OwnedProcessRecording: Sendable {
@@ -52,6 +84,13 @@ public struct AppleXcodeBuildLockOwnership: Codable, Equatable, Sendable {
     public let token: String
     public let generation: String
     public let owner: OwnedProcessIdentity
+
+    public init(path: String, token: String, generation: String, owner: OwnedProcessIdentity) {
+        self.path = path
+        self.token = token
+        self.generation = generation
+        self.owner = owner
+    }
 }
 
 public struct NoopTestAccountLifecycleRecorder: TestAccountLifecycleRecording {
@@ -74,7 +113,13 @@ public enum SharedReadingRecoveryJournalError: Error, Equatable {
     case malformedArtifact
     case runIDMismatch
     case missingRecordedAccount
+    case missingRecordedProcessGroup
+    case missingRecordedProcess
+    case missingRecordedSimulatorDevice
     case missingCatalystLaunchIntent
+    case missingRecordedSecretArtifact
+    case missingRecordedBuildLock
+    case invalidRealizedSimulatorDevice
     case invalidSecretArtifactPath
     case cleanupIncomplete
     case journalRemovalFailed
@@ -130,12 +175,55 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         try mutate { $0.processGroups.insert(group) }
     }
 
+    public func recordVerifiedProcessGroupAbsence(_ group: OwnedProcessGroup) throws {
+        try mutate { state in
+            guard state.processGroups.remove(group) != nil else {
+                throw SharedReadingRecoveryJournalError.missingRecordedProcessGroup
+            }
+        }
+    }
+
     public func recordOwnedProcess(_ identity: OwnedProcessIdentity) throws {
         try mutate { $0.processes.insert(identity) }
     }
 
+    public func recordVerifiedProcessAbsence(_ identity: OwnedProcessIdentity) throws {
+        try mutate { state in
+            guard state.processes.remove(identity) != nil else {
+                throw SharedReadingRecoveryJournalError.missingRecordedProcess
+            }
+        }
+    }
+
     public func recordOwnedSimulatorDevice(_ device: OwnedSimulatorDevice) throws {
         try mutate { $0.simulatorDevices.insert(device) }
+    }
+
+    public func recordRealizedSimulatorDevice(
+        _ realized: OwnedSimulatorDevice,
+        replacingIntent intent: OwnedSimulatorDevice
+    ) throws {
+        guard intent.udid == nil,
+              realized.udid != nil,
+              intent.name == realized.name,
+              intent.deviceTypeIdentifier == realized.deviceTypeIdentifier,
+              intent.runtimeIdentifier == realized.runtimeIdentifier else {
+            throw SharedReadingRecoveryJournalError.invalidRealizedSimulatorDevice
+        }
+        try mutate { state in
+            guard state.simulatorDevices.remove(intent) != nil else {
+                throw SharedReadingRecoveryJournalError.missingRecordedSimulatorDevice
+            }
+            state.simulatorDevices.insert(realized)
+        }
+    }
+
+    public func recordVerifiedSimulatorDeletion(_ device: OwnedSimulatorDevice) throws {
+        try mutate { state in
+            guard state.simulatorDevices.remove(device) != nil else {
+                throw SharedReadingRecoveryJournalError.missingRecordedSimulatorDevice
+            }
+        }
     }
 
     public func recordCatalystLaunchIntent(_ intent: PendingCatalystLaunch) throws {
@@ -164,6 +252,14 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         }
     }
 
+    public func recordVerifiedCatalystLaunchAbsence(_ launch: PendingCatalystLaunch) throws {
+        try mutate { state in
+            guard state.pendingCatalystLaunches.remove(launch) != nil else {
+                throw SharedReadingRecoveryJournalError.missingCatalystLaunchIntent
+            }
+        }
+    }
+
     public func recordSecretArtifact(relativePath: String) throws {
         guard Self.isSafeRelativePath(relativePath) else {
             throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
@@ -171,16 +267,25 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         try mutate { $0.secretArtifactRelativePaths.insert(relativePath) }
     }
 
-    public func removeSecretArtifact(relativePath: String) throws {
-        try mutate { $0.secretArtifactRelativePaths.remove(relativePath) }
+    public func recordVerifiedSecretArtifactDeletion(relativePath: String) throws {
+        try mutate { state in
+            guard state.secretArtifactRelativePaths.remove(relativePath) != nil else {
+                throw SharedReadingRecoveryJournalError.missingRecordedSecretArtifact
+            }
+        }
     }
 
     public func recordBuildLock(_ ownership: AppleXcodeBuildLockOwnership) throws {
         try mutate { $0.buildLock = ownership }
     }
 
-    public func clearBuildLock() throws {
-        try mutate { $0.buildLock = nil }
+    public func recordVerifiedBuildLockRelease(_ ownership: AppleXcodeBuildLockOwnership) throws {
+        try mutate { state in
+            guard state.buildLock == ownership else {
+                throw SharedReadingRecoveryJournalError.missingRecordedBuildLock
+            }
+            state.buildLock = nil
+        }
     }
 
     public func finalizeAfterSuccessfulCleanup() throws {

@@ -72,11 +72,180 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         }
     }
 
+    func testJournalFinalizesOnlyAfterExactVerifiedProcessGroupAbsence() throws {
+        let journal = try makeJournal()
+        let group = OwnedProcessGroup(
+            processGroupID: 41,
+            leader: OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        )
+        try journal.recordOwnedProcessGroup(group)
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertThrowsError(try journal.recordVerifiedProcessGroupAbsence(OwnedProcessGroup(
+            processGroupID: group.processGroupID,
+            leader: OwnedProcessIdentity(pid: 42, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        )))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedProcessGroupAbsence(group)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testJournalFinalizesOnlyAfterExactVerifiedProcessAbsence() throws {
+        let journal = try makeJournal()
+        let process = OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        try journal.recordOwnedProcess(process)
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertThrowsError(try journal.recordVerifiedProcessAbsence(OwnedProcessIdentity(
+            pid: process.pid,
+            birthTimeSeconds: 3,
+            birthTimeMicroseconds: 4
+        )))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedProcessAbsence(process)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testJournalReplacesSimulatorIntentThenFinalizesOnlyAfterExactVerifiedDeletion() throws {
+        let journal = try makeJournal()
+        let intent = OwnedSimulatorDevice(
+            udid: nil,
+            name: "Rishi E2E",
+            deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+            runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0"
+        )
+        let realized = OwnedSimulatorDevice(
+            udid: "simulator-1",
+            name: intent.name,
+            deviceTypeIdentifier: intent.deviceTypeIdentifier,
+            runtimeIdentifier: intent.runtimeIdentifier
+        )
+        try journal.recordOwnedSimulatorDevice(intent)
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordRealizedSimulatorDevice(realized, replacingIntent: intent)
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertThrowsError(try journal.recordVerifiedSimulatorDeletion(OwnedSimulatorDevice(
+            udid: "simulator-2",
+            name: realized.name,
+            deviceTypeIdentifier: realized.deviceTypeIdentifier,
+            runtimeIdentifier: realized.runtimeIdentifier
+        )))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedSimulatorDeletion(realized)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testJournalFinalizesOnlyAfterExactVerifiedCatalystLaunchAbsence() throws {
+        let journal = try makeJournal()
+        let baseline = OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let registered = OwnedProcessIdentity(pid: 43, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let intent = PendingCatalystLaunch(
+            role: .owner,
+            kind: .app,
+            bundleIdentifier: "com.example.rishi",
+            baselineIdentities: [baseline],
+            registeredIdentity: nil
+        )
+        let registeredIntent = PendingCatalystLaunch(
+            role: intent.role,
+            kind: intent.kind,
+            bundleIdentifier: intent.bundleIdentifier,
+            baselineIdentities: intent.baselineIdentities,
+            registeredIdentity: registered
+        )
+        try journal.recordCatalystLaunchIntent(intent)
+        try journal.recordCatalystRegisteredIdentity(registered, role: .owner, kind: .app)
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertThrowsError(try journal.recordVerifiedCatalystLaunchAbsence(PendingCatalystLaunch(
+            role: registeredIntent.role,
+            kind: registeredIntent.kind,
+            bundleIdentifier: registeredIntent.bundleIdentifier,
+            baselineIdentities: registeredIntent.baselineIdentities,
+            registeredIdentity: OwnedProcessIdentity(pid: registered.pid, birthTimeSeconds: 5, birthTimeMicroseconds: 6)
+        )))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedCatalystLaunchAbsence(registeredIntent)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testJournalFinalizesOnlyAfterExactVerifiedSecretArtifactDeletion() throws {
+        let journal = try makeJournal()
+        try journal.recordSecretArtifact(relativePath: "credentials.xctestrun")
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertThrowsError(try journal.recordVerifiedSecretArtifactDeletion(relativePath: "other.xctestrun"))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedSecretArtifactDeletion(relativePath: "credentials.xctestrun")
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testJournalFinalizesOnlyAfterExactVerifiedBuildLockRelease() throws {
+        let journal = try makeJournal()
+        let lock = AppleXcodeBuildLockOwnership(
+            path: "/private/tmp/rishi-lock",
+            token: "token-1",
+            generation: "generation-1",
+            owner: OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        )
+        try journal.recordBuildLock(lock)
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        XCTAssertThrowsError(try journal.recordVerifiedBuildLockRelease(AppleXcodeBuildLockOwnership(
+            path: lock.path,
+            token: lock.token,
+            generation: "generation-2",
+            owner: lock.owner
+        )))
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+        try journal.recordVerifiedBuildLockRelease(lock)
+        try journal.finalizeAfterSuccessfulCleanup()
+    }
+
+    func testPublicRecoveryValueInitializersConstructValues() {
+        let process = OwnedProcessIdentity(pid: 42, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let group = OwnedProcessGroup(processGroupID: 41, leader: process)
+        let device = OwnedSimulatorDevice(
+            udid: "simulator-1",
+            name: "Rishi E2E",
+            deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+            runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0"
+        )
+        let launch = PendingCatalystLaunch(
+            role: .owner,
+            kind: .runner,
+            bundleIdentifier: "com.example.rishi",
+            baselineIdentities: [process],
+            registeredIdentity: process
+        )
+        let lock = AppleXcodeBuildLockOwnership(
+            path: "/private/tmp/rishi-lock",
+            token: "token-1",
+            generation: "generation-1",
+            owner: process
+        )
+
+        XCTAssertEqual(group.leader, process)
+        XCTAssertEqual(device.udid, "simulator-1")
+        XCTAssertEqual(launch.kind, .runner)
+        XCTAssertEqual(lock.owner, process)
+    }
+
     private func makeTemporaryRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-recovery-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func makeJournal() throws -> SharedReadingRecoveryJournal {
+        let root = try makeTemporaryRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return try SharedReadingRecoveryJournal(
+            url: root.appendingPathComponent("rishi-shared-reading-run/recovery.json"),
+            runID: "run-1"
+        )
     }
 
     private func writeArtifact(at url: URL) throws {
