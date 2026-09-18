@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import AppKit
 
 public struct OwnedProcessIdentity: Codable, Hashable, Sendable {
     public let pid: Int32
@@ -744,10 +745,656 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     }
 }
 
-public extension SharedReadingRecoveryJournal {
+struct RecoveryArtifactValidation: Sendable {
+    let emailIsInConfiguredNamespace: @Sendable (String) -> Bool
+    let allowedRuntimeIdentifiers: Set<String>
+    let runnerBundleIdentifier: String
+    let appBundleIdentifier: String
+}
+
+struct RecoveryArtifact: Sendable {
+    let url: URL
+    let runID: String
+    let accounts: [RecordedAccount]
+    let processGroups: Set<OwnedProcessGroup>
+    let processes: Set<OwnedProcessIdentity>
+    let simulatorDevices: Set<OwnedSimulatorDevice>
+    let pendingCatalystLaunches: Set<PendingCatalystLaunch>
+    let secretArtifactURLs: Set<URL>
+    let buildLock: AppleXcodeBuildLockOwnership?
+    let isLegacy: Bool
+}
+
+struct RecoveryOperations: Sendable {
+    let recoverProcessGroup: @Sendable (OwnedProcessGroup) async throws -> Void
+    let recoverProcess: @Sendable (OwnedProcessIdentity) async throws -> Void
+    let currentCatalystIdentities: @Sendable (String) throws -> Set<OwnedProcessIdentity>
+    let recoverSimulator: @Sendable (OwnedSimulatorDevice) async throws -> Void
+    let removeSecretArtifact: @Sendable (URL) throws -> Void
+    let recoverAccount: @Sendable (RecordedAccount) async throws -> Void
+    let reconcileBuildLock: @Sendable (AppleXcodeBuildLockOwnership) throws -> Void
+    let exactRunIDProcessIsVisible: @Sendable (String) throws -> Bool
+    let configuredBuildLockExists: @Sendable (URL) throws -> Bool
+    let removeArtifactAndRunDirectory: @Sendable (URL) throws -> Void
+}
+
+private struct RecoveryCombinedError: Error, LocalizedError {
+    let failureCount: Int
+    var errorDescription: String? {
+        "Shared-reading recovery could not prove complete cleanup (\(failureCount) failure(s))."
+    }
+}
+
+extension SharedReadingRecoveryJournal {
+    public static func recover(
+        at artifactURL: URL,
+        temporaryRoot: URL,
+        configuredBuildLockURL: URL,
+        accountClient: TestAccountClient
+    ) async throws {
+        let claimedRuntimeIdentifiers = try claimedSimulatorRuntimeIdentifiers(
+            at: artifactURL,
+            temporaryRoot: temporaryRoot
+        )
+        let validation = RecoveryArtifactValidation(
+            emailIsInConfiguredNamespace: accountClient.isGeneratedRecoveryEmail,
+            allowedRuntimeIdentifiers: claimedRuntimeIdentifiers,
+            runnerBundleIdentifier: "org.fidexa.rishiUITests",
+            appBundleIdentifier: "org.fidexa.rishi"
+        )
+        let artifact = try decodeRecoveryArtifact(
+            at: artifactURL,
+            temporaryRoot: temporaryRoot,
+            configuredBuildLockURL: configuredBuildLockURL,
+            validation: validation
+        )
+        if !artifact.simulatorDevices.isEmpty {
+            let configuredRuntimeIdentifiers = try await productionSimulatorRuntimeIdentifiers()
+            guard artifact.simulatorDevices.allSatisfy({
+                configuredRuntimeIdentifiers.contains($0.runtimeIdentifier)
+            }) else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+        }
+        let operations = RecoveryOperations(
+            recoverProcessGroup: { group in
+                try await recoverProcessGroups(
+                    [group],
+                    liveIdentity: ProcessIdentityReader.identity(for:),
+                    members: OwnedProcessGroupInspector.members(in:),
+                    processGroup: OwnedProcessGroupInspector.processGroup(of:),
+                    signal: { pid, signal in _ = Darwin.kill(pid, signal) },
+                    sleep: { duration in try await Task.sleep(for: duration) }
+                )
+            },
+            recoverProcess: { process in
+                try await recoverProcesses(
+                    [process],
+                    liveIdentity: ProcessIdentityReader.identity(for:),
+                    signal: { pid, signal in _ = Darwin.kill(pid, signal) },
+                    sleep: { duration in try await Task.sleep(for: duration) }
+                )
+            },
+            currentCatalystIdentities: productionCatalystIdentities(bundleIdentifier:),
+            recoverSimulator: { simulator in try await recoverProductionSimulator(simulator) },
+            removeSecretArtifact: removeProductionSecretArtifact(at:),
+            recoverAccount: { account in
+                try await accountClient.deleteProvisionedAccount(email: account.email)
+            },
+            reconcileBuildLock: AppleXcodeBuildLock.reconcileRetainedLock(ownership:),
+            exactRunIDProcessIsVisible: productionExactRunIDProcessIsVisible(_:),
+            configuredBuildLockExists: productionPathExists(_:),
+            removeArtifactAndRunDirectory: { url in
+                try removeProductionArtifactAndRunDirectory(at: url, temporaryRoot: temporaryRoot)
+            }
+        )
+        try await orchestrateRecovery(
+            artifact,
+            configuredBuildLockURL: configuredBuildLockURL,
+            operations: operations
+        )
+    }
+
+    internal static func decodeRecoveryArtifact(
+        at artifactURL: URL,
+        temporaryRoot: URL,
+        configuredBuildLockURL: URL,
+        validation: RecoveryArtifactValidation
+    ) throws -> RecoveryArtifact {
+        do {
+            let data = try readRecoveryArtifactData(at: artifactURL, temporaryRoot: temporaryRoot)
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+            let keys = Set(object.keys)
+            let journalRequired: Set<String> = [
+                "runID", "accounts", "processGroups", "processes", "simulatorDevices",
+                "pendingCatalystLaunches", "secretArtifactRelativePaths",
+            ]
+            let journalAllowed = journalRequired.union(["buildLock"])
+            let rendezvousKeys: Set<String> = [
+                "runID", "fixture", "ownerEmail", "participantEmail",
+                "ownerDestination", "participantDestination", "rendezvousPath",
+            ]
+            let persistedKeys: Set<String> = [
+                "runID", "owner", "participant", "fixture", "manifestPath",
+                "ownerDestination", "participantDestination", "rendezvousPath",
+            ]
+
+            let artifact: RecoveryArtifact
+            if journalRequired.isSubset(of: keys), keys.isSubset(of: journalAllowed) {
+                try validateJournalJSONShape(object)
+                let state = try JSONDecoder().decode(RecoveryState.self, from: data)
+                artifact = try normalizedJournal(
+                    state,
+                    at: artifactURL,
+                    configuredBuildLockURL: configuredBuildLockURL,
+                    validation: validation
+                )
+            } else if keys == rendezvousKeys {
+                try validateFixtureShape(object["fixture"])
+                let manifest = try JSONDecoder().decode(RendezvousManifest.self, from: data)
+                artifact = try normalizedLegacy(
+                    runID: manifest.runID,
+                    accounts: [
+                        RecordedAccount(email: manifest.ownerEmail, role: .owner, outcome: .recoverable),
+                        RecordedAccount(email: manifest.participantEmail, role: .participant, outcome: .recoverable),
+                    ],
+                    at: artifactURL,
+                    validation: validation
+                )
+            } else if keys == persistedKeys {
+                try validateFixtureShape(object["fixture"])
+                try validatePersistedAccountShape(object["owner"], role: .owner)
+                try validatePersistedAccountShape(object["participant"], role: .participant)
+                let manifest = try JSONDecoder().decode(PersistedHostRecoveryManifest.self, from: data)
+                artifact = try normalizedLegacy(
+                    runID: manifest.runID,
+                    accounts: [
+                        RecordedAccount(email: manifest.owner.email, role: manifest.owner.role, outcome: .recoverable),
+                        RecordedAccount(email: manifest.participant.email, role: manifest.participant.role, outcome: .recoverable),
+                    ],
+                    at: artifactURL,
+                    validation: validation
+                )
+            } else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+            try validateArtifactLocation(artifact, temporaryRoot: temporaryRoot)
+            return artifact
+        } catch let error as SharedReadingRecoveryJournalError {
+            throw error
+        } catch {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+    }
+
+    internal static func recover(
+        at artifactURL: URL,
+        temporaryRoot: URL,
+        configuredBuildLockURL: URL,
+        validation: RecoveryArtifactValidation,
+        operations: RecoveryOperations
+    ) async throws {
+        let artifact = try decodeRecoveryArtifact(
+            at: artifactURL,
+            temporaryRoot: temporaryRoot,
+            configuredBuildLockURL: configuredBuildLockURL,
+            validation: validation
+        )
+
+        try await orchestrateRecovery(
+            artifact,
+            configuredBuildLockURL: configuredBuildLockURL,
+            operations: operations
+        )
+    }
+
+    private static func orchestrateRecovery(
+        _ artifact: RecoveryArtifact,
+        configuredBuildLockURL: URL,
+        operations: RecoveryOperations
+    ) async throws {
+        var failures = 0
+        if artifact.isLegacy {
+            do {
+                if try operations.exactRunIDProcessIsVisible(artifact.runID) { failures += 1 }
+            } catch { failures += 1 }
+            do {
+                if try operations.configuredBuildLockExists(configuredBuildLockURL) { failures += 1 }
+            } catch { failures += 1 }
+        } else {
+            for group in artifact.processGroups.sorted(by: RecoveryState.processGroupsInOrder) {
+                do { try await operations.recoverProcessGroup(group) }
+                catch { failures += 1 }
+            }
+            var identities = artifact.processes
+            identities.formUnion(artifact.pendingCatalystLaunches.compactMap(\.registeredIdentity))
+            for process in identities.sorted(by: RecoveryState.processesInOrder) {
+                do { try await operations.recoverProcess(process) }
+                catch { failures += 1 }
+            }
+            for launch in artifact.pendingCatalystLaunches where launch.registeredIdentity == nil {
+                do {
+                    let current = try operations.currentCatalystIdentities(launch.bundleIdentifier)
+                    guard current.isSubset(of: launch.baselineIdentities) else {
+                        throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                    }
+                } catch { failures += 1 }
+            }
+        }
+        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
+
+        if !artifact.isLegacy {
+            for simulator in artifact.simulatorDevices.sorted(by: RecoveryState.simulatorDevicesInOrder) {
+                do { try await operations.recoverSimulator(simulator) }
+                catch { failures += 1 }
+            }
+            for secretURL in artifact.secretArtifactURLs.sorted(by: { $0.path < $1.path }) {
+                do { try operations.removeSecretArtifact(secretURL) }
+                catch { failures += 1 }
+            }
+        }
+        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
+
+        for account in artifact.accounts.sorted(by: RecoveryState.accountsInOrder) {
+            do { try await operations.recoverAccount(account) }
+            catch { failures += 1 }
+        }
+        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
+
+        if let buildLock = artifact.buildLock {
+            do { try operations.reconcileBuildLock(buildLock) }
+            catch { failures += 1 }
+        }
+        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
+
+        do { try operations.removeArtifactAndRunDirectory(artifact.url) }
+        catch { failures += 1 }
+        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
+    }
+
+    private static func productionCatalystIdentities(
+        bundleIdentifier: String
+    ) throws -> Set<OwnedProcessIdentity> {
+        var identities: Set<OwnedProcessIdentity> = []
+        for application in NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier) {
+            let pid = application.processIdentifier
+            guard let identity = ProcessIdentityReader.identity(for: pid),
+                  ProcessIdentityReader.identity(for: pid) == identity else {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
+            identities.insert(identity)
+        }
+        return identities
+    }
+
+    private static func claimedSimulatorRuntimeIdentifiers(
+        at artifactURL: URL,
+        temporaryRoot: URL
+    ) throws -> Set<String> {
+        let data = try readRecoveryArtifactData(at: artifactURL, temporaryRoot: temporaryRoot)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let devices = object["simulatorDevices"] as? [[String: Any]] else {
+            return []
+        }
+        return Set(try devices.map { device in
+            guard let runtime = device["runtimeIdentifier"] as? String else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+            return runtime
+        })
+    }
+
+    private static func productionExactRunIDProcessIsVisible(_ runID: String) throws -> Bool {
+        NSWorkspace.shared.runningApplications.contains { application in
+            application.localizedName == runID
+        }
+    }
+
+    private static func productionPathExists(_ url: URL) throws -> Bool {
+        var details = stat()
+        if lstat(url.path, &details) == 0 { return true }
+        if errno == ENOENT { return false }
+        throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+    }
+
+    private static func productionSimulatorRuntimeIdentifiers() async throws -> Set<String> {
+        Set(try await productionSimulatorInventory().map(\.runtimeIdentifier))
+    }
+
+    private static func recoverProductionSimulator(_ recorded: OwnedSimulatorDevice) async throws {
+        let initial = try await productionSimulatorInventory()
+        let exactMatches = initial.filter {
+            $0.name == recorded.name
+                && $0.deviceTypeIdentifier == recorded.deviceTypeIdentifier
+                && $0.runtimeIdentifier == recorded.runtimeIdentifier
+        }
+        let target: ProductionSimulatorDevice
+        if let udid = recorded.udid {
+            if let exact = exactMatches.first(where: { $0.udid == udid }) {
+                target = exact
+            } else if initial.contains(where: { $0.udid == udid || $0.name == recorded.name }) {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            } else {
+                return
+            }
+        } else {
+            guard exactMatches.count <= 1 else { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+            guard let exact = exactMatches.first else { return }
+            target = exact
+        }
+
+        let shutdown = try await runSimctl(["shutdown", target.udid])
+        if !shutdown.succeeded {
+            let diagnostic = shutdown.stderr.lowercased()
+            guard diagnostic.contains("current state: shutdown") || diagnostic.contains("already shutdown") else {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
+        }
+        guard try await runSimctl(["delete", target.udid]).succeeded else {
+            throw SharedReadingRecoveryJournalError.cleanupIncomplete
+        }
+        for _ in 0..<6 {
+            let remaining = try await productionSimulatorInventory()
+            if !remaining.contains(where: { $0.udid == target.udid || $0.name == recorded.name }) { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw SharedReadingRecoveryJournalError.cleanupIncomplete
+    }
+
+    private static func productionSimulatorInventory() async throws -> [ProductionSimulatorDevice] {
+        let result = try await runSimctl(["list", "devices", "--json"])
+        guard result.succeeded, let data = result.stdout.data(using: .utf8) else {
+            throw SharedReadingRecoveryJournalError.cleanupIncomplete
+        }
+        do {
+            let decoded = try JSONDecoder().decode(ProductionSimulatorInventory.self, from: data)
+            return decoded.devices.flatMap { runtime, devices in
+                devices.map {
+                    ProductionSimulatorDevice(
+                        udid: $0.udid,
+                        name: $0.name,
+                        deviceTypeIdentifier: $0.deviceTypeIdentifier,
+                        runtimeIdentifier: runtime
+                    )
+                }
+            }
+        } catch {
+            throw SharedReadingRecoveryJournalError.cleanupIncomplete
+        }
+    }
+
+    private static func runSimctl(_ arguments: [String]) async throws -> ProcessResult {
+        try await FoundationProcessRunner().run(ProcessRequest(
+            executablePath: "/usr/bin/xcrun",
+            arguments: ["simctl"] + arguments
+        ))
+    }
+
+    private static func removeProductionSecretArtifact(at url: URL) throws {
+        let directoryFD = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(directoryFD) }
+        guard let kind = try fileKind(at: url.lastPathComponent, directoryFD: directoryFD) else { return }
+        guard kind == S_IFREG,
+              unlinkat(directoryFD, url.lastPathComponent, 0) == 0,
+              fsync(directoryFD) == 0,
+              try fileKind(at: url.lastPathComponent, directoryFD: directoryFD) == nil else {
+            throw SharedReadingRecoveryJournalError.cleanupIncomplete
+        }
+    }
+
+    private static func removeProductionArtifactAndRunDirectory(
+        at artifactURL: URL,
+        temporaryRoot: URL
+    ) throws {
+        let runDirectory = artifactURL.deletingLastPathComponent()
+        guard runDirectory.deletingLastPathComponent().standardizedFileURL == temporaryRoot.standardizedFileURL else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let rootFD = open(temporaryRoot.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(rootFD) }
+        let runFD = openat(rootFD, runDirectory.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(runFD) }
+        try withDirectoryLockAlreadySerialized(runFD) {
+            let entries = try withDirectoryEntries(runFD) { $0 }
+            guard entries == [artifactURL.lastPathComponent],
+                  try fileKind(at: artifactURL.lastPathComponent, directoryFD: runFD) == S_IFREG,
+                  unlinkat(runFD, artifactURL.lastPathComponent, 0) == 0,
+                  fsync(runFD) == 0,
+                  try withDirectoryEntries(runFD, { $0 }).isEmpty,
+                  unlinkat(rootFD, runDirectory.lastPathComponent, AT_REMOVEDIR) == 0,
+                  fsync(rootFD) == 0 else {
+                throw SharedReadingRecoveryJournalError.journalRemovalFailed
+            }
+        }
+        guard !FileManager.default.fileExists(atPath: artifactURL.path),
+              !FileManager.default.fileExists(atPath: runDirectory.path) else {
+            throw SharedReadingRecoveryJournalError.journalRemovalFailed
+        }
+    }
+
+    private static func readRecoveryArtifactData(at artifactURL: URL, temporaryRoot: URL) throws -> Data {
+        let root = temporaryRoot.standardizedFileURL
+        let runDirectory = artifactURL.deletingLastPathComponent().standardizedFileURL
+        guard runDirectory.deletingLastPathComponent().path == root.path,
+              artifactURL.standardizedFileURL.path == artifactURL.path,
+              runDirectory.lastPathComponent.hasPrefix("rishi-shared-reading-"),
+              ["recovery.json", "manifest.json"].contains(artifactURL.lastPathComponent) else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(rootFD) }
+        let runFD = openat(rootFD, runDirectory.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(runFD) }
+        guard try fileKind(at: artifactURL.lastPathComponent, directoryFD: runFD) == S_IFREG else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let fileFD = openat(runFD, artifactURL.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(fileFD) }
+        var details = stat()
+        guard fstat(fileFD, &details) == 0,
+              details.st_mode & S_IFMT == S_IFREG,
+              details.st_size >= 0,
+              details.st_size <= off_t(maximumEncodedJournalBytes) else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+        return try readAll(from: fileFD, maximumBytes: maximumEncodedJournalBytes)
+    }
+
+    private static func validateArtifactLocation(
+        _ artifact: RecoveryArtifact,
+        temporaryRoot: URL
+    ) throws {
+        let runDirectory = artifact.url.deletingLastPathComponent().standardizedFileURL
+        guard !artifact.runID.isEmpty,
+              !artifact.runID.contains("/"),
+              !artifact.runID.contains(".."),
+              runDirectory.deletingLastPathComponent().path == temporaryRoot.standardizedFileURL.path,
+              runDirectory.lastPathComponent == "rishi-shared-reading-\(artifact.runID)" else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+    }
+
+    private static func normalizedJournal(
+        _ state: RecoveryState,
+        at artifactURL: URL,
+        configuredBuildLockURL: URL,
+        validation: RecoveryArtifactValidation
+    ) throws -> RecoveryArtifact {
+        try validateAccounts(state.accounts, validation: validation)
+        for group in state.processGroups {
+            guard group.processGroupID > 0,
+                  group.leader.pid == group.processGroupID,
+                  validIdentity(group.leader) else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+        }
+        guard state.processes.allSatisfy(validIdentity) else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+        for device in state.simulatorDevices {
+            guard device.name == "rishi-e2e-\(state.runID)",
+                  device.deviceTypeIdentifier == "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+                  validation.allowedRuntimeIdentifiers.contains(device.runtimeIdentifier),
+                  device.udid?.isEmpty != true else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+        }
+        for launch in state.pendingCatalystLaunches {
+            let expectedBundle: String
+            switch launch.kind {
+            case .runner: expectedBundle = validation.runnerBundleIdentifier
+            case .app: expectedBundle = validation.appBundleIdentifier
+            }
+            guard launch.role == .owner,
+                  launch.bundleIdentifier == expectedBundle,
+                  launch.baselineIdentities.allSatisfy(validIdentity),
+                  launch.registeredIdentity.map(validIdentity) ?? true else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+        }
+        let runRoot = artifactURL.deletingLastPathComponent().standardizedFileURL
+        let reserved = Set(["owner.xctestrun", "participant.xctestrun"])
+        let secretURLs = try Set(state.secretArtifactRelativePaths.map { path in
+            guard reserved.contains(path), isSafeRelativePath(path), !path.contains("/") else {
+                throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
+            }
+            let url = runRoot.appendingPathComponent(path).standardizedFileURL
+            guard url.deletingLastPathComponent() == runRoot else {
+                throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
+            }
+            return url
+        })
+        if let buildLock = state.buildLock {
+            guard buildLock.path == configuredBuildLockURL.standardizedFileURL.path,
+                  configuredBuildLockURL.path == configuredBuildLockURL.standardizedFileURL.path,
+                  !buildLock.token.isEmpty,
+                  !buildLock.generation.isEmpty,
+                  validIdentity(buildLock.owner) else {
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+        }
+        return RecoveryArtifact(
+            url: artifactURL,
+            runID: state.runID,
+            accounts: state.accounts,
+            processGroups: state.processGroups,
+            processes: state.processes,
+            simulatorDevices: state.simulatorDevices,
+            pendingCatalystLaunches: state.pendingCatalystLaunches,
+            secretArtifactURLs: secretURLs,
+            buildLock: state.buildLock,
+            isLegacy: false
+        )
+    }
+
+    private static func normalizedLegacy(
+        runID: String,
+        accounts: [RecordedAccount],
+        at artifactURL: URL,
+        validation: RecoveryArtifactValidation
+    ) throws -> RecoveryArtifact {
+        try validateAccounts(accounts, validation: validation)
+        return RecoveryArtifact(
+            url: artifactURL,
+            runID: runID,
+            accounts: accounts,
+            processGroups: [],
+            processes: [],
+            simulatorDevices: [],
+            pendingCatalystLaunches: [],
+            secretArtifactURLs: [],
+            buildLock: nil,
+            isLegacy: true
+        )
+    }
+
+    private static func validateAccounts(
+        _ accounts: [RecordedAccount],
+        validation: RecoveryArtifactValidation
+    ) throws {
+        guard Set(accounts.map { $0.role.rawValue }).count == accounts.count,
+              Set(accounts.map { $0.email.lowercased() }).count == accounts.count,
+              accounts.allSatisfy({ !$0.email.isEmpty && validation.emailIsInConfiguredNamespace($0.email) }) else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+    }
+
+    private static func validIdentity(_ identity: OwnedProcessIdentity) -> Bool {
+        identity.pid > 0
+    }
+
+    private static func validateJournalJSONShape(_ object: [String: Any]) throws {
+        try validateObjectArray(object["accounts"], required: ["email", "role", "outcome"])
+        try validateObjectArray(object["processes"], required: ["pid", "birthTimeSeconds", "birthTimeMicroseconds"])
+        try validateObjectArray(object["processGroups"], required: ["processGroupID", "leader"]) { value in
+            guard let object = value as? [String: Any] else { throw SharedReadingRecoveryJournalError.malformedArtifact }
+            try validateObject(object["leader"], required: ["pid", "birthTimeSeconds", "birthTimeMicroseconds"])
+        }
+        try validateObjectArray(object["simulatorDevices"], required: ["name", "deviceTypeIdentifier", "runtimeIdentifier"], optional: ["udid"])
+        try validateObjectArray(object["pendingCatalystLaunches"], required: ["role", "kind", "bundleIdentifier", "baselineIdentities"], optional: ["registeredIdentity"]) { value in
+            guard let launch = value as? [String: Any] else { throw SharedReadingRecoveryJournalError.malformedArtifact }
+            try validateObjectArray(launch["baselineIdentities"], required: ["pid", "birthTimeSeconds", "birthTimeMicroseconds"])
+            if let registered = launch["registeredIdentity"], !(registered is NSNull) {
+                try validateObject(registered, required: ["pid", "birthTimeSeconds", "birthTimeMicroseconds"])
+            }
+        }
+        guard object["secretArtifactRelativePaths"] is [String] else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+        if let lock = object["buildLock"], !(lock is NSNull) {
+            try validateObject(lock, required: ["path", "token", "generation", "owner"])
+            guard let lockObject = lock as? [String: Any] else { throw SharedReadingRecoveryJournalError.malformedArtifact }
+            try validateObject(lockObject["owner"], required: ["pid", "birthTimeSeconds", "birthTimeMicroseconds"])
+        }
+    }
+
+    private static func validateObjectArray(
+        _ value: Any?,
+        required: Set<String>,
+        optional: Set<String> = [],
+        nested: ((Any) throws -> Void)? = nil
+    ) throws {
+        guard let values = value as? [Any] else { throw SharedReadingRecoveryJournalError.malformedArtifact }
+        for value in values {
+            try validateObject(value, required: required, optional: optional)
+            try nested?(value)
+        }
+    }
+
+    private static func validateObject(
+        _ value: Any?,
+        required: Set<String>,
+        optional: Set<String> = []
+    ) throws {
+        guard let object = value as? [String: Any],
+              required.isSubset(of: Set(object.keys)),
+              Set(object.keys).isSubset(of: required.union(optional)) else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+    }
+
+    private static func validateFixtureShape(_ value: Any?) throws {
+        try validateObject(value, required: ["role", "format", "basename", "sha256", "byteSize"])
+    }
+
+    private static func validatePersistedAccountShape(_ value: Any?, role: TestAccountRole) throws {
+        try validateObject(value, required: ["role", "email"])
+        guard let object = value as? [String: Any], object["role"] as? String == role.rawValue else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
+    }
+
     /// Recover recorded individual identities without ever treating a reused
     /// PID as owned. A missing or birth-mismatched PID is already absent.
-    static func recoverProcesses(
+    public static func recoverProcesses(
         _ processes: [OwnedProcessIdentity],
         liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
         signal: @escaping @Sendable (Int32, Int32) -> Void,
@@ -769,7 +1416,7 @@ public extension SharedReadingRecoveryJournal {
     /// Group recovery has explicit inventory seams so unit tests never signal a
     /// real process. A live PGID leader whose birth time differs is a reused
     /// group and therefore an error, not cleanup authority.
-    static func recoverProcessGroups(
+    public static func recoverProcessGroups(
         _ groups: [OwnedProcessGroup],
         liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
         members: @escaping @Sendable (Int32) throws -> [Int32],
@@ -902,24 +1549,24 @@ private struct RecoveryState: Codable, Equatable {
         return set
     }
 
-    private static func accountsInOrder(_ lhs: RecordedAccount, _ rhs: RecordedAccount) -> Bool {
+    static func accountsInOrder(_ lhs: RecordedAccount, _ rhs: RecordedAccount) -> Bool {
         if lhs.email != rhs.email { return lhs.email < rhs.email }
         if lhs.role.rawValue != rhs.role.rawValue { return lhs.role.rawValue < rhs.role.rawValue }
         return lhs.outcome.rawValue < rhs.outcome.rawValue
     }
 
-    private static func processesInOrder(_ lhs: OwnedProcessIdentity, _ rhs: OwnedProcessIdentity) -> Bool {
+    static func processesInOrder(_ lhs: OwnedProcessIdentity, _ rhs: OwnedProcessIdentity) -> Bool {
         if lhs.pid != rhs.pid { return lhs.pid < rhs.pid }
         if lhs.birthTimeSeconds != rhs.birthTimeSeconds { return lhs.birthTimeSeconds < rhs.birthTimeSeconds }
         return lhs.birthTimeMicroseconds < rhs.birthTimeMicroseconds
     }
 
-    private static func processGroupsInOrder(_ lhs: OwnedProcessGroup, _ rhs: OwnedProcessGroup) -> Bool {
+    static func processGroupsInOrder(_ lhs: OwnedProcessGroup, _ rhs: OwnedProcessGroup) -> Bool {
         if lhs.processGroupID != rhs.processGroupID { return lhs.processGroupID < rhs.processGroupID }
         return processesInOrder(lhs.leader, rhs.leader)
     }
 
-    private static func simulatorDevicesInOrder(_ lhs: OwnedSimulatorDevice, _ rhs: OwnedSimulatorDevice) -> Bool {
+    static func simulatorDevicesInOrder(_ lhs: OwnedSimulatorDevice, _ rhs: OwnedSimulatorDevice) -> Bool {
         if lhs.udid != rhs.udid {
             switch (lhs.udid, rhs.udid) {
             case (nil, .some): return true
@@ -949,8 +1596,36 @@ private struct RecoveryState: Codable, Equatable {
     }
 }
 
-private struct RecordedAccount: Codable, Equatable {
+struct RecordedAccount: Codable, Equatable, Sendable {
     var email: String
     var role: TestAccountRole
     var outcome: TestAccountProvisioningOutcome
+}
+
+private struct PersistedHostRecoveryManifest: Decodable {
+    struct Account: Decodable {
+        let role: TestAccountRole
+        let email: String
+    }
+
+    let runID: String
+    let owner: Account
+    let participant: Account
+}
+
+private struct ProductionSimulatorInventory: Decodable {
+    struct Device: Decodable {
+        let udid: String
+        let name: String
+        let deviceTypeIdentifier: String
+    }
+
+    let devices: [String: [Device]]
+}
+
+private struct ProductionSimulatorDevice: Sendable {
+    let udid: String
+    let name: String
+    let deviceTypeIdentifier: String
+    let runtimeIdentifier: String
 }

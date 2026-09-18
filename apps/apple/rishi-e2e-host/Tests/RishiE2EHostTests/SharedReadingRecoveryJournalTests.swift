@@ -896,6 +896,653 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertEqual(lock.owner, process)
     }
 
+    func testRecoveryParsesEarlyJournalAndBothLegacyManifestShapes() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+
+        let journalURL = root
+            .appendingPathComponent("rishi-shared-reading-run-journal", isDirectory: true)
+            .appendingPathComponent("recovery.json")
+        let journal = try SharedReadingRecoveryJournal(url: journalURL, runID: "run-journal")
+        let process = OwnedProcessIdentity(pid: 801, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        try journal.recordProvisioningAddress("rishi-e2e-owner@example.test", role: .owner)
+        try journal.recordOwnedProcess(process)
+        let decodedJournal = try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: journalURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation
+        )
+        XCTAssertFalse(decodedJournal.isLegacy)
+        XCTAssertEqual(decodedJournal.runID, "run-journal")
+        XCTAssertEqual(decodedJournal.processes, [process])
+        XCTAssertEqual(decodedJournal.accounts.map(\.role), [.owner])
+
+        let fixture = RealBookFixture.Manifest(
+            role: .owner,
+            format: .pdf,
+            basename: "fixture.pdf",
+            sha256: String(repeating: "a", count: 64),
+            byteSize: 12
+        )
+        let rendezvousURL = root
+            .appendingPathComponent("rishi-shared-reading-run-rendezvous", isDirectory: true)
+            .appendingPathComponent("manifest.json")
+        try writeJSON(
+            RendezvousManifest(
+                runID: "run-rendezvous",
+                fixture: fixture,
+                ownerEmail: "rishi-e2e-owner@example.test",
+                participantEmail: "rishi-e2e-participant@example.test",
+                ownerDestination: .catalyst,
+                participantDestination: .iPhone17Pro,
+                rendezvousPath: "invite.json"
+            ),
+            to: rendezvousURL
+        )
+        let rendezvous = try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: rendezvousURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation
+        )
+        XCTAssertTrue(rendezvous.isLegacy)
+        XCTAssertEqual(Set(rendezvous.accounts.map { $0.role.rawValue }), ["owner", "participant"])
+
+        let persistedURL = root
+            .appendingPathComponent("rishi-shared-reading-run-persisted", isDirectory: true)
+            .appendingPathComponent("manifest.json")
+        try writeJSONObject([
+            "runID": "run-persisted",
+            "owner": ["role": "owner", "email": "rishi-e2e-owner@example.test"],
+            "participant": ["role": "participant", "email": "rishi-e2e-participant@example.test"],
+            "fixture": ["role": "owner", "format": "pdf", "basename": "fixture.pdf", "sha256": String(repeating: "a", count: 64), "byteSize": 12],
+            "manifestPath": "manifest.json",
+            "ownerDestination": "catalyst",
+            "participantDestination": "iPhone17Pro",
+            "rendezvousPath": "invite.json",
+        ], to: persistedURL)
+        let persisted = try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: persistedURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation
+        )
+        XCTAssertTrue(persisted.isLegacy)
+        XCTAssertEqual(Set(persisted.accounts.map { $0.role.rawValue }), ["owner", "participant"])
+    }
+
+    func testRecoveryArtifactRejectsMalformedDuplicateSecretAndOutOfScopeData() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        var cases: [[String: Any]] = [
+            ["runID": "", "accounts": [], "processGroups": [], "processes": [], "simulatorDevices": [], "pendingCatalystLaunches": [], "secretArtifactRelativePaths": []],
+            recoveryStateJSONObject(runID: "run-invalid", accounts: [
+                ["email": "rishi-e2e-one@example.test", "role": "owner", "outcome": "recoverable"],
+                ["email": "rishi-e2e-two@example.test", "role": "owner", "outcome": "recoverable"],
+            ]),
+            recoveryStateJSONObject(runID: "run-invalid", accounts: [
+                ["email": "other@example.test", "role": "owner", "outcome": "recoverable"],
+            ]),
+            recoveryStateJSONObject(runID: "run-invalid", secretPaths: ["../owner.xctestrun"]),
+            recoveryStateJSONObject(runID: "run-invalid", secretPaths: ["unexpected.xctestrun"]),
+            recoveryStateJSONObject(runID: "run-invalid", simulatorDevices: [[
+                "udid": "sim-1", "name": "not-the-run", "deviceTypeIdentifier": recoveryDeviceType,
+                "runtimeIdentifier": recoveryRuntime,
+            ]]),
+            recoveryStateJSONObject(runID: "run-invalid", simulatorDevices: [[
+                "udid": "sim-1", "name": "rishi-e2e-run-invalid", "deviceTypeIdentifier": "wrong-device",
+                "runtimeIdentifier": recoveryRuntime,
+            ]]),
+            recoveryStateJSONObject(runID: "run-invalid", simulatorDevices: [[
+                "udid": "sim-1", "name": "rishi-e2e-run-invalid", "deviceTypeIdentifier": recoveryDeviceType,
+                "runtimeIdentifier": "unconfigured-runtime",
+            ]]),
+            recoveryStateJSONObject(runID: "run-invalid", pendingLaunches: [[
+                "role": "owner", "kind": "app", "bundleIdentifier": "unexpected.bundle",
+                "baselineIdentities": [],
+            ]]),
+            recoveryStateJSONObject(runID: "run-invalid", pendingLaunches: [[
+                "role": "owner", "kind": "unexpected-kind", "bundleIdentifier": "org.fidexa.rishi",
+                "baselineIdentities": [],
+            ]]),
+            recoveryStateJSONObject(runID: "run-invalid", pendingLaunches: [[
+                "role": "owner", "kind": "app", "bundleIdentifier": "org.fidexa.rishi",
+                "baselineIdentities": [], "nonce": "must-not-persist",
+            ]]),
+        ]
+        let identity: [String: Any] = ["pid": 901, "birthTimeSeconds": 1, "birthTimeMicroseconds": 2]
+        var duplicateProcesses = recoveryStateJSONObject(runID: "run-invalid")
+        duplicateProcesses["processes"] = [identity, identity]
+        cases.append(duplicateProcesses)
+        var wrongLock = recoveryStateJSONObject(runID: "run-invalid")
+        wrongLock["buildLock"] = [
+            "path": root.appendingPathComponent("other.lock").path,
+            "token": "token", "generation": "generation", "owner": identity,
+        ]
+        cases.append(wrongLock)
+
+        for (index, object) in cases.enumerated() {
+            let runID = object["runID"] as? String ?? "missing-\(index)"
+            let url = root
+                .appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
+                .appendingPathComponent("recovery.json")
+            try writeJSONObject(object, to: url)
+            XCTAssertThrowsError(try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+                at: url,
+                temporaryRoot: root,
+                configuredBuildLockURL: lockURL,
+                validation: recoveryValidation
+            ), "case \(index)")
+        }
+
+        let secretURL = root
+            .appendingPathComponent("rishi-shared-reading-run-secret", isDirectory: true)
+            .appendingPathComponent("manifest.json")
+        try writeJSONObject([
+            "runID": "run-secret",
+            "owner": ["role": "owner", "email": "rishi-e2e-owner@example.test", "password": "must-not-parse"],
+            "participant": ["role": "participant", "email": "rishi-e2e-participant@example.test"],
+        ], to: secretURL)
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: secretURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation
+        ))
+
+        let externalRoot = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: externalRoot) }
+        let externalURL = externalRoot
+            .appendingPathComponent("rishi-shared-reading-run-external", isDirectory: true)
+            .appendingPathComponent("recovery.json")
+        try writeJSONObject(recoveryStateJSONObject(runID: "run-external"), to: externalURL)
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: externalURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation
+        ))
+    }
+
+    func testRecoveryStopsCommandGroupsBeforeDeletingDisposableSimulatorAndAccounts() async throws {
+        let fixture = try makeOrchestrationFixture(includeGroup: true, includeProcess: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "group:stop:811")), try XCTUnwrap(events.values.firstIndex(of: "simulator:delete:simulator-1")))
+        XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "simulator:absent:simulator-1")), try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner")))
+    }
+
+    func testRecoveryStopsMatchingProcessesBeforeDeletingAccounts() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        XCTAssertEqual(events.values, [
+            "process:stop:812",
+            "process:absent:812",
+            "simulator:delete:simulator-1",
+            "simulator:absent:simulator-1",
+            "account:delete:owner",
+            "account:verified:owner",
+            "account:delete:participant",
+            "account:verified:participant",
+            "lock:reconcile",
+            "artifact:remove",
+        ])
+    }
+
+    func testRecoveryAttemptsEveryProcessWhenOneCannotBeStopped() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let journal = try SharedReadingRecoveryJournal(url: fixture.artifactURL, runID: "run-order")
+        try journal.recordOwnedProcess(OwnedProcessIdentity(pid: 813, birthTimeSeconds: 5, birthTimeMicroseconds: 6))
+        let events = RecoveryEventRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(
+                events: events,
+                artifactURL: fixture.artifactURL,
+                failing: ["process:812"]
+            )
+        ))
+
+        XCTAssertTrue(events.values.contains("process:stop:812"))
+        XCTAssertTrue(events.values.contains("process:stop:813"))
+        XCTAssertTrue(events.values.contains("process:absent:813"))
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:") }))
+    }
+
+    func testRecoveryEnumeratesIdentityBoundPrivateGroupBeforeIndividualProcessCleanup() async throws {
+        let fixture = try makeOrchestrationFixture(includeGroup: true, includeProcess: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        XCTAssertLessThan(
+            try XCTUnwrap(events.values.firstIndex(of: "group:absent:811")),
+            try XCTUnwrap(events.values.firstIndex(of: "process:stop:812"))
+        )
+    }
+
+    func testRecoveryDoesNotDeleteAccountsWhileProcessCleanupIsUnproven() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(
+                events: events,
+                artifactURL: fixture.artifactURL,
+                failing: ["process:812"]
+            )
+        ))
+
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("simulator:") }))
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:") }))
+        XCTAssertFalse(events.values.contains("lock:reconcile"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testRecoveryAttemptsSecondAccountAfterFirstDeletionFails() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(
+                events: events,
+                artifactURL: fixture.artifactURL,
+                failing: ["account:owner"]
+            )
+        ))
+
+        XCTAssertTrue(events.values.contains("account:delete:owner"))
+        XCTAssertTrue(events.values.contains("account:delete:participant"))
+        XCTAssertTrue(events.values.contains("account:verified:participant"))
+        XCTAssertFalse(events.values.contains("lock:reconcile"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testRecoveryDeletesPendingProvisioningAddressUntilAbsenceIsAuthoritative() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let artifactURL = root
+            .appendingPathComponent("rishi-shared-reading-run-pending", isDirectory: true)
+            .appendingPathComponent("recovery.json")
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(url: artifactURL, runID: "run-pending")
+        try journal.recordProvisioningAddress("rishi-e2e-owner@example.test", role: .owner)
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: artifactURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: artifactURL)
+        )
+
+        XCTAssertEqual(events.values, [
+            "account:delete:owner", "account:verified:owner", "artifact:remove",
+        ])
+    }
+
+    func testRecoveryReconcilesLockOnlyAfterProcessesAndAccountsAreAbsent() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        let lockIndex = try XCTUnwrap(events.values.firstIndex(of: "lock:reconcile"))
+        XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "process:absent:812")), lockIndex)
+        XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "account:verified:participant")), lockIndex)
+        XCTAssertLessThan(lockIndex, try XCTUnwrap(events.values.firstIndex(of: "artifact:remove")))
+    }
+
+    func testRecoveryRetainsArtifactAndLockOnAnyFailure() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        do {
+            try await SharedReadingRecoveryJournal.recover(
+                at: fixture.artifactURL,
+                temporaryRoot: fixture.root,
+                configuredBuildLockURL: fixture.lockURL,
+                validation: recoveryValidation,
+                operations: recoveryOperations(
+                    events: events,
+                    artifactURL: fixture.artifactURL,
+                    failing: ["simulator"]
+                )
+            )
+            XCTFail("Expected fail-closed recovery")
+        } catch {
+            let description = error.localizedDescription
+            XCTAssertFalse(description.contains("rishi-e2e-owner@example.test"))
+            XCTAssertFalse(description.contains("token-order"))
+        }
+
+        XCTAssertFalse(events.values.contains("lock:reconcile"))
+        XCTAssertFalse(events.values.contains("artifact:remove"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testRecoveryRemovesArtifactOnlyAfterCompleteProof() async throws {
+        let fixture = try makeOrchestrationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        XCTAssertEqual(events.values.last, "artifact:remove")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.artifactURL.deletingLastPathComponent().path))
+    }
+
+    func testLegacyManifestFailsClosedWhileExactRunIDProcessOrConfiguredLockExists() async throws {
+        for (index, processVisible, lockExists) in [(0, true, false), (1, false, true)] {
+            let root = try makeTemporaryRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let artifactURL = root
+                .appendingPathComponent("rishi-shared-reading-run-legacy-\(index)", isDirectory: true)
+                .appendingPathComponent("manifest.json")
+            let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+            try writeJSONObject([
+                "runID": "run-legacy-\(index)",
+                "owner": ["role": "owner", "email": "rishi-e2e-owner@example.test"],
+                "participant": ["role": "participant", "email": "rishi-e2e-participant@example.test"],
+                "fixture": ["role": "owner", "format": "pdf", "basename": "fixture.pdf", "sha256": String(repeating: "a", count: 64), "byteSize": 12],
+                "manifestPath": "manifest.json",
+                "ownerDestination": "catalyst",
+                "participantDestination": "iPhone17Pro",
+                "rendezvousPath": "invite.json",
+            ], to: artifactURL)
+            let events = RecoveryEventRecorder()
+
+            await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recover(
+                at: artifactURL,
+                temporaryRoot: root,
+                configuredBuildLockURL: lockURL,
+                validation: recoveryValidation,
+                operations: recoveryOperations(
+                    events: events,
+                    artifactURL: artifactURL,
+                    legacyProcessVisible: processVisible,
+                    configuredLockExists: lockExists
+                )
+            ))
+
+            XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:") }))
+            XCTAssertFalse(events.values.contains("artifact:remove"))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path))
+        }
+    }
+
+    func testRecoveryPublicAPIHasExactProductionSignature() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/RishiE2EHost/SharedReadingRecoveryJournal.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("public static func recover("))
+        XCTAssertTrue(source.contains("accountClient: TestAccountClient"))
+    }
+
+    func testRecoveryHandlesRegisteredAndUnresolvedCatalystIntentsWithoutBundleWideSignalling() async throws {
+        let fixture = try makeOrchestrationFixture(includeProcess: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let journal = try SharedReadingRecoveryJournal(url: fixture.artifactURL, runID: "run-order")
+        let registered = OwnedProcessIdentity(pid: 814, birthTimeSeconds: 7, birthTimeMicroseconds: 8)
+        try journal.recordCatalystLaunchIntent(PendingCatalystLaunch(
+            role: .owner,
+            kind: .runner,
+            bundleIdentifier: "org.fidexa.rishiUITests",
+            baselineIdentities: [],
+            registeredIdentity: nil
+        ))
+        try journal.recordCatalystRegisteredIdentity(registered, role: .owner, kind: .runner)
+        try journal.recordCatalystLaunchIntent(PendingCatalystLaunch(
+            role: .owner,
+            kind: .app,
+            bundleIdentifier: "org.fidexa.rishi",
+            baselineIdentities: [],
+            registeredIdentity: nil
+        ))
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        XCTAssertTrue(events.values.contains("process:stop:814"))
+        XCTAssertTrue(events.values.contains("process:absent:814"))
+        XCTAssertTrue(events.values.contains("intent:inspect:org.fidexa.rishi"))
+        XCTAssertFalse(events.values.contains("intent:signal:org.fidexa.rishi"))
+    }
+
+    func testRecoveryRemovesBothReservedSecretClonesBeforeAccounts() async throws {
+        let fixture = try makeOrchestrationFixture(includeProcess: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let journal = try SharedReadingRecoveryJournal(url: fixture.artifactURL, runID: "run-order")
+        for name in ["owner.xctestrun", "participant.xctestrun"] {
+            try journal.recordSecretArtifact(relativePath: name)
+            try Data("secret".utf8).write(to: fixture.artifactURL.deletingLastPathComponent().appendingPathComponent(name))
+        }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL)
+        )
+
+        let ownerSecret = try XCTUnwrap(events.values.firstIndex(of: "secret:remove:owner.xctestrun"))
+        let participantSecret = try XCTUnwrap(events.values.firstIndex(of: "secret:remove:participant.xctestrun"))
+        let account = try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner"))
+        XCTAssertLessThan(ownerSecret, account)
+        XCTAssertLessThan(participantSecret, account)
+    }
+
+    private var recoveryRuntime: String { "com.apple.CoreSimulator.SimRuntime.iOS-26-0" }
+    private var recoveryDeviceType: String { "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" }
+
+    private var recoveryValidation: RecoveryArtifactValidation {
+        RecoveryArtifactValidation(
+            emailIsInConfiguredNamespace: {
+                $0.hasPrefix("rishi-e2e-") && $0.hasSuffix("@example.test")
+            },
+            allowedRuntimeIdentifiers: [recoveryRuntime],
+            runnerBundleIdentifier: "org.fidexa.rishiUITests",
+            appBundleIdentifier: "org.fidexa.rishi"
+        )
+    }
+
+    private struct OrchestrationFixture {
+        let root: URL
+        let artifactURL: URL
+        let lockURL: URL
+    }
+
+    private func makeOrchestrationFixture(
+        includeGroup: Bool = false,
+        includeProcess: Bool = true
+    ) throws -> OrchestrationFixture {
+        let root = try makeTemporaryRoot()
+        let artifactURL = root
+            .appendingPathComponent("rishi-shared-reading-run-order", isDirectory: true)
+            .appendingPathComponent("recovery.json")
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(url: artifactURL, runID: "run-order")
+        try journal.recordProvisioningAddress("rishi-e2e-owner@example.test", role: .owner)
+        try journal.recordProvisioningOutcome(.recoverable, email: "rishi-e2e-owner@example.test")
+        try journal.recordProvisioningAddress("rishi-e2e-participant@example.test", role: .participant)
+        try journal.recordProvisioningOutcome(.recoverable, email: "rishi-e2e-participant@example.test")
+        if includeGroup {
+            let leader = OwnedProcessIdentity(pid: 811, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+            try journal.recordOwnedProcessGroup(OwnedProcessGroup(processGroupID: 811, leader: leader))
+        }
+        if includeProcess {
+            try journal.recordOwnedProcess(OwnedProcessIdentity(pid: 812, birthTimeSeconds: 3, birthTimeMicroseconds: 4))
+        }
+        try journal.recordOwnedSimulatorDevice(OwnedSimulatorDevice(
+            udid: "simulator-1",
+            name: "rishi-e2e-run-order",
+            deviceTypeIdentifier: recoveryDeviceType,
+            runtimeIdentifier: recoveryRuntime
+        ))
+        try journal.recordBuildLock(AppleXcodeBuildLockOwnership(
+            path: lockURL.path,
+            token: "token-order",
+            generation: "generation-order",
+            owner: OwnedProcessIdentity(pid: 810, birthTimeSeconds: 1, birthTimeMicroseconds: 1)
+        ))
+        return OrchestrationFixture(root: root, artifactURL: artifactURL, lockURL: lockURL)
+    }
+
+    private func recoveryOperations(
+        events: RecoveryEventRecorder,
+        artifactURL: URL,
+        failing: Set<String> = [],
+        currentCatalystIdentities: [String: Set<OwnedProcessIdentity>] = [:],
+        legacyProcessVisible: Bool = false,
+        configuredLockExists: Bool = false
+    ) -> RecoveryOperations {
+        RecoveryOperations(
+            recoverProcessGroup: { group in
+                events.append("group:stop:\(group.processGroupID)")
+                if failing.contains("group") { throw RecoveryInspectionTestError.unavailable }
+                events.append("group:absent:\(group.processGroupID)")
+            },
+            recoverProcess: { process in
+                events.append("process:stop:\(process.pid)")
+                if failing.contains("process:\(process.pid)") { throw RecoveryInspectionTestError.unavailable }
+                events.append("process:absent:\(process.pid)")
+            },
+            currentCatalystIdentities: { bundle in
+                events.append("intent:inspect:\(bundle)")
+                if failing.contains("bundle") { throw RecoveryInspectionTestError.unavailable }
+                return currentCatalystIdentities[bundle] ?? []
+            },
+            recoverSimulator: { simulator in
+                events.append("simulator:delete:\(simulator.udid ?? "intent")")
+                if failing.contains("simulator") { throw RecoveryInspectionTestError.unavailable }
+                events.append("simulator:absent:\(simulator.udid ?? "intent")")
+            },
+            removeSecretArtifact: { url in
+                events.append("secret:remove:\(url.lastPathComponent)")
+                if failing.contains("secret") { throw RecoveryInspectionTestError.unavailable }
+            },
+            recoverAccount: { account in
+                events.append("account:delete:\(account.role.rawValue)")
+                if failing.contains("account:\(account.role.rawValue)") { throw RecoveryInspectionTestError.unavailable }
+                events.append("account:verified:\(account.role.rawValue)")
+            },
+            reconcileBuildLock: { _ in
+                events.append("lock:reconcile")
+                if failing.contains("lock") { throw RecoveryInspectionTestError.unavailable }
+            },
+            exactRunIDProcessIsVisible: { _ in legacyProcessVisible },
+            configuredBuildLockExists: { _ in configuredLockExists },
+            removeArtifactAndRunDirectory: { _ in
+                events.append("artifact:remove")
+                if failing.contains("artifact") { throw RecoveryInspectionTestError.unavailable }
+                try FileManager.default.removeItem(at: artifactURL.deletingLastPathComponent())
+            }
+        )
+    }
+
+    private func recoveryStateJSONObject(
+        runID: String,
+        accounts: [[String: Any]] = [],
+        simulatorDevices: [[String: Any]] = [],
+        pendingLaunches: [[String: Any]] = [],
+        secretPaths: [String] = []
+    ) -> [String: Any] {
+        [
+            "runID": runID,
+            "accounts": accounts,
+            "processGroups": [],
+            "processes": [],
+            "simulatorDevices": simulatorDevices,
+            "pendingCatalystLaunches": pendingLaunches,
+            "secretArtifactRelativePaths": secretPaths,
+            "buildLock": NSNull(),
+        ]
+    }
+
+    private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(value).write(to: url)
+    }
+
+    private func writeJSONObject(_ value: [String: Any], to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]).write(to: url)
+    }
+
     private func makeTemporaryRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-recovery-tests-\(UUID().uuidString)", isDirectory: true)
@@ -972,6 +1619,14 @@ private final class SignalRecorder: @unchecked Sendable {
 
     var values: [Int32] { lock.withLock { stored } }
     func append(_ pid: Int32) { lock.withLock { stored.append(pid) } }
+}
+
+private final class RecoveryEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+
+    var values: [String] { lock.withLock { stored } }
+    func append(_ value: String) { lock.withLock { stored.append(value) } }
 }
 
 private enum RecoveryInspectionTestError: Error { case unavailable }

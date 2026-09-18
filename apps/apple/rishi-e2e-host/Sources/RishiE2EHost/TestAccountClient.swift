@@ -326,12 +326,17 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
     /// command cannot be pointed at an unrelated user by accident.
     public func deleteProvisionedAccount(email: String) async throws {
         let normalized = email.lowercased()
-        let prefix = "\(configuration.emailPrefix.lowercased())-"
-        let suffix = "@\(configuration.testDomain.lowercased())"
-        guard normalized.hasPrefix(prefix), normalized.hasSuffix(suffix) else {
+        guard isGeneratedRecoveryEmail(normalized) else {
             throw TestAccountClientError.invalidConfiguration("The recovery email is outside the configured test-account namespace.")
         }
         try await deleteProvisionedAccount(byEmail: normalized)
+    }
+
+    func isGeneratedRecoveryEmail(_ email: String) -> Bool {
+        let normalized = email.lowercased()
+        let prefix = "\(configuration.emailPrefix.lowercased())-"
+        let suffix = "@\(configuration.testDomain.lowercased())"
+        return normalized.hasPrefix(prefix) && normalized.hasSuffix(suffix)
     }
 
     /// Attempt each generated account independently. Recovery artifact
