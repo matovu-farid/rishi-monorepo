@@ -506,6 +506,14 @@ public final class SharedReadingPreparedBuildLock: @unchecked Sendable {
         }
     }
 
+    fileprivate func requireBound() throws {
+        try stateLock.withLock {
+            guard case .bound = state else {
+                throw ResourcePreflightError("Prepared Apple build lock is not bound to this host")
+            }
+        }
+    }
+
     fileprivate func rollbackBeforeBinding() throws -> Bool {
         let lock: (any AppleXcodeBuildLockHolding)? = stateLock.withLock {
             let lock: (any AppleXcodeBuildLockHolding)
@@ -563,6 +571,7 @@ public struct SharedReadingHost: Sendable {
     private let buildLockLifecycle: BuildLockLifecycle?
     private let executionGate: HostExecutionGate
     private let preparedBuildLockIdentifier: UUID?
+    private let preparedBuildLockBinding: SharedReadingPreparedBuildLock?
 
     init(
         configuration: Configuration,
@@ -579,6 +588,7 @@ public struct SharedReadingHost: Sendable {
         self.buildLockLifecycle = nil
         self.executionGate = HostExecutionGate()
         self.preparedBuildLockIdentifier = nil
+        self.preparedBuildLockBinding = nil
     }
 
     public init(
@@ -602,6 +612,7 @@ public struct SharedReadingHost: Sendable {
         )
         self.executionGate = HostExecutionGate()
         self.preparedBuildLockIdentifier = preparedBuildLock.identifier
+        self.preparedBuildLockBinding = preparedBuildLock
     }
 
     init(
@@ -625,6 +636,7 @@ public struct SharedReadingHost: Sendable {
         )
         self.executionGate = HostExecutionGate()
         self.preparedBuildLockIdentifier = nil
+        self.preparedBuildLockBinding = nil
     }
 
     private static func prepareBuildLock(
@@ -708,6 +720,7 @@ public struct SharedReadingHost: Sendable {
     /// Runs the lifecycle without allowing a teardown failure to erase the
     /// operation failure that caused teardown to begin.
     public func runReport(preflightAlreadyCompleted: Bool = false) async throws -> SharedReadingRunReport {
+        try preparedBuildLockBinding?.requireBound()
         try executionGate.begin()
         var owner: TestAccount?
         var participant: TestAccount?

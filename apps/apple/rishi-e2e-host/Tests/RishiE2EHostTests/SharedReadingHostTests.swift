@@ -411,25 +411,18 @@ final class SharedReadingHostTests: XCTestCase {
         let events = EventRecorder()
         let lock = FakeBuildLock(events: events)
         let recorder = FakeBuildLockRecorder(events: events)
-
-        let prepared = try SharedReadingHost.prepareBuildLock(
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = try makeBoundPreparedHost(
+            events: events,
+            manifestURL: manifestURL,
             recorder: recorder,
-            acquire: {
+            acquireBuildLock: {
                 events.append("lock:acquire")
                 return lock
             }
         )
         XCTAssertEqual(events.values, ["lock:acquire", "journal:record-lock"])
-
-        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: manifestURL) }
-        let host = try SharedReadingHost(
-            configuration: makeConfiguration(manifestURL: manifestURL),
-            accounts: FakeAccounts(events: events),
-            peers: FakePeers(events: events),
-            rendezvous: FakeRendezvous(events: events),
-            preparedBuildLock: prepared
-        )
 
         try await host.run()
 
@@ -490,13 +483,14 @@ final class SharedReadingHostTests: XCTestCase {
 
     func testPreparedHostCanRunOnlyOnceSequentiallyWithoutRepeatingSideEffects() async throws {
         let events = EventRecorder()
-        let prepared = try SharedReadingHost.prepareBuildLock(
-            recorder: FakeBuildLockRecorder(events: events),
-            acquire: { FakeBuildLock(events: events) }
-        )
         let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: manifestURL) }
-        let host = try makeHost(preparedBuildLock: prepared, events: events, manifestURL: manifestURL)
+        let host = try makeBoundPreparedHost(
+            events: events,
+            manifestURL: manifestURL,
+            recorder: FakeBuildLockRecorder(events: events),
+            acquireBuildLock: { FakeBuildLock(events: events) }
+        )
 
         _ = try await host.runReport()
         let eventsAfterFirstRun = events.values
@@ -559,18 +553,14 @@ final class SharedReadingHostTests: XCTestCase {
             let lock = FakeBuildLock(events: events, releaseOnDeinitUnlessTransferred: true)
             releasedLock = lock
             let recorder = FakeBuildLockRecorder(events: events, failRecordAttempt: 2)
-            let prepared = try SharedReadingHost.prepareBuildLock(
-                recorder: recorder,
-                acquire: { lock }
-            )
             let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: manifestURL) }
-            let host = try SharedReadingHost(
-                configuration: makeConfiguration(manifestURL: manifestURL),
+            let host = try makeBoundPreparedHost(
+                events: events,
+                manifestURL: manifestURL,
                 accounts: FakeAccounts(events: events, deleteErrorRole: .owner),
-                peers: FakePeers(events: events),
-                rendezvous: FakeRendezvous(events: events),
-                preparedBuildLock: prepared
+                recorder: recorder,
+                acquireBuildLock: { lock }
             )
 
             let report = try await host.runReport()
@@ -683,6 +673,72 @@ final class SharedReadingHostTests: XCTestCase {
         ))
 
         XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "journal:clear-lock"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
+    }
+
+    func testEscapedConsumedHostIsInvalidAfterFactoryRollback() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-cli-escaped-host-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-run", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(
+            url: runRoot.appendingPathComponent("recovery.json"),
+            runID: "run-escaped-host"
+        )
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events)
+        let manifestURL = runRoot.appendingPathComponent("manifest.json")
+        var escapedHost: SharedReadingHost?
+
+        XCTAssertThrowsError(try SharedReadingHost.withPreparedBuildLockForHost(
+            recoveryJournal: journal,
+            prepare: {
+                try SharedReadingHost.prepareBuildLock(
+                    recorder: recorder,
+                    acquire: { lock }
+                )
+            },
+            makeHost: { prepared in
+                let consumedHost = try SharedReadingHost(
+                    configuration: self.makeConfiguration(manifestURL: manifestURL),
+                    accounts: FakeAccounts(events: events),
+                    peers: FakePeers(events: events),
+                    rendezvous: FakeRendezvous(events: events),
+                    preparedBuildLock: prepared
+                )
+                escapedHost = consumedHost
+                return SharedReadingHost(
+                    configuration: self.makeConfiguration(manifestURL: manifestURL),
+                    accounts: FakeAccounts(events: events),
+                    peers: FakePeers(events: events),
+                    rendezvous: FakeRendezvous(events: events)
+                )
+            }
+        ))
+
+        let capturedHost = try XCTUnwrap(escapedHost)
+        let eventsAfterRollback = events.values
+        do {
+            _ = try await capturedHost.runReport()
+            XCTFail("An escaped host report must remain invalid after exact lock rollback")
+        } catch {
+            XCTAssertTrue(error is ResourcePreflightError)
+        }
+        do {
+            _ = try await capturedHost.run()
+            XCTFail("An escaped host run must remain invalid after exact lock rollback")
+        } catch {
+            XCTAssertTrue(error is ResourcePreflightError)
+        }
+
+        XCTAssertEqual(events.values, eventsAfterRollback)
+        XCTAssertEqual(eventsAfterRollback, [
+            "journal:record-lock", "lock:release", "journal:clear-lock",
+        ])
+        XCTAssertFalse(events.values.contains("account:preflight"))
+        XCTAssertFalse(events.values.contains("preflight"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
     }
 
@@ -806,6 +862,44 @@ final class SharedReadingHostTests: XCTestCase {
             peers: FakePeers(events: events),
             rendezvous: FakeRendezvous(events: events),
             preparedBuildLock: preparedBuildLock
+        )
+    }
+
+    private func makeBoundPreparedHost(
+        events: EventRecorder,
+        manifestURL: URL,
+        accounts: (any TestAccountManaging)? = nil,
+        recorder: any BuildLockOwnershipRecording,
+        acquireBuildLock: @escaping @Sendable () throws -> any AppleXcodeBuildLockHolding
+    ) throws -> SharedReadingHost {
+        let recoveryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-host-binding-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: recoveryRoot, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: recoveryRoot) }
+        let journal = try SharedReadingRecoveryJournal(
+            url: recoveryRoot
+                .appendingPathComponent("run", isDirectory: true)
+                .appendingPathComponent("recovery.json"),
+            runID: "run-binding"
+        )
+
+        return try SharedReadingHost.withPreparedBuildLockForHost(
+            recoveryJournal: journal,
+            prepare: {
+                try SharedReadingHost.prepareBuildLock(
+                    recorder: recorder,
+                    acquire: acquireBuildLock
+                )
+            },
+            makeHost: { prepared in
+                try SharedReadingHost(
+                    configuration: self.makeConfiguration(manifestURL: manifestURL),
+                    accounts: accounts ?? FakeAccounts(events: events),
+                    peers: FakePeers(events: events),
+                    rendezvous: FakeRendezvous(events: events),
+                    preparedBuildLock: prepared
+                )
+            }
         )
     }
 
