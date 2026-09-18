@@ -79,6 +79,53 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertTrue(testHandle.cleanupState().ownedProcessesAreAbsent)
     }
 
+    func testReentrantRecorderCancellationDoesNotDeadlockAndFailsClosed() throws {
+        let root = OwnedProcessIdentity(pid: 750, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let descendant = OwnedProcessIdentity(pid: 751, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let group = OwnedProcessGroup(processGroupID: root.pid, leader: root)
+        let recorder = ReentrantCancellingRecorder(target: descendant)
+        try recorder.recordOwnedProcess(root)
+        try recorder.recordOwnedProcessGroup(group)
+        let state = ReentrantRecorderProcessState(root: root, descendant: descendant)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        try stdout.fileHandleForWriting.close()
+        try stderr.fileHandleForWriting.close()
+        let outcome = WaitOutcome()
+        let testHandle = FoundationProcessRunner.makeHandleForTesting(
+            group: group,
+            observed: [root],
+            recorder: recorder,
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            liveIdentity: { state.identity(for: $0) },
+            members: { state.members(in: $0) },
+            processGroup: { state.processGroup(of: $0) },
+            signal: { state.signal(pid: $0, signal: $1) },
+            observeRootExit: { _ in 0 },
+            reapRoot: { state.reapRoot(pid: $0) },
+            waitCallStarted: {}
+        )
+
+        XCTAssertEqual(state.discoveryStarted.wait(timeout: .now() + 1), .success)
+        recorder.onTargetRecord = { testHandle.handle.cancel() }
+        Task {
+            outcome.finish(failedClosed: await cleanupErrorFromWait(testHandle.handle))
+        }
+        state.allowDiscovery.signal()
+
+        guard outcome.completed.wait(timeout: .now() + 2) == .success else {
+            XCTFail("Reentrant recorder cancellation deadlocked process completion")
+            return
+        }
+        XCTAssertTrue(outcome.failedClosed)
+        XCTAssertEqual(recorder.targetRecordCount, 1)
+        XCTAssertEqual(state.signals(for: descendant.pid), [SIGTERM])
+        XCTAssertNil(state.identity(for: descendant.pid))
+        XCTAssertEqual(recorder.processes, [root])
+        XCTAssertEqual(recorder.groups, [group])
+    }
+
     func testStableIdentityRequiresIdentityAndProcessGroupRecheck() {
         let first = OwnedProcessIdentity(pid: 700, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
         let reused = OwnedProcessIdentity(pid: 700, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
@@ -455,6 +502,59 @@ private final class ProcessRecorder: OwnedProcessRecording, @unchecked Sendable 
     func recordCatalystRegisteredIdentity(_: OwnedProcessIdentity, role _: TestAccountRole, kind _: PendingCatalystLaunch.Kind) throws {}
 }
 
+private final class ReentrantCancellingRecorder: OwnedProcessRecording, @unchecked Sendable {
+    private let lock = NSLock()
+    private let target: OwnedProcessIdentity
+    private var storedProcesses: [OwnedProcessIdentity] = []
+    private var storedGroups: [OwnedProcessGroup] = []
+    private var storedTargetRecordCount = 0
+    private var storedOnTargetRecord: (@Sendable () -> Void)?
+
+    init(target: OwnedProcessIdentity) { self.target = target }
+
+    var onTargetRecord: (@Sendable () -> Void)? {
+        get { lock.withLock { storedOnTargetRecord } }
+        set { lock.withLock { storedOnTargetRecord = newValue } }
+    }
+
+    var processes: [OwnedProcessIdentity] { lock.withLock { storedProcesses } }
+    var groups: [OwnedProcessGroup] { lock.withLock { storedGroups } }
+    var targetRecordCount: Int { lock.withLock { storedTargetRecordCount } }
+
+    func recordOwnedProcess(_ identity: OwnedProcessIdentity) throws {
+        if identity == target {
+            let callback = lock.withLock { () -> (@Sendable () -> Void)? in
+                storedTargetRecordCount += 1
+                return storedOnTargetRecord
+            }
+            callback?()
+            throw ProcessRecorderError.failed
+        }
+        lock.withLock { storedProcesses.append(identity) }
+    }
+
+    func recordOwnedProcessGroup(_ group: OwnedProcessGroup) throws {
+        lock.withLock { storedGroups.append(group) }
+    }
+
+    func recordOwnedSimulatorDevice(_: OwnedSimulatorDevice) throws {}
+    func recordCatalystLaunchIntent(_: PendingCatalystLaunch) throws {}
+    func recordCatalystRegisteredIdentity(_: OwnedProcessIdentity, role _: TestAccountRole, kind _: PendingCatalystLaunch.Kind) throws {}
+}
+
+private final class WaitOutcome: @unchecked Sendable {
+    let completed = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var storedFailedClosed = false
+
+    var failedClosed: Bool { lock.withLock { storedFailedClosed } }
+
+    func finish(failedClosed: Bool) {
+        lock.withLock { storedFailedClosed = failedClosed }
+        completed.signal()
+    }
+}
+
 private enum ProcessRecorderError: Error { case failed }
 private enum ProcessInspectionTestError: Error { case unavailable }
 
@@ -585,6 +685,74 @@ private final class MonitorCompletionRaceState: @unchecked Sendable {
         guard shouldPause else { return }
         callbackValidated.signal()
         allowPublication.wait()
+    }
+
+    func signal(pid: Int32, signal: Int32) -> Int32 {
+        lock.withLock {
+            recordedSignals.append((pid, signal))
+            if pid == descendant.pid, signal == SIGTERM { descendantIsAlive = false }
+        }
+        return 0
+    }
+
+    func reapRoot(pid: Int32) {
+        XCTAssertEqual(pid, root.pid)
+        lock.withLock { rootWasReaped = true }
+    }
+
+    func signals(for pid: Int32) -> [Int32] {
+        lock.withLock { recordedSignals.compactMap { $0.0 == pid ? $0.1 : nil } }
+    }
+}
+
+private final class ReentrantRecorderProcessState: @unchecked Sendable {
+    let discoveryStarted = DispatchSemaphore(value: 0)
+    let allowDiscovery = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let root: OwnedProcessIdentity
+    private let descendant: OwnedProcessIdentity
+    private var heldDiscovery = false
+    private var rootWasReaped = false
+    private var descendantIsAlive = true
+    private var recordedSignals: [(Int32, Int32)] = []
+
+    init(root: OwnedProcessIdentity, descendant: OwnedProcessIdentity) {
+        self.root = root
+        self.descendant = descendant
+    }
+
+    func identity(for pid: Int32) -> OwnedProcessIdentity? {
+        lock.withLock {
+            if pid == root.pid { return rootWasReaped ? nil : root }
+            if pid == descendant.pid { return descendantIsAlive ? descendant : nil }
+            return nil
+        }
+    }
+
+    func members(in processGroupID: Int32) -> [Int32] {
+        let shouldHold = lock.withLock { () -> Bool in
+            guard processGroupID == root.pid, !heldDiscovery else { return false }
+            heldDiscovery = true
+            return true
+        }
+        if shouldHold {
+            discoveryStarted.signal()
+            allowDiscovery.wait()
+        }
+        return lock.withLock {
+            guard processGroupID == root.pid else { return [] }
+            var result = rootWasReaped ? [] : [root.pid]
+            if descendantIsAlive { result.append(descendant.pid) }
+            return result
+        }
+    }
+
+    func processGroup(of pid: Int32) -> Int32? {
+        lock.withLock {
+            if pid == root.pid { return rootWasReaped ? nil : root.pid }
+            if pid == descendant.pid { return descendantIsAlive ? root.pid : nil }
+            return nil
+        }
     }
 
     func signal(pid: Int32, signal: Int32) -> Int32 {

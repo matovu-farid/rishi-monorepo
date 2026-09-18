@@ -540,25 +540,25 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
             return
         }
         for pid in members {
-            var publicationError: Error?
-            monitorStateLock.withLock {
+            let identityToRecord = monitorStateLock.withLock { () -> OwnedProcessIdentity? in
                 guard !finished,
                       let identity = OwnedProcessGroupInspector.stableIdentity(
                           for: pid,
                           in: group.processGroupID,
                           identity: system.liveIdentity,
                           processGroup: system.processGroup
-                      ) else { return }
+                      ) else { return nil }
                 system.afterMonitorValidation(identity)
-                guard observed.insert(identity).inserted else { return }
-                do {
-                    try recorder.recordOwnedProcess(identity)
-                } catch {
-                    publicationError = error
-                }
+                return observed.insert(identity).inserted ? identity : nil
             }
-            if let publicationError {
-                recordingError.retain(publicationError)
+            guard let identityToRecord else { continue }
+            do {
+                // Publication remains serialized with final cleanup by
+                // monitorQueue, but external recorder code must run unlocked
+                // so a synchronous cancel() callback cannot self-deadlock.
+                try recorder.recordOwnedProcess(identityToRecord)
+            } catch {
+                recordingError.retain(error)
                 cancel()
                 return
             }
