@@ -602,7 +602,7 @@ final class SharedReadingHostTests: XCTestCase {
                 prepare: { throw ResourcePreflightError("contention") },
                 makeHost: { _ in
                     invokedHostFactory = true
-                    return ()
+                    throw ResourcePreflightError("host factory must not run")
                 }
             ))
             XCTAssertFalse(invokedHostFactory)
@@ -642,28 +642,46 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
     }
 
-    func testSetupHelperRejectsFactoryThatDoesNotConsumeCapability() throws {
+    func testScopedFactoryRejectsDiscardedConsumingHostAndRollsBackExactOwnership() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rishi-cli-unconsumed-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("rishi-cli-discarded-host-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let runRoot = root.appendingPathComponent("rishi-shared-reading-run", isDirectory: true)
         let journal = try SharedReadingRecoveryJournal(
             url: runRoot.appendingPathComponent("recovery.json"),
-            runID: "run-unconsumed"
+            runID: "run-discarded-host"
         )
         let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events)
+        let manifestURL = runRoot.appendingPathComponent("manifest.json")
 
         XCTAssertThrowsError(try SharedReadingHost.withPreparedBuildLockForHost(
             recoveryJournal: journal,
             prepare: {
                 try SharedReadingHost.prepareBuildLock(
-                    recorder: FakeBuildLockRecorder(events: events),
-                    acquire: { FakeBuildLock(events: events) }
+                    recorder: recorder,
+                    acquire: { lock }
                 )
             },
-            makeHost: { _ in () }
+            makeHost: { prepared in
+                _ = try SharedReadingHost(
+                    configuration: self.makeConfiguration(manifestURL: manifestURL),
+                    accounts: FakeAccounts(events: events),
+                    peers: FakePeers(events: events),
+                    rendezvous: FakeRendezvous(events: events),
+                    preparedBuildLock: prepared
+                )
+                return SharedReadingHost(
+                    configuration: self.makeConfiguration(manifestURL: manifestURL),
+                    accounts: FakeAccounts(events: events),
+                    peers: FakePeers(events: events),
+                    rendezvous: FakeRendezvous(events: events)
+                )
+            }
         ))
+
         XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "journal:clear-lock"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
     }
@@ -687,7 +705,7 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertLessThan(prepareIndex, relayStartIndex)
     }
 
-    func testRawPreparedBuildLockFactoryIsNotPublicAPI() throws {
+    func testPreparedBuildLockFactoryIsScopedAndReturnsOnlyTheConsumingHost() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -696,7 +714,9 @@ final class SharedReadingHostTests: XCTestCase {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         XCTAssertFalse(source.contains("public static func prepareBuildLock("))
-        XCTAssertTrue(source.contains("public static func withPreparedBuildLockForHost<Output>("))
+        XCTAssertFalse(source.contains("withPreparedBuildLockForHost<Output>"))
+        XCTAssertTrue(source.contains("makeHost: (SharedReadingPreparedBuildLock) throws -> SharedReadingHost"))
+        XCTAssertTrue(source.contains(") throws -> SharedReadingHost {"))
     }
 
     func testRedactedManifestContainsNoCredentialsOrSourcePath() throws {

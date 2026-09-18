@@ -469,10 +469,12 @@ private struct BuildLockLifecycle: Sendable {
 public final class SharedReadingPreparedBuildLock: @unchecked Sendable {
     private enum State {
         case available(any AppleXcodeBuildLockHolding)
-        case consumed
+        case consumed(any AppleXcodeBuildLockHolding)
+        case bound
         case cancelled
     }
 
+    fileprivate let identifier = UUID()
     private let stateLock = NSLock()
     private var state: State
     fileprivate let recorder: any BuildLockOwnershipRecording
@@ -490,14 +492,29 @@ public final class SharedReadingPreparedBuildLock: @unchecked Sendable {
             guard case .available(let lock) = state else {
                 throw ResourcePreflightError("Prepared Apple build lock was already consumed")
             }
-            state = .consumed
+            state = .consumed(lock)
             return lock
         }
     }
 
-    fileprivate func cancelBeforeConsumption() throws -> Bool {
+    fileprivate func bind(toReturnedHost identifier: UUID?) throws {
+        try stateLock.withLock {
+            guard identifier == self.identifier, case .consumed = state else {
+                throw ResourcePreflightError("Returned host does not own the prepared Apple build lock")
+            }
+            state = .bound
+        }
+    }
+
+    fileprivate func rollbackBeforeBinding() throws -> Bool {
         let lock: (any AppleXcodeBuildLockHolding)? = stateLock.withLock {
-            guard case .available(let lock) = state else { return nil }
+            let lock: (any AppleXcodeBuildLockHolding)
+            switch state {
+            case .available(let available), .consumed(let available):
+                lock = available
+            case .bound, .cancelled:
+                return nil
+            }
             state = .cancelled
             return lock
         }
@@ -509,13 +526,6 @@ public final class SharedReadingPreparedBuildLock: @unchecked Sendable {
         } catch {
             _ = lock.transferToRecovery()
             throw error
-        }
-    }
-
-    fileprivate var isConsumed: Bool {
-        stateLock.withLock {
-            if case .consumed = state { return true }
-            return false
         }
     }
 }
@@ -552,6 +562,7 @@ public struct SharedReadingHost: Sendable {
     private let fixtureProvisioner: (any FixtureBookProvisioning)?
     private let buildLockLifecycle: BuildLockLifecycle?
     private let executionGate: HostExecutionGate
+    private let preparedBuildLockIdentifier: UUID?
 
     init(
         configuration: Configuration,
@@ -567,6 +578,7 @@ public struct SharedReadingHost: Sendable {
         self.fixtureProvisioner = fixtureProvisioner
         self.buildLockLifecycle = nil
         self.executionGate = HostExecutionGate()
+        self.preparedBuildLockIdentifier = nil
     }
 
     public init(
@@ -589,6 +601,7 @@ public struct SharedReadingHost: Sendable {
             ownershipAlreadyRecorded: true
         )
         self.executionGate = HostExecutionGate()
+        self.preparedBuildLockIdentifier = preparedBuildLock.identifier
     }
 
     init(
@@ -611,6 +624,7 @@ public struct SharedReadingHost: Sendable {
             ownershipAlreadyRecorded: false
         )
         self.executionGate = HostExecutionGate()
+        self.preparedBuildLockIdentifier = nil
     }
 
     private static func prepareBuildLock(
@@ -643,11 +657,11 @@ public struct SharedReadingHost: Sendable {
         }
     }
 
-    public static func withPreparedBuildLockForHost<Output>(
+    public static func withPreparedBuildLockForHost(
         recoveryJournal: SharedReadingRecoveryJournal,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        makeHost: (SharedReadingPreparedBuildLock) throws -> Output
-    ) throws -> Output {
+        makeHost: (SharedReadingPreparedBuildLock) throws -> SharedReadingHost
+    ) throws -> SharedReadingHost {
         try withPreparedBuildLockForHost(
             recoveryJournal: recoveryJournal,
             prepare: {
@@ -657,24 +671,22 @@ public struct SharedReadingHost: Sendable {
         )
     }
 
-    static func withPreparedBuildLockForHost<Output>(
+    static func withPreparedBuildLockForHost(
         recoveryJournal: SharedReadingRecoveryJournal,
         prepare: () throws -> SharedReadingPreparedBuildLock,
-        makeHost: (SharedReadingPreparedBuildLock) throws -> Output
-    ) throws -> Output {
+        makeHost: (SharedReadingPreparedBuildLock) throws -> SharedReadingHost
+    ) throws -> SharedReadingHost {
         var prepared: SharedReadingPreparedBuildLock?
         do {
             let value = try prepare()
             prepared = value
-            let output = try makeHost(value)
-            guard value.isConsumed else {
-                throw ResourcePreflightError("Prepared Apple build lock was not consumed by a host")
-            }
-            return output
+            let host = try makeHost(value)
+            try value.bind(toReturnedHost: host.preparedBuildLockIdentifier)
+            return host
         } catch {
             let canFinalize: Bool
             if let prepared {
-                canFinalize = (try? prepared.cancelBeforeConsumption()) == true
+                canFinalize = (try? prepared.rollbackBeforeBinding()) == true
             } else {
                 canFinalize = true
             }
