@@ -238,13 +238,22 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         afterCoordinationLockBeforePathValidation: () -> Void
     ) throws {
         let lockURL = try validatedLockURL(path: ownership.path)
-        guard parentDirectoryExistsNoFollow(lockURL.deletingLastPathComponent().path) else { return }
+        switch inspectParentDirectory(lockURL.deletingLastPathComponent().path) {
+        case .expected: break
+        case .absent, .invalid:
+            throw ResourcePreflightError("Apple build lock parent is absent or unsafe: \(lockURL.deletingLastPathComponent().path)")
+        }
         try coordinationLock.withLock {
             try withCrossProcessCoordination(
                 at: lockURL,
                 afterLockBeforePathValidation: afterCoordinationLockBeforePathValidation
             ) { coordination in
-                guard lockDirectoryExists(coordination) else { return }
+                switch inspectLockDirectory(coordination) {
+                case .absent: return
+                case .expected: break
+                case .invalid:
+                    throw ResourcePreflightError("Apple build lock path contains an unexpected object: \(lockURL.path)")
+                }
                 guard liveIdentity(ownership.owner.pid) != ownership.owner else {
                     throw ResourcePreflightError("Apple build lock owner is still running: \(lockURL.path)")
                 }
@@ -422,18 +431,26 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         return result
     }
 
-    private static func parentDirectoryExistsNoFollow(_ path: String) -> Bool {
+    private static func inspectParentDirectory(_ path: String) -> PathInspection {
         var info = stat()
-        if lstat(path, &info) == 0 { return info.st_mode & S_IFMT == S_IFDIR }
-        return errno != ENOENT ? true : false
+        if lstat(path, &info) == 0 {
+            return info.st_mode & S_IFMT == S_IFDIR ? .expected : .invalid
+        }
+        return errno == ENOENT ? .absent : .invalid
     }
 
-    private static func lockDirectoryExists(_ coordination: Coordination) -> Bool {
+    private static func inspectLockDirectory(_ coordination: Coordination) -> PathInspection {
         var info = stat()
         if fstatat(coordination.parentFD, coordination.lockName, &info, AT_SYMLINK_NOFOLLOW) == 0 {
-            return info.st_mode & S_IFMT == S_IFDIR
+            return info.st_mode & S_IFMT == S_IFDIR ? .expected : .invalid
         }
-        return errno != ENOENT
+        return errno == ENOENT ? .absent : .invalid
+    }
+
+    private enum PathInspection {
+        case absent
+        case expected
+        case invalid
     }
 
     private static func openLockDirectory(_ coordination: Coordination) throws -> OpenedLockDirectory {

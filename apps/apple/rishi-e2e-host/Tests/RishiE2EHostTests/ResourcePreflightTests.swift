@@ -293,6 +293,68 @@ final class ResourcePreflightTests: XCTestCase {
         XCTAssertEqual(persisted, replacementOwnership)
     }
 
+    func testReconcileFailsClosedForRegularFileAtExactLockPath() throws {
+        let lockPath = temporaryLockPath()
+        let coordinationURL = try AppleXcodeBuildLock.coordinationURLForTesting(lockPath: lockPath)
+        defer {
+            try? FileManager.default.removeItem(at: lockPath)
+            try? FileManager.default.removeItem(at: coordinationURL)
+        }
+        let lock = try AppleXcodeBuildLock.acquire(environment: lockEnvironment(lockPath))
+        try FileManager.default.removeItem(at: lockPath)
+        try Data("replacement".utf8).write(to: lockPath)
+
+        XCTAssertThrowsError(try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: lock.ownership,
+            liveIdentity: { _ in nil }
+        ))
+        XCTAssertEqual(try Data(contentsOf: lockPath), Data("replacement".utf8))
+    }
+
+    func testReconcileFailsClosedForSymlinkAtExactLockPath() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-lock-symlink-\(UUID().uuidString)", isDirectory: true)
+        let lockPath = root.appendingPathComponent("build.lock", isDirectory: true)
+        let target = root.appendingPathComponent("replacement", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lock = try AppleXcodeBuildLock.acquire(environment: lockEnvironment(lockPath))
+        try FileManager.default.removeItem(at: lockPath)
+        try FileManager.default.createSymbolicLink(at: lockPath, withDestinationURL: target)
+
+        XCTAssertThrowsError(try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: lock.ownership,
+            liveIdentity: { _ in nil }
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: lockPath.path), target.path)
+    }
+
+    func testReconcileFailsClosedWhenPinnedParentPathBecomesSymlink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-lock-parent-\(UUID().uuidString)", isDirectory: true)
+        let parent = root.appendingPathComponent("parent", isDirectory: true)
+        let replacementParent = root.appendingPathComponent("replacement-parent", isDirectory: true)
+        let lockPath = parent.appendingPathComponent("build.lock", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: replacementParent, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lock = try AppleXcodeBuildLock.acquire(environment: lockEnvironment(lockPath))
+        let coordinationURL = try AppleXcodeBuildLock.coordinationURLForTesting(lockPath: lockPath)
+        try FileManager.default.removeItem(at: lockPath)
+        try FileManager.default.removeItem(at: coordinationURL)
+        try FileManager.default.removeItem(at: parent)
+        try FileManager.default.createSymbolicLink(at: parent, withDestinationURL: replacementParent)
+
+        XCTAssertThrowsError(try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: lock.ownership,
+            liveIdentity: { _ in nil }
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacementParent.path))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: parent.path), replacementParent.path)
+    }
+
     private func temporaryLockPath() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-build-lock-\(UUID().uuidString)", isDirectory: true)
