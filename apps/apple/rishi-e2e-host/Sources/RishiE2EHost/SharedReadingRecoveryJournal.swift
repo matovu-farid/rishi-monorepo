@@ -531,6 +531,20 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(state)
+        try writeDataAtomically(
+            data,
+            to: directoryFD,
+            filename: filename,
+            permissions: mode_t(S_IRUSR | S_IWUSR)
+        )
+    }
+
+    private static func writeDataAtomically(
+        _ data: Data,
+        to directoryFD: Int32,
+        filename: String,
+        permissions: mode_t
+    ) throws {
         if let existing = try fileKind(at: filename, directoryFD: directoryFD), existing != S_IFREG {
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
@@ -539,7 +553,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             directoryFD,
             temporaryName,
             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-            mode_t(S_IRUSR | S_IWUSR)
+            permissions
         )
         guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.permissionsNotApplied }
         var shouldRemoveTemporary = true
@@ -547,7 +561,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             close(fileFD)
             if shouldRemoveTemporary { _ = unlinkat(directoryFD, temporaryName, 0) }
         }
-        guard fchmod(fileFD, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+        guard fchmod(fileFD, permissions) == 0 else {
             throw SharedReadingRecoveryJournalError.permissionsNotApplied
         }
         try writeAll(data, to: fileFD)
@@ -772,10 +786,9 @@ struct RecoveryOperations: Sendable {
     let recoverSimulator: @Sendable (OwnedSimulatorDevice) async throws -> Void
     let removeSecretArtifact: @Sendable (URL) throws -> Void
     let recoverAccount: @Sendable (RecordedAccount) async throws -> Void
-    let reconcileBuildLock: @Sendable (AppleXcodeBuildLockOwnership) throws -> Void
     let exactRunIDProcessIsVisible: @Sendable (String) throws -> Bool
     let configuredBuildLockExists: @Sendable (URL) throws -> Bool
-    let removeArtifactAndRunDirectory: @Sendable (URL) throws -> Void
+    let finalizeArtifactAndBuildLock: @Sendable (URL, AppleXcodeBuildLockOwnership?) throws -> Void
 }
 
 private struct RecoveryCombinedError: Error, LocalizedError {
@@ -841,11 +854,14 @@ extension SharedReadingRecoveryJournal {
             recoverAccount: { account in
                 try await accountClient.deleteProvisionedAccount(email: account.email)
             },
-            reconcileBuildLock: AppleXcodeBuildLock.reconcileRetainedLock(ownership:),
             exactRunIDProcessIsVisible: productionExactRunIDProcessIsVisible(_:),
             configuredBuildLockExists: productionPathExists(_:),
-            removeArtifactAndRunDirectory: { url in
-                try removeProductionArtifactAndRunDirectory(at: url, temporaryRoot: temporaryRoot)
+            finalizeArtifactAndBuildLock: { url, buildLock in
+                try finalizeProductionArtifactAndBuildLock(
+                    at: url,
+                    temporaryRoot: temporaryRoot,
+                    buildLock: buildLock
+                )
             }
         )
         try await orchestrateRecovery(
@@ -1003,13 +1019,7 @@ extension SharedReadingRecoveryJournal {
         }
         guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
 
-        if let buildLock = artifact.buildLock {
-            do { try operations.reconcileBuildLock(buildLock) }
-            catch { failures += 1 }
-        }
-        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
-
-        do { try operations.removeArtifactAndRunDirectory(artifact.url) }
+        do { try operations.finalizeArtifactAndBuildLock(artifact.url, artifact.buildLock) }
         catch { failures += 1 }
         guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
     }
@@ -1046,10 +1056,13 @@ extension SharedReadingRecoveryJournal {
         })
     }
 
-    private static func productionExactRunIDProcessIsVisible(_ runID: String) throws -> Bool {
-        NSWorkspace.shared.runningApplications.contains { application in
-            application.localizedName == runID
-        }
+    static func productionExactRunIDProcessIsVisible(_ runID: String) throws -> Bool {
+        // Legacy artifacts contain no stable process identity. NSWorkspace only
+        // enumerates applications, and its display name cannot prove absence of
+        // CLI, xcodebuild, or XCTest processes. Darwin offers no safe exact-run
+        // discovery primitive without forbidden argv/environment inspection.
+        _ = runID
+        throw SharedReadingRecoveryJournalError.cleanupIncomplete
     }
 
     private static func productionPathExists(_ url: URL) throws -> Bool {
@@ -1145,35 +1158,151 @@ extension SharedReadingRecoveryJournal {
         }
     }
 
-    private static func removeProductionArtifactAndRunDirectory(
+    static func finalizeProductionArtifactAndBuildLock(
         at artifactURL: URL,
-        temporaryRoot: URL
-    ) throws {
-        let runDirectory = artifactURL.deletingLastPathComponent()
-        guard runDirectory.deletingLastPathComponent().standardizedFileURL == temporaryRoot.standardizedFileURL else {
-            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
-        }
-        let rootFD = open(temporaryRoot.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-        defer { close(rootFD) }
-        let runFD = openat(rootFD, runDirectory.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-        defer { close(runFD) }
-        try withDirectoryLockAlreadySerialized(runFD) {
-            let entries = try withDirectoryEntries(runFD) { $0 }
-            guard entries == [artifactURL.lastPathComponent],
-                  try fileKind(at: artifactURL.lastPathComponent, directoryFD: runFD) == S_IFREG,
-                  unlinkat(runFD, artifactURL.lastPathComponent, 0) == 0,
-                  fsync(runFD) == 0,
-                  try withDirectoryEntries(runFD, { $0 }).isEmpty,
-                  unlinkat(rootFD, runDirectory.lastPathComponent, AT_REMOVEDIR) == 0,
-                  fsync(rootFD) == 0 else {
+        temporaryRoot: URL,
+        buildLock: AppleXcodeBuildLockOwnership?,
+        removeRunDirectory: (Int32, String) throws -> Void = { rootFD, name in
+            guard unlinkat(rootFD, name, AT_REMOVEDIR) == 0 else {
                 throw SharedReadingRecoveryJournalError.journalRemovalFailed
             }
+        },
+        syncRootAfterRemoval: (Int32) throws -> Void = { rootFD in
+            guard fsync(rootFD) == 0 else {
+                throw SharedReadingRecoveryJournalError.journalRemovalFailed
+            }
+        },
+        reconcileBuildLock: (AppleXcodeBuildLockOwnership) throws -> Void = AppleXcodeBuildLock.reconcileRetainedLock(ownership:)
+    ) throws {
+        let runDirectory = artifactURL.deletingLastPathComponent()
+        let root = temporaryRoot.standardizedFileURL
+        guard temporaryRoot.path == root.path,
+              artifactURL.path == artifactURL.standardizedFileURL.path,
+              runDirectory.deletingLastPathComponent().standardizedFileURL == root,
+              runDirectory.lastPathComponent.hasPrefix("rishi-shared-reading-"),
+              ["recovery.json", "manifest.json"].contains(artifactURL.lastPathComponent) else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
-        guard !FileManager.default.fileExists(atPath: artifactURL.path),
-              !FileManager.default.fileExists(atPath: runDirectory.path) else {
-            throw SharedReadingRecoveryJournalError.journalRemovalFailed
+        let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        defer { close(rootFD) }
+
+        try withInterprocessLock(rootFD) {
+            let runName = runDirectory.lastPathComponent
+            let filename = artifactURL.lastPathComponent
+            let runFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { close(runFD) }
+            try withDirectoryLockAlreadySerialized(runFD) {
+                var runDetails = stat()
+                var namedRunDetails = stat()
+                guard fstat(runFD, &runDetails) == 0,
+                      fstatat(rootFD, runName, &namedRunDetails, AT_SYMLINK_NOFOLLOW) == 0,
+                      namedRunDetails.st_mode & S_IFMT == S_IFDIR,
+                      runDetails.st_dev == namedRunDetails.st_dev,
+                      runDetails.st_ino == namedRunDetails.st_ino,
+                      try withDirectoryEntries(runFD, { $0 }) == [filename],
+                      try fileKind(at: filename, directoryFD: runFD) == S_IFREG else {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
+
+                let artifactFD = openat(runFD, filename, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+                guard artifactFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                var artifactDetails = stat()
+                let rawData: Data
+                do {
+                    guard fstat(artifactFD, &artifactDetails) == 0,
+                          artifactDetails.st_mode & S_IFMT == S_IFREG,
+                          artifactDetails.st_size >= 0,
+                          artifactDetails.st_size <= off_t(maximumEncodedJournalBytes) else {
+                        throw SharedReadingRecoveryJournalError.malformedArtifact
+                    }
+                    rawData = try readAll(from: artifactFD, maximumBytes: maximumEncodedJournalBytes)
+                } catch {
+                    close(artifactFD)
+                    throw error
+                }
+                close(artifactFD)
+
+                var runDirectoryRemoved = false
+                do {
+                    guard unlinkat(runFD, filename, 0) == 0,
+                          fsync(runFD) == 0,
+                          try withDirectoryEntries(runFD, { $0 }).isEmpty else {
+                        throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                    }
+                    try removeRunDirectory(rootFD, runName)
+                    runDirectoryRemoved = true
+                    try syncRootAfterRemoval(rootFD)
+                    guard try fileKind(at: runName, directoryFD: rootFD) == nil else {
+                        throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                    }
+                    if let buildLock { try reconcileBuildLock(buildLock) }
+                } catch {
+                    do {
+                        try restoreRecoveryArtifact(
+                            rawData,
+                            permissions: artifactDetails.st_mode & mode_t(0o777),
+                            runDirectoryPermissions: runDetails.st_mode & mode_t(0o777),
+                            rootFD: rootFD,
+                            originalRunFD: runFD,
+                            runName: runName,
+                            filename: filename,
+                            runDirectoryRemoved: runDirectoryRemoved
+                        )
+                    } catch {
+                        throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                    }
+                    throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                }
+            }
+        }
+    }
+
+    private static func restoreRecoveryArtifact(
+        _ data: Data,
+        permissions: mode_t,
+        runDirectoryPermissions: mode_t,
+        rootFD: Int32,
+        originalRunFD: Int32,
+        runName: String,
+        filename: String,
+        runDirectoryRemoved: Bool
+    ) throws {
+        let targetFD: Int32
+        var closesTarget = false
+        if runDirectoryRemoved {
+            guard try fileKind(at: runName, directoryFD: rootFD) == nil,
+                  mkdirat(rootFD, runName, runDirectoryPermissions) == 0 else {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
+            targetFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard targetFD >= 0 else { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+            closesTarget = true
+        } else {
+            var original = stat()
+            var named = stat()
+            guard fstat(originalRunFD, &original) == 0,
+                  fstatat(rootFD, runName, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                  named.st_mode & S_IFMT == S_IFDIR,
+                  original.st_dev == named.st_dev,
+                  original.st_ino == named.st_ino else {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
+            targetFD = originalRunFD
+        }
+        defer { if closesTarget { close(targetFD) } }
+
+        try writeDataAtomically(data, to: targetFD, filename: filename, permissions: permissions)
+        guard fsync(targetFD) == 0,
+              fsync(rootFD) == 0 else {
+            throw SharedReadingRecoveryJournalError.cleanupIncomplete
+        }
+        let verificationFD = openat(targetFD, filename, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard verificationFD >= 0 else { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+        defer { close(verificationFD) }
+        guard try readAll(from: verificationFD, maximumBytes: maximumEncodedJournalBytes) == data else {
+            throw SharedReadingRecoveryJournalError.cleanupIncomplete
         }
     }
 
@@ -1402,6 +1531,10 @@ extension SharedReadingRecoveryJournal {
     ) async throws {
         var failures = false
         for process in processes {
+            // Darwin has no pidfd-style identity-bound signal. This full birth
+            // identity comparison is repeated immediately before each kill,
+            // which is the strongest available primitive but not atomic with
+            // the following kill(2).
             guard liveIdentity(process.pid) == process else { continue }
             signal(process.pid, SIGTERM)
             if try await waitForIdentityAbsence(process, liveIdentity: liveIdentity, sleep: sleep) { continue }
@@ -1462,6 +1595,9 @@ extension SharedReadingRecoveryJournal {
                     if pid == group.processGroupID, let identity = liveIdentity(pid), identity != group.leader {
                         throw SharedReadingRecoveryJournalError.cleanupIncomplete
                     }
+                    // Recheck the full birth identity and PGID immediately
+                    // before kill(2). Darwin cannot make this validation and
+                    // signal atomic, so a mismatch always fails closed.
                     guard let identity = liveIdentity(pid), processGroup(pid) == group.processGroupID,
                           liveIdentity(pid) == identity, processGroup(pid) == group.processGroupID else { continue }
                     signal(pid, phase)

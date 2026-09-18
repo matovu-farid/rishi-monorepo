@@ -1331,6 +1331,104 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         }
     }
 
+    func testProductionLegacyDiscoveryUnavailableBlocksAccountLockAndArtifactCleanup() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let artifactURL = root
+            .appendingPathComponent("rishi-shared-reading-run-legacy-unavailable", isDirectory: true)
+            .appendingPathComponent("manifest.json")
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        try writeLegacyManifest(runID: "run-legacy-unavailable", to: artifactURL)
+        let events = RecoveryEventRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recover(
+            at: artifactURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation,
+            operations: RecoveryOperations(
+                recoverProcessGroup: { _ in },
+                recoverProcess: { _ in },
+                currentCatalystIdentities: { _ in [] },
+                recoverSimulator: { _ in },
+                removeSecretArtifact: { _ in },
+                recoverAccount: { _ in events.append("account") },
+                exactRunIDProcessIsVisible: SharedReadingRecoveryJournal.productionExactRunIDProcessIsVisible,
+                configuredBuildLockExists: { _ in false },
+                finalizeArtifactAndBuildLock: { _, _ in events.append("artifact") }
+            )
+        ))
+
+        XCTAssertEqual(events.values, [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path))
+    }
+
+    func testLegacyRecoveryCanSucceedWhenInjectedDiscoveryExplicitlyProvesAbsence() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let artifactURL = root
+            .appendingPathComponent("rishi-shared-reading-run-legacy-safe", isDirectory: true)
+            .appendingPathComponent("manifest.json")
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        try writeLegacyManifest(runID: "run-legacy-safe", to: artifactURL)
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: artifactURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: artifactURL)
+        )
+
+        XCTAssertTrue(events.values.contains("account:verified:owner"))
+        XCTAssertTrue(events.values.contains("account:verified:participant"))
+        XCTAssertTrue(events.values.contains("artifact:remove"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artifactURL.path))
+    }
+
+    func testFinalizationRestoresExactArtifactAndRetainsLockWhenRunDirectoryRemovalFails() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-rmdir-failure")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try Data(contentsOf: fixture.artifactURL)
+        let lockReconciled = LockedBoolean(false)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            removeRunDirectory: { _, _ in throw RecoveryInspectionTestError.unavailable },
+            syncRootAfterRemoval: { _ in },
+            reconcileBuildLock: { _ in lockReconciled.value = true }
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
+        XCTAssertFalse(lockReconciled.value)
+    }
+
+    func testFinalizationRestoresExactArtifactAndRetainsLockWhenRootFsyncFailsAfterRmdir() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-fsync-failure")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try Data(contentsOf: fixture.artifactURL)
+        let lockReconciled = LockedBoolean(false)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            removeRunDirectory: { rootFD, name in
+                guard unlinkat(rootFD, name, AT_REMOVEDIR) == 0 else {
+                    throw RecoveryInspectionTestError.unavailable
+                }
+            },
+            syncRootAfterRemoval: { _ in throw RecoveryInspectionTestError.unavailable },
+            reconcileBuildLock: { _ in lockReconciled.value = true }
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
+        XCTAssertFalse(lockReconciled.value)
+    }
+
     func testRecoveryPublicAPIHasExactProductionSignature() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1426,6 +1524,27 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         let lockURL: URL
     }
 
+    private struct FinalizationFixture {
+        let root: URL
+        let artifactURL: URL
+        let lock: AppleXcodeBuildLockOwnership
+    }
+
+    private func makeFinalizationFixture(runID: String) throws -> FinalizationFixture {
+        let root = try makeTemporaryRoot()
+        let artifactURL = root
+            .appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
+            .appendingPathComponent("recovery.json")
+        let lock = AppleXcodeBuildLockOwnership(
+            path: root.appendingPathComponent("build.lock").path,
+            token: "token-\(runID)",
+            generation: "generation-\(runID)",
+            owner: OwnedProcessIdentity(pid: 899, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        )
+        try writeJSONObject(recoveryStateJSONObject(runID: runID), to: artifactURL)
+        return FinalizationFixture(root: root, artifactURL: artifactURL, lock: lock)
+    }
+
     private func makeOrchestrationFixture(
         includeGroup: Bool = false,
         includeProcess: Bool = true
@@ -1500,15 +1619,15 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
                 if failing.contains("account:\(account.role.rawValue)") { throw RecoveryInspectionTestError.unavailable }
                 events.append("account:verified:\(account.role.rawValue)")
             },
-            reconcileBuildLock: { _ in
-                events.append("lock:reconcile")
-                if failing.contains("lock") { throw RecoveryInspectionTestError.unavailable }
-            },
             exactRunIDProcessIsVisible: { _ in legacyProcessVisible },
             configuredBuildLockExists: { _ in configuredLockExists },
-            removeArtifactAndRunDirectory: { _ in
-                events.append("artifact:remove")
+            finalizeArtifactAndBuildLock: { _, buildLock in
                 if failing.contains("artifact") { throw RecoveryInspectionTestError.unavailable }
+                if buildLock != nil {
+                    events.append("lock:reconcile")
+                    if failing.contains("lock") { throw RecoveryInspectionTestError.unavailable }
+                }
+                events.append("artifact:remove")
                 try FileManager.default.removeItem(at: artifactURL.deletingLastPathComponent())
             }
         )
@@ -1541,6 +1660,22 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
     private func writeJSONObject(_ value: [String: Any], to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]).write(to: url)
+    }
+
+    private func writeLegacyManifest(runID: String, to url: URL) throws {
+        try writeJSONObject([
+            "runID": runID,
+            "owner": ["role": "owner", "email": "rishi-e2e-owner@example.test"],
+            "participant": ["role": "participant", "email": "rishi-e2e-participant@example.test"],
+            "fixture": [
+                "role": "owner", "format": "pdf", "basename": "fixture.pdf",
+                "sha256": String(repeating: "a", count: 64), "byteSize": 12,
+            ],
+            "manifestPath": "manifest.json",
+            "ownerDestination": "catalyst",
+            "participantDestination": "iPhone17Pro",
+            "rendezvousPath": "invite.json",
+        ], to: url)
     }
 
     private func makeTemporaryRoot() throws -> URL {
