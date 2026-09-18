@@ -7,6 +7,34 @@ import Darwin
 #endif
 
 final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
+    func testRunnerRegistrationRejectsCallerBundleClaimWhenPIDHasNoMatchingBundle() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4241, birthTimeSeconds: 10, birthTimeMicroseconds: 20)
+        let relay = RendezvousRelayServer(
+            secret: "registration-secret",
+            liveIdentity: { $0 == identity.pid ? identity : nil },
+            liveBundleIdentifier: { _ in "org.fidexa.other" }
+        )
+        let nonce = try relay.reserveRegistration(
+            runID: "run-pid-bundle", role: .owner, kind: .runner,
+            bundleIdentifier: "org.fidexa.rishiUITests.xctrunner"
+        )
+        let configuration = try relay.start()
+        defer { relay.stop() }
+
+        let response = try request([
+            "op": "register-runner", "secret": configuration.secret,
+            "runID": "run-pid-bundle", "kind": "runner", "role": "owner",
+            "nonce": nonce, "bundleIdentifier": "org.fidexa.rishiUITests.xctrunner",
+            "pid": identity.pid,
+        ], port: configuration.port)
+
+        XCTAssertEqual(response["ok"] as? Bool, false)
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
     func testRelayReturnsExactParticipantProgressSequence() throws {
         #if canImport(Darwin)
         let relay = RendezvousRelayServer(secret: "test-secret")
@@ -49,7 +77,8 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         let relay = RendezvousRelayServer(
             secret: "registration-secret",
             processRecorder: recorder,
-            liveIdentity: { $0 == identity.pid ? identity : nil }
+            liveIdentity: { $0 == identity.pid ? identity : nil },
+            liveBundleIdentifier: { _ in "org.fidexa.rishiUITests" }
         )
         let nonce = try relay.reserveRegistration(
             runID: "run-registration", role: .owner, kind: .runner,
@@ -79,7 +108,8 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         let relay = RendezvousRelayServer(
             secret: "registration-secret",
             processRecorder: recorder,
-            liveIdentity: { pid in reads.increment(); return pid == identity.pid ? identity : nil }
+            liveIdentity: { pid in reads.increment(); return pid == identity.pid ? identity : nil },
+            liveBundleIdentifier: { _ in "org.fidexa.rishiUITests" }
         )
         let nonce = try relay.reserveRegistration(
             runID: "run-blocking", role: .owner, kind: .runner,
@@ -118,7 +148,8 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         let relay = RendezvousRelayServer(
             secret: "registration-secret",
             processRecorder: recorder,
-            liveIdentity: { _ in identities.next() }
+            liveIdentity: { _ in identities.next() },
+            liveBundleIdentifier: { _ in "org.fidexa.rishiUITests" }
         )
         let nonce = try relay.reserveRegistration(
             runID: "run-reuse", role: .owner, kind: .runner,
@@ -145,7 +176,12 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         #if canImport(Darwin)
         let identity = OwnedProcessIdentity(pid: 4262, birthTimeSeconds: 11, birthTimeMicroseconds: 22)
         let recorder = RelayRegistrationRecorder()
-        let relay = RendezvousRelayServer(secret: "secret", processRecorder: recorder, liveIdentity: { $0 == 4262 ? identity : nil })
+        let relay = RendezvousRelayServer(
+            secret: "secret",
+            processRecorder: recorder,
+            liveIdentity: { $0 == 4262 ? identity : nil },
+            liveBundleIdentifier: { _ in "app" }
+        )
         let runnerNonce = try relay.reserveRegistration(runID: "run-distinct", role: .owner, kind: .runner, bundleIdentifier: "runner")
         let appNonce = try relay.reserveRegistration(runID: "run-distinct", role: .owner, kind: .app, bundleIdentifier: "app")
         XCTAssertNotEqual(runnerNonce, appNonce)
@@ -170,7 +206,11 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
     func testPrepareAppLaunchWireRequestIncludesAcknowledgedRunnerKindAndNonce() throws {
         #if canImport(Darwin)
         let identity = OwnedProcessIdentity(pid: 4272, birthTimeSeconds: 12, birthTimeMicroseconds: 23)
-        let relay = RendezvousRelayServer(secret: "secret", liveIdentity: { $0 == 4272 ? identity : nil })
+        let relay = RendezvousRelayServer(
+            secret: "secret",
+            liveIdentity: { $0 == 4272 ? identity : nil },
+            liveBundleIdentifier: { _ in "runner" }
+        )
         let runnerNonce = try relay.reserveRegistration(runID: "run-prepare", role: .owner, kind: .runner, bundleIdentifier: "runner")
         _ = try relay.reserveRegistration(runID: "run-prepare", role: .owner, kind: .app, bundleIdentifier: "app")
         let configuration = try relay.start()
@@ -199,7 +239,8 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         let identity = OwnedProcessIdentity(pid: 4343, birthTimeSeconds: 11, birthTimeMicroseconds: 21)
         let relay = RendezvousRelayServer(
             secret: "registration-secret",
-            liveIdentity: { $0 == identity.pid ? identity : nil }
+            liveIdentity: { $0 == identity.pid ? identity : nil },
+            liveBundleIdentifier: { _ in "org.fidexa.rishi" }
         )
         let runnerNonce = try relay.reserveRegistration(
             runID: "run-kinds", role: .owner, kind: .runner,
@@ -232,7 +273,8 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         let identity = OwnedProcessIdentity(pid: 4444, birthTimeSeconds: 12, birthTimeMicroseconds: 22)
         let relay = RendezvousRelayServer(
             secret: "registration-secret",
-            liveIdentity: { $0 == identity.pid ? identity : nil }
+            liveIdentity: { $0 == identity.pid ? identity : nil },
+            liveBundleIdentifier: { _ in "org.fidexa.rishi" }
         )
         let nonce = try relay.reserveRegistration(
             runID: "run-app", role: .owner, kind: .app,

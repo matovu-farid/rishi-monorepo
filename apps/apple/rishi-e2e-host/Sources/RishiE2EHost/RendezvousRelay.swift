@@ -34,6 +34,7 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
     private let secret: String
     private let processRecorder: any OwnedProcessRecording
     private let liveIdentity: @Sendable (Int32) -> OwnedProcessIdentity?
+    private let liveBundleIdentifier: @Sendable (Int32) -> String?
     private let registrationLock = NSLock()
     private var registrations: [RegistrationKey: Registration] = [:]
     private var socket: Int32 = -1
@@ -43,11 +44,13 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
     public init(
         secret: String = UUID().uuidString.lowercased(),
         processRecorder: any OwnedProcessRecording = NoopOwnedProcessRecorder(),
-        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity? = ProcessIdentityReader.identity(for:)
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity? = ProcessIdentityReader.identity(for:),
+        liveBundleIdentifier: (@Sendable (Int32) -> String?)? = nil
     ) {
         self.secret = secret
         self.processRecorder = processRecorder
         self.liveIdentity = liveIdentity
+        self.liveBundleIdentifier = liveBundleIdentifier ?? ProcessExecutableBundleIdentifierReader.bundleIdentifier(for:)
     }
 
     public func reserveRegistration(
@@ -349,11 +352,15 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
                   registration.bundleIdentifier == bundleIdentifier,
                   let identity = liveIdentity(pid),
                   identity.pid == pid,
-                  liveIdentity(pid) == identity else {
+                  liveIdentity(pid) == identity,
+                  liveBundleIdentifier(pid) == registration.bundleIdentifier else {
                 throw RendezvousRelayError.registrationRejected
             }
             try processRecorder.recordCatalystRegisteredIdentity(identity, role: role, kind: expected)
-            guard liveIdentity(pid) == identity else { throw RendezvousRelayError.registrationRejected }
+            guard liveIdentity(pid) == identity,
+                  liveBundleIdentifier(pid) == registration.bundleIdentifier else {
+                throw RendezvousRelayError.registrationRejected
+            }
             registration.consumed = true
             registration.identity = identity
             registrations[key] = registration
@@ -396,6 +403,43 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
         }
     }
     #endif
+}
+
+enum ProcessExecutableBundleIdentifierReader {
+    static func bundleIdentifier(for pid: Int32) -> String? {
+        #if canImport(Darwin)
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard Darwin.proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
+
+        let executablePath = String(
+            decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        let executableURL = URL(fileURLWithPath: executablePath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard let bundleURL = enclosingApplicationBundle(for: executableURL),
+              let bundle = Bundle(url: bundleURL),
+              let bundleExecutableURL = bundle.executableURL?.standardizedFileURL.resolvingSymlinksInPath(),
+              bundleExecutableURL == executableURL,
+              let bundleIdentifier = bundle.bundleIdentifier,
+              !bundleIdentifier.isEmpty else {
+            return nil
+        }
+        return bundleIdentifier
+        #else
+        return nil
+        #endif
+    }
+
+    private static func enclosingApplicationBundle(for executableURL: URL) -> URL? {
+        var candidate = executableURL.deletingLastPathComponent()
+        while candidate.path != "/" {
+            if candidate.pathExtension == "app" { return candidate }
+            candidate.deleteLastPathComponent()
+        }
+        return nil
+    }
 }
 
 private struct RegistrationKey: Hashable {

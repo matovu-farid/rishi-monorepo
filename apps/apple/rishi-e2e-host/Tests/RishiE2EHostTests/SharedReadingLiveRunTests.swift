@@ -3,6 +3,13 @@ import XCTest
 @testable import RishiE2EHost
 
 final class SharedReadingLiveRunTests: XCTestCase {
+    func testCatalystRunnerReservationUsesXCTestRunnerBundleIdentifier() throws {
+        XCTAssertEqual(
+            SharedReadingLiveRun.catalystUITestRunnerBundleIdentifier,
+            "org.fidexa.rishiUITests.xctrunner"
+        )
+    }
+
     func testSignalInstallationRestoresExactPreviousDispositionsOnCancel() throws {
         let events = LiveRunCallRecorder()
         let system = LiveRunSignalHandler.System(

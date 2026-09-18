@@ -42,6 +42,8 @@ public enum SharedReadingLiveRunError: Error, LocalizedError, Equatable, Sendabl
 }
 
 public enum SharedReadingLiveRun {
+    static let catalystUITestRunnerBundleIdentifier = "org.fidexa.rishiUITests.xctrunner"
+
     struct SignalInstallation: Sendable {
         let cancel: @Sendable () throws -> Void
         static let none = SignalInstallation(cancel: {})
@@ -316,7 +318,7 @@ private final class ProductionState: @unchecked Sendable {
         let configuration = try relay.start()
         _ = try relay.reserveRegistration(
             runID: runID, role: .owner, kind: .runner,
-            bundleIdentifier: "org.fidexa.rishiUITests"
+            bundleIdentifier: SharedReadingLiveRun.catalystUITestRunnerBundleIdentifier
         )
         _ = try relay.reserveRegistration(
             runID: runID, role: .owner, kind: .app,
