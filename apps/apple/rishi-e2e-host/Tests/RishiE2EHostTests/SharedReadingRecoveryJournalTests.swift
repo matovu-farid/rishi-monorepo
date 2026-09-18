@@ -1387,7 +1387,7 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: artifactURL.path))
     }
 
-    func testFinalizationRestoresExactArtifactAndRetainsLockWhenRunDirectoryRemovalFails() throws {
+    func testFinalizationReconcilesLockThenRestoresExactArtifactWhenRunDirectoryRemovalFails() throws {
         let fixture = try makeFinalizationFixture(runID: "run-rmdir-failure")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let original = try Data(contentsOf: fixture.artifactURL)
@@ -1403,10 +1403,10 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         ))
 
         XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
-        XCTAssertFalse(lockReconciled.value)
+        XCTAssertTrue(lockReconciled.value)
     }
 
-    func testFinalizationRestoresExactArtifactAndRetainsLockWhenRootFsyncFailsAfterRmdir() throws {
+    func testFinalizationReconcilesLockThenRestoresExactArtifactWhenRootFsyncFailsAfterRmdir() throws {
         let fixture = try makeFinalizationFixture(runID: "run-fsync-failure")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let original = try Data(contentsOf: fixture.artifactURL)
@@ -1426,7 +1426,56 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         ))
 
         XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
-        XCTAssertFalse(lockReconciled.value)
+        XCTAssertTrue(lockReconciled.value)
+    }
+
+    func testCrashAfterLockReconciliationRetainsArtifactAndRetryFinishesWithAbsentLock() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-post-lock-crash")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try Data(contentsOf: fixture.artifactURL)
+        let reconciliationAttempts = LockedCounter()
+        let shouldCrash = LockedBoolean(true)
+        let lockPresent = LockedBoolean(true)
+        let artifactWasPresentAtReconciliation = LockedBoolean(false)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            afterBuildLockReconciliation: {
+                if shouldCrash.value {
+                    shouldCrash.value = false
+                    throw RecoveryInspectionTestError.unavailable
+                }
+            },
+            reconcileBuildLock: { _ in
+                reconciliationAttempts.increment()
+                artifactWasPresentAtReconciliation.value = FileManager.default.fileExists(
+                    atPath: fixture.artifactURL.path
+                )
+                lockPresent.value = false
+            }
+        ))
+
+        XCTAssertEqual(reconciliationAttempts.value, 1)
+        XCTAssertTrue(artifactWasPresentAtReconciliation.value)
+        XCTAssertFalse(lockPresent.value)
+        XCTAssertEqual(try Data(contentsOf: fixture.artifactURL), original)
+
+        try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            afterBuildLockReconciliation: {},
+            reconcileBuildLock: { _ in
+                reconciliationAttempts.increment()
+                XCTAssertFalse(lockPresent.value, "Retry must observe idempotently absent retained lock")
+            }
+        )
+
+        XCTAssertEqual(reconciliationAttempts.value, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.artifactURL.deletingLastPathComponent().path))
     }
 
     func testRecoveryPublicAPIHasExactProductionSignature() throws {
@@ -1746,6 +1795,14 @@ private final class LockedBoolean: @unchecked Sendable {
         get { lock.withLock { storedValue } }
         set { lock.withLock { storedValue = newValue } }
     }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue = 0
+
+    var value: Int { lock.withLock { storedValue } }
+    func increment() { lock.withLock { storedValue += 1 } }
 }
 
 private final class SignalRecorder: @unchecked Sendable {

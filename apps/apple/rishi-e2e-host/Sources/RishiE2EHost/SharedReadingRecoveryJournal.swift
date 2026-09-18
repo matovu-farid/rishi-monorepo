@@ -1162,6 +1162,7 @@ extension SharedReadingRecoveryJournal {
         at artifactURL: URL,
         temporaryRoot: URL,
         buildLock: AppleXcodeBuildLockOwnership?,
+        afterBuildLockReconciliation: () throws -> Void = {},
         removeRunDirectory: (Int32, String) throws -> Void = { rootFD, name in
             guard unlinkat(rootFD, name, AT_REMOVEDIR) == 0 else {
                 throw SharedReadingRecoveryJournalError.journalRemovalFailed
@@ -1226,6 +1227,14 @@ extension SharedReadingRecoveryJournal {
 
                 var runDirectoryRemoved = false
                 do {
+                    // The ownership artifact must remain visible for the entire
+                    // lifetime of a present retained lock. Reconcile first;
+                    // absence is idempotent on retry. Every subsequent failure
+                    // restores the exact bounded artifact bytes.
+                    if let buildLock {
+                        try reconcileBuildLock(buildLock)
+                        try afterBuildLockReconciliation()
+                    }
                     guard unlinkat(runFD, filename, 0) == 0,
                           fsync(runFD) == 0,
                           try withDirectoryEntries(runFD, { $0 }).isEmpty else {
@@ -1237,7 +1246,6 @@ extension SharedReadingRecoveryJournal {
                     guard try fileKind(at: runName, directoryFD: rootFD) == nil else {
                         throw SharedReadingRecoveryJournalError.journalRemovalFailed
                     }
-                    if let buildLock { try reconcileBuildLock(buildLock) }
                 } catch {
                     do {
                         try restoreRecoveryArtifact(
