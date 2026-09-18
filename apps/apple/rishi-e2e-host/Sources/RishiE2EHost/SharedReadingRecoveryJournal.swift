@@ -1439,14 +1439,15 @@ extension SharedReadingRecoveryJournal {
         artifactFilename: String,
         runDevice: dev_t
     ) throws -> [RecoveryTreeNode] {
-        let entries = try withDirectoryEntries(runDirectoryFD, maximumCount: 3) { $0 }
-        let allowed = Set([artifactFilename, "derived", "results"])
+        let entries = try withDirectoryEntries(runDirectoryFD, maximumCount: 4) { $0 }
+        var allowed = Set([artifactFilename, "derived", "results"])
+        if artifactFilename != "manifest.json" { allowed.insert("manifest.json") }
         guard entries.contains(artifactFilename),
               Set(entries).isSubset(of: allowed) else {
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
         var budget = RecoveryTreeBudget()
-        return try ["derived", "results"].compactMap { name in
+        var snapshots: [RecoveryTreeNode] = try ["derived", "results"].compactMap { name in
             guard entries.contains(name) else { return nil }
             let snapshot = try snapshotOwnedRecoveryTree(
                 named: name,
@@ -1460,6 +1461,20 @@ extension SharedReadingRecoveryJournal {
             }
             return snapshot
         }
+        if artifactFilename != "manifest.json", entries.contains("manifest.json") {
+            let manifest = try snapshotOwnedRecoveryTree(
+                named: "manifest.json",
+                parentFD: runDirectoryFD,
+                runDevice: runDevice,
+                depth: 1,
+                budget: &budget
+            )
+            guard manifest.type == S_IFREG else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            snapshots.append(manifest)
+        }
+        return snapshots
     }
 
     static func finalizeProductionArtifactAndBuildLock(

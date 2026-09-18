@@ -1538,6 +1538,9 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         let resultURL = runRoot.appendingPathComponent("results/owner/result.xcresult/Data/Info.plist")
         try FileManager.default.createDirectory(at: resultURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("result".utf8).write(to: resultURL)
+        try Data(#"{"runID":"run-owned-trees","redacted":true}"#.utf8).write(
+            to: runRoot.appendingPathComponent("manifest.json")
+        )
 
         try await SharedReadingRecoveryJournal.recover(
             at: artifactURL,
@@ -1548,6 +1551,88 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         )
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
+    }
+
+    func testFinalizationRejectsNearNameInsteadOfTreatingItAsOwnedManifest() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-manifest-near-name")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let nearName = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent("manifest.json.backup")
+        let data = Data("retain".utf8)
+        try data.write(to: nearName)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: nil
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: nearName), data)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testFinalizationRejectsSymlinkedManifestAndLeavesExternalTargetUntouched() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-manifest-symlink")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let external = fixture.root.appendingPathComponent("external-manifest")
+        let externalData = Data("external".utf8)
+        try externalData.write(to: external)
+        let manifest = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent("manifest.json")
+        try FileManager.default.createSymbolicLink(at: manifest, withDestinationURL: external)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: nil
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: external), externalData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testFinalizationRejectsSpecialFileAtManifestPath() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-manifest-special")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manifest = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent("manifest.json")
+        XCTAssertEqual(mkfifo(manifest.path, mode_t(S_IRUSR | S_IWUSR)), 0)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: nil
+        ))
+
+        var details = stat()
+        XCTAssertEqual(lstat(manifest.path, &details), 0)
+        XCTAssertEqual(details.st_mode & S_IFMT, S_IFIFO)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testFinalizationRejectsManifestInodeReplacementAfterValidation() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-manifest-replacement")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manifest = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent("manifest.json")
+        let original = Data("original".utf8)
+        let replacement = Data("replacement".utf8)
+        try original.write(to: manifest)
+        let parked = fixture.root.appendingPathComponent("parked-manifest")
+        let replacementAttempted = LockedBoolean(false)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: fixture.lock,
+            afterBuildLockReconciliation: {
+                try FileManager.default.moveItem(at: manifest, to: parked)
+                try replacement.write(to: manifest)
+                replacementAttempted.value = true
+            },
+            reconcileBuildLock: { _ in }
+        ))
+
+        XCTAssertTrue(replacementAttempted.value)
+        XCTAssertEqual(try Data(contentsOf: manifest), replacement)
+        XCTAssertEqual(try Data(contentsOf: parked), original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
     }
 
     func testOwnedTreeRemovalRejectsSymlinkAndLeavesExternalTargetUntouched() throws {
