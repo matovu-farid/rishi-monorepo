@@ -61,15 +61,21 @@ public enum ProcessIdentityReader {
 
 /// Shared by the live runner and recovery. It deliberately does not discover
 /// ownership from names, command lines, parents, or environments.
+enum ProcessInspectionError: Error {
+    case enumerationUnavailable
+}
+
 enum OwnedProcessGroupInspector {
-    static func members(in processGroupID: Int32) -> [Int32] {
+    static func members(in processGroupID: Int32) throws -> [Int32] {
         // `proc_listallpids(nil, 0)` is not a reliable sizing probe on every
         // supported Darwin release. Keep an explicitly bounded inventory.
         var pids = [pid_t](repeating: 0, count: 16_384)
         let listed = pids.withUnsafeMutableBufferPointer {
             proc_listallpids($0.baseAddress, Int32($0.count * MemoryLayout<pid_t>.size))
         }
-        guard listed > 0 else { return [] }
+        guard listed > 0, listed < pids.count else {
+            throw ProcessInspectionError.enumerationUnavailable
+        }
         return pids.prefix(Int(listed)).compactMap { pid in
             getpgid(pid) == processGroupID ? Int32(pid) : nil
         }
@@ -79,9 +85,31 @@ enum OwnedProcessGroupInspector {
         let group = getpgid(pid)
         return group < 0 ? nil : group
     }
+
+    static func stableIdentity(
+        for pid: Int32,
+        in processGroupID: Int32,
+        identity: (Int32) -> OwnedProcessIdentity? = ProcessIdentityReader.identity,
+        processGroup: (Int32) -> Int32? = processGroup(of:)
+    ) -> OwnedProcessIdentity? {
+        guard let first = identity(pid), processGroup(pid) == processGroupID,
+              identity(pid) == first, processGroup(pid) == processGroupID else { return nil }
+        return first
+    }
+
+    static func allOwnedProcessesAreAbsent(
+        processGroupID: Int32,
+        observed: Set<OwnedProcessIdentity>,
+        members: (Int32) throws -> [Int32] = members(in:),
+        liveIdentity: (Int32) -> OwnedProcessIdentity? = ProcessIdentityReader.identity
+    ) throws -> Bool {
+        guard try members(processGroupID).isEmpty else { return false }
+        return !observed.contains { liveIdentity($0.pid) == $0 }
+    }
 }
 
 public struct FoundationProcessRunner: ProcessRunner {
+    private static let spawnLock = NSLock()
     private let recorder: any OwnedProcessRecording
     private let closeGateBeforeReleaseForTesting: Bool
 
@@ -95,7 +123,56 @@ public struct FoundationProcessRunner: ProcessRunner {
         self.closeGateBeforeReleaseForTesting = closeGateBeforeReleaseForTesting
     }
 
+#if DEBUG
+    static func withSpawnLockForTesting(_ body: () -> Void) {
+        spawnLock.withLock(body)
+    }
+
+    static func pipeDescriptorFlagsForTesting() throws -> [Int32] {
+        try spawnLock.withLock {
+            let descriptors = try makeCloseOnExecPipe()
+            defer { closeIfOpen(descriptors.0); closeIfOpen(descriptors.1) }
+            return [fcntl(descriptors.0, F_GETFD), fcntl(descriptors.1, F_GETFD)]
+        }
+    }
+
+    static func gateEOFExitStatusForTesting(_ request: ProcessRequest) throws -> Int32 {
+        try spawnLock.withLock {
+            try gateEOFExitStatusSerializedForTesting(request)
+        }
+    }
+
+    private static func gateEOFExitStatusSerializedForTesting(_ request: ProcessRequest) throws -> Int32 {
+        let gate = try makeCloseOnExecPipe()
+        let stdout = try makeCloseOnExecPipe()
+        let stderr = try makeCloseOnExecPipe()
+        var child: pid_t = 0
+        defer {
+            closeIfOpen(gate.0); closeIfOpen(gate.1)
+            closeIfOpen(stdout.0); closeIfOpen(stdout.1)
+            closeIfOpen(stderr.0); closeIfOpen(stderr.1)
+        }
+        child = try spawnGateShell(request: request, gate: gate, stdout: stdout, stderr: stderr)
+        closeIfOpen(gate.0)
+        closeIfOpen(stdout.1)
+        closeIfOpen(stderr.1)
+        closeIfOpen(gate.1)
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(child, &status, 0)
+            if result == child { return decodedExitStatus(status) }
+            if result == -1, errno != EINTR { throw ProcessCleanupError() }
+        }
+    }
+#endif
+
     public func start(_ request: ProcessRequest) throws -> any ProcessHandle {
+        try Self.spawnLock.withLock {
+            try startSerialized(request)
+        }
+    }
+
+    private func startSerialized(_ request: ProcessRequest) throws -> any ProcessHandle {
         let gate = try makeCloseOnExecPipe()
         var stdout: (Int32, Int32) = (-1, -1)
         var stderr: (Int32, Int32) = (-1, -1)
@@ -195,8 +272,12 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
         }, onCancel: { self.cancel() })
         let cleaned = await waitForGroupAbsence()
         stopMonitor()
-        await waitForReaders()
-        if !cleaned || recordingError.hasError { throw ProcessCleanupError() }
+        if !cleaned {
+            try? stdout.close()
+            try? stderr.close()
+        }
+        let readersFinished = await waitForReaders()
+        if !cleaned || !readersFinished || recordingError.hasError { throw ProcessCleanupError() }
         return ProcessResult(exitStatus: status, stdout: String(decoding: stdoutData.get(), as: UTF8.self), stderr: String(decoding: stderrData.get(), as: UTF8.self))
     }
 
@@ -250,8 +331,16 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
 
     private func recordStableGroupMembers() {
         guard !lifecycleLock.withLock({ finished }) else { return }
-        for pid in OwnedProcessGroupInspector.members(in: group.processGroupID) {
-            guard let identity = ProcessIdentityReader.identity(for: pid) else { continue }
+        let members: [Int32]
+        do {
+            members = try OwnedProcessGroupInspector.members(in: group.processGroupID)
+        } catch {
+            recordingError.retain(error)
+            cancel()
+            return
+        }
+        for pid in members {
+            guard let identity = OwnedProcessGroupInspector.stableIdentity(for: pid, in: group.processGroupID) else { continue }
             let shouldRecord = lifecycleLock.withLock { observed.insert(identity).inserted }
             guard shouldRecord else { continue }
             do {
@@ -276,7 +365,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
         let termDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         while ContinuousClock.now < termDeadline {
             recordStableGroupMembers()
-            if groupIsAbsent() { return true }
+            if ownedProcessesAreAbsent() { return true }
             if recordingError.hasError { cancel() }
             try? await Task.sleep(for: .milliseconds(50))
         }
@@ -284,20 +373,31 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
         let killDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         while ContinuousClock.now < killDeadline {
             signalVerifiedGroup(SIGKILL)
-            if groupIsAbsent() { return true }
+            if ownedProcessesAreAbsent() { return true }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        return groupIsAbsent()
+        return ownedProcessesAreAbsent()
     }
 
-    private func groupIsAbsent() -> Bool { OwnedProcessGroupInspector.members(in: group.processGroupID).isEmpty }
+    private func ownedProcessesAreAbsent() -> Bool {
+        let observed = lifecycleLock.withLock { self.observed }
+        do {
+            return try OwnedProcessGroupInspector.allOwnedProcessesAreAbsent(
+                processGroupID: group.processGroupID,
+                observed: observed
+            )
+        } catch {
+            recordingError.retain(error)
+            return false
+        }
+    }
 
     private func signalVerifiedGroup(_ signal: Int32) {
         if let leader = ProcessIdentityReader.identity(for: group.leader.pid), leader != group.leader {
             recordingError.retain(ProcessCleanupError())
             return
         }
-        if ProcessIdentityReader.identity(for: group.leader.pid) == group.leader {
+        if OwnedProcessGroupInspector.stableIdentity(for: group.leader.pid, in: group.processGroupID) == group.leader {
             // The live PGID leader still proves that this exact private group
             // belongs to us, so a group signal cannot target a reused PGID.
             let groupResult = Darwin.kill(-group.processGroupID, signal)
@@ -309,29 +409,48 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
                     recordingError.retain(ProcessCleanupError())
                 }
             }
-            return
+        } else {
+            do {
+                for pid in try OwnedProcessGroupInspector.members(in: group.processGroupID) {
+                    guard let identity = OwnedProcessGroupInspector.stableIdentity(for: pid, in: group.processGroupID) else { continue }
+                    signalExactIdentity(identity, signal: signal)
+                }
+            } catch {
+                recordingError.retain(error)
+            }
         }
-        for pid in OwnedProcessGroupInspector.members(in: group.processGroupID) {
-            guard let identity = ProcessIdentityReader.identity(for: pid),
-                  OwnedProcessGroupInspector.processGroup(of: pid) == group.processGroupID,
-                  ProcessIdentityReader.identity(for: pid) == identity,
-                  OwnedProcessGroupInspector.processGroup(of: pid) == group.processGroupID else { continue }
-            _ = Darwin.kill(pid, signal)
+        let observed = lifecycleLock.withLock { self.observed }
+        for identity in observed {
+            signalExactIdentity(identity, signal: signal)
         }
     }
 
-    private func waitForReaders() async {
+    private func signalExactIdentity(_ identity: OwnedProcessIdentity, signal: Int32) {
+        guard ProcessIdentityReader.identity(for: identity.pid) == identity,
+              ProcessIdentityReader.identity(for: identity.pid) == identity else { return }
+        if Darwin.kill(identity.pid, signal) != 0,
+           ProcessIdentityReader.identity(for: identity.pid) == identity {
+            recordingError.retain(ProcessCleanupError())
+        }
+    }
+
+    private func waitForReaders(timeout: DispatchTimeInterval = .seconds(1)) async -> Bool {
         await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async { self.readers.wait(); continuation.resume() }
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: self.readers.wait(timeout: .now() + timeout) == .success)
+            }
         }
     }
 
     private static func readPipe(_ handle: FileHandle, maxBytes: Int = 4 * 1_024 * 1_024) -> Data {
         var result = Data()
         while true {
-            let chunk = handle.availableData
-            if chunk.isEmpty { return result }
-            if result.count < maxBytes { result.append(chunk.prefix(maxBytes - result.count)) }
+            do {
+                guard let chunk = try handle.read(upToCount: 64 * 1_024), !chunk.isEmpty else { return result }
+                if result.count < maxBytes { result.append(chunk.prefix(maxBytes - result.count)) }
+            } catch {
+                return result
+            }
         }
     }
 }

@@ -83,6 +83,38 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertEqual(signals.values, [])
     }
 
+    func testRecoveryFailsClosedWhenGroupEnumerationIsUnavailable() async throws {
+        let leader = OwnedProcessIdentity(pid: 709, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let signals = SignalRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recoverProcessGroups(
+            [OwnedProcessGroup(processGroupID: 709, leader: leader)],
+            liveIdentity: { _ in nil },
+            members: { _ in throw RecoveryInspectionTestError.unavailable },
+            processGroup: { _ in nil },
+            signal: { pid, _ in signals.append(pid) },
+            sleep: { _ in }
+        ))
+
+        XCTAssertEqual(signals.values, [])
+    }
+
+    func testRecoveryTreatsAlreadyAbsentGroupAsRecovered() async throws {
+        let leader = OwnedProcessIdentity(pid: 710, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let signals = SignalRecorder()
+
+        try await SharedReadingRecoveryJournal.recoverProcessGroups(
+            [OwnedProcessGroup(processGroupID: 710, leader: leader)],
+            liveIdentity: { _ in nil },
+            members: { _ in [] },
+            processGroup: { _ in nil },
+            signal: { pid, _ in signals.append(pid) },
+            sleep: { _ in }
+        )
+
+        XCTAssertEqual(signals.values, [])
+    }
+
     func testRecoveryCleansOriginalGroupMembersAfterLeaderExits() async throws {
         let leader = OwnedProcessIdentity(pid: 705, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
         let child = OwnedProcessIdentity(pid: 706, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
@@ -893,6 +925,8 @@ private final class SignalRecorder: @unchecked Sendable {
     var values: [Int32] { lock.withLock { stored } }
     func append(_ pid: Int32) { lock.withLock { stored.append(pid) } }
 }
+
+private enum RecoveryInspectionTestError: Error { case unavailable }
 
 private final class RecoveryProcessState: @unchecked Sendable {
     private let lock = NSLock()

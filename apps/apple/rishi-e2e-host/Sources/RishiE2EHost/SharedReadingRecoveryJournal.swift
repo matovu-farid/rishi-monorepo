@@ -746,7 +746,7 @@ public extension SharedReadingRecoveryJournal {
     static func recoverProcessGroups(
         _ groups: [OwnedProcessGroup],
         liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
-        members: @escaping @Sendable (Int32) -> [Int32],
+        members: @escaping @Sendable (Int32) throws -> [Int32],
         processGroup: @escaping @Sendable (Int32) -> Int32?,
         signal: @escaping @Sendable (Int32, Int32) -> Void,
         sleep: @escaping @Sendable (Duration) async throws -> Void
@@ -772,7 +772,7 @@ public extension SharedReadingRecoveryJournal {
     private static func recoverProcessGroup(
         _ group: OwnedProcessGroup,
         liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
-        members: @escaping @Sendable (Int32) -> [Int32],
+        members: @escaping @Sendable (Int32) throws -> [Int32],
         processGroup: @escaping @Sendable (Int32) -> Int32?,
         signal: @escaping @Sendable (Int32, Int32) -> Void,
         sleep: @escaping @Sendable (Duration) async throws -> Void
@@ -781,7 +781,7 @@ public extension SharedReadingRecoveryJournal {
             for _ in 0..<6 {
                 let leader = liveIdentity(group.leader.pid)
                 if let leader, leader != group.leader { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
-                let snapshot = members(group.processGroupID)
+                let snapshot = try members(group.processGroupID)
                 if snapshot.isEmpty { return }
                 for pid in snapshot {
                     // A current process whose PID equals the old PGID can only
@@ -796,7 +796,7 @@ public extension SharedReadingRecoveryJournal {
                 try await sleep(.milliseconds(25))
             }
         }
-        if !members(group.processGroupID).isEmpty { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+        if !(try members(group.processGroupID)).isEmpty { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
     }
 
     private static func waitForIdentityAbsence(
