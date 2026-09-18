@@ -1,6 +1,16 @@
 import Foundation
 #if canImport(Darwin)
 import Darwin
+
+// Swift imports Darwin's `sigaction` structure and C function with the same
+// name, so the function is not directly spellable through the module. Bind
+// the C symbol explicitly while preserving its exact Darwin ABI.
+@_silgen_name("sigaction")
+private func rishiDarwinSigaction(
+    _ signal: Int32,
+    _ action: UnsafePointer<sigaction>?,
+    _ previous: UnsafeMutablePointer<sigaction>?
+) -> Int32
 #endif
 
 public struct SharedReadingLiveRunEvidence: Codable, Equatable, Sendable {
@@ -33,7 +43,7 @@ public enum SharedReadingLiveRunError: Error, LocalizedError, Equatable, Sendabl
 
 public enum SharedReadingLiveRun {
     struct SignalInstallation: Sendable {
-        let cancel: @Sendable () -> Void
+        let cancel: @Sendable () throws -> Void
         static let none = SignalInstallation(cancel: {})
     }
 
@@ -50,7 +60,7 @@ public enum SharedReadingLiveRun {
         let participantProgress: @Sendable () -> Int64?
         let finish: @Sendable (_ succeeded: Bool, _ keepDiagnostics: Bool) async throws -> Void
         let makeRunID: @Sendable () -> String
-        let installSignals: @Sendable (@escaping @Sendable () -> Void) -> SignalInstallation
+        let installSignals: @Sendable (@escaping @Sendable () -> Void) throws -> SignalInstallation
 
         static func probe(
             progress: Int64 = 2,
@@ -149,13 +159,22 @@ public enum SharedReadingLiveRun {
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let task = Task { try await operation() }
-        let installation = dependencies.installSignals { task.cancel() }
-        defer { installation.cancel() }
+        let installation: SignalInstallation
         do {
-            return try await task.value
+            installation = try dependencies.installSignals { task.cancel() }
         } catch {
             task.cancel()
             _ = try? await task.value
+            throw error
+        }
+        do {
+            let value = try await task.value
+            try installation.cancel()
+            return value
+        } catch {
+            task.cancel()
+            _ = try? await task.value
+            try? installation.cancel()
             throw error
         }
     }
@@ -232,8 +251,7 @@ private final class ProductionState: @unchecked Sendable {
             finish: { [self] success, keep in try await finish(success: success, keepDiagnostics: keep) },
             makeRunID: { UUID().uuidString.lowercased() },
             installSignals: { cancel in
-                let sources = LiveRunSignalHandler.install(cancel: cancel)
-                return .init(cancel: { sources.forEach { $0.cancel() } })
+                try LiveRunSignalHandler.install(cancel: cancel)
             }
         )
     }
@@ -488,17 +506,106 @@ private final class ProductionState: @unchecked Sendable {
 }
 
 enum LiveRunSignalHandler {
-    static func install(cancel: @escaping @Sendable () -> Void) -> [DispatchSourceSignal] {
+    struct System: @unchecked Sendable {
+        let ignore: @Sendable (Int32) throws -> @Sendable () throws -> Void
+        let makeSource: @Sendable (
+            Int32,
+            @escaping @Sendable () -> Void
+        ) -> @Sendable () -> Void
+
+        static let live = System(
+            ignore: { signalNumber in
+                #if canImport(Darwin)
+                var ignored = sigaction()
+                ignored.__sigaction_u.__sa_handler = SIG_IGN
+                sigemptyset(&ignored.sa_mask)
+                ignored.sa_flags = 0
+                var previous = sigaction()
+                guard rishiDarwinSigaction(signalNumber, &ignored, &previous) == 0 else {
+                    throw ResourcePreflightError("Could not install live E2E signal disposition")
+                }
+                let disposition = SignalDisposition(previous)
+                return {
+                    var previous = disposition.value
+                    guard rishiDarwinSigaction(signalNumber, &previous, nil) == 0 else {
+                        throw ResourcePreflightError("Could not restore live E2E signal disposition")
+                    }
+                }
+                #else
+                return {}
+                #endif
+            },
+            makeSource: { signalNumber, cancel in
+                #if canImport(Darwin)
+                let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global(qos: .utility))
+                source.setEventHandler(handler: cancel)
+                source.resume()
+                return { source.cancel() }
+                #else
+                return {}
+                #endif
+            }
+        )
+    }
+
+    static func install(
+        cancel: @escaping @Sendable () -> Void,
+        system: System = .live
+    ) throws -> SharedReadingLiveRun.SignalInstallation {
         #if canImport(Darwin)
-        return [SIGINT, SIGTERM].map { signalNumber in
-            Darwin.signal(signalNumber, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global(qos: .utility))
-            source.setEventHandler(handler: cancel)
-            source.resume()
-            return source
+        let state = SignalRestorationState()
+        do {
+            for signalNumber in [SIGINT, SIGTERM] {
+                let restore = try system.ignore(signalNumber)
+                let cancelSource = system.makeSource(signalNumber, cancel)
+                state.append(cancelSource: cancelSource, restore: restore)
+            }
+        } catch {
+            try? state.cancel()
+            throw error
         }
+        return .init(cancel: { try state.cancel() })
         #else
-        return []
+        return .none
         #endif
+    }
+
+    #if canImport(Darwin)
+    private final class SignalDisposition: @unchecked Sendable {
+        let value: sigaction
+        init(_ value: sigaction) { self.value = value }
+    }
+    #endif
+
+    private final class SignalRestorationState: @unchecked Sendable {
+        private struct Action: Sendable {
+            let cancelSource: @Sendable () -> Void
+            let restore: @Sendable () throws -> Void
+        }
+
+        private let lock = NSLock()
+        private var actions: [Action] = []
+        private var cancelled = false
+
+        func append(
+            cancelSource: @escaping @Sendable () -> Void,
+            restore: @escaping @Sendable () throws -> Void
+        ) {
+            lock.withLock { actions.append(.init(cancelSource: cancelSource, restore: restore)) }
+        }
+
+        func cancel() throws {
+            let pending = lock.withLock { () -> [Action] in
+                guard !cancelled else { return [] }
+                cancelled = true
+                return actions.reversed()
+            }
+            var firstError: Error?
+            for action in pending {
+                action.cancelSource()
+                do { try action.restore() } catch { if firstError == nil { firstError = error } }
+            }
+            if let firstError { throw firstError }
+        }
     }
 }

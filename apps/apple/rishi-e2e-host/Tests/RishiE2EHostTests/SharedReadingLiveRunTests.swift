@@ -3,6 +3,81 @@ import XCTest
 @testable import RishiE2EHost
 
 final class SharedReadingLiveRunTests: XCTestCase {
+    func testSignalInstallationRestoresExactPreviousDispositionsOnCancel() throws {
+        let events = LiveRunCallRecorder()
+        let system = LiveRunSignalHandler.System(
+            ignore: { signal in
+                events.append("ignore:\(signal)")
+                return { events.append("restore:\(signal):original") }
+            },
+            makeSource: { signal, _ in
+                events.append("source:\(signal)")
+                return { events.append("cancel-source:\(signal)") }
+            }
+        )
+
+        let installation = try LiveRunSignalHandler.install(cancel: {}, system: system)
+        try installation.cancel()
+        try installation.cancel()
+
+        XCTAssertEqual(events.values, [
+            "ignore:\(SIGINT)", "source:\(SIGINT)",
+            "ignore:\(SIGTERM)", "source:\(SIGTERM)",
+            "cancel-source:\(SIGTERM)", "restore:\(SIGTERM):original",
+            "cancel-source:\(SIGINT)", "restore:\(SIGINT):original",
+        ])
+    }
+
+    func testSequentialSignalInstallationsObserveRestoredDispositions() throws {
+        let state = FakeSignalDispositionState()
+        let system = LiveRunSignalHandler.System(
+            ignore: { signal in try state.ignore(signal) },
+            makeSource: { _, _ in {} }
+        )
+
+        let first = try LiveRunSignalHandler.install(cancel: {}, system: system)
+        try first.cancel()
+        let second = try LiveRunSignalHandler.install(cancel: {}, system: system)
+        try second.cancel()
+
+        XCTAssertEqual(state.captured, [
+            "original-\(SIGINT)", "original-\(SIGTERM)",
+            "original-\(SIGINT)", "original-\(SIGTERM)",
+        ])
+        XCTAssertEqual(state.current(SIGINT), "original-\(SIGINT)")
+        XCTAssertEqual(state.current(SIGTERM), "original-\(SIGTERM)")
+    }
+
+    func testSignalInstallationFailureCancelsAndAwaitsStartedOperation() async throws {
+        let calls = LiveRunCallRecorder()
+        let started = DispatchSemaphore(value: 0)
+        let dependencies = makeDependencies(
+            calls: calls,
+            preparePackages: {
+                calls.append("packages:started")
+                started.signal()
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch {
+                    calls.append("packages:cleanup")
+                    throw error
+                }
+            },
+            installSignals: { _ in
+                _ = started.wait(timeout: .now() + 2)
+                throw ResourcePreflightError("signal install failed")
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingLiveRun.execute(
+            environment: SharedReadingLiveRun.validTestEnvironment,
+            dependencies: dependencies
+        ))
+
+        XCTAssertLessThan(
+            try XCTUnwrap(calls.values.firstIndex(of: "packages:cleanup")),
+            try XCTUnwrap(calls.values.firstIndex(of: "finish:false:true"))
+        )
+    }
     func testLiveRunRequiresNetworkAcknowledgementBeforeAnyDependencyCall() async throws {
         let calls = LiveRunCallRecorder()
         let dependencies = SharedReadingLiveRun.Dependencies.probe { calls.append($0) }
@@ -291,7 +366,7 @@ private func makeDependencies(
     preparePackages: (@Sendable () async throws -> Void)? = nil,
     runHost: (@Sendable () async throws -> SharedReadingRunReport)? = nil,
     finish: (@Sendable (Bool, Bool) async throws -> Void)? = nil,
-    installSignals: (@Sendable (@escaping @Sendable () -> Void) -> SharedReadingLiveRun.SignalInstallation)? = nil
+    installSignals: (@Sendable (@escaping @Sendable () -> Void) throws -> SharedReadingLiveRun.SignalInstallation)? = nil
 ) -> SharedReadingLiveRun.Dependencies {
     .init(
         unresolvedArtifact: { _ in calls.append("recovery:check"); return unresolvedArtifact },
@@ -323,6 +398,25 @@ private final class SignalProbe: @unchecked Sendable {
         let callback = lock.withLock { callbacks.last }
         callback?()
     }
+}
+
+private final class FakeSignalDispositionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dispositions = [SIGINT: "original-\(SIGINT)", SIGTERM: "original-\(SIGTERM)"]
+    private var capturedStorage: [String] = []
+
+    func ignore(_ signal: Int32) throws -> @Sendable () throws -> Void {
+        let previous = lock.withLock { () -> String in
+            let value = dispositions[signal]!
+            capturedStorage.append(value)
+            dispositions[signal] = "ignored"
+            return value
+        }
+        return { [self] in lock.withLock { dispositions[signal] = previous } }
+    }
+
+    var captured: [String] { lock.withLock { capturedStorage } }
+    func current(_ signal: Int32) -> String? { lock.withLock { dispositions[signal] } }
 }
 
 private final class LiveRunCallRecorder: @unchecked Sendable {

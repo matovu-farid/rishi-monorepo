@@ -109,6 +109,38 @@ final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
         #endif
     }
 
+    func testRunnerCallbackRejectsPIDReusedAfterIdentityJournalWriteWithoutAcknowledgement() throws {
+        #if canImport(Darwin)
+        let accepted = OwnedProcessIdentity(pid: 4253, birthTimeSeconds: 10, birthTimeMicroseconds: 21)
+        let reused = OwnedProcessIdentity(pid: 4253, birthTimeSeconds: 99, birthTimeMicroseconds: 1)
+        let recorder = RelayRegistrationRecorder()
+        let identities = SequencedIdentities([accepted, accepted, reused])
+        let relay = RendezvousRelayServer(
+            secret: "registration-secret",
+            processRecorder: recorder,
+            liveIdentity: { _ in identities.next() }
+        )
+        let nonce = try relay.reserveRegistration(
+            runID: "run-reuse", role: .owner, kind: .runner,
+            bundleIdentifier: "org.fidexa.rishiUITests"
+        )
+        let configuration = try relay.start()
+        defer { relay.stop() }
+
+        let response = try request([
+            "op": "register-runner", "secret": configuration.secret,
+            "runID": "run-reuse", "kind": "runner", "role": "owner",
+            "nonce": nonce, "bundleIdentifier": "org.fidexa.rishiUITests", "pid": 4253,
+        ], port: configuration.port)
+
+        XCTAssertEqual(response["ok"] as? Bool, false)
+        XCTAssertEqual(recorder.registered, [accepted])
+        XCTAssertTrue(relay.registeredCatalystLaunches().allSatisfy { $0.registeredIdentity == nil })
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
     func testAppCallbackConsumesDistinctLaunchNonceAndJournalsBeforeAcknowledgement() throws {
         #if canImport(Darwin)
         let identity = OwnedProcessIdentity(pid: 4262, birthTimeSeconds: 11, birthTimeMicroseconds: 22)
@@ -495,4 +527,11 @@ private final class LockedInt: @unchecked Sendable {
     private var storage = 0
     func increment() { lock.withLock { storage += 1 } }
     var value: Int { lock.withLock { storage } }
+}
+
+private final class SequencedIdentities: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [OwnedProcessIdentity]
+    init(_ values: [OwnedProcessIdentity]) { self.values = values }
+    func next() -> OwnedProcessIdentity? { lock.withLock { values.isEmpty ? nil : values.removeFirst() } }
 }
