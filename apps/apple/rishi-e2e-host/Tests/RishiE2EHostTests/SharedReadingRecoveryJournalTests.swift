@@ -1513,6 +1513,106 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.artifactURL.deletingLastPathComponent().path))
     }
 
+    func testInterruptedRunRecoveryRemovesOwnedBuildAndResultTreesThenFinalizesRunDirectory() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runID = "run-owned-trees"
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
+        let artifactURL = runRoot.appendingPathComponent("recovery.json")
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(url: artifactURL, runID: runID)
+
+        for role in [TestAccountRole.owner, .participant] {
+            let relativePath = SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: role)
+            let secretURL = runRoot.appendingPathComponent(relativePath)
+            try journal.recordSecretArtifact(relativePath: relativePath)
+            try FileManager.default.createDirectory(at: secretURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("credential".utf8).write(to: secretURL)
+            try Data("generated specification".utf8).write(
+                to: secretURL.deletingLastPathComponent().appendingPathComponent("source.xctestrun")
+            )
+        }
+        let objectURL = runRoot.appendingPathComponent("derived/catalyst/Build/Intermediates.noindex/App.build/object.o")
+        try FileManager.default.createDirectory(at: objectURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 0x2a, count: 4_096).write(to: objectURL)
+        let resultURL = runRoot.appendingPathComponent("results/owner/result.xcresult/Data/Info.plist")
+        try FileManager.default.createDirectory(at: resultURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("result".utf8).write(to: resultURL)
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: artifactURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation,
+            operations: productionFileCleanupOperations(artifactURL: artifactURL, temporaryRoot: root)
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
+    }
+
+    func testOwnedTreeRemovalRejectsSymlinkAndLeavesExternalTargetUntouched() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-tree-symlink")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let runRoot = fixture.artifactURL.deletingLastPathComponent()
+        let external = fixture.root.appendingPathComponent("external", isDirectory: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        let sentinel = external.appendingPathComponent("sentinel")
+        let sentinelData = Data("external".utf8)
+        try sentinelData.write(to: sentinel)
+        let derived = runRoot.appendingPathComponent("derived", isDirectory: true)
+        try FileManager.default.createDirectory(at: derived, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: derived.appendingPathComponent("redirect"), withDestinationURL: external)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: nil
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: sentinel), sentinelData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
+    func testOwnedTreeRemovalRejectsSpecialFileAndRetainsRecoveryArtifact() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-tree-special")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let results = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent("results", isDirectory: true)
+        try FileManager.default.createDirectory(at: results, withIntermediateDirectories: true)
+        let fifo = results.appendingPathComponent("unexpected.fifo")
+        XCTAssertEqual(mkfifo(fifo.path, mode_t(S_IRUSR | S_IWUSR)), 0)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: nil
+        ))
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+        var details = stat()
+        XCTAssertEqual(lstat(fifo.path, &details), 0)
+        XCTAssertEqual(details.st_mode & S_IFMT, S_IFIFO)
+    }
+
+    func testOwnedTreeRemovalRejectsExternalHardlinkAndRetainsRecoveryArtifact() throws {
+        let fixture = try makeFinalizationFixture(runID: "run-tree-hardlink")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let external = fixture.root.appendingPathComponent("external-file")
+        let sentinelData = Data("must survive".utf8)
+        try sentinelData.write(to: external)
+        let results = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent("results", isDirectory: true)
+        try FileManager.default.createDirectory(at: results, withIntermediateDirectories: true)
+        try FileManager.default.linkItem(at: external, to: results.appendingPathComponent("linked-result"))
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            buildLock: nil
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: external), sentinelData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+    }
+
     func testRecoveryPublicAPIHasExactProductionSignature() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1828,6 +1928,32 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
                 }
                 events.append("artifact:remove")
                 try FileManager.default.removeItem(at: artifactURL.deletingLastPathComponent())
+            }
+        )
+    }
+
+    private func productionFileCleanupOperations(
+        artifactURL: URL,
+        temporaryRoot: URL
+    ) -> RecoveryOperations {
+        let runRoot = artifactURL.deletingLastPathComponent()
+        return RecoveryOperations(
+            recoverProcessGroup: { _ in },
+            recoverProcess: { _ in },
+            currentCatalystIdentities: { _ in [] },
+            recoverSimulator: { _ in },
+            removeSecretArtifact: { url in
+                try SharedReadingRecoveryJournal.removeProductionSecretArtifact(at: url, runRoot: runRoot)
+            },
+            recoverAccount: { _ in },
+            exactRunIDProcessIsVisible: { _ in false },
+            configuredBuildLockExists: { _ in false },
+            finalizeArtifactAndBuildLock: { url, lock in
+                try SharedReadingRecoveryJournal.finalizeProductionArtifactAndBuildLock(
+                    at: url,
+                    temporaryRoot: temporaryRoot,
+                    buildLock: lock
+                )
             }
         )
     }

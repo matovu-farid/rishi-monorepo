@@ -193,6 +193,9 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
 
     private static let inProcessInterprocessLock = NSLock()
     private static let maximumEncodedJournalBytes = 1_048_576
+    private static let maximumRecoveryTreeDepth = 64
+    private static let maximumRecoveryTreeEntries = 500_000
+    private static let maximumRecoveryTreeBytes: UInt64 = 100 * 1_024 * 1_024 * 1_024
     private let lock = NSLock()
     private let rootDirectoryFD: Int32
     private let runDirectoryFD: Int32
@@ -681,7 +684,11 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         }
     }
 
-    private static func withDirectoryEntries<T>(_ directoryFD: Int32, _ operation: ([String]) throws -> T) throws -> T {
+    private static func withDirectoryEntries<T>(
+        _ directoryFD: Int32,
+        maximumCount: Int? = nil,
+        _ operation: ([String]) throws -> T
+    ) throws -> T {
         let duplicateFD = fcntl(directoryFD, F_DUPFD_CLOEXEC, 0)
         guard duplicateFD >= 0, let directory = fdopendir(duplicateFD) else {
             if duplicateFD >= 0 { close(duplicateFD) }
@@ -689,11 +696,23 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         }
         defer { closedir(directory) }
         var names: [String] = []
-        while let entry = readdir(directory) {
+        while true {
+            errno = 0
+            guard let entry = readdir(directory) else {
+                guard errno == 0 else {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
+                break
+            }
             let name = withUnsafeBytes(of: entry.pointee.d_name) {
                 String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
             }
-            if name != "." && name != ".." { names.append(name) }
+            if name != "." && name != ".." {
+                if let maximumCount, names.count >= maximumCount {
+                    throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+                }
+                names.append(name)
+            }
         }
         return try operation(names.sorted())
     }
@@ -814,6 +833,20 @@ struct RecoveryOperations: Sendable {
     let exactRunIDProcessIsVisible: @Sendable (String) throws -> Bool
     let configuredBuildLockExists: @Sendable (URL) throws -> Bool
     let finalizeArtifactAndBuildLock: @Sendable (URL, AppleXcodeBuildLockOwnership?) throws -> Void
+}
+
+private struct RecoveryTreeBudget {
+    var entries = 0
+    var bytes: UInt64 = 0
+}
+
+private struct RecoveryTreeNode {
+    let name: String
+    let device: dev_t
+    let inode: ino_t
+    let type: mode_t
+    let size: off_t
+    let children: [RecoveryTreeNode]
 }
 
 private struct RecoveryCombinedError: Error, LocalizedError {
@@ -1258,6 +1291,177 @@ extension SharedReadingRecoveryJournal {
         }
     }
 
+    private static func snapshotOwnedRecoveryTree(
+        named name: String,
+        parentFD: Int32,
+        runDevice: dev_t,
+        depth: Int,
+        budget: inout RecoveryTreeBudget
+    ) throws -> RecoveryTreeNode {
+        guard depth <= maximumRecoveryTreeDepth,
+              budget.entries < maximumRecoveryTreeEntries else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        budget.entries += 1
+
+        var named = stat()
+        guard fstatat(parentFD, name, &named, AT_SYMLINK_NOFOLLOW) == 0,
+              named.st_dev == runDevice else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let type = named.st_mode & S_IFMT
+        switch type {
+        case S_IFDIR:
+            let directoryFD = openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard directoryFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { close(directoryFD) }
+            var opened = stat()
+            guard fstat(directoryFD, &opened) == 0,
+                  opened.st_mode & S_IFMT == S_IFDIR,
+                  opened.st_dev == named.st_dev,
+                  opened.st_ino == named.st_ino else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            let children = try withDirectoryEntries(
+                directoryFD,
+                maximumCount: maximumRecoveryTreeEntries - budget.entries
+            ) { names in
+                try names.map { child in
+                    try snapshotOwnedRecoveryTree(
+                        named: child,
+                        parentFD: directoryFD,
+                        runDevice: runDevice,
+                        depth: depth + 1,
+                        budget: &budget
+                    )
+                }
+            }
+            return RecoveryTreeNode(
+                name: name, device: named.st_dev, inode: named.st_ino,
+                type: type, size: 0, children: children
+            )
+        case S_IFREG:
+            guard named.st_nlink == 1, named.st_size >= 0 else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            let size = UInt64(named.st_size)
+            guard budget.bytes <= maximumRecoveryTreeBytes,
+                  size <= maximumRecoveryTreeBytes - budget.bytes else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            budget.bytes += size
+            let fileFD = openat(parentFD, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { close(fileFD) }
+            var opened = stat()
+            guard fstat(fileFD, &opened) == 0,
+                  opened.st_mode & S_IFMT == S_IFREG,
+                  opened.st_dev == named.st_dev,
+                  opened.st_ino == named.st_ino,
+                  opened.st_nlink == 1,
+                  opened.st_size == named.st_size else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            return RecoveryTreeNode(
+                name: name, device: named.st_dev, inode: named.st_ino,
+                type: type, size: named.st_size, children: []
+            )
+        default:
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+    }
+
+    private static func deleteOwnedRecoveryTree(
+        _ node: RecoveryTreeNode,
+        parentFD: Int32,
+        runDevice: dev_t
+    ) throws {
+        switch node.type {
+        case S_IFREG:
+            let fileFD = openat(parentFD, node.name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { close(fileFD) }
+            var opened = stat()
+            var named = stat()
+            guard fstat(fileFD, &opened) == 0,
+                  fstatat(parentFD, node.name, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                  opened.st_mode & S_IFMT == S_IFREG,
+                  named.st_mode & S_IFMT == S_IFREG,
+                  opened.st_dev == runDevice,
+                  opened.st_dev == node.device,
+                  opened.st_ino == node.inode,
+                  named.st_dev == opened.st_dev,
+                  named.st_ino == opened.st_ino,
+                  opened.st_nlink == 1,
+                  named.st_nlink == 1,
+                  opened.st_size == node.size,
+                  named.st_size == node.size,
+                  unlinkat(parentFD, node.name, 0) == 0,
+                  try fileKind(at: node.name, directoryFD: parentFD) == nil else {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
+        case S_IFDIR:
+            let directoryFD = openat(parentFD, node.name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard directoryFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { close(directoryFD) }
+            var opened = stat()
+            var named = stat()
+            guard fstat(directoryFD, &opened) == 0,
+                  fstatat(parentFD, node.name, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                  opened.st_mode & S_IFMT == S_IFDIR,
+                  named.st_mode & S_IFMT == S_IFDIR,
+                  opened.st_dev == runDevice,
+                  opened.st_dev == node.device,
+                  opened.st_ino == node.inode,
+                  named.st_dev == opened.st_dev,
+                  named.st_ino == opened.st_ino else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            for child in node.children {
+                try deleteOwnedRecoveryTree(child, parentFD: directoryFD, runDevice: runDevice)
+            }
+            guard try withDirectoryEntries(directoryFD, { $0 }).isEmpty,
+                  fstatat(parentFD, node.name, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                  named.st_mode & S_IFMT == S_IFDIR,
+                  named.st_dev == node.device,
+                  named.st_ino == node.inode,
+                  unlinkat(parentFD, node.name, AT_REMOVEDIR) == 0,
+                  try fileKind(at: node.name, directoryFD: parentFD) == nil else {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
+        default:
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+    }
+
+    private static func ownedRecoveryTreeSnapshots(
+        runDirectoryFD: Int32,
+        artifactFilename: String,
+        runDevice: dev_t
+    ) throws -> [RecoveryTreeNode] {
+        let entries = try withDirectoryEntries(runDirectoryFD, maximumCount: 3) { $0 }
+        let allowed = Set([artifactFilename, "derived", "results"])
+        guard entries.contains(artifactFilename),
+              Set(entries).isSubset(of: allowed) else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        var budget = RecoveryTreeBudget()
+        return try ["derived", "results"].compactMap { name in
+            guard entries.contains(name) else { return nil }
+            let snapshot = try snapshotOwnedRecoveryTree(
+                named: name,
+                parentFD: runDirectoryFD,
+                runDevice: runDevice,
+                depth: 1,
+                budget: &budget
+            )
+            guard snapshot.type == S_IFDIR else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            return snapshot
+        }
+    }
+
     static func finalizeProductionArtifactAndBuildLock(
         at artifactURL: URL,
         temporaryRoot: URL,
@@ -1302,10 +1506,14 @@ extension SharedReadingRecoveryJournal {
                       namedRunDetails.st_mode & S_IFMT == S_IFDIR,
                       runDetails.st_dev == namedRunDetails.st_dev,
                       runDetails.st_ino == namedRunDetails.st_ino,
-                      try withDirectoryEntries(runFD, { $0 }) == [filename],
                       try fileKind(at: filename, directoryFD: runFD) == S_IFREG else {
                     throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
                 }
+                let ownedTrees = try ownedRecoveryTreeSnapshots(
+                    runDirectoryFD: runFD,
+                    artifactFilename: filename,
+                    runDevice: runDetails.st_dev
+                )
 
                 let artifactFD = openat(runFD, filename, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
                 guard artifactFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
@@ -1335,7 +1543,15 @@ extension SharedReadingRecoveryJournal {
                         try reconcileBuildLock(buildLock)
                         try afterBuildLockReconciliation()
                     }
-                    guard unlinkat(runFD, filename, 0) == 0,
+                    for tree in ownedTrees {
+                        try deleteOwnedRecoveryTree(
+                            tree,
+                            parentFD: runFD,
+                            runDevice: runDetails.st_dev
+                        )
+                    }
+                    guard fsync(runFD) == 0,
+                          unlinkat(runFD, filename, 0) == 0,
                           fsync(runFD) == 0,
                           try withDirectoryEntries(runFD, { $0 }).isEmpty else {
                         throw SharedReadingRecoveryJournalError.journalRemovalFailed
