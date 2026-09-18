@@ -123,17 +123,11 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         at lockURL: URL,
         coordination: Coordination
     ) throws -> AppleXcodeBuildLock {
-        if mkdirat(coordination.parentFD, coordination.lockName, mode_t(0o700)) != 0 {
-            // A force-quit or interrupted host can leave its lock directory
-            // behind after the Xcode child has exited. Recover only when the
-            // lock metadata proves its recorded owner PID is dead; missing or
-            // malformed metadata remains fail-closed.
-            guard errno == EEXIST, recoverStaleLock(at: lockURL, coordination: coordination) else {
-                throw ResourcePreflightError("Another Apple build is using the shared build lock: \(lockURL.path)")
-            }
-            guard mkdirat(coordination.parentFD, coordination.lockName, mode_t(0o700)) == 0 else {
-                throw ResourcePreflightError("Another Apple build is using the shared build lock: \(lockURL.path)")
-            }
+        guard mkdirat(coordination.parentFD, coordination.lockName, mode_t(0o700)) == 0 else {
+            // Acquisition never interprets stale ownership. Only recovery,
+            // after proving every journaled resource absent, may reconcile an
+            // exact retained generation.
+            throw ResourcePreflightError("Another Apple build is using the shared build lock: \(lockURL.path)")
         }
         let lockDirectory = try openLockDirectory(coordination)
         defer { close(lockDirectory.fd) }
@@ -264,25 +258,6 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
                     afterValidationBeforeRemoval: afterValidationBeforeRemoval
                 )
             }
-        }
-    }
-
-    private static func recoverStaleLock(at lockURL: URL, coordination: Coordination) -> Bool {
-        guard let lockDirectory = try? openLockDirectory(coordination) else { return false }
-        defer { close(lockDirectory.fd) }
-        guard let ownership = try? persistedOwnership(lockDirectoryFD: lockDirectory.fd, lockURL: lockURL),
-              ownership.path == lockURL.path,
-              ProcessIdentityReader.identity(for: ownership.owner.pid) != ownership.owner else { return false }
-        do {
-            try removePresentLock(
-                at: lockURL,
-                matching: ownership,
-                coordination: coordination,
-                openedLockDirectory: lockDirectory
-            )
-            return true
-        } catch {
-            return false
         }
     }
 

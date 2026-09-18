@@ -64,12 +64,12 @@ final class ResourcePreflightTests: XCTestCase {
         try replacement.release()
     }
 
-    func testSharedBuildLockRecoversWhenRecordedOwnerIsNoLongerRunning() throws {
+    func testAcquireLeavesDeadOwnerLockUntilExplicitExactReconciliation() throws {
         let lockPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-build-lock-stale-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: lockPath) }
         try FileManager.default.createDirectory(at: lockPath, withIntermediateDirectories: true)
-        let metadata = try JSONEncoder().encode(AppleXcodeBuildLockOwnership(
+        let staleOwnership = AppleXcodeBuildLockOwnership(
             path: lockPath.path,
             token: "stale-owner",
             generation: "stale-generation",
@@ -78,9 +78,25 @@ final class ResourcePreflightTests: XCTestCase {
                 birthTimeSeconds: 1,
                 birthTimeMicroseconds: 2
             )
-        ))
+        )
+        let metadata = try JSONEncoder().encode(staleOwnership)
         try metadata.write(to: lockPath.appendingPathComponent("owner.json"), options: .atomic)
 
+        XCTAssertThrowsError(try AppleXcodeBuildLock.acquire(environment: [
+            "RISHI_APPLE_XCODE_BUILD_LOCK_PATH": lockPath.path,
+        ]))
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                AppleXcodeBuildLockOwnership.self,
+                from: Data(contentsOf: lockPath.appendingPathComponent("owner.json"))
+            ),
+            staleOwnership
+        )
+
+        try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: staleOwnership,
+            liveIdentity: { _ in nil }
+        )
         let lock = try AppleXcodeBuildLock.acquire(environment: [
             "RISHI_APPLE_XCODE_BUILD_LOCK_PATH": lockPath.path,
         ])

@@ -356,7 +356,7 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertFalse(events.values.contains("lock:transfer"))
     }
 
-    func testUnprovenCleanupTransfersOnlyAfterJournalConfirmsSameOwnership() async throws {
+    func testUnprovenCleanupTransfersAlreadyJournaledExactOwnership() async throws {
         let events = EventRecorder()
         let lock = FakeBuildLock(events: events)
         let recorder = FakeBuildLockRecorder(events: events)
@@ -376,7 +376,8 @@ final class SharedReadingHostTests: XCTestCase {
         let report = await host.runReport()
 
         XCTAssertTrue(report.cleanupFailed)
-        XCTAssertEqual(Array(events.values.suffix(2)), ["journal:record-lock", "lock:transfer"])
+        XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
+        XCTAssertEqual(events.values.last, "lock:transfer")
         XCTAssertFalse(events.values.contains("lock:release"))
         XCTAssertEqual(recorder.recordedOwnership, lock.ownership)
     }
@@ -400,7 +401,8 @@ final class SharedReadingHostTests: XCTestCase {
         let report = await host.runReport()
 
         XCTAssertTrue(report.cleanupFailed)
-        XCTAssertEqual(Array(events.values.suffix(3)), ["lock:release", "journal:record-lock", "lock:transfer"])
+        XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
+        XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "lock:transfer"])
         XCTAssertFalse(events.values.contains("journal:clear-lock"))
         XCTAssertEqual(recorder.recordedOwnership, lock.ownership)
     }
@@ -421,7 +423,7 @@ final class SharedReadingHostTests: XCTestCase {
 
         let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: manifestURL) }
-        let host = SharedReadingHost(
+        let host = try SharedReadingHost(
             configuration: makeConfiguration(manifestURL: manifestURL),
             accounts: FakeAccounts(events: events),
             peers: FakePeers(events: events),
@@ -436,6 +438,172 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "journal:clear-lock"])
     }
 
+    func testPreparedBuildLockCanBeConsumedOnlyOnceSequentially() throws {
+        let events = EventRecorder()
+        let prepared = try SharedReadingHost.prepareBuildLock(
+            recorder: FakeBuildLockRecorder(events: events),
+            acquire: { FakeBuildLock(events: events) }
+        )
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+
+        _ = try makeHost(preparedBuildLock: prepared, events: events, manifestURL: manifestURL)
+        XCTAssertThrowsError(
+            try makeHost(preparedBuildLock: prepared, events: events, manifestURL: manifestURL)
+        )
+        XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
+    }
+
+    func testPreparedBuildLockCanBeConsumedOnlyOnceConcurrently() async throws {
+        let events = EventRecorder()
+        let prepared = try SharedReadingHost.prepareBuildLock(
+            recorder: FakeBuildLockRecorder(events: events),
+            acquire: { FakeBuildLock(events: events) }
+        )
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let configuration = makeConfiguration(manifestURL: manifestURL)
+
+        let outcomes = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for _ in 0..<2 {
+                group.addTask {
+                    do {
+                        _ = try SharedReadingHost(
+                            configuration: configuration,
+                            accounts: FakeAccounts(events: events),
+                            peers: FakePeers(events: events),
+                            rendezvous: FakeRendezvous(events: events),
+                            preparedBuildLock: prepared
+                        )
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            return await group.reduce(into: []) { $0.append($1) }
+        }
+
+        XCTAssertEqual(outcomes.filter { $0 }.count, 1)
+        XCTAssertEqual(outcomes.filter { !$0 }.count, 1)
+    }
+
+    func testUnprovenCleanupTransfersPreparedLockWithoutRedundantJournalMutation() async throws {
+        let events = EventRecorder()
+        weak var releasedLock: FakeBuildLock?
+        do {
+            let lock = FakeBuildLock(events: events, releaseOnDeinitUnlessTransferred: true)
+            releasedLock = lock
+            let recorder = FakeBuildLockRecorder(events: events, failRecordAttempt: 2)
+            let prepared = try SharedReadingHost.prepareBuildLock(
+                recorder: recorder,
+                acquire: { lock }
+            )
+            let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: manifestURL) }
+            let host = try SharedReadingHost(
+                configuration: makeConfiguration(manifestURL: manifestURL),
+                accounts: FakeAccounts(events: events, deleteErrorRole: .owner),
+                peers: FakePeers(events: events),
+                rendezvous: FakeRendezvous(events: events),
+                preparedBuildLock: prepared
+            )
+
+            let report = await host.runReport()
+
+            XCTAssertTrue(report.cleanupFailed)
+            XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
+            XCTAssertTrue(events.values.contains("lock:transfer"))
+        }
+        XCTAssertNil(releasedLock)
+        XCTAssertFalse(events.values.contains("lock:deinit-release"))
+    }
+
+    func testSetupContentionFinalizesAndRemovesEmptyJournalRunWithoutInvokingHostFactory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-cli-contention-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for attempt in 0..<2 {
+            let runRoot = root.appendingPathComponent("rishi-shared-reading-\(attempt)", isDirectory: true)
+            let journal = try SharedReadingRecoveryJournal(
+                url: runRoot.appendingPathComponent("recovery.json"),
+                runID: "run-\(attempt)"
+            )
+            var invokedHostFactory = false
+
+            XCTAssertThrowsError(try SharedReadingHost.withPreparedBuildLockForHost(
+                recoveryJournal: journal,
+                prepare: { throw ResourcePreflightError("contention") },
+                makeHost: { _ in
+                    invokedHostFactory = true
+                    return ()
+                }
+            ))
+            XCTAssertFalse(invokedHostFactory)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
+    }
+
+    func testConfigurationFailureReleasesPreparedLockAndRemovesProvenEmptyRun() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-cli-configuration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-run", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(
+            url: runRoot.appendingPathComponent("recovery.json"),
+            runID: "run-configuration"
+        )
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events)
+
+        XCTAssertThrowsError(try SharedReadingHost.withPreparedBuildLockForHost(
+            recoveryJournal: journal,
+            prepare: {
+                try SharedReadingHost.prepareBuildLock(
+                    recorder: recorder,
+                    acquire: { lock }
+                )
+            },
+            makeHost: { _ in throw ResourcePreflightError("configuration") }
+        ))
+
+        XCTAssertEqual(events.values, [
+            "journal:record-lock", "lock:release", "journal:clear-lock",
+        ])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
+    }
+
+    func testSetupHelperRejectsFactoryThatDoesNotConsumeCapability() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rishi-cli-unconsumed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-run", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(
+            url: runRoot.appendingPathComponent("recovery.json"),
+            runID: "run-unconsumed"
+        )
+        let events = EventRecorder()
+
+        XCTAssertThrowsError(try SharedReadingHost.withPreparedBuildLockForHost(
+            recoveryJournal: journal,
+            prepare: {
+                try SharedReadingHost.prepareBuildLock(
+                    recorder: FakeBuildLockRecorder(events: events),
+                    acquire: { FakeBuildLock(events: events) }
+                )
+            },
+            makeHost: { _ in () }
+        ))
+        XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "journal:clear-lock"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.path))
+    }
+
     func testCLIProductionSourceCreatesDurableJournalAndDelegatesLockOwnershipToHost() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -445,14 +613,14 @@ final class SharedReadingHostTests: XCTestCase {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         XCTAssertTrue(source.contains("SharedReadingRecoveryJournal("))
-        XCTAssertTrue(source.contains("SharedReadingHost.prepareBuildLock("))
+        XCTAssertTrue(source.contains("SharedReadingHost.withPreparedBuildLockForHost("))
         XCTAssertTrue(source.contains("preparedBuildLock: preparedBuildLock"))
         XCTAssertFalse(source.contains("keepBuildLockForRecovery"))
         XCTAssertFalse(source.contains("let buildLock = try AppleXcodeBuildLock.acquire()"))
 
-        let prepareIndex = try XCTUnwrap(source.range(of: "SharedReadingHost.prepareBuildLock(")?.lowerBound)
-        let relayIndex = try XCTUnwrap(source.range(of: "let relay = RendezvousRelayServer()")?.lowerBound)
-        XCTAssertLessThan(prepareIndex, relayIndex)
+        let prepareIndex = try XCTUnwrap(source.range(of: "SharedReadingHost.withPreparedBuildLockForHost(")?.lowerBound)
+        let relayStartIndex = try XCTUnwrap(source.range(of: "let relayConfiguration = try relay.start()")?.lowerBound)
+        XCTAssertLessThan(prepareIndex, relayStartIndex)
     }
 
     func testRedactedManifestContainsNoCredentialsOrSourcePath() throws {
@@ -531,6 +699,20 @@ final class SharedReadingHostTests: XCTestCase {
         )
     }
 
+    private func makeHost(
+        preparedBuildLock: SharedReadingPreparedBuildLock,
+        events: EventRecorder,
+        manifestURL: URL
+    ) throws -> SharedReadingHost {
+        try SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: FakeAccounts(events: events),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events),
+            preparedBuildLock: preparedBuildLock
+        )
+    }
+
     private func makeConfiguration(manifestURL: URL) -> SharedReadingHost.Configuration {
         .init(
             runID: "run-build-lock",
@@ -550,10 +732,18 @@ final class SharedReadingHostTests: XCTestCase {
         )
         private let events: EventRecorder
         private let failRelease: Bool
+        private let releaseOnDeinitUnlessTransferred: Bool
+        private let stateLock = NSLock()
+        private var transferred = false
 
-        init(events: EventRecorder, failRelease: Bool = false) {
+        init(
+            events: EventRecorder,
+            failRelease: Bool = false,
+            releaseOnDeinitUnlessTransferred: Bool = false
+        ) {
             self.events = events
             self.failRelease = failRelease
+            self.releaseOnDeinitUnlessTransferred = releaseOnDeinitUnlessTransferred
         }
 
         func release() throws {
@@ -563,7 +753,14 @@ final class SharedReadingHostTests: XCTestCase {
 
         func transferToRecovery() -> AppleXcodeBuildLockOwnership {
             events.append("lock:transfer")
+            stateLock.withLock { transferred = true }
             return ownership
+        }
+
+        deinit {
+            if releaseOnDeinitUnlessTransferred && !stateLock.withLock({ transferred }) {
+                events.append("lock:deinit-release")
+            }
         }
     }
 
@@ -572,10 +769,17 @@ final class SharedReadingHostTests: XCTestCase {
         private let lock = NSLock()
         private var ownership: AppleXcodeBuildLockOwnership?
         private var shouldFailRecord: Bool
+        private let failRecordAttempt: Int?
+        private var recordAttempt = 0
 
-        init(events: EventRecorder, failFirstRecord: Bool = false) {
+        init(
+            events: EventRecorder,
+            failFirstRecord: Bool = false,
+            failRecordAttempt: Int? = nil
+        ) {
             self.events = events
             self.shouldFailRecord = failFirstRecord
+            self.failRecordAttempt = failRecordAttempt
         }
 
         var recordedOwnership: AppleXcodeBuildLockOwnership? {
@@ -585,8 +789,12 @@ final class SharedReadingHostTests: XCTestCase {
         func recordBuildLock(_ ownership: AppleXcodeBuildLockOwnership) throws {
             events.append("journal:record-lock")
             try lock.withLock {
+                recordAttempt += 1
                 if shouldFailRecord {
                     shouldFailRecord = false
+                    throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                }
+                if recordAttempt == failRecordAttempt {
                     throw SharedReadingRecoveryJournalError.journalRemovalFailed
                 }
                 guard self.ownership == nil || self.ownership == ownership else {

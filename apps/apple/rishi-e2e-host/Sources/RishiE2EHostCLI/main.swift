@@ -91,50 +91,50 @@ struct RishiE2EHostCLI {
                 if runCompleted {
                     do { try FileManager.default.removeItem(at: runRoot) }
                     catch { FileHandle.standardError.write(Data("Could not remove E2E artifacts at \(runRoot.path): \(error)\n".utf8)) }
-                } else {
+                } else if FileManager.default.fileExists(atPath: runRoot.path) {
                     FileHandle.standardError.write(Data("Preserving E2E artifacts after an incomplete run: \(runRoot.path)\n".utf8))
                 }
             }
         }
-        let preparedBuildLock = try SharedReadingHost.prepareBuildLock(
+        let relay = RendezvousRelayServer()
+        defer { relay.stop() }
+        let manifestURL = runRoot.appendingPathComponent("manifest.json")
+        let host = try SharedReadingHost.withPreparedBuildLockForHost(
             recoveryJournal: recoveryJournal,
             environment: environment
-        )
-        let relay = RendezvousRelayServer()
-        let relayConfiguration = try relay.start()
-        defer { relay.stop() }
-        let liveAccountClient = TestAccountClient(
-            configuration: accountConfiguration,
-            lifecycleRecorder: recoveryJournal
-        )
-        let peerRunner = XCTestPeerProcessRunner(configuration: .init(
-            projectPath: projectPath,
-            simulatorID: simulatorID,
-            derivedDataRoot: derivedDataRoot,
-            resultBundleRoot: resultBundleRoot,
-            allowSimulatorReset: allowReset,
-            fixturePath: nil,
-            rendezvousEnvironment: relayConfiguration.environment,
-            usePreparedProducts: usePreparedProducts
-        ), processRunner: FoundationProcessRunner(recorder: recoveryJournal))
-
-        let manifestURL = runRoot.appendingPathComponent("manifest.json")
-        try FileManager.default.createDirectory(at: resultBundleRoot, withIntermediateDirectories: true)
-        let host = SharedReadingHost(
-            configuration: .init(
-                runID: runID,
-                fixture: fixture,
-                manifestURL: manifestURL,
-                ownerDestination: .catalyst,
-                participantDestination: .iPhone17Pro,
-                fixturePath: fixtureURL
-            ),
-            accounts: liveAccountClient,
-            peers: peerRunner,
-            rendezvous: relay,
-            fixtureProvisioner: FixtureBookProvisioner(configuration: .init(baseURL: baseURL)),
-            preparedBuildLock: preparedBuildLock
-        )
+        ) { preparedBuildLock in
+            let relayConfiguration = try relay.start()
+            let liveAccountClient = TestAccountClient(
+                configuration: accountConfiguration,
+                lifecycleRecorder: recoveryJournal
+            )
+            let peerRunner = XCTestPeerProcessRunner(configuration: .init(
+                projectPath: projectPath,
+                simulatorID: simulatorID,
+                derivedDataRoot: derivedDataRoot,
+                resultBundleRoot: resultBundleRoot,
+                allowSimulatorReset: allowReset,
+                fixturePath: nil,
+                rendezvousEnvironment: relayConfiguration.environment,
+                usePreparedProducts: usePreparedProducts
+            ), processRunner: FoundationProcessRunner(recorder: recoveryJournal))
+            try FileManager.default.createDirectory(at: resultBundleRoot, withIntermediateDirectories: true)
+            return try SharedReadingHost(
+                configuration: .init(
+                    runID: runID,
+                    fixture: fixture,
+                    manifestURL: manifestURL,
+                    ownerDestination: .catalyst,
+                    participantDestination: .iPhone17Pro,
+                    fixturePath: fixtureURL
+                ),
+                accounts: liveAccountClient,
+                peers: peerRunner,
+                rendezvous: relay,
+                fixtureProvisioner: FixtureBookProvisioner(configuration: .init(baseURL: baseURL)),
+                preparedBuildLock: preparedBuildLock
+            )
+        }
         let runTask = Task {
             await host.runReport(preflightAlreadyCompleted: true)
         }

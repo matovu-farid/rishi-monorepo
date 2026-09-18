@@ -444,6 +444,23 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         }
     }
 
+    func finalizeAndRemoveEmptyRunDirectory() throws {
+        try finalizeAfterSuccessfulCleanup()
+        try lock.withLock {
+            try Self.withInterprocessLock(rootDirectoryFD) {
+                try validateRunDirectory()
+                let entries = try Self.withDirectoryEntries(runDirectoryFD) { $0 }
+                guard entries.isEmpty else {
+                    throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                }
+                guard unlinkat(rootDirectoryFD, runDirectoryName, AT_REMOVEDIR) == 0,
+                      fsync(rootDirectoryFD) == 0 else {
+                    throw SharedReadingRecoveryJournalError.journalRemovalFailed
+                }
+            }
+        }
+    }
+
     public static func unresolvedArtifact(in root: URL) throws -> URL? {
         let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         if rootFD < 0 {

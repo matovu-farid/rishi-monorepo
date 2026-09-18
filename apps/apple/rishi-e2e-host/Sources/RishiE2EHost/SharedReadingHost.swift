@@ -452,16 +452,57 @@ private struct BuildLockLifecycle: Sendable {
     let ownershipAlreadyRecorded: Bool
 }
 
-public struct SharedReadingPreparedBuildLock: @unchecked Sendable {
-    fileprivate let lock: any AppleXcodeBuildLockHolding
+public final class SharedReadingPreparedBuildLock: @unchecked Sendable {
+    private enum State {
+        case available(any AppleXcodeBuildLockHolding)
+        case consumed
+        case cancelled
+    }
+
+    private let stateLock = NSLock()
+    private var state: State
     fileprivate let recorder: any BuildLockOwnershipRecording
 
     fileprivate init(
         lock: any AppleXcodeBuildLockHolding,
         recorder: any BuildLockOwnershipRecording
     ) {
-        self.lock = lock
+        self.state = .available(lock)
         self.recorder = recorder
+    }
+
+    fileprivate func consume() throws -> any AppleXcodeBuildLockHolding {
+        try stateLock.withLock {
+            guard case .available(let lock) = state else {
+                throw ResourcePreflightError("Prepared Apple build lock was already consumed")
+            }
+            state = .consumed
+            return lock
+        }
+    }
+
+    fileprivate func cancelBeforeConsumption() throws -> Bool {
+        let lock: (any AppleXcodeBuildLockHolding)? = stateLock.withLock {
+            guard case .available(let lock) = state else { return nil }
+            state = .cancelled
+            return lock
+        }
+        guard let lock else { return false }
+        do {
+            try lock.release()
+            try recorder.recordVerifiedBuildLockRelease(lock.ownership)
+            return true
+        } catch {
+            _ = lock.transferToRecovery()
+            throw error
+        }
+    }
+
+    fileprivate var isConsumed: Bool {
+        stateLock.withLock {
+            if case .consumed = state { return true }
+            return false
+        }
     }
 }
 
@@ -519,7 +560,8 @@ public struct SharedReadingHost: Sendable {
         rendezvous: any SharedReadingRendezvous = RendezvousFileStore(),
         fixtureProvisioner: (any FixtureBookProvisioning)? = nil,
         preparedBuildLock: SharedReadingPreparedBuildLock
-    ) {
+    ) throws {
+        let consumedLock = try preparedBuildLock.consume()
         self.configuration = configuration
         self.accounts = accounts
         self.peers = peers
@@ -527,7 +569,7 @@ public struct SharedReadingHost: Sendable {
         self.fixtureProvisioner = fixtureProvisioner
         self.buildLockLifecycle = BuildLockLifecycle(
             recorder: preparedBuildLock.recorder,
-            acquire: { preparedBuildLock.lock },
+            acquire: { consumedLock },
             ownershipAlreadyRecorded: true
         )
     }
@@ -578,6 +620,48 @@ public struct SharedReadingHost: Sendable {
                 throw ResourcePreflightError(
                     "Could not record or release Apple build lock \(acquired.ownership.path)"
                 )
+            }
+            throw error
+        }
+    }
+
+    public static func withPreparedBuildLockForHost<Output>(
+        recoveryJournal: SharedReadingRecoveryJournal,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        makeHost: (SharedReadingPreparedBuildLock) throws -> Output
+    ) throws -> Output {
+        try withPreparedBuildLockForHost(
+            recoveryJournal: recoveryJournal,
+            prepare: {
+                try prepareBuildLock(recoveryJournal: recoveryJournal, environment: environment)
+            },
+            makeHost: makeHost
+        )
+    }
+
+    static func withPreparedBuildLockForHost<Output>(
+        recoveryJournal: SharedReadingRecoveryJournal,
+        prepare: () throws -> SharedReadingPreparedBuildLock,
+        makeHost: (SharedReadingPreparedBuildLock) throws -> Output
+    ) throws -> Output {
+        var prepared: SharedReadingPreparedBuildLock?
+        do {
+            let value = try prepare()
+            prepared = value
+            let output = try makeHost(value)
+            guard value.isConsumed else {
+                throw ResourcePreflightError("Prepared Apple build lock was not consumed by a host")
+            }
+            return output
+        } catch {
+            let canFinalize: Bool
+            if let prepared {
+                canFinalize = (try? prepared.cancelBeforeConsumption()) == true
+            } else {
+                canFinalize = true
+            }
+            if canFinalize {
+                try? recoveryJournal.finalizeAndRemoveEmptyRunDirectory()
             }
             throw error
         }
@@ -724,18 +808,17 @@ public struct SharedReadingHost: Sendable {
         var cleanupFailed = cleanupFailedBeforeTeardown || cleanup.cleanupFailed
         if let buildLock, let lifecycle = buildLockLifecycle {
             if cleanupFailed {
-                _ = retainBuildLockForRecovery(buildLock, lifecycle: lifecycle)
+                _ = retainBuildLockForRecovery(buildLock)
             } else {
                 do {
                     try buildLock.release()
                     try lifecycle.recorder.recordVerifiedBuildLockRelease(buildLock.ownership)
                 } catch {
                     cleanupFailed = true
-                    // A failed release may still own the exact generation.
-                    // Reassert the idempotent journal entry before suppressing
-                    // deinit release. If release succeeded but journal clearing
-                    // failed, transfer is harmless and recovery sees absence.
-                    _ = retainBuildLockForRecovery(buildLock, lifecycle: lifecycle)
+                    // The exact generation was journaled before the run. A
+                    // failed release or journal clear must suppress deinit
+                    // release unconditionally so recovery remains authoritative.
+                    _ = retainBuildLockForRecovery(buildLock)
                 }
             }
         }
@@ -748,15 +831,9 @@ public struct SharedReadingHost: Sendable {
     }
 
     private func retainBuildLockForRecovery(
-        _ buildLock: any AppleXcodeBuildLockHolding,
-        lifecycle: BuildLockLifecycle
+        _ buildLock: any AppleXcodeBuildLockHolding
     ) -> Bool {
-        do {
-            try lifecycle.recorder.recordBuildLock(buildLock.ownership)
-            return buildLock.transferToRecovery() == buildLock.ownership
-        } catch {
-            return false
-        }
+        buildLock.transferToRecovery() == buildLock.ownership
     }
 
     private struct CleanupOutcome: Sendable {
