@@ -6,7 +6,7 @@ final class SharedReadingOwnerUITests: XCTestCase {
         let support = SharedReadingTestSupport()
         support.recordStage("owner.test-begin")
         let app = try support.launch(role: .owner)
-        defer { support.resetLocalState(app) }
+        defer { support.terminateWithoutRelaunch(app) }
         try support.login(app, role: .owner)
         XCTAssertFalse(
             app.buttons["data-use-consent-allow"].exists,

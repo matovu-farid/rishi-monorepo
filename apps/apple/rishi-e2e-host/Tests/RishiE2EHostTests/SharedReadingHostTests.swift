@@ -3,6 +3,167 @@ import XCTest
 @testable import RishiE2EHost
 
 final class SharedReadingHostTests: XCTestCase {
+    func testSafeDestinationPreflightDoesNotResolvePackagesOrAcquireBuildLock() async throws {
+        let process = CapturingProcessRunner(results: [
+            ProcessResult(exitStatus: 0, stdout: "Xcode 27", stderr: ""),
+            ProcessResult(exitStatus: 0, stdout: #"{"devices":{"runtime":[{"name":"iPhone 17 Pro","udid":"source-udid"}]}}"#, stderr: ""),
+        ])
+        let runner = XCTestPeerProcessRunner(
+            configuration: .init(
+                projectPath: URL(fileURLWithPath: "/private/tmp/rishi.xcodeproj"),
+                simulatorID: "source-udid",
+                derivedDataRoot: FileManager.default.temporaryDirectory,
+                resultBundleRoot: FileManager.default.temporaryDirectory
+            ),
+            processRunner: process
+        )
+
+        try await runner.preflight()
+
+        XCTAssertEqual(process.requests.count, 2)
+        XCTAssertFalse(process.requests.flatMap(\.arguments).contains("-resolvePackageDependencies"))
+    }
+
+    func testPackagePreparationUsesCallerHeldLockWithoutNestedAcquisition() async throws {
+        let process = CapturingProcessRunner(results: [
+            ProcessResult(exitStatus: 0, stdout: "", stderr: "")
+        ])
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let verifyCount = LockedCounter()
+        let preparer = PackageDependencyPreparer(
+            processRunner: process,
+            verifyOwnership: { ownership in
+                XCTAssertEqual(ownership, lock.ownership)
+                verifyCount.increment()
+            }
+        )
+
+        try await preparer.preparePackageDependencies(
+            project: URL(fileURLWithPath: "/private/tmp/rishi.xcodeproj"),
+            derivedDataRoot: URL(fileURLWithPath: "/private/tmp/derived", isDirectory: true),
+            whileHolding: lock
+        )
+
+        let request = try XCTUnwrap(process.requests.first)
+        XCTAssertEqual(request.executablePath, "/usr/bin/xcodebuild")
+        XCTAssertTrue(request.arguments.contains("-resolvePackageDependencies"))
+        XCTAssertFalse(request.arguments.contains("-destination"))
+        XCTAssertEqual(verifyCount.value, 2)
+        XCTAssertFalse(events.values.contains("lock:release"))
+    }
+
+    func testAppLaunchNonceExistsOnlyInUITargetAppEnvironmentVariables() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-xctestrun-\(UUID().uuidString)", isDirectory: true)
+        let products = root.appendingPathComponent("Build/Products", isDirectory: true)
+        try FileManager.default.createDirectory(at: products, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = products.appendingPathComponent("source.xctestrun")
+        let plist: [String: Any] = ["UITests": ["TestBundlePath": "__TESTROOT__/rishiUITests.xctest"]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0).write(to: source)
+        let runner = XCTestPeerProcessRunner(configuration: .init(
+            projectPath: URL(fileURLWithPath: "/private/tmp/rishi.xcodeproj"),
+            simulatorID: "sim",
+            derivedDataRoot: root.deletingLastPathComponent(),
+            resultBundleRoot: root,
+            rendezvousEnvironment: ["RISHI_E2E_RENDEZVOUS_SECRET": "relay-secret"],
+            catalystRegistration: .init(runnerNonce: "runner-nonce", appNonce: "app-nonce")
+        ))
+        let account = TestAccount(role: .owner, email: "owner@example.test", password: "pw", userID: "id", bearerToken: "token")
+        let manifest = HostRunManifest(
+            runID: "run-nonces", owner: account,
+            participant: TestAccount(role: .participant, email: "p@example.test", password: "pw", userID: "p", bearerToken: "token"),
+            fixture: .init(role: .owner, format: .epub, basename: "book.epub", sha256: String(repeating: "a", count: 64), byteSize: 1),
+            ownerDestination: .catalyst, participantDestination: .iPhone17Pro,
+            rendezvousPath: "/private/tmp/invite"
+        )
+
+        let clone = try runner.makeRoleTestRunSpecification(role: .owner, derivedData: root, manifest: manifest, inviteToken: nil)
+        let decoded = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: clone), format: nil) as? [String: Any])
+        let target = try XCTUnwrap(decoded["UITests"] as? [String: Any])
+        let runnerEnvironment = try XCTUnwrap(target["EnvironmentVariables"] as? [String: String])
+        let appEnvironment = try XCTUnwrap(target["UITargetAppEnvironmentVariables"] as? [String: String])
+        XCTAssertEqual(runnerEnvironment["RISHI_E2E_RUNNER_REGISTRATION_NONCE"], "runner-nonce")
+        XCTAssertNil(runnerEnvironment["RISHI_E2E_APP_REGISTRATION_NONCE"])
+        XCTAssertEqual(appEnvironment["RISHI_E2E_APP_REGISTRATION_NONCE"], "app-nonce")
+        XCTAssertNil(appEnvironment["RISHI_E2E_RUNNER_REGISTRATION_NONCE"])
+        XCTAssertEqual(runnerEnvironment["RISHI_E2E_RENDEZVOUS_SECRET"], "relay-secret")
+        XCTAssertEqual(appEnvironment["RISHI_E2E_RENDEZVOUS_SECRET"], "relay-secret")
+    }
+
+    func testPeerRegistrationNonceAndRoleAreWrittenToXctestrunEnvironment() throws {
+        try testAppLaunchNonceExistsOnlyInUITargetAppEnvironmentVariables()
+    }
+
+    func testHostReservesDistinctRunnerAndAppNoncesBeforeOwnerTestLaunch() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: packageRoot.appendingPathComponent("Sources/RishiE2EHost/SharedReadingLiveRun.swift"))
+        let runner = try XCTUnwrap(source.range(of: "kind: .runner"))
+        let app = try XCTUnwrap(source.range(of: "kind: .app"))
+        let host = try XCTUnwrap(source.range(of: "private func runHost()"))
+        XCTAssertLessThan(runner.lowerBound, app.lowerBound)
+        XCTAssertLessThan(app.lowerBound, host.lowerBound)
+        XCTAssertTrue(source.contains("runnerNonce: runnerNonce, appNonce: appNonce"))
+    }
+
+    func testLiveOwnerUsesResetOnItsSingleRegisteredLaunchWithoutDeferredRelaunch() throws {
+        let owner = try uiTestSource(named: "SharedReadingOwnerUITests.swift")
+        let support = try uiTestSource(named: "SharedReadingTestSupport.swift")
+        XCTAssertEqual(owner.components(separatedBy: "support.launch(role: .owner)").count - 1, 1)
+        XCTAssertTrue(support.contains("app.launchArguments += [\"--rishi-e2e-reset\"]"))
+        XCTAssertFalse(owner.contains("resetLocalState"))
+        XCTAssertFalse(owner.contains("defer { try? support.launch"))
+    }
+
+    func testDisposableParticipantKeepsRejoinRestartButSkipsDeferredCleanupRelaunch() throws {
+        let source = try uiTestSource(named: "SharedReadingParticipantUITests.swift")
+        XCTAssertTrue(source.contains("restartPreservingLocalState"))
+        XCTAssertFalse(source.contains("defer { try? support.launch"))
+        XCTAssertTrue(source.contains("terminateWithoutRelaunch"))
+    }
+    func testHostInvokesOwnedResourceCleanupBeforeEitherAccountDeletion() async throws {
+        let events = EventRecorder()
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        let host = SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: FakeAccounts(events: events),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events),
+            preAccountCleanup: { events.append("owned-resources:cleanup") }
+        )
+
+        try await host.run()
+
+        let cleanup = try XCTUnwrap(events.values.firstIndex(of: "owned-resources:cleanup"))
+        XCTAssertLessThan(cleanup, try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner")))
+        XCTAssertLessThan(cleanup, try XCTUnwrap(events.values.firstIndex(of: "account:delete:participant")))
+    }
+
+    func testHostSkipsAccountDeletionWhenOwnedResourceCleanupIsUnproven() async throws {
+        let events = EventRecorder()
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        let host = SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: FakeAccounts(events: events),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events),
+            preAccountCleanup: {
+                events.append("owned-resources:cleanup")
+                throw ResourcePreflightError("unproven")
+            }
+        )
+
+        let report = try await host.runReport()
+
+        XCTAssertTrue(report.cleanupFailed)
+        XCTAssertFalse(events.values.contains("account:delete:owner"))
+        XCTAssertFalse(events.values.contains("account:delete:participant"))
+    }
+
+    private func uiTestSource(named name: String) throws -> String {
+        let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: packageRoot.deletingLastPathComponent().appendingPathComponent("rishi/rishiUITests/\(name)"))
+    }
     func testStageLogPathIsPeerScopedAndOutsideCredentialManifest() {
         let root = URL(fileURLWithPath: "/private/tmp/rishi-results", isDirectory: true)
 
@@ -1148,5 +1309,33 @@ final class SharedReadingHostTests: XCTestCase {
         }
 
         func cancel() {}
+    }
+
+    private final class CapturingProcessRunner: @unchecked Sendable, ProcessRunner {
+        private let lock = NSLock()
+        private var remaining: [ProcessResult]
+        private var captured: [ProcessRequest] = []
+        init(results: [ProcessResult]) { remaining = results }
+        var requests: [ProcessRequest] { lock.withLock { captured } }
+        func start(_ request: ProcessRequest) throws -> any ProcessHandle {
+            try lock.withLock {
+                captured.append(request)
+                guard !remaining.isEmpty else { throw ResourcePreflightError("unexpected process") }
+                return ImmediateProcessHandle(result: remaining.removeFirst())
+            }
+        }
+    }
+
+    private struct ImmediateProcessHandle: ProcessHandle {
+        let result: ProcessResult
+        func wait() async throws -> ProcessResult { result }
+        func cancel() {}
+    }
+
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = 0
+        func increment() { lock.withLock { storage += 1 } }
+        var value: Int { lock.withLock { storage } }
     }
 }

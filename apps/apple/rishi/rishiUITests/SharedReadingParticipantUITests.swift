@@ -5,7 +5,7 @@ final class SharedReadingParticipantUITests: XCTestCase {
     func testParticipantJoinsAndRejoinsSharedReadingSession() throws {
         let support = SharedReadingTestSupport()
         let app = try support.launch(role: .participant)
-        defer { support.resetLocalState(app) }
+        defer { support.terminateWithoutRelaunch(app) }
         try support.login(app, role: .participant)
         let token = try support.waitForInvite()
         support.openSession(app, token: token)

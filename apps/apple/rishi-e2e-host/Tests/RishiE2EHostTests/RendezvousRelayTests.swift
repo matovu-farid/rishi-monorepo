@@ -6,7 +6,226 @@ import XCTest
 import Darwin
 #endif
 
-final class RendezvousRelayTests: XCTestCase {
+final class RendezvousRelayTests: XCTestCase, @unchecked Sendable {
+    func testRelayReturnsExactParticipantProgressSequence() throws {
+        #if canImport(Darwin)
+        let relay = RendezvousRelayServer(secret: "test-secret")
+        let configuration = try relay.start()
+        defer { relay.stop() }
+        _ = try request([
+            "op": "publish", "secret": configuration.secret,
+            "runID": "run-progress", "kind": "participant-progress",
+            "value": Int64.max - 1,
+        ], port: configuration.port)
+
+        XCTAssertEqual(relay.participantProgressSequence(runID: "run-progress"), Int64.max - 1)
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testRelayRejectsBooleanAndFractionalProgressSequences() throws {
+        #if canImport(Darwin)
+        for value: Any in [true, 2.5] {
+            let relay = RendezvousRelayServer(secret: "test-secret")
+            let configuration = try relay.start()
+            _ = try request([
+                "op": "publish", "secret": configuration.secret,
+                "runID": "run-progress", "kind": "participant-progress",
+                "value": value,
+            ], port: configuration.port)
+            XCTAssertNil(relay.participantProgressSequence(runID: "run-progress"))
+            relay.stop()
+        }
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testRegisterRunnerJSONOperationRequiresSecretRunnerReservationAndRunnerKind() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4242, birthTimeSeconds: 10, birthTimeMicroseconds: 20)
+        let recorder = RelayRegistrationRecorder()
+        let relay = RendezvousRelayServer(
+            secret: "registration-secret",
+            processRecorder: recorder,
+            liveIdentity: { $0 == identity.pid ? identity : nil }
+        )
+        let nonce = try relay.reserveRegistration(
+            runID: "run-registration", role: .owner, kind: .runner,
+            bundleIdentifier: "org.fidexa.rishiUITests"
+        )
+        let configuration = try relay.start()
+        defer { relay.stop() }
+
+        let response = try request([
+            "op": "register-runner", "secret": configuration.secret,
+            "runID": "run-registration", "kind": "runner", "role": "owner",
+            "nonce": nonce, "bundleIdentifier": "org.fidexa.rishiUITests", "pid": 4242,
+        ], port: configuration.port)
+
+        XCTAssertEqual(response["ok"] as? Bool, true)
+        XCTAssertEqual(recorder.registered, [identity])
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testRunnerCallbackAcknowledgesOnlyAfterStableIdentityJournalWrite() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4252, birthTimeSeconds: 10, birthTimeMicroseconds: 21)
+        let recorder = BlockingRelayRegistrationRecorder()
+        let reads = LockedInt()
+        let relay = RendezvousRelayServer(
+            secret: "registration-secret",
+            processRecorder: recorder,
+            liveIdentity: { pid in reads.increment(); return pid == identity.pid ? identity : nil }
+        )
+        let nonce = try relay.reserveRegistration(
+            runID: "run-blocking", role: .owner, kind: .runner,
+            bundleIdentifier: "org.fidexa.rishiUITests"
+        )
+        let configuration = try relay.start()
+        defer { relay.stop() }
+        let completed = DispatchSemaphore(value: 0)
+        let response = LockedResponse()
+        DispatchQueue.global().async {
+            defer { completed.signal() }
+            response.value = try? self.request([
+                "op": "register-runner", "secret": configuration.secret,
+                "runID": "run-blocking", "kind": "runner", "role": "owner",
+                "nonce": nonce, "bundleIdentifier": "org.fidexa.rishiUITests", "pid": 4252,
+            ], port: configuration.port)
+        }
+        XCTAssertEqual(recorder.entered.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(completed.wait(timeout: .now() + 0.05), .timedOut)
+        recorder.release.signal()
+        XCTAssertEqual(completed.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(response.value?["ok"] as? Bool, true)
+        XCTAssertEqual(recorder.registered, [identity])
+        XCTAssertGreaterThanOrEqual(reads.value, 3)
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testAppCallbackConsumesDistinctLaunchNonceAndJournalsBeforeAcknowledgement() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4262, birthTimeSeconds: 11, birthTimeMicroseconds: 22)
+        let recorder = RelayRegistrationRecorder()
+        let relay = RendezvousRelayServer(secret: "secret", processRecorder: recorder, liveIdentity: { $0 == 4262 ? identity : nil })
+        let runnerNonce = try relay.reserveRegistration(runID: "run-distinct", role: .owner, kind: .runner, bundleIdentifier: "runner")
+        let appNonce = try relay.reserveRegistration(runID: "run-distinct", role: .owner, kind: .app, bundleIdentifier: "app")
+        XCTAssertNotEqual(runnerNonce, appNonce)
+        let configuration = try relay.start()
+        defer { relay.stop() }
+        let response = try request([
+            "op": "register-app", "secret": configuration.secret, "runID": "run-distinct",
+            "role": "owner", "kind": "app", "nonce": appNonce,
+            "bundleIdentifier": "app", "pid": 4262,
+        ], port: configuration.port)
+        XCTAssertEqual(response["ok"] as? Bool, true)
+        XCTAssertEqual(recorder.registered, [identity])
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testRegisterAppJSONOperationRequiresSecretAppReservationAndAppKind() throws {
+        try testAppCallbackConsumesDistinctLaunchNonceAndJournalsBeforeAcknowledgement()
+    }
+
+    func testPrepareAppLaunchWireRequestIncludesAcknowledgedRunnerKindAndNonce() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4272, birthTimeSeconds: 12, birthTimeMicroseconds: 23)
+        let relay = RendezvousRelayServer(secret: "secret", liveIdentity: { $0 == 4272 ? identity : nil })
+        let runnerNonce = try relay.reserveRegistration(runID: "run-prepare", role: .owner, kind: .runner, bundleIdentifier: "runner")
+        _ = try relay.reserveRegistration(runID: "run-prepare", role: .owner, kind: .app, bundleIdentifier: "app")
+        let configuration = try relay.start()
+        defer { relay.stop() }
+        let before = try request([
+            "op": "prepare-app-launch", "secret": configuration.secret, "runID": "run-prepare",
+            "role": "owner", "kind": "runner", "nonce": runnerNonce,
+        ], port: configuration.port)
+        XCTAssertEqual(before["ok"] as? Bool, false)
+        XCTAssertEqual(try request([
+            "op": "register-runner", "secret": configuration.secret, "runID": "run-prepare",
+            "role": "owner", "kind": "runner", "nonce": runnerNonce,
+            "bundleIdentifier": "runner", "pid": 4272,
+        ], port: configuration.port)["ok"] as? Bool, true)
+        XCTAssertEqual(try request([
+            "op": "prepare-app-launch", "secret": configuration.secret, "runID": "run-prepare",
+            "role": "owner", "kind": "runner", "nonce": runnerNonce,
+        ], port: configuration.port)["ok"] as? Bool, true)
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testRelayRejectsAppKindOnRunnerEndpointAndRunnerKindOnAppEndpoint() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4343, birthTimeSeconds: 11, birthTimeMicroseconds: 21)
+        let relay = RendezvousRelayServer(
+            secret: "registration-secret",
+            liveIdentity: { $0 == identity.pid ? identity : nil }
+        )
+        let runnerNonce = try relay.reserveRegistration(
+            runID: "run-kinds", role: .owner, kind: .runner,
+            bundleIdentifier: "org.fidexa.rishiUITests"
+        )
+        let appNonce = try relay.reserveRegistration(
+            runID: "run-kinds", role: .owner, kind: .app,
+            bundleIdentifier: "org.fidexa.rishi"
+        )
+        let configuration = try relay.start()
+        defer { relay.stop() }
+
+        for body in [
+            ["op": "register-runner", "kind": "app", "nonce": runnerNonce, "bundleIdentifier": "org.fidexa.rishiUITests"] as [String: Any],
+            ["op": "register-app", "kind": "runner", "nonce": appNonce, "bundleIdentifier": "org.fidexa.rishi"] as [String: Any],
+        ] {
+            let response = try request(body.merging([
+                "secret": configuration.secret, "runID": "run-kinds",
+                "role": "owner", "pid": 4343,
+            ]) { _, new in new }, port: configuration.port)
+            XCTAssertEqual(response["ok"] as? Bool, false)
+        }
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
+
+    func testAppCallbackRejectsWrongNonceRoleBundlePIDReuseAndSecondUse() throws {
+        #if canImport(Darwin)
+        let identity = OwnedProcessIdentity(pid: 4444, birthTimeSeconds: 12, birthTimeMicroseconds: 22)
+        let relay = RendezvousRelayServer(
+            secret: "registration-secret",
+            liveIdentity: { $0 == identity.pid ? identity : nil }
+        )
+        let nonce = try relay.reserveRegistration(
+            runID: "run-app", role: .owner, kind: .app,
+            bundleIdentifier: "org.fidexa.rishi"
+        )
+        let configuration = try relay.start()
+        defer { relay.stop() }
+        let valid: [String: Any] = [
+            "op": "register-app", "secret": configuration.secret,
+            "runID": "run-app", "kind": "app", "role": "owner",
+            "nonce": nonce, "bundleIdentifier": "org.fidexa.rishi", "pid": 4444,
+        ]
+        for mutation: [String: Any] in [
+            ["nonce": "wrong"], ["role": "participant"],
+            ["bundleIdentifier": "org.fidexa.other"], ["pid": 9999],
+        ] {
+            let response = try request(valid.merging(mutation) { _, new in new }, port: configuration.port)
+            XCTAssertEqual(response["ok"] as? Bool, false)
+        }
+        XCTAssertEqual(try request(valid, port: configuration.port)["ok"] as? Bool, true)
+        XCTAssertEqual(try request(valid, port: configuration.port)["ok"] as? Bool, false)
+        #else
+        throw XCTSkip("The relay requires Darwin sockets.")
+        #endif
+    }
     func testRelayPublishesAndReadsAValueOverLoopback() throws {
         #if canImport(Darwin)
         let relay = RendezvousRelayServer(secret: "test-secret")
@@ -230,4 +449,50 @@ final class RendezvousRelayTests: XCTestCase {
         return response
     }
     #endif
+}
+
+private final class RelayRegistrationRecorder: @unchecked Sendable, OwnedProcessRecording {
+    private let lock = NSLock()
+    private var identities: [OwnedProcessIdentity] = []
+    var registered: [OwnedProcessIdentity] { lock.withLock { identities } }
+    func recordOwnedProcessGroup(_ group: OwnedProcessGroup) throws {}
+    func recordOwnedProcess(_ identity: OwnedProcessIdentity) throws {}
+    func recordOwnedSimulatorDevice(_ device: OwnedSimulatorDevice) throws {}
+    func recordCatalystLaunchIntent(_ intent: PendingCatalystLaunch) throws {}
+    func recordCatalystRegisteredIdentity(_ identity: OwnedProcessIdentity, role: TestAccountRole, kind: PendingCatalystLaunch.Kind) throws {
+        lock.withLock { identities.append(identity) }
+    }
+}
+
+private final class BlockingRelayRegistrationRecorder: @unchecked Sendable, OwnedProcessRecording {
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var identities: [OwnedProcessIdentity] = []
+    var registered: [OwnedProcessIdentity] { lock.withLock { identities } }
+    func recordOwnedProcessGroup(_ group: OwnedProcessGroup) throws {}
+    func recordOwnedProcess(_ identity: OwnedProcessIdentity) throws {}
+    func recordOwnedSimulatorDevice(_ device: OwnedSimulatorDevice) throws {}
+    func recordCatalystLaunchIntent(_ intent: PendingCatalystLaunch) throws {}
+    func recordCatalystRegisteredIdentity(_ identity: OwnedProcessIdentity, role: TestAccountRole, kind: PendingCatalystLaunch.Kind) throws {
+        entered.signal()
+        _ = release.wait(timeout: .now() + 2)
+        lock.withLock { identities.append(identity) }
+    }
+}
+
+private final class LockedResponse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String: Any]?
+    var value: [String: Any]? {
+        get { lock.withLock { storage } }
+        set { lock.withLock { storage = newValue } }
+    }
+}
+
+private final class LockedInt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+    func increment() { lock.withLock { storage += 1 } }
+    var value: Int { lock.withLock { storage } }
 }

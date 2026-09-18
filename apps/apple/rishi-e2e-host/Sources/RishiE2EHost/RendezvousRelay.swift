@@ -32,12 +32,75 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
     private let lock = NSLock()
     private let stateLock = NSLock()
     private let secret: String
+    private let processRecorder: any OwnedProcessRecording
+    private let liveIdentity: @Sendable (Int32) -> OwnedProcessIdentity?
+    private let registrationLock = NSLock()
+    private var registrations: [RegistrationKey: Registration] = [:]
     private var socket: Int32 = -1
     private var values: [String: Data] = [:]
     private let maximumStoredValues = 32
 
-    public init(secret: String = UUID().uuidString.lowercased()) {
+    public init(
+        secret: String = UUID().uuidString.lowercased(),
+        processRecorder: any OwnedProcessRecording = NoopOwnedProcessRecorder(),
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity? = ProcessIdentityReader.identity(for:)
+    ) {
         self.secret = secret
+        self.processRecorder = processRecorder
+        self.liveIdentity = liveIdentity
+    }
+
+    public func reserveRegistration(
+        runID: String,
+        role: TestAccountRole,
+        kind: PendingCatalystLaunch.Kind,
+        bundleIdentifier: String,
+        baselineIdentities: Set<OwnedProcessIdentity> = []
+    ) throws -> String {
+        guard !runID.isEmpty, !bundleIdentifier.isEmpty else { throw RendezvousRelayError.invalidRequest }
+        let key = RegistrationKey(runID: runID, role: role, kind: kind)
+        return try registrationLock.withLock {
+            guard registrations[key] == nil else { throw RendezvousRelayError.registrationAlreadyReserved }
+            let nonce = UUID().uuidString.lowercased()
+            let intent = PendingCatalystLaunch(
+                role: role,
+                kind: kind,
+                bundleIdentifier: bundleIdentifier,
+                baselineIdentities: baselineIdentities,
+                registeredIdentity: nil
+            )
+            try processRecorder.recordCatalystLaunchIntent(intent)
+            registrations[key] = Registration(nonce: nonce, bundleIdentifier: bundleIdentifier, intent: intent)
+            return nonce
+        }
+    }
+
+    func registeredCatalystLaunches() -> [PendingCatalystLaunch] {
+        registrationLock.withLock {
+            registrations.values.map { registration in
+                PendingCatalystLaunch(
+                    role: registration.intent.role,
+                    kind: registration.intent.kind,
+                    bundleIdentifier: registration.intent.bundleIdentifier,
+                    baselineIdentities: registration.intent.baselineIdentities,
+                    registeredIdentity: registration.identity
+                )
+            }
+        }
+    }
+
+    func reservedNonce(
+        runID: String,
+        role: TestAccountRole,
+        kind: PendingCatalystLaunch.Kind
+    ) throws -> String {
+        try registrationLock.withLock {
+            guard let registration = registrations[.init(runID: runID, role: role, kind: kind)],
+                  !registration.consumed else {
+                throw RendezvousRelayError.registrationRejected
+            }
+            return registration.nonce
+        }
     }
 
     public func start() throws -> RendezvousRelayConfiguration {
@@ -95,6 +158,7 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
         stateLock.lock()
         values.removeAll(keepingCapacity: false)
         stateLock.unlock()
+        registrationLock.withLock { registrations.removeAll(keepingCapacity: false) }
         lock.unlock()
         #if canImport(Darwin)
         if listener >= 0 { Darwin.close(listener) }
@@ -134,6 +198,17 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
         stateLock.lock()
         defer { stateLock.unlock() }
         return values[key]
+    }
+
+    /// Returns only the typed, redacted completion evidence needed by the
+    /// host. Decoding the original JSON bytes (instead of bridging through
+    /// NSNumber) deliberately rejects booleans and fractional values.
+    public func participantProgressSequence(runID: String) -> Int64? {
+        guard !runID.isEmpty,
+              let data = storedValue(for: "\(runID)\u{1F}participant-progress") else {
+            return nil
+        }
+        return try? JSONDecoder().decode(Int64.self, from: data)
     }
 
     public func removeManifest(at url: URL) throws {
@@ -238,8 +313,71 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
             guard let encoded else { return ["ok": true, "value": NSNull()] }
             let value = try JSONSerialization.jsonObject(with: encoded, options: [.fragmentsAllowed])
             return ["ok": true, "value": value]
+        case "register-runner":
+            return try register(request, expected: .runner)
+        case "register-app":
+            return try register(request, expected: .app)
+        case "prepare-app-launch":
+            return try prepareAppLaunch(request)
         default:
             throw RendezvousRelayError.invalidRequest
+        }
+    }
+
+    private func register(
+        _ request: [String: Any],
+        expected: PendingCatalystLaunch.Kind
+    ) throws -> [String: Any] {
+        guard request["kind"] as? String == expected.rawValue,
+              let runID = request["runID"] as? String,
+              let roleRaw = request["role"] as? String,
+              let role = TestAccountRole(rawValue: roleRaw),
+              let nonce = request["nonce"] as? String,
+              let bundleIdentifier = request["bundleIdentifier"] as? String,
+              let pidNumber = request["pid"] as? NSNumber,
+              CFGetTypeID(pidNumber) != CFBooleanGetTypeID(),
+              pidNumber.int64Value > 0,
+              pidNumber.int64Value <= Int64(Int32.max) else {
+            throw RendezvousRelayError.invalidRequest
+        }
+        let pid = pidNumber.int32Value
+        let key = RegistrationKey(runID: runID, role: role, kind: expected)
+        return try registrationLock.withLock {
+            guard var registration = registrations[key],
+                  !registration.consumed,
+                  registration.nonce == nonce,
+                  registration.bundleIdentifier == bundleIdentifier,
+                  let identity = liveIdentity(pid),
+                  identity.pid == pid,
+                  liveIdentity(pid) == identity else {
+                throw RendezvousRelayError.registrationRejected
+            }
+            try processRecorder.recordCatalystRegisteredIdentity(identity, role: role, kind: expected)
+            guard liveIdentity(pid) == identity else { throw RendezvousRelayError.registrationRejected }
+            registration.consumed = true
+            registration.identity = identity
+            registrations[key] = registration
+            return ["ok": true]
+        }
+    }
+
+    private func prepareAppLaunch(_ request: [String: Any]) throws -> [String: Any] {
+        guard request["kind"] as? String == PendingCatalystLaunch.Kind.runner.rawValue,
+              let runID = request["runID"] as? String,
+              let roleRaw = request["role"] as? String,
+              let role = TestAccountRole(rawValue: roleRaw),
+              let runnerNonce = request["nonce"] as? String else {
+            throw RendezvousRelayError.invalidRequest
+        }
+        return try registrationLock.withLock {
+            let runnerKey = RegistrationKey(runID: runID, role: role, kind: .runner)
+            let appKey = RegistrationKey(runID: runID, role: role, kind: .app)
+            guard let runner = registrations[runnerKey], runner.consumed,
+                  runner.nonce == runnerNonce,
+                  let app = registrations[appKey], !app.consumed else {
+                throw RendezvousRelayError.registrationRejected
+            }
+            return ["ok": true]
         }
     }
 
@@ -260,6 +398,20 @@ public final class RendezvousRelayServer: @unchecked Sendable, SharedReadingRend
     #endif
 }
 
+private struct RegistrationKey: Hashable {
+    let runID: String
+    let role: TestAccountRole
+    let kind: PendingCatalystLaunch.Kind
+}
+
+private struct Registration {
+    let nonce: String
+    let bundleIdentifier: String
+    let intent: PendingCatalystLaunch
+    var consumed = false
+    var identity: OwnedProcessIdentity?
+}
+
 public enum RendezvousRelayError: Error, LocalizedError, Equatable, Sendable {
     case alreadyStarted
     case bindFailed
@@ -269,6 +421,8 @@ public enum RendezvousRelayError: Error, LocalizedError, Equatable, Sendable {
     case unsupported
     case valueTooLarge
     case valueStoreFull
+    case registrationAlreadyReserved
+    case registrationRejected
 
     public var errorDescription: String? {
         switch self {
@@ -280,6 +434,8 @@ public enum RendezvousRelayError: Error, LocalizedError, Equatable, Sendable {
         case .unsupported: return "The rendezvous relay requires Darwin sockets."
         case .valueTooLarge: return "The rendezvous relay value is too large."
         case .valueStoreFull: return "The rendezvous relay value store is full."
+        case .registrationAlreadyReserved: return "The relay registration was already reserved."
+        case .registrationRejected: return "The relay registration did not match its single-use reservation."
     }
 }
 }

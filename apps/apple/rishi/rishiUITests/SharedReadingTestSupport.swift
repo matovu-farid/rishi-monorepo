@@ -124,11 +124,10 @@ final class SharedReadingTestSupport {
     func launch(role: Role) throws -> XCUIApplication {
         recordStage("launch.begin")
         let app = XCUIApplication()
-        // Catalyst can retain the app process between xcodebuild sessions.
-        // Terminate it before applying launch arguments so the real-auth and
-        // reset flags cannot be silently ignored by an already-running app.
-        app.terminate()
-        _ = app.wait(for: .notRunning, timeout: 30)
+        if role == .owner {
+            try registerRunner()
+            try prepareAppLaunch()
+        }
         app.launchArguments += ["--rishi-e2e-real-auth"]
         if ProcessInfo.processInfo.environment["RISHI_E2E_RESET_ON_LAUNCH"] == "1" {
             app.launchArguments += ["--rishi-e2e-reset"]
@@ -538,11 +537,14 @@ final class SharedReadingTestSupport {
     /// run does not leave the imported book or account-keyed caches behind.
     @MainActor
     func resetLocalState(_ app: XCUIApplication) {
+        // Cleanup must not create an unregistered process. The single initial
+        // launch already ran the narrow DEBUG reset path.
         app.terminate()
-        app.launchArguments.append("--rishi-e2e-reset")
-        app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
-        _ = waitForEmailField(app, timeout: 30)
+        removeStagedFixture()
+    }
+
+    @MainActor
+    func terminateWithoutRelaunch(_ app: XCUIApplication) {
         app.terminate()
         removeStagedFixture()
     }
@@ -708,6 +710,36 @@ final class SharedReadingTestSupport {
         #else
         throw RendezvousTestError.relayUnavailable
         #endif
+    }
+
+    private func registerRunner() throws {
+        guard let nonce = ProcessInfo.processInfo.environment["RISHI_E2E_RUNNER_REGISTRATION_NONCE"],
+              !nonce.isEmpty else { throw RendezvousTestError.relayUnavailable }
+        let response = try relayRequest([
+            "op": "register-runner",
+            "secret": relaySecret ?? "",
+            "runID": try requiredRunID(),
+            "role": Role.owner.rawValue,
+            "kind": "runner",
+            "nonce": nonce,
+            "bundleIdentifier": Bundle.main.bundleIdentifier ?? "org.fidexa.rishiUITests",
+            "pid": Int(getpid()),
+        ])
+        guard response["ok"] as? Bool == true else { throw RendezvousTestError.relayUnavailable }
+    }
+
+    private func prepareAppLaunch() throws {
+        guard let nonce = ProcessInfo.processInfo.environment["RISHI_E2E_RUNNER_REGISTRATION_NONCE"],
+              !nonce.isEmpty else { throw RendezvousTestError.relayUnavailable }
+        let response = try relayRequest([
+            "op": "prepare-app-launch",
+            "secret": relaySecret ?? "",
+            "runID": try requiredRunID(),
+            "role": Role.owner.rawValue,
+            "kind": "runner",
+            "nonce": nonce,
+        ])
+        guard response["ok"] as? Bool == true else { throw RendezvousTestError.relayUnavailable }
     }
 
     private func relayInt64(_ value: Any?) -> Int64 {

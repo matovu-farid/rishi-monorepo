@@ -52,7 +52,93 @@ public protocol SharedReadingPeerRunner: Sendable {
     func cancel(_ handle: SharedReadingPeerHandle) async throws
 }
 
+public struct PackageDependencyPreparer: Sendable {
+    private let processRunner: any ProcessRunner
+    private let verifyOwnership: @Sendable (AppleXcodeBuildLockOwnership) throws -> Void
+
+    public init(processRunner: any ProcessRunner = FoundationProcessRunner()) {
+        self.init(processRunner: processRunner, verifyOwnership: Self.verifyPersistedOwnership)
+    }
+
+    init(
+        processRunner: any ProcessRunner,
+        verifyOwnership: @escaping @Sendable (AppleXcodeBuildLockOwnership) throws -> Void
+    ) {
+        self.processRunner = processRunner
+        self.verifyOwnership = verifyOwnership
+    }
+
+    func preparePackageDependencies(
+        project: URL,
+        derivedDataRoot: URL,
+        whileHolding lock: any AppleXcodeBuildLockHolding
+    ) async throws {
+        try verifyOwnership(lock.ownership)
+        let sourcePackages = derivedDataRoot.appendingPathComponent("SourcePackages", isDirectory: true)
+        let request = ProcessRequest(
+            executablePath: "/usr/bin/xcodebuild",
+            arguments: [
+                "-resolvePackageDependencies",
+                "-project", project.path,
+                "-clonedSourcePackagesDirPath", sourcePackages.path,
+            ]
+        )
+        let handle = try processRunner.start(request)
+        let waitTask = Task { try await handle.wait() }
+        let result = try await withTaskCancellationHandler(operation: {
+            do {
+                return try await waitTask.value
+            } catch {
+                handle.cancel()
+                // `wait()` is a shared completion. Await the original waiter
+                // so cancellation cannot release the caller-held lock while
+                // the journaled process or its output readers are still live.
+                _ = try? await waitTask.value
+                throw error
+            }
+        }, onCancel: {
+            handle.cancel()
+        })
+        guard result.succeeded else {
+            throw HostError.processFailed(role: .owner, status: result.exitStatus)
+        }
+        try verifyOwnership(lock.ownership)
+    }
+
+    private static func verifyPersistedOwnership(_ ownership: AppleXcodeBuildLockOwnership) throws {
+        let lockURL = URL(fileURLWithPath: ownership.path, isDirectory: true)
+        guard lockURL.standardizedFileURL.path == ownership.path else {
+            throw ResourcePreflightError("Apple build lock path is not canonical")
+        }
+        let metadata = lockURL.appendingPathComponent("owner.json", isDirectory: false)
+        let data = try Data(contentsOf: metadata, options: [.mappedIfSafe])
+        guard data.count <= 64 * 1024,
+              try JSONDecoder().decode(AppleXcodeBuildLockOwnership.self, from: data) == ownership else {
+            throw ResourcePreflightError("Apple build lock ownership changed before package preparation")
+        }
+    }
+}
+
 public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
+    public struct CatalystRegistration: Sendable, Equatable {
+        public let runnerNonce: String
+        public let appNonce: String
+        public let runnerBundleIdentifier: String
+        public let appBundleIdentifier: String
+
+        public init(
+            runnerNonce: String,
+            appNonce: String,
+            runnerBundleIdentifier: String = "org.fidexa.rishiUITests",
+            appBundleIdentifier: String = "org.fidexa.rishi"
+        ) {
+            self.runnerNonce = runnerNonce
+            self.appNonce = appNonce
+            self.runnerBundleIdentifier = runnerBundleIdentifier
+            self.appBundleIdentifier = appBundleIdentifier
+        }
+    }
+
     public struct Configuration: Sendable, Equatable {
         public let projectPath: URL
         public let scheme: String
@@ -63,8 +149,9 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
         public let fixturePath: URL?
         public let rendezvousEnvironment: [String: String]
         public let usePreparedProducts: Bool
+        public let catalystRegistration: CatalystRegistration?
 
-        public init(projectPath: URL, scheme: String = "rishi-mcp", simulatorID: String, derivedDataRoot: URL, resultBundleRoot: URL, allowSimulatorReset: Bool = false, fixturePath: URL? = nil, rendezvousEnvironment: [String: String] = [:], usePreparedProducts: Bool = false) {
+        public init(projectPath: URL, scheme: String = "rishi-mcp", simulatorID: String, derivedDataRoot: URL, resultBundleRoot: URL, allowSimulatorReset: Bool = false, fixturePath: URL? = nil, rendezvousEnvironment: [String: String] = [:], usePreparedProducts: Bool = false, catalystRegistration: CatalystRegistration? = nil) {
             self.projectPath = projectPath
             self.scheme = scheme
             self.simulatorID = simulatorID
@@ -74,15 +161,25 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
             self.fixturePath = fixturePath
             self.rendezvousEnvironment = rendezvousEnvironment
             self.usePreparedProducts = usePreparedProducts
+            self.catalystRegistration = catalystRegistration
         }
     }
 
     private let configuration: Configuration
     private let processRunner: any ProcessRunner
+    private let recoveryJournal: SharedReadingRecoveryJournal?
+    private let secretArtifactDidReserve: @Sendable (String) -> Void
 
-    public init(configuration: Configuration, processRunner: any ProcessRunner = FoundationProcessRunner()) {
+    public init(
+        configuration: Configuration,
+        processRunner: any ProcessRunner = FoundationProcessRunner(),
+        recoveryJournal: SharedReadingRecoveryJournal? = nil,
+        secretArtifactDidReserve: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.configuration = configuration
         self.processRunner = processRunner
+        self.recoveryJournal = recoveryJournal
+        self.secretArtifactDidReserve = secretArtifactDidReserve
     }
 
     public func preflight() async throws {
@@ -100,7 +197,6 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
         // otherwise a typo or stale UDID would only fail after the expensive
         // build phase has started.
         try await verifyConfiguredSimulator()
-        try await preflightPackageResolution()
     }
 
     public func reset(target: SharedReadingDestination) async throws {
@@ -218,7 +314,7 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
     /// explicit by cloning the generated .xctestrun file for each peer. The
     /// credentials remain in a 0600, per-run temporary artifact and are
     /// removed with the other run artifacts.
-    private func makeRoleTestRunSpecification(
+    func makeRoleTestRunSpecification(
         role: TestAccountRole,
         derivedData: URL,
         manifest: HostRunManifest,
@@ -241,6 +337,11 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
             runID: manifest.runID,
             role: role
         ).path
+        if role == .owner, let registration = configuration.catalystRegistration {
+            environment["RISHI_E2E_PROCESS_KIND"] = PendingCatalystLaunch.Kind.runner.rawValue
+            environment["RISHI_E2E_RUNNER_REGISTRATION_NONCE"] = registration.runnerNonce
+            environment["RISHI_E2E_BUNDLE_IDENTIFIER"] = registration.runnerBundleIdentifier
+        }
         let data = try Data(contentsOf: source)
         guard var root = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let testKey = root.keys.first(where: { key in
@@ -256,6 +357,20 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
             for (name, value) in environment { values[name] = value }
             testConfiguration[key] = values
         }
+        if role == .owner, let registration = configuration.catalystRegistration {
+            var appEnvironment = (testConfiguration["UITargetAppEnvironmentVariables"] as? [String: Any]) ?? [:]
+            let relayEnvironment = configuration.rendezvousEnvironment.merging([
+                "RISHI_UITEST": "1",
+                "RISHI_E2E_REAL_AUTH": "1",
+                "RISHI_E2E_RUN_ID": manifest.runID,
+                "RISHI_E2E_ROLE": role.rawValue,
+                "RISHI_E2E_PROCESS_KIND": PendingCatalystLaunch.Kind.app.rawValue,
+                "RISHI_E2E_APP_REGISTRATION_NONCE": registration.appNonce,
+                "RISHI_E2E_BUNDLE_IDENTIFIER": registration.appBundleIdentifier,
+            ]) { _, new in new }
+            for (name, value) in relayEnvironment { appEnvironment[name] = value }
+            testConfiguration["UITargetAppEnvironmentVariables"] = appEnvironment
+        }
         root[testKey] = testConfiguration
 
         // Keep the clone beside the generated specification. Xcode resolves
@@ -264,6 +379,15 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
         let target = productsDirectory.appendingPathComponent(
             "\(manifest.runID)-\(role.rawValue).xctestrun"
         )
+        if let recoveryJournal {
+            let runRoot = recoveryJournal.url.deletingLastPathComponent().standardizedFileURL
+            let targetPath = target.standardizedFileURL.path
+            let prefix = runRoot.path.hasSuffix("/") ? runRoot.path : runRoot.path + "/"
+            guard targetPath.hasPrefix(prefix) else { throw HostError.testRunSpecificationInvalid(target) }
+            let relativePath = String(targetPath.dropFirst(prefix.count))
+            try recoveryJournal.recordSecretArtifact(relativePath: relativePath)
+            secretArtifactDidReserve(relativePath)
+        }
         let updated = try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
         try updated.write(to: target, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
@@ -337,33 +461,6 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
             // unchanged.
             "ENABLE_APP_INTENTS_METADATA_GENERATION=NO"
         ]
-    }
-
-    private func preflightPackageResolution() async throws {
-        let root = configuration.derivedDataRoot
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-
-        let sourcePackages = root.appendingPathComponent("SourcePackages", isDirectory: true)
-        let buildLock = try AppleXcodeBuildLock.acquire()
-        defer { try? buildLock.release() }
-
-        for destination in [SharedReadingDestination.catalyst, .iPhone17Pro] {
-            let derivedData = root.appendingPathComponent(destination.rawValue, isDirectory: true)
-            try ResourcePreflight.requireSufficient(for: derivedData)
-            let result = try await runBounded(ProcessRequest(
-                executablePath: "/usr/bin/xcodebuild",
-                arguments: ["-resolvePackageDependencies"] + commonArguments(
-                    for: destination,
-                    derivedData: derivedData,
-                    sourcePackages: sourcePackages
-                )
-            ), role: .owner, timeout: .seconds(600))
-            guard result.succeeded else {
-                reportProcessFailure(role: .owner, result: result)
-                throw HostError.processFailed(role: .owner, status: result.exitStatus)
-            }
-            try ResourcePreflight.requireSufficient(for: derivedData)
-        }
     }
 
     private func environment(for role: TestAccountRole, email: String, password: String, manifest: HostRunManifest, inviteToken: String?) -> [String: String] {
@@ -497,6 +594,15 @@ public final class SharedReadingPreparedBuildLock: @unchecked Sendable {
         }
     }
 
+    func borrowedLock() throws -> any AppleXcodeBuildLockHolding {
+        try stateLock.withLock {
+            guard case .available(let lock) = state else {
+                throw ResourcePreflightError("Prepared Apple build lock is unavailable")
+            }
+            return lock
+        }
+    }
+
     fileprivate func bind(toReturnedHost identifier: UUID?) throws {
         try stateLock.withLock {
             guard identifier == self.identifier, case .consumed = state else {
@@ -570,6 +676,7 @@ public struct SharedReadingHost: Sendable {
     private let fixtureProvisioner: (any FixtureBookProvisioning)?
     private let buildLockLifecycle: BuildLockLifecycle?
     private let executionGate: HostExecutionGate
+    private let preAccountCleanup: @Sendable () async throws -> Void
     private let preparedBuildLockIdentifier: UUID?
     private let preparedBuildLockBinding: SharedReadingPreparedBuildLock?
 
@@ -578,13 +685,15 @@ public struct SharedReadingHost: Sendable {
         accounts: any TestAccountManaging,
         peers: any SharedReadingPeerRunner,
         rendezvous: any SharedReadingRendezvous = RendezvousFileStore(),
-        fixtureProvisioner: (any FixtureBookProvisioning)? = nil
+        fixtureProvisioner: (any FixtureBookProvisioning)? = nil,
+        preAccountCleanup: @escaping @Sendable () async throws -> Void = {}
     ) {
         self.configuration = configuration
         self.accounts = accounts
         self.peers = peers
         self.rendezvous = rendezvous
         self.fixtureProvisioner = fixtureProvisioner
+        self.preAccountCleanup = preAccountCleanup
         self.buildLockLifecycle = nil
         self.executionGate = HostExecutionGate()
         self.preparedBuildLockIdentifier = nil
@@ -597,6 +706,7 @@ public struct SharedReadingHost: Sendable {
         peers: any SharedReadingPeerRunner,
         rendezvous: any SharedReadingRendezvous = RendezvousFileStore(),
         fixtureProvisioner: (any FixtureBookProvisioning)? = nil,
+        preAccountCleanup: @escaping @Sendable () async throws -> Void = {},
         preparedBuildLock: SharedReadingPreparedBuildLock
     ) throws {
         let consumedLock = try preparedBuildLock.consume()
@@ -605,6 +715,7 @@ public struct SharedReadingHost: Sendable {
         self.peers = peers
         self.rendezvous = rendezvous
         self.fixtureProvisioner = fixtureProvisioner
+        self.preAccountCleanup = preAccountCleanup
         self.buildLockLifecycle = BuildLockLifecycle(
             recorder: preparedBuildLock.recorder,
             acquire: { consumedLock },
@@ -621,6 +732,7 @@ public struct SharedReadingHost: Sendable {
         peers: any SharedReadingPeerRunner,
         rendezvous: any SharedReadingRendezvous = RendezvousFileStore(),
         fixtureProvisioner: (any FixtureBookProvisioning)? = nil,
+        preAccountCleanup: @escaping @Sendable () async throws -> Void = {},
         buildLockRecorder: any BuildLockOwnershipRecording,
         acquireBuildLock: @escaping @Sendable () throws -> any AppleXcodeBuildLockHolding
     ) {
@@ -629,6 +741,7 @@ public struct SharedReadingHost: Sendable {
         self.peers = peers
         self.rendezvous = rendezvous
         self.fixtureProvisioner = fixtureProvisioner
+        self.preAccountCleanup = preAccountCleanup
         self.buildLockLifecycle = BuildLockLifecycle(
             recorder: buildLockRecorder,
             acquire: acquireBuildLock,
@@ -844,6 +957,7 @@ public struct SharedReadingHost: Sendable {
             participant: participant,
             ownerHandle: ownerHandle,
             participantHandle: participantHandle
+            , preAccountCleanup: preAccountCleanup
         )
         let cleanup = await Task.detached(priority: .utility) { @Sendable in
             await SharedReadingHost.cleanup(inputs: cleanupInputs)
@@ -893,6 +1007,7 @@ public struct SharedReadingHost: Sendable {
         let participant: TestAccount?
         let ownerHandle: SharedReadingPeerHandle?
         let participantHandle: SharedReadingPeerHandle?
+        let preAccountCleanup: @Sendable () async throws -> Void
     }
 
     private static func cleanup(
@@ -919,11 +1034,18 @@ public struct SharedReadingHost: Sendable {
         if let participantHandle {
             do { try await peers.cancel(participantHandle); participantStopped = true } catch { cleanupFailed = true }
         }
+        var ownedResourcesAbsent = false
+        do {
+            try await inputs.preAccountCleanup()
+            ownedResourcesAbsent = true
+        } catch {
+            cleanupFailed = true
+        }
         // Delete each account independently once its own peer is stopped. A
         // failed stop must preserve that account's credentials, but must not
         // prevent cleanup of the other account.
         var accountsDeletedAndVerified = true
-        if let owner, ownerStopped {
+        if let owner, ownerStopped, ownedResourcesAbsent {
             do {
                 try await accounts.delete(owner)
                 try await accounts.verifyDeleted(owner)
@@ -937,7 +1059,7 @@ public struct SharedReadingHost: Sendable {
         } else if owner != nil {
             accountsDeletedAndVerified = false
         }
-        if let participant, participantStopped {
+        if let participant, participantStopped, ownedResourcesAbsent {
             do {
                 try await accounts.delete(participant)
                 try await accounts.verifyDeleted(participant)

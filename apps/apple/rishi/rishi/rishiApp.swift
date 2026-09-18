@@ -69,6 +69,9 @@ struct rishiApp: App {
 
     init() {
         #if DEBUG
+        E2EProcessRegistration.blockStartupIfConfigured()
+        #endif
+        #if DEBUG
         if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
            !RishiE2EConfiguration.isRealAuth {
             let uiTestUserID = UUID(uuidString: "7F7B3D2A-8B8D-4D2E-9D1D-9B4C8F7E6A10")!
