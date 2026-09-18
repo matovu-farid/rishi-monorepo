@@ -162,17 +162,20 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
     private let transport: any TestAccountTransport
     private let valueGenerator: @Sendable () -> String
     private let lifecycleRecorder: any TestAccountLifecycleRecording
+    private let cleanupRetryDelay: Duration
 
     public init(
         configuration: Configuration,
         transport: any TestAccountTransport = URLSessionTestAccountTransport(),
         valueGenerator: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
-        lifecycleRecorder: any TestAccountLifecycleRecording = NoopTestAccountLifecycleRecorder()
+        lifecycleRecorder: any TestAccountLifecycleRecording = NoopTestAccountLifecycleRecorder(),
+        cleanupRetryDelay: Duration = .seconds(5)
     ) {
         self.configuration = configuration
         self.transport = transport
         self.valueGenerator = valueGenerator
         self.lifecycleRecorder = lifecycleRecorder
+        self.cleanupRetryDelay = cleanupRetryDelay
     }
 
     /// Probe the gate without creating an account. The route validates the
@@ -272,12 +275,28 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
 
     private func deleteProvisionedAccount(byEmail email: String) async throws {
         let request = try provisioningCleanupRequest(byEmail: email)
-        let deletionResponse = try await transport.send(request)
-        guard (200..<300).contains(deletionResponse.statusCode) || deletionResponse.statusCode == 404 else {
-            throw TestAccountClientError.httpFailure(statusCode: deletionResponse.statusCode)
-        }
+        try await sendProvisioningCleanupDeletion(request)
 
         try await verifyProvisionedAccountAbsence(byEmail: email)
+    }
+
+    private func sendProvisioningCleanupDeletion(_ request: URLRequest) async throws {
+        var lastStatusCode = 503
+        for attempt in 0..<3 {
+            let response = try await transport.send(request)
+            lastStatusCode = response.statusCode
+            if (200..<300).contains(response.statusCode) || response.statusCode == 404 { return }
+            // The gated cleanup route can briefly expose a Worker or ledger
+            // failure while the preceding mutation settles. Retry only those
+            // historical transient statuses; a later, separate request must
+            // still prove exact account absence.
+            if Self.isTransientCleanupStatus(response.statusCode), attempt < 2 {
+                try await Task.sleep(for: cleanupRetryDelay)
+                continue
+            }
+            throw TestAccountClientError.httpFailure(statusCode: response.statusCode)
+        }
+        throw TestAccountClientError.httpFailure(statusCode: lastStatusCode)
     }
 
     private func verifyProvisionedAccountAbsence(byEmail email: String) async throws {
@@ -468,6 +487,10 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
             return false
         }
         return true
+    }
+
+    private static func isTransientCleanupStatus(_ statusCode: Int) -> Bool {
+        statusCode == 502 || statusCode == 503 || statusCode == 504
     }
 
     private func numericResidue(in value: Any?) -> Int {

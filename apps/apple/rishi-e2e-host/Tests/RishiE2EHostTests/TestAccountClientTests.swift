@@ -129,10 +129,7 @@ final class TestAccountClientTests: XCTestCase {
             .status(200),
             .json(["error": "user not found"], statusCode: 404),
         ])
-        let client = TestAccountClient(
-            configuration: .init(baseURL: URL(string: "https://api.example.test")!, testAuthSecret: "gate", testDomain: "example.test"),
-            transport: transport
-        )
+        let client = makeClient(transport: transport)
 
         try await client.deleteProvisionedAccount(email: "rishi-e2e-recovery@example.test")
 
@@ -142,6 +139,138 @@ final class TestAccountClientTests: XCTestCase {
             "/test/users/rishi-e2e-recovery@example.test",
             "/test/users/rishi-e2e-recovery@example.test",
         ])
+    }
+
+    func testRecoveryRetriesEachTransientCleanupStatusThenStrictlyVerifiesAbsence() async throws {
+        for statusCode in [502, 503, 504] {
+            let recorder = LifecycleRecorder()
+            let transport = RecordingTransport(responses: [
+                .status(statusCode),
+                .status(200),
+                .json(["error": "user not found"], statusCode: 404),
+            ])
+            let client = makeClient(transport: transport, lifecycleRecorder: recorder)
+
+            try await client.deleteProvisionedAccount(email: "rishi-e2e-recovery@example.test")
+
+            XCTAssertEqual(transport.requests.count, 3, "HTTP \(statusCode)")
+            XCTAssertEqual(transport.requests.map(\.httpMethod), ["DELETE", "DELETE", "DELETE"], "HTTP \(statusCode)")
+            XCTAssertEqual(transport.requests.map { $0.url?.path }, Array(repeating: "/test/users/rishi-e2e-recovery@example.test", count: 3), "HTTP \(statusCode)")
+            XCTAssertEqual(recorder.events, ["verified:rishi-e2e-recovery@example.test"], "HTTP \(statusCode)")
+        }
+    }
+
+    func testNormalDeleteRetriesTransientGatedCleanupThenVerifiesAbsence() async throws {
+        let recorder = LifecycleRecorder()
+        let transport = RecordingTransport(responses: [
+            .status(401),
+            .status(503),
+            .status(200),
+            .json(["error": "user not found"], statusCode: 404),
+        ])
+        let client = makeClient(transport: transport, lifecycleRecorder: recorder)
+        let account = TestAccount(
+            role: .owner,
+            email: "rishi-e2e-owner@example.test",
+            password: "pw",
+            userID: "user-1",
+            bearerToken: "expired"
+        )
+
+        try await client.delete(account)
+
+        XCTAssertEqual(transport.requests.count, 4)
+        XCTAssertEqual(transport.requests.map { $0.url?.path }, [
+            "/api/user",
+            "/test/users/rishi-e2e-owner@example.test",
+            "/test/users/rishi-e2e-owner@example.test",
+            "/test/users/rishi-e2e-owner@example.test",
+        ])
+        XCTAssertEqual(recorder.events, ["verified:rishi-e2e-owner@example.test"])
+    }
+
+    func testCompensatingCleanupRetriesTransientDeleteThenVerifiesAbsence() async throws {
+        let recorder = LifecycleRecorder()
+        let transport = SequencedInspectingTransport(steps: [
+            .failure(URLError(.networkConnectionLost)) { _ in },
+            .response(.status(504)) { _ in },
+            .response(.status(200)) { _ in },
+            .response(.json(["error": "user not found"], statusCode: 404)) { _ in },
+        ])
+        let client = makeClient(transport: transport, lifecycleRecorder: recorder)
+
+        do {
+            _ = try await client.create(role: .owner)
+            XCTFail("Expected original provisioning transport error")
+        } catch is URLError {}
+
+        XCTAssertEqual(transport.requests.count, 4)
+        XCTAssertEqual(recorder.events, [
+            "pending:rishi-e2e-fixed@example.test:owner",
+            "recoverable:rishi-e2e-fixed@example.test",
+            "verified:rishi-e2e-fixed@example.test",
+        ])
+    }
+
+    func testTransientCleanupRetryExhaustionRetainsRecoverableJournalEntry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let journal = try SharedReadingRecoveryJournal(
+            url: root.appendingPathComponent("rishi-shared-reading-run/recovery.json"),
+            runID: "run-1"
+        )
+        let email = "rishi-e2e-owner@example.test"
+        try journal.recordProvisioningAddress(email, role: .owner)
+        try journal.recordProvisioningOutcome(.recoverable, email: email)
+        let transport = RecordingTransport(responses: [.status(502), .status(502), .status(502)])
+        let client = makeClient(transport: transport, lifecycleRecorder: journal)
+
+        await XCTAssertThrowsErrorAsync(try await client.deleteProvisionedAccount(email: email))
+
+        let data = try Data(contentsOf: journal.url)
+        let state = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let accounts = state?["accounts"] as? [[String: Any]]
+        XCTAssertEqual(accounts?.map { $0["email"] as? String }, [email])
+        XCTAssertEqual(accounts?.first?["outcome"] as? String, TestAccountProvisioningOutcome.recoverable.rawValue)
+        XCTAssertEqual(transport.requests.count, 3)
+    }
+
+    func testTransientCleanupRetryClearsJournalOnlyAfterExactAbsenceVerification() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let journal = try SharedReadingRecoveryJournal(
+            url: root.appendingPathComponent("rishi-shared-reading-run/recovery.json"),
+            runID: "run-1"
+        )
+        let email = "rishi-e2e-owner@example.test"
+        try journal.recordProvisioningAddress(email, role: .owner)
+        try journal.recordProvisioningOutcome(.recoverable, email: email)
+        let transport = RecordingTransport(responses: [
+            .status(503),
+            .status(200),
+            .json(["error": "user not found"], statusCode: 404),
+        ])
+        let client = makeClient(transport: transport, lifecycleRecorder: journal)
+
+        try await client.deleteProvisionedAccount(email: email)
+
+        let data = try Data(contentsOf: journal.url)
+        let state = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertTrue((state?["accounts"] as? [[String: Any]])?.isEmpty == true)
+        XCTAssertEqual(transport.requests.count, 3)
+    }
+
+    func testRecoveryDoesNotRetryNonTransientCleanup4xx() async throws {
+        let recorder = LifecycleRecorder()
+        let transport = RecordingTransport(responses: [.status(400)])
+        let client = makeClient(transport: transport, lifecycleRecorder: recorder)
+
+        await XCTAssertThrowsErrorAsync(try await client.deleteProvisionedAccount(email: "rishi-e2e-recovery@example.test"))
+
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertFalse(recorder.events.contains("verified:rishi-e2e-recovery@example.test"))
     }
 
     func testRecoveryRejectsPlainTextNotFound() async throws {
@@ -458,16 +587,14 @@ final class TestAccountClientTests: XCTestCase {
 
     func testDeleteFailsClosedWhenGatedCleanupCannotBeVerified() async throws {
         let transport = RecordingTransport(responses: [.status(401), .status(503)])
-        let client = TestAccountClient(
-            configuration: .init(baseURL: URL(string: "https://api.example.test")!, testAuthSecret: "gate", testDomain: "example.test"),
-            transport: transport
-        )
+        let client = makeClient(transport: transport)
         let account = TestAccount(role: .participant, email: "invitee@example.test", password: "pw", userID: "u-1", bearerToken: "expired-token")
 
         await XCTAssertThrowsErrorAsync(try await client.delete(account))
 
-        XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertEqual(transport.requests.count, 3)
         XCTAssertEqual(transport.requests[1].url?.path, "/test/users/invitee@example.test")
+        XCTAssertEqual(transport.requests[2].url?.path, "/test/users/invitee@example.test")
     }
 
     func testRecoveryDeleteUsesOnlyConfiguredGeneratedEmailNamespace() async throws {
@@ -616,7 +743,8 @@ final class TestAccountClientTests: XCTestCase {
             ),
             transport: transport,
             valueGenerator: { "fixed" },
-            lifecycleRecorder: lifecycleRecorder
+            lifecycleRecorder: lifecycleRecorder,
+            cleanupRetryDelay: .zero
         )
     }
 
