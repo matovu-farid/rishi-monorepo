@@ -1,131 +1,140 @@
 # Rishi native shared-reading E2E host
 
-This macOS Swift package owns the disposable-account, real-book fixture, rendezvous, and two-peer XCTest coordination seams for the Apple shared-reading E2E run.
+This macOS Swift package owns the disposable accounts, real-book fixture,
+disposable simulator, process identities, rendezvous relay, and two XCTest peers
+used by the Apple shared-reading acceptance run. Unit tests use injected
+collaborators; they do not call the API, run Xcode, boot a simulator, or launch
+an app.
 
-Book contents are never checked in. Supply local inputs through:
+The live test is intentionally local-only and is not run by GitHub Actions or
+other CI. It mutates real external state: it creates two disposable accounts,
+clones the configured iPhone 17 Pro simulator as `rishi-e2e-<runID>`, erases
+that disposable clone, and deletes and verifies both accounts during cleanup.
+Use only dedicated test credentials, a dedicated source simulator, and a book
+fixture that is safe to upload to the production data plane.
 
-- RISHI_E2E_FIXTURE — one explicit .pdf or .epub path (preferred when both
-  books are available)
-- RISHI_E2E_FIXTURE_FORMAT — pdf or epub when selecting one of the
-  format-specific variables below
-- RISHI_E2E_PDF_FIXTURE — a regular .pdf file beginning with %PDF-
-- RISHI_E2E_EPUB_FIXTURE — a regular .epub ZIP file
+## Deterministic tests
 
-If both format-specific variables are set, selection is intentionally rejected
-unless RISHI_E2E_FIXTURE_FORMAT is also set. This prevents a run from using a
-different real book than the operator intended.
+The ordinary package suite leaves live mode unset, so the canonical acceptance
+test is skipped:
 
-The host accepts only the canonical production API URL
-https://api.fidexa.org; it does not launch or target a local Worker.
-The production deployment currently leaves the gated test-auth route disabled.
-Therefore a live run is expected to stop during account-service preflight until
-an approved, controlled provisioning configuration is enabled on this same API
-data plane. Do not point the Apple app at a local Worker or enable the route on
-production without that operational approval.
-The host and Swift MCP also share an atomic build lock. Set
-RISHI_APPLE_XCODE_BUILD_LOCK_PATH to choose its location; an existing lock is
-never removed automatically.
+```sh
+swift test --package-path apps/apple/rishi-e2e-host --jobs 1
+```
 
-If an interrupted run preserves its `manifest.json`, recover the account
-cleanup without building the Apple app or launching a simulator:
+The local validator always runs that complete deterministic suite first with
+`RISHI_E2E_RUN_LIVE` removed from its environment. It starts the one focused
+live XCTest only when the deterministic phase succeeds and all live settings
+below are valid.
+
+## Local live validation
+
+From the repository root, run:
 
 ```sh
 RISHI_E2E_ALLOW_NETWORK=1 \
-RISHI_E2E_API_BASE_URL="https://api.fidexa.org" \
-RISHI_E2E_TEST_AUTH_SECRET="..." \
-RISHI_E2E_TEST_DOMAIN="example.test" \
-swift run --jobs 1 rishi-e2e-host \
-  --cleanup-manifest="/private/tmp/rishi-shared-reading-.../manifest.json"
-```
-
-The recovery command accepts only emails in the configured generated
-`rishi-e2e-*` namespace and attempts both accounts independently.
-
-The resolver records only role, format, basename, SHA-256, and byte size in its redacted manifest. Account passwords and invite tokens are passed only to the corresponding short-lived XCTest process; bearer tokens remain in the host process. In a live host run, the Catalyst owner publishes its invite to the authorized loopback relay, which keeps it in memory; the file rendezvous remains a fallback for standalone peer execution. Participant readiness/progress/playback events also use the relay because the iPhone Simulator cannot read host filesystem paths. Secrets are not included in redacted output or process diagnostics.
-If account provisioning loses its response after the server may have created an
-account, the client attempts the gated email-based teardown route and fails
-closed if that compensation fails.
-Provisioning is create-only: an existing normalized email is rejected rather
-than signed in, protecting unrelated accounts from teardown.
-Cleanup calls the canonical authenticated `DELETE /api/user` route and requires
-its explicit `ok: true` response before treating deletion as successful. It
-falls back to the gated email teardown route if the authenticated request loses
-its session or response, then verifies that the same credentials can no longer
-access the account; failed deletion or verification preserves the run artifacts
-for recovery.
-
-Run the focused unit tests with:
-
-```sh
-swift test --jobs 1
-RISHI_E2E_FIXTURE="/path/to/book.pdf" \
-swift test --jobs 1 --filter RealBookFixturesTests
-```
-
-Before a live run, validate the external inputs independently with `pdfinfo` (or the platform equivalent) and `unzip -t`. Unit tests use fake transports and fake process/account collaborators; they do not call an API, launch `xcodebuild`, or launch a simulator.
-
-To validate the complete local environment without creating accounts, retaining
-build artifacts, or erasing a simulator, append `--preflight` to the Swift
-command:
-
-```sh
-RISHI_E2E_ALLOW_NETWORK=1 \
-RISHI_E2E_API_BASE_URL="https://api.fidexa.org" \
-RISHI_E2E_TEST_AUTH_SECRET="..." \
-RISHI_E2E_TEST_DOMAIN="example.test" \
-RISHI_E2E_IPHONE17_UDID="..." \
-RISHI_E2E_PROJECT="/absolute/path/to/rishi.xcodeproj" \
-RISHI_E2E_FIXTURE="/absolute/path/to/book.pdf" \
-swift run --skip-build --jobs 1 rishi-e2e-host --preflight
-```
-
-## Live two-peer run
-
-The live host requires an explicitly enabled test environment and a dedicated
-iPhone 17 Pro simulator UDID. It erases only that simulator when
-`RISHI_E2E_ALLOW_SIMULATOR_RESET=1`; omit that setting to fail closed.
-
-```sh
-RISHI_E2E_ALLOW_NETWORK=1 \
-RISHI_E2E_API_BASE_URL="https://api.fidexa.org" \
-RISHI_E2E_TEST_AUTH_SECRET="..." \
-RISHI_E2E_TEST_DOMAIN="example.test" \
-RISHI_E2E_IPHONE17_UDID="..." \
-RISHI_E2E_PROJECT="/absolute/path/to/rishi.xcodeproj" \
-RISHI_E2E_FIXTURE="/absolute/path/to/book.pdf" \
 RISHI_E2E_ALLOW_SIMULATOR_RESET=1 \
-swift run --jobs 1 rishi-e2e-host
+RISHI_E2E_API_BASE_URL="https://api.fidexa.org" \
+RISHI_E2E_TEST_AUTH_SECRET="..." \
+RISHI_E2E_TEST_DOMAIN="example.test" \
+RISHI_E2E_IPHONE17_UDID="..." \
+RISHI_E2E_PROJECT="/absolute/path/to/rishi.xcodeproj" \
+RISHI_E2E_FIXTURE="/absolute/path/to/book.pdf" \
+apps/apple/scripts/validate-shared-reading.sh
 ```
 
-The host starts a bounded loopback relay, resolves packages and builds Catalyst and iPhone sequentially into
-separate derived-data directories, then starts the two already-built XCTest
-peers. After
-the owner peer imports the book through the normal app path, the host polls the
-authenticated sync changes endpoint until the expected fixture hash has a
-non-empty server object and size; only then is the participant peer launched.
-The host checks free disk before any Xcode process starts and every five seconds
-while the peers are active. If disk falls below the configured floor, it cancels
-the run and enters the same account/process cleanup path. The manifest stays
-restrictive, and both accounts are deleted and verified in cleanup even if
-either peer fails. Set `RISHI_E2E_KEEP_ARTIFACTS=1` only when you intentionally
-need the result bundles for diagnosis.
+Both acknowledgement variables must be exactly `1`, and the API URL must be
+exactly `https://api.fidexa.org`. The production deployment currently leaves
+the gated test-auth route disabled, so account-service preflight will fail until
+an approved controlled provisioning configuration is enabled on that same API
+data plane. Do not redirect this test to a local Worker or enable the route on
+production without operational approval.
 
-Before any Xcode process starts, the host requires at least 20 GiB of free
-disk by default. This threshold can be overridden with `RISHI_E2E_MIN_FREE_DISK_GB`.
-The host does not inspect available memory for admission or cancellation.
-Incomplete runs are preserved for recovery, but the host refuses to start when
-the temporary root already contains three retained `rishi-shared-reading-*`
-directories. Set `RISHI_E2E_MAX_RETAINED_RUNS` only when an operator has an
-explicit retention policy; the host never deletes old failed-run artifacts
-automatically.
+Book contents are never checked in. `RISHI_E2E_FIXTURE` must identify one
+explicit regular PDF or EPUB. Validate it independently with `pdfinfo` or
+`unzip -t` before the run. The host also supports
+`RISHI_E2E_PDF_FIXTURE`/`RISHI_E2E_EPUB_FIXTURE` with an explicit
+`RISHI_E2E_FIXTURE_FORMAT`, but the validator deliberately requires the single
+unambiguous `RISHI_E2E_FIXTURE` setting.
 
-When preflight fails, it creates no relay or retained run directory. Package
-resolution uses a unique temporary directory and the shared build lock, and
-removes that temporary state only after both Xcode processes have stopped.
-The lock is retained if ownership cleanup cannot be proven.
-Before retrying, first confirm that
-`/private/tmp/rishi-apple-xcode-build.lock` is absent and that no Xcode or
-simulator process is running. Remove only the specific stale
-`rishi-shared-reading-*` directory or result bundle you have identified as no
-longer needed; never use a broad `/private/tmp` recursive deletion while an
-Apple process may still be alive.
+The exact focused command run by the wrapper is:
+
+```sh
+RISHI_E2E_RUN_LIVE=1 \
+swift test --package-path apps/apple/rishi-e2e-host --jobs 1 \
+  --filter SharedReadingLiveEndToEndTests/testTwoAccountsJoinOneSessionAndSynchronizeReadingProgress
+```
+
+All other required environment variables from the wrapper invocation must
+remain set for that direct command. `RISHI_E2E_RUN_LIVE=1` alone is not an
+authorization to use the network or reset a simulator.
+
+Acceptance requires two consecutive successful validator runs. Each run must
+report a participant progress sequence of at least 2, exactly two verified
+account deletions, complete owned-process/simulator cleanup, release of the
+exact build lock, and no retained recovery artifact or run directory.
+
+The focused XCTest writes one redacted, sorted JSON line prefixed with
+`RISHI_E2E_EVIDENCE`. It contains only the run ID, participant progress
+sequence, and deleted-account count. Set `RISHI_E2E_EVIDENCE_PATH` to an
+absolute local path to additionally retain that JSON as a mode `0600` file.
+Never publish credentials, relay secrets, or raw process diagnostics as
+evidence.
+
+## Preflight
+
+To validate configuration and package/build prerequisites without creating
+accounts, launching an app, or erasing a simulator, use the same environment
+except that reset acknowledgement is not required:
+
+```sh
+RISHI_E2E_ALLOW_NETWORK=1 \
+RISHI_E2E_API_BASE_URL="https://api.fidexa.org" \
+RISHI_E2E_TEST_AUTH_SECRET="..." \
+RISHI_E2E_TEST_DOMAIN="example.test" \
+RISHI_E2E_IPHONE17_UDID="..." \
+RISHI_E2E_PROJECT="/absolute/path/to/rishi.xcodeproj" \
+RISHI_E2E_FIXTURE="/absolute/path/to/book.pdf" \
+swift run --package-path apps/apple/rishi-e2e-host --jobs 1 \
+  rishi-e2e-host --preflight
+```
+
+## Interrupted-run recovery
+
+An incomplete run retains an exact `recovery.json` ownership artifact and, when
+cleanup cannot be proven, its exact build lock. Recover only that artifact:
+
+```sh
+RISHI_E2E_ALLOW_NETWORK=1 \
+RISHI_E2E_API_BASE_URL="https://api.fidexa.org" \
+RISHI_E2E_TEST_AUTH_SECRET="..." \
+RISHI_E2E_TEST_DOMAIN="example.test" \
+RISHI_E2E_TEMP_ROOT="/private/tmp" \
+RISHI_APPLE_XCODE_BUILD_LOCK_PATH="/private/tmp/rishi-apple-xcode-build.lock" \
+swift run --package-path apps/apple/rishi-e2e-host --jobs 1 \
+  rishi-e2e-host \
+  --cleanup-manifest="/private/tmp/rishi-shared-reading-<runID>/recovery.json"
+```
+
+Recovery verifies recorded process birth identities, disposable simulator and
+secret-clone contracts, both accounts independently, exact lock ownership, and
+descriptor-anchored run artifacts before removing anything. Any unproven step
+fails closed and retains or restores the recovery artifact and lock for another
+attempt. It never searches by process name, command line, bundle ID, or
+environment and never guesses ownership.
+
+Legacy `manifest.json` artifacts are recognized for compatibility, but
+production recovery may safely refuse them because Darwin cannot prove exact
+run-ID process absence without forbidden command-line/environment inspection.
+An exact configured lock that cannot be tied to recorded ownership also blocks
+legacy cleanup. Preserve the artifact and investigate; do not broadly delete
+`/private/tmp`, kill processes by name, or remove a lock while Apple processes
+may still be alive.
+
+The host starts a bounded loopback relay, resolves packages, and builds Catalyst
+and iPhone products sequentially into separate run-owned derived-data trees.
+It checks free disk before Xcode starts and periodically while peers are active;
+the default floor is 20 GiB (`RISHI_E2E_MIN_FREE_DISK_GB` can override it).
+`RISHI_E2E_KEEP_ARTIFACTS=1` retains diagnostics intentionally. Otherwise,
+successful cleanup removes all owned resources. Failed runs count against the
+retained-run limit and are never deleted automatically.
