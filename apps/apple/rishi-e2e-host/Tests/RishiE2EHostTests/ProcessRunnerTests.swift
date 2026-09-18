@@ -14,9 +14,6 @@ final class ProcessRunnerTests: XCTestCase {
         let firstEntered = DispatchSemaphore(value: 0)
         let releaseFirst = DispatchSemaphore(value: 0)
         let firstFinished = DispatchSemaphore(value: 0)
-        let secondAttemptStarted = DispatchSemaphore(value: 0)
-        let secondEntered = DispatchSemaphore(value: 0)
-        let secondFinished = DispatchSemaphore(value: 0)
 
         DispatchQueue.global().async {
             FoundationProcessRunner.withSpawnLockForTesting {
@@ -27,19 +24,59 @@ final class ProcessRunnerTests: XCTestCase {
         }
         XCTAssertEqual(firstEntered.wait(timeout: .now() + 1), .success)
 
-        DispatchQueue.global().async {
-            FoundationProcessRunner.withSpawnLockForTesting(
-                beforeLock: { secondAttemptStarted.signal() },
-                body: { secondEntered.signal() }
-            )
-            secondFinished.signal()
-        }
-        XCTAssertEqual(secondAttemptStarted.wait(timeout: .now() + 1), .success)
-        XCTAssertEqual(secondEntered.wait(timeout: .now() + .milliseconds(100)), .timedOut)
+        XCTAssertFalse(FoundationProcessRunner.trySpawnLockForTesting())
         releaseFirst.signal()
         XCTAssertEqual(firstFinished.wait(timeout: .now() + 1), .success)
-        XCTAssertEqual(secondEntered.wait(timeout: .now() + 1), .success)
-        XCTAssertEqual(secondFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertTrue(FoundationProcessRunner.trySpawnLockForTesting())
+    }
+
+    func testWaitDrainsValidatedMonitorPublicationBeforeSuccessfulAbsence() async throws {
+        let root = OwnedProcessIdentity(pid: 740, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let descendant = OwnedProcessIdentity(pid: 741, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let group = OwnedProcessGroup(processGroupID: root.pid, leader: root)
+        let recorder = ProcessRecorder()
+        try recorder.recordOwnedProcess(root)
+        try recorder.recordOwnedProcessGroup(group)
+        let state = MonitorCompletionRaceState(root: root, descendant: descendant)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        try stdout.fileHandleForWriting.close()
+        try stderr.fileHandleForWriting.close()
+        let waitCompleted = DispatchSemaphore(value: 0)
+        let testHandle = FoundationProcessRunner.makeHandleForTesting(
+            group: group,
+            observed: [root],
+            recorder: recorder,
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            liveIdentity: { state.identity(for: $0) },
+            members: { state.members(in: $0) },
+            processGroup: { state.processGroup(of: $0) },
+            signal: { state.signal(pid: $0, signal: $1) },
+            observeRootExit: { _ in 0 },
+            reapRoot: { state.reapRoot(pid: $0) },
+            waitCallStarted: {},
+            afterMonitorValidation: { state.pauseAfterValidation($0) },
+            finalAbsenceAttemptStarted: { state.finalAbsenceAttemptStarted.signal() }
+        )
+
+        XCTAssertEqual(state.callbackValidated.wait(timeout: .now() + 1), .success)
+        let wait = Task {
+            defer { waitCompleted.signal() }
+            return try await testHandle.handle.wait()
+        }
+        XCTAssertEqual(state.finalAbsenceAttemptStarted.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(waitCompleted.wait(timeout: .now() + .milliseconds(100)), .timedOut)
+
+        state.allowPublication.signal()
+        XCTAssertTrue(recorder.waitForProcessCount(2, timeout: .now() + 1))
+        testHandle.handle.cancel()
+        _ = try await wait.value
+
+        XCTAssertEqual(state.signals(for: descendant.pid), [SIGTERM])
+        XCTAssertNil(state.identity(for: descendant.pid))
+        XCTAssertEqual(recorder.processes, [root, descendant])
+        XCTAssertTrue(testHandle.cleanupState().ownedProcessesAreAbsent)
     }
 
     func testStableIdentityRequiresIdentityAndProcessGroupRecheck() {
@@ -492,6 +529,80 @@ private final class ConcurrentWaitState: @unchecked Sendable {
     var reapCount: Int { lock.withLock { storedReaps } }
     var checkedRootGroupBeforeReap: Bool { lock.withLock { storedCheckedBeforeReap } }
     var signals: [(Int32, Int32)] { lock.withLock { storedSignals } }
+}
+
+private final class MonitorCompletionRaceState: @unchecked Sendable {
+    let callbackValidated = DispatchSemaphore(value: 0)
+    let allowPublication = DispatchSemaphore(value: 0)
+    let finalAbsenceAttemptStarted = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let root: OwnedProcessIdentity
+    private let descendant: OwnedProcessIdentity
+    private var descendantIsDetached = false
+    private var descendantIsAlive = true
+    private var validationPaused = false
+    private var rootWasReaped = false
+    private var recordedSignals: [(Int32, Int32)] = []
+
+    init(root: OwnedProcessIdentity, descendant: OwnedProcessIdentity) {
+        self.root = root
+        self.descendant = descendant
+    }
+
+    func identity(for pid: Int32) -> OwnedProcessIdentity? {
+        lock.withLock {
+            if pid == root.pid { return rootWasReaped ? nil : root }
+            if pid == descendant.pid { return descendantIsAlive ? descendant : nil }
+            return nil
+        }
+    }
+
+    func members(in processGroupID: Int32) -> [Int32] {
+        lock.withLock {
+            guard processGroupID == root.pid else { return [] }
+            var result = rootWasReaped ? [] : [root.pid]
+            if descendantIsAlive, !descendantIsDetached { result.append(descendant.pid) }
+            return result
+        }
+    }
+
+    func processGroup(of pid: Int32) -> Int32? {
+        lock.withLock {
+            if pid == root.pid { return rootWasReaped ? nil : root.pid }
+            if pid == descendant.pid { return descendantIsAlive && !descendantIsDetached ? root.pid : nil }
+            return nil
+        }
+    }
+
+    func pauseAfterValidation(_ identity: OwnedProcessIdentity) {
+        guard identity == descendant else { return }
+        let shouldPause = lock.withLock { () -> Bool in
+            guard !validationPaused else { return false }
+            validationPaused = true
+            descendantIsDetached = true
+            return true
+        }
+        guard shouldPause else { return }
+        callbackValidated.signal()
+        allowPublication.wait()
+    }
+
+    func signal(pid: Int32, signal: Int32) -> Int32 {
+        lock.withLock {
+            recordedSignals.append((pid, signal))
+            if pid == descendant.pid, signal == SIGTERM { descendantIsAlive = false }
+        }
+        return 0
+    }
+
+    func reapRoot(pid: Int32) {
+        XCTAssertEqual(pid, root.pid)
+        lock.withLock { rootWasReaped = true }
+    }
+
+    func signals(for pid: Int32) -> [Int32] {
+        lock.withLock { recordedSignals.compactMap { $0.0 == pid ? $0.1 : nil } }
+    }
 }
 
 private final class CleanupProcessState: @unchecked Sendable {

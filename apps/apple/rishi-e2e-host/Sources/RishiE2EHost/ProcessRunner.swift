@@ -147,6 +147,12 @@ public struct FoundationProcessRunner: ProcessRunner {
         spawnLock.withLock(body)
     }
 
+    static func trySpawnLockForTesting() -> Bool {
+        guard spawnLock.try() else { return false }
+        spawnLock.unlock()
+        return true
+    }
+
     static func pipeDescriptorFlagsForTesting() throws -> [Int32] {
         try spawnLock.withLock {
             let descriptors = try makeCloseOnExecPipe()
@@ -237,7 +243,9 @@ public struct FoundationProcessRunner: ProcessRunner {
         signal: @escaping @Sendable (Int32, Int32) -> Int32,
         observeRootExit: @escaping @Sendable (pid_t) throws -> Int32,
         reapRoot: @escaping @Sendable (pid_t) throws -> Void,
-        waitCallStarted: @escaping @Sendable () -> Void
+        waitCallStarted: @escaping @Sendable () -> Void,
+        afterMonitorValidation: @escaping @Sendable (OwnedProcessIdentity) -> Void = { _ in },
+        finalAbsenceAttemptStarted: @escaping @Sendable () -> Void = {}
     ) -> HandleForTesting {
         HandleForTesting(handle: FoundationProcessHandle(
             pid: group.leader.pid,
@@ -252,7 +260,9 @@ public struct FoundationProcessRunner: ProcessRunner {
                 signal: signal,
                 observeRootExit: observeRootExit,
                 reapRoot: reapRoot,
-                waitCallStarted: waitCallStarted
+                waitCallStarted: waitCallStarted,
+                afterMonitorValidation: afterMonitorValidation,
+                finalAbsenceAttemptStarted: finalAbsenceAttemptStarted
             ),
             initialObserved: observed
         ))
@@ -340,6 +350,8 @@ private struct FoundationProcessSystem: Sendable {
     let observeRootExit: @Sendable (pid_t) throws -> Int32
     let reapRoot: @Sendable (pid_t) throws -> Void
     let waitCallStarted: @Sendable () -> Void
+    let afterMonitorValidation: @Sendable (OwnedProcessIdentity) -> Void
+    let finalAbsenceAttemptStarted: @Sendable () -> Void
 
     static let live = FoundationProcessSystem(
         liveIdentity: { ProcessIdentityReader.identity(for: $0) },
@@ -366,7 +378,9 @@ private struct FoundationProcessSystem: Sendable {
                 if result == -1, errno != EINTR { throw ProcessCleanupError() }
             }
         },
-        waitCallStarted: {}
+        waitCallStarted: {},
+        afterMonitorValidation: { _ in },
+        finalAbsenceAttemptStarted: {}
     )
 }
 
@@ -381,6 +395,8 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     private let stderrData = DataBox()
     private let readers = DispatchGroup()
     private let lifecycleLock = NSLock()
+    private let monitorStateLock = NSLock()
+    private let monitorQueue = DispatchQueue(label: "app.rishi.e2e-host.process-monitor")
     private let recordingError = ErrorBox()
     private var monitor: DispatchSourceTimer?
     private var observed = Set<OwnedProcessIdentity>()
@@ -464,7 +480,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     }
 
     func cancel() {
-        let shouldCancel = lifecycleLock.withLock { () -> Bool in
+        let shouldCancel = monitorStateLock.withLock { () -> Bool in
             guard !finished, !cancellationRequested else { return false }
             cancellationRequested = true
             return true
@@ -475,7 +491,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
             // while the root wait is still pending; waiting to reap first
             // would make the TERM→KILL bound ineffective in that case.
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
-                guard let self, !self.lifecycleLock.withLock({ self.finished }) else { return }
+                guard let self, !self.monitorStateLock.withLock({ self.finished }) else { return }
                 self.signalVerifiedGroup(SIGKILL)
             }
         }
@@ -495,46 +511,56 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     }
 
     private func startMonitor() {
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let timer = DispatchSource.makeTimerSource(queue: monitorQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(50), leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in self?.recordStableGroupMembers() }
-        lifecycleLock.withLock { monitor = timer }
+        monitorStateLock.withLock { monitor = timer }
         timer.resume()
     }
 
     private func stopMonitor() {
-        let timer = lifecycleLock.withLock { () -> DispatchSourceTimer? in
+        let timer = monitorStateLock.withLock { () -> DispatchSourceTimer? in
             finished = true
             defer { monitor = nil }
             return monitor
         }
         timer?.cancel()
+        monitorQueue.sync {}
     }
 
     private func recordStableGroupMembers() {
-        guard !lifecycleLock.withLock({ finished }) else { return }
+        guard !monitorStateLock.withLock({ finished }) else { return }
         let members: [Int32]
         do {
             members = try system.members(group.processGroupID)
         } catch {
+            guard !monitorStateLock.withLock({ finished }) else { return }
             recordingError.retain(error)
             cancel()
             return
         }
         for pid in members {
-            guard let identity = OwnedProcessGroupInspector.stableIdentity(
-                for: pid,
-                in: group.processGroupID,
-                identity: system.liveIdentity,
-                processGroup: system.processGroup
-            ) else { continue }
-            let shouldRecord = lifecycleLock.withLock { observed.insert(identity).inserted }
-            guard shouldRecord else { continue }
-            do {
-                try recorder.recordOwnedProcess(identity)
-            } catch {
-                recordingError.retain(error)
+            var publicationError: Error?
+            monitorStateLock.withLock {
+                guard !finished,
+                      let identity = OwnedProcessGroupInspector.stableIdentity(
+                          for: pid,
+                          in: group.processGroupID,
+                          identity: system.liveIdentity,
+                          processGroup: system.processGroup
+                      ) else { return }
+                system.afterMonitorValidation(identity)
+                guard observed.insert(identity).inserted else { return }
+                do {
+                    try recorder.recordOwnedProcess(identity)
+                } catch {
+                    publicationError = error
+                }
+            }
+            if let publicationError {
+                recordingError.retain(publicationError)
                 cancel()
+                return
             }
         }
     }
@@ -542,8 +568,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     private func waitForGroupAbsence() async -> Bool {
         let termDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         while ContinuousClock.now < termDeadline {
-            recordStableGroupMembers()
-            if ownedProcessesAreAbsent() { return true }
+            if finishMonitoringIfOwnedProcessesAreAbsent() { return true }
             if recordingError.hasError { cancel() }
             try? await Task.sleep(for: .milliseconds(50))
         }
@@ -551,28 +576,63 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
         let killDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         while ContinuousClock.now < killDeadline {
             signalVerifiedGroup(SIGKILL)
-            if ownedProcessesAreAbsent() { return true }
+            if finishMonitoringIfOwnedProcessesAreAbsent() { return true }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        return ownedProcessesAreAbsent()
+        return finishMonitoringIfOwnedProcessesAreAbsent()
+    }
+
+    private func finishMonitoringIfOwnedProcessesAreAbsent() -> Bool {
+        system.finalAbsenceAttemptStarted()
+        monitorQueue.sync { recordStableGroupMembers() }
+        let rootExitObserved = lifecycleLock.withLock { self.rootExitObserved }
+        var inspectionError: Error?
+        let transition = monitorStateLock.withLock { () -> (absent: Bool, timer: DispatchSourceTimer?) in
+            guard !finished else { return (true, nil) }
+            do {
+                guard try ownedProcessesAreAbsent(
+                    observed: observed,
+                    rootExitObserved: rootExitObserved
+                ) else { return (false, nil) }
+                finished = true
+                defer { monitor = nil }
+                return (true, monitor)
+            } catch {
+                inspectionError = error
+                return (false, nil)
+            }
+        }
+        if let inspectionError { recordingError.retain(inspectionError) }
+        guard transition.absent else { return false }
+        transition.timer?.cancel()
+        // A cancelled dispatch source may already have an enqueued handler.
+        // Drain it synchronously; finished prevents any late publication.
+        monitorQueue.sync {}
+        return true
+    }
+
+    private func ownedProcessesAreAbsent(
+        observed: Set<OwnedProcessIdentity>,
+        rootExitObserved: Bool
+    ) throws -> Bool {
+        let observed = rootExitObserved ? observed.subtracting([group.leader]) : observed
+        return try OwnedProcessGroupInspector.allOwnedProcessesAreAbsent(
+            processGroupID: group.processGroupID,
+            observed: observed,
+            members: { processGroupID in
+                let members = try self.system.members(processGroupID)
+                guard rootExitObserved else { return members }
+                return members.filter { $0 != self.pid }
+            },
+            liveIdentity: system.liveIdentity
+        )
     }
 
     private func ownedProcessesAreAbsent() -> Bool {
-        let state = lifecycleLock.withLock {
-            (observed: self.observed, rootExitObserved: self.rootExitObserved)
-        }
-        let observed = state.rootExitObserved ? state.observed.subtracting([group.leader]) : state.observed
+        let rootExitObserved = lifecycleLock.withLock { self.rootExitObserved }
+        let observed = monitorStateLock.withLock { self.observed }
         do {
-            return try OwnedProcessGroupInspector.allOwnedProcessesAreAbsent(
-                processGroupID: group.processGroupID,
-                observed: observed,
-                members: { processGroupID in
-                    let members = try self.system.members(processGroupID)
-                    guard state.rootExitObserved else { return members }
-                    return members.filter { $0 != self.pid }
-                },
-                liveIdentity: system.liveIdentity
-            )
+            return try ownedProcessesAreAbsent(observed: observed, rootExitObserved: rootExitObserved)
         } catch {
             recordingError.retain(error)
             return false
@@ -617,7 +677,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
                 recordingError.retain(error)
             }
         }
-        let observed = lifecycleLock.withLock { self.observed }
+        let observed = monitorStateLock.withLock { self.observed }
         for identity in observed where !rootExitObserved || identity != group.leader {
             signalExactIdentity(identity, signal: signal)
         }
