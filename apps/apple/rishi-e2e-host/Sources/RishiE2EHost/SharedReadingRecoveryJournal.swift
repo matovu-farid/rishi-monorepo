@@ -2,6 +2,31 @@ import Darwin
 import Foundation
 import AppKit
 
+/// Exact persisted names shared by live-run production and restrictive
+/// recovery decoding. Recovery never infers ownership from near matches.
+enum SharedReadingOwnedResourceContract {
+    static let disposableSimulatorDeviceTypeIdentifier =
+        "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+
+    static func disposableSimulatorName(runID: String) -> String {
+        "rishi-e2e-\(runID)"
+    }
+
+    static func secretTestRunRelativePath(for role: TestAccountRole) -> String {
+        switch role {
+        case .owner:
+            return "derived/catalyst/Build/Products/owner.xctestrun"
+        case .participant:
+            return "derived/iPhone17Pro/Build/Products/participant.xctestrun"
+        }
+    }
+
+    static let secretTestRunRelativePaths: Set<String> = [
+        secretTestRunRelativePath(for: .owner),
+        secretTestRunRelativePath(for: .participant),
+    ]
+}
+
 public struct OwnedProcessIdentity: Codable, Hashable, Sendable {
     public let pid: Int32
     public let birthTimeSeconds: UInt64
@@ -850,7 +875,12 @@ extension SharedReadingRecoveryJournal {
             },
             currentCatalystIdentities: productionCatalystIdentities(bundleIdentifier:),
             recoverSimulator: { simulator in try await recoverProductionSimulator(simulator) },
-            removeSecretArtifact: removeProductionSecretArtifact(at:),
+            removeSecretArtifact: { url in
+                try removeProductionSecretArtifact(
+                    at: url,
+                    runRoot: artifact.url.deletingLastPathComponent()
+                )
+            },
             recoverAccount: { account in
                 try await accountClient.deleteProvisionedAccount(email: account.email)
             },
@@ -1145,16 +1175,86 @@ extension SharedReadingRecoveryJournal {
         ))
     }
 
-    private static func removeProductionSecretArtifact(at url: URL) throws {
-        let directoryFD = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard directoryFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-        defer { close(directoryFD) }
-        guard let kind = try fileKind(at: url.lastPathComponent, directoryFD: directoryFD) else { return }
-        guard kind == S_IFREG,
-              unlinkat(directoryFD, url.lastPathComponent, 0) == 0,
-              fsync(directoryFD) == 0,
-              try fileKind(at: url.lastPathComponent, directoryFD: directoryFD) == nil else {
-            throw SharedReadingRecoveryJournalError.cleanupIncomplete
+    internal static func removeProductionSecretArtifact(at url: URL, runRoot: URL) throws {
+        let root = runRoot.standardizedFileURL
+        let artifact = url.standardizedFileURL
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard runRoot.path == root.path,
+              url.path == artifact.path,
+              artifact.path.hasPrefix(prefix) else {
+            throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+        }
+        let relativePath = String(artifact.path.dropFirst(prefix.count))
+        guard SharedReadingOwnedResourceContract.secretTestRunRelativePaths.contains(relativePath) else {
+            throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
+        }
+        let components = relativePath.split(separator: "/").map(String.init)
+        guard components.count > 1, let filename = components.last else {
+            throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
+        }
+
+        let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+        var directoryFDs = [rootFD]
+        defer { directoryFDs.reversed().forEach { close($0) } }
+
+        var reachedArtifactParent = true
+        for component in components.dropLast() {
+            let childFD = openat(
+                directoryFDs.last!, component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            if childFD < 0, errno == ENOENT {
+                reachedArtifactParent = false
+                break
+            }
+            guard childFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            directoryFDs.append(childFD)
+        }
+
+        if reachedArtifactParent {
+            let parentFD = directoryFDs.last!
+            if let kind = try fileKind(at: filename, directoryFD: parentFD) {
+                guard kind == S_IFREG else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                let artifactFD = openat(parentFD, filename, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+                guard artifactFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+                defer { close(artifactFD) }
+                var opened = stat()
+                var named = stat()
+                guard fstat(artifactFD, &opened) == 0,
+                      fstatat(parentFD, filename, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                      named.st_mode & S_IFMT == S_IFREG,
+                      opened.st_dev == named.st_dev,
+                      opened.st_ino == named.st_ino,
+                      unlinkat(parentFD, filename, 0) == 0,
+                      fsync(parentFD) == 0,
+                      try fileKind(at: filename, directoryFD: parentFD) == nil else {
+                    throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                }
+            }
+        }
+
+        let directoryNames = Array(components.dropLast())
+        guard directoryFDs.count > 1 else { return }
+        for index in stride(from: directoryFDs.count - 1, through: 1, by: -1) {
+            let parent = directoryFDs[index - 1]
+            let childName = directoryNames[index - 1]
+            var openedDirectory = stat()
+            var namedDirectory = stat()
+            guard fstat(directoryFDs[index], &openedDirectory) == 0,
+                  fstatat(parent, childName, &namedDirectory, AT_SYMLINK_NOFOLLOW) == 0,
+                  namedDirectory.st_mode & S_IFMT == S_IFDIR,
+                  openedDirectory.st_dev == namedDirectory.st_dev,
+                  openedDirectory.st_ino == namedDirectory.st_ino else {
+                throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
+            }
+            if unlinkat(parent, childName, AT_REMOVEDIR) == 0 {
+                guard fsync(parent) == 0 else {
+                    throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                }
+            } else if errno != ENOTEMPTY && errno != EEXIST {
+                throw SharedReadingRecoveryJournalError.cleanupIncomplete
+            }
         }
     }
 
@@ -1377,8 +1477,8 @@ extension SharedReadingRecoveryJournal {
             throw SharedReadingRecoveryJournalError.malformedArtifact
         }
         for device in state.simulatorDevices {
-            guard device.name == "rishi-e2e-\(state.runID)",
-                  device.deviceTypeIdentifier == "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+            guard device.name == SharedReadingOwnedResourceContract.disposableSimulatorName(runID: state.runID),
+                  device.deviceTypeIdentifier == SharedReadingOwnedResourceContract.disposableSimulatorDeviceTypeIdentifier,
                   validation.allowedRuntimeIdentifiers.contains(device.runtimeIdentifier),
                   device.udid?.isEmpty != true else {
                 throw SharedReadingRecoveryJournalError.malformedArtifact
@@ -1398,13 +1498,14 @@ extension SharedReadingRecoveryJournal {
             }
         }
         let runRoot = artifactURL.deletingLastPathComponent().standardizedFileURL
-        let reserved = Set(["owner.xctestrun", "participant.xctestrun"])
+        let reserved = SharedReadingOwnedResourceContract.secretTestRunRelativePaths
         let secretURLs = try Set(state.secretArtifactRelativePaths.map { path in
-            guard reserved.contains(path), isSafeRelativePath(path), !path.contains("/") else {
+            guard reserved.contains(path), isSafeRelativePath(path) else {
                 throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
             }
             let url = runRoot.appendingPathComponent(path).standardizedFileURL
-            guard url.deletingLastPathComponent() == runRoot else {
+            guard url.path.hasPrefix(runRoot.path + "/"),
+                  url.path == runRoot.appendingPathComponent(path).path else {
                 throw SharedReadingRecoveryJournalError.invalidSecretArtifactPath
             }
             return url

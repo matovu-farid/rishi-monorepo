@@ -376,17 +376,18 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
         // Keep the clone beside the generated specification. Xcode resolves
         // `__TESTROOT__` relative to the .xctestrun file, so moving it to the
         // result directory makes the runner silently discover zero tests.
+        let canonicalRelativePath = SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: role)
         let target = productsDirectory.appendingPathComponent(
-            "\(manifest.runID)-\(role.rawValue).xctestrun"
+            URL(fileURLWithPath: canonicalRelativePath).lastPathComponent
         )
         if let recoveryJournal {
             let runRoot = recoveryJournal.url.deletingLastPathComponent().standardizedFileURL
-            let targetPath = target.standardizedFileURL.path
-            let prefix = runRoot.path.hasSuffix("/") ? runRoot.path : runRoot.path + "/"
-            guard targetPath.hasPrefix(prefix) else { throw HostError.testRunSpecificationInvalid(target) }
-            let relativePath = String(targetPath.dropFirst(prefix.count))
-            try recoveryJournal.recordSecretArtifact(relativePath: relativePath)
-            secretArtifactDidReserve(relativePath)
+            let canonicalTarget = runRoot.appendingPathComponent(canonicalRelativePath).standardizedFileURL
+            guard target.standardizedFileURL == canonicalTarget else {
+                throw HostError.testRunSpecificationInvalid(target)
+            }
+            try recoveryJournal.recordSecretArtifact(relativePath: canonicalRelativePath)
+            secretArtifactDidReserve(canonicalRelativePath)
         }
         let updated = try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
         try updated.write(to: target, options: [.atomic])

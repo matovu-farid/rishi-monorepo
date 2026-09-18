@@ -1067,6 +1067,41 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         ))
     }
 
+    func testRecoveryAcceptsExactProductionSimulatorNameAndRejectsNearMatches() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        let runID = "run-simulator-contract"
+        let exactName = SharedReadingOwnedResourceContract.disposableSimulatorName(runID: runID)
+
+        for (index, name) in [exactName, exactName + "-iPhone 17 Pro", exactName + "-copy"].enumerated() {
+            let artifactURL = root
+                .appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
+                .appendingPathComponent("recovery.json")
+            try writeJSONObject(recoveryStateJSONObject(runID: runID, simulatorDevices: [[
+                "udid": "sim-\(index)", "name": name,
+                "deviceTypeIdentifier": recoveryDeviceType,
+                "runtimeIdentifier": recoveryRuntime,
+            ]]), to: artifactURL)
+
+            if index == 0 {
+                XCTAssertNoThrow(try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+                    at: artifactURL,
+                    temporaryRoot: root,
+                    configuredBuildLockURL: lockURL,
+                    validation: recoveryValidation
+                ))
+            } else {
+                XCTAssertThrowsError(try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+                    at: artifactURL,
+                    temporaryRoot: root,
+                    configuredBuildLockURL: lockURL,
+                    validation: recoveryValidation
+                ), "near-match simulator name \(name) must fail closed")
+            }
+        }
+    }
+
     func testRecoveryStopsCommandGroupsBeforeDeletingDisposableSimulatorAndAccounts() async throws {
         let fixture = try makeOrchestrationFixture(includeGroup: true, includeProcess: false)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -1532,9 +1567,13 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         let fixture = try makeOrchestrationFixture(includeProcess: false)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let journal = try SharedReadingRecoveryJournal(url: fixture.artifactURL, runID: "run-order")
-        for name in ["owner.xctestrun", "participant.xctestrun"] {
-            try journal.recordSecretArtifact(relativePath: name)
-            try Data("secret".utf8).write(to: fixture.artifactURL.deletingLastPathComponent().appendingPathComponent(name))
+        let roles: [TestAccountRole] = [.owner, .participant]
+        let paths = roles.map(SharedReadingOwnedResourceContract.secretTestRunRelativePath(for:))
+        for path in paths {
+            try journal.recordSecretArtifact(relativePath: path)
+            let url = fixture.artifactURL.deletingLastPathComponent().appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("secret".utf8).write(to: url)
         }
         let events = RecoveryEventRecorder()
 
@@ -1551,6 +1590,117 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         let account = try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner"))
         XCTAssertLessThan(ownerSecret, account)
         XCTAssertLessThan(participantSecret, account)
+    }
+
+    func testProducerGeneratedSecretClonePathsDecodeThroughRecoveryContract() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runID = "run-producer-contract"
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
+        let artifactURL = runRoot.appendingPathComponent("recovery.json")
+        let lockURL = root.appendingPathComponent("build.lock", isDirectory: true)
+        let journal = try SharedReadingRecoveryJournal(url: artifactURL, runID: runID)
+        let manifest = HostRunManifest(
+            runID: runID,
+            owner: TestAccount(role: .owner, email: "rishi-e2e-owner@example.test", password: "pw", userID: "owner", bearerToken: "token"),
+            participant: TestAccount(role: .participant, email: "rishi-e2e-participant@example.test", password: "pw", userID: "participant", bearerToken: "token"),
+            fixture: .init(role: .owner, format: .epub, basename: "fixture.epub", sha256: String(repeating: "a", count: 64), byteSize: 1),
+            ownerDestination: .catalyst,
+            participantDestination: .iPhone17Pro,
+            rendezvousPath: "invite.json"
+        )
+        let runner = XCTestPeerProcessRunner(
+            configuration: .init(
+                projectPath: URL(fileURLWithPath: "/private/tmp/rishi.xcodeproj"),
+                simulatorID: "simulator",
+                derivedDataRoot: runRoot.appendingPathComponent("derived", isDirectory: true),
+                resultBundleRoot: runRoot.appendingPathComponent("results", isDirectory: true)
+            ),
+            recoveryJournal: journal
+        )
+
+        let roles: [TestAccountRole] = [.owner, .participant]
+        for role in roles {
+            let relativePath = SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: role)
+            let derivedData = runRoot.appendingPathComponent(relativePath, isDirectory: false)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let products = derivedData.appendingPathComponent("Build/Products", isDirectory: true)
+            try FileManager.default.createDirectory(at: products, withIntermediateDirectories: true)
+            let source = products.appendingPathComponent("source.xctestrun")
+            let plist: [String: Any] = ["UITests": ["TestBundlePath": "__TESTROOT__/rishiUITests.xctest"]]
+            try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0).write(to: source)
+
+            let clone = try runner.makeRoleTestRunSpecification(
+                role: role,
+                derivedData: derivedData,
+                manifest: manifest,
+                inviteToken: role == .participant ? "invite" : nil
+            )
+            XCTAssertEqual(clone.standardizedFileURL.path, runRoot.appendingPathComponent(relativePath).standardizedFileURL.path)
+        }
+
+        let artifact = try SharedReadingRecoveryJournal.decodeRecoveryArtifact(
+            at: artifactURL,
+            temporaryRoot: root,
+            configuredBuildLockURL: lockURL,
+            validation: recoveryValidation
+        )
+        XCTAssertEqual(
+            Set(artifact.secretArtifactURLs.map(\.standardizedFileURL.path)),
+            Set(roles.map {
+                runRoot.appendingPathComponent(SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: $0)).standardizedFileURL.path
+            })
+        )
+    }
+
+    func testProductionSecretCloneRemovalIsRunRootAnchoredAndPrunesCanonicalDirectories() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runRoot = root.appendingPathComponent("rishi-shared-reading-run-secret-removal", isDirectory: true)
+        let roles: [TestAccountRole] = [.owner, .participant]
+        for role in roles {
+            let url = runRoot.appendingPathComponent(
+                SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: role)
+            )
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("credential".utf8).write(to: url)
+            try SharedReadingRecoveryJournal.removeProductionSecretArtifact(at: url, runRoot: runRoot)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runRoot.appendingPathComponent("derived").path))
+
+        let interruptedURL = runRoot.appendingPathComponent(
+            SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: .owner)
+        )
+        try FileManager.default.createDirectory(
+            at: interruptedURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try SharedReadingRecoveryJournal.removeProductionSecretArtifact(at: interruptedURL, runRoot: runRoot)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: runRoot.appendingPathComponent("derived").path),
+            "retry after a post-unlink crash must prune the canonical empty directory chain"
+        )
+
+        let external = root.appendingPathComponent("external", isDirectory: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        let externalSecret = external.appendingPathComponent("owner.xctestrun")
+        try Data("must survive".utf8).write(to: externalSecret)
+        let derived = runRoot.appendingPathComponent("derived", isDirectory: true)
+        try FileManager.default.createDirectory(at: derived, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: derived.appendingPathComponent("catalyst"),
+            withDestinationURL: external
+        )
+        let canonicalOwner = runRoot.appendingPathComponent(
+            SharedReadingOwnedResourceContract.secretTestRunRelativePath(for: .owner)
+        )
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal.removeProductionSecretArtifact(
+            at: canonicalOwner,
+            runRoot: runRoot
+        ))
+        XCTAssertEqual(try Data(contentsOf: externalSecret), Data("must survive".utf8))
     }
 
     private var recoveryRuntime: String { "com.apple.CoreSimulator.SimRuntime.iOS-26-0" }

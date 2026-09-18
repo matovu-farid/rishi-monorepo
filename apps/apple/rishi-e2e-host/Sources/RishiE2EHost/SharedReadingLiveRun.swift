@@ -330,8 +330,8 @@ private final class ProductionState: @unchecked Sendable {
         guard let runtimeIdentifier, let journal else { throw SharedReadingLiveRunError.cleanupIncomplete }
         let intent = OwnedSimulatorDevice(
             udid: nil,
-            name: "rishi-e2e-\(runID)-iPhone 17 Pro",
-            deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+            name: SharedReadingOwnedResourceContract.disposableSimulatorName(runID: runID),
+            deviceTypeIdentifier: SharedReadingOwnedResourceContract.disposableSimulatorDeviceTypeIdentifier,
             runtimeIdentifier: runtimeIdentifier
         )
         try journal.recordOwnedSimulatorDevice(intent)
