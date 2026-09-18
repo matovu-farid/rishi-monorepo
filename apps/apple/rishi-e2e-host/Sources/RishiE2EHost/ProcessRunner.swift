@@ -130,7 +130,20 @@ public struct FoundationProcessRunner: ProcessRunner {
         let readersFinished: Bool
     }
 
-    static func withSpawnLockForTesting(_ body: () -> Void) {
+    struct HandleForTesting: Sendable {
+        let handle: any ProcessHandle
+        private let state: @Sendable () -> (ownedProcessesAreAbsent: Bool, readersFinished: Bool)
+
+        fileprivate init(handle: FoundationProcessHandle) {
+            self.handle = handle
+            state = { handle.cleanupStateForTesting() }
+        }
+
+        func cleanupState() -> (ownedProcessesAreAbsent: Bool, readersFinished: Bool) { state() }
+    }
+
+    static func withSpawnLockForTesting(beforeLock: () -> Void = {}, body: () -> Void) {
+        beforeLock()
         spawnLock.withLock(body)
     }
 
@@ -182,10 +195,54 @@ public struct FoundationProcessRunner: ProcessRunner {
         signal: @escaping @Sendable (Int32, Int32) -> Int32,
         waitForRoot: @escaping @Sendable (pid_t) -> Int32
     ) async -> CleanupPathResultForTesting {
-        let handle = FoundationProcessHandle(
+        let testHandle = makeHandleForTesting(
+            group: group,
+            observed: observed,
+            recorder: NoopOwnedProcessRecorder(),
+            stdout: stdout,
+            stderr: stderr,
+            liveIdentity: liveIdentity,
+            members: members,
+            processGroup: processGroup,
+            signal: signal,
+            observeRootExit: waitForRoot,
+            reapRoot: { _ in },
+            waitCallStarted: {}
+        )
+        testHandle.handle.cancel()
+        let waitThrewCleanupError: Bool
+        do {
+            _ = try await testHandle.handle.wait()
+            waitThrewCleanupError = false
+        } catch {
+            waitThrewCleanupError = error is ProcessCleanupError
+        }
+        let state = testHandle.cleanupState()
+        return CleanupPathResultForTesting(
+            waitThrewCleanupError: waitThrewCleanupError,
+            ownedProcessesAreAbsent: state.ownedProcessesAreAbsent,
+            readersFinished: state.readersFinished
+        )
+    }
+
+    static func makeHandleForTesting(
+        group: OwnedProcessGroup,
+        observed: Set<OwnedProcessIdentity>,
+        recorder: any OwnedProcessRecording,
+        stdout: FileHandle,
+        stderr: FileHandle,
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
+        members: @escaping @Sendable (Int32) throws -> [Int32],
+        processGroup: @escaping @Sendable (Int32) -> Int32?,
+        signal: @escaping @Sendable (Int32, Int32) -> Int32,
+        observeRootExit: @escaping @Sendable (pid_t) throws -> Int32,
+        reapRoot: @escaping @Sendable (pid_t) throws -> Void,
+        waitCallStarted: @escaping @Sendable () -> Void
+    ) -> HandleForTesting {
+        HandleForTesting(handle: FoundationProcessHandle(
             pid: group.leader.pid,
             group: group,
-            recorder: NoopOwnedProcessRecorder(),
+            recorder: recorder,
             stdout: stdout,
             stderr: stderr,
             system: FoundationProcessSystem(
@@ -193,24 +250,12 @@ public struct FoundationProcessRunner: ProcessRunner {
                 members: members,
                 processGroup: processGroup,
                 signal: signal,
-                waitForRoot: waitForRoot
+                observeRootExit: observeRootExit,
+                reapRoot: reapRoot,
+                waitCallStarted: waitCallStarted
             ),
             initialObserved: observed
-        )
-        handle.cancel()
-        let waitThrewCleanupError: Bool
-        do {
-            _ = try await handle.wait()
-            waitThrewCleanupError = false
-        } catch {
-            waitThrewCleanupError = error is ProcessCleanupError
-        }
-        let state = handle.cleanupStateForTesting()
-        return CleanupPathResultForTesting(
-            waitThrewCleanupError: waitThrewCleanupError,
-            ownedProcessesAreAbsent: state.ownedProcessesAreAbsent,
-            readersFinished: state.readersFinished
-        )
+        ))
     }
 #endif
 
@@ -292,21 +337,36 @@ private struct FoundationProcessSystem: Sendable {
     let members: @Sendable (Int32) throws -> [Int32]
     let processGroup: @Sendable (Int32) -> Int32?
     let signal: @Sendable (Int32, Int32) -> Int32
-    let waitForRoot: @Sendable (pid_t) -> Int32
+    let observeRootExit: @Sendable (pid_t) throws -> Int32
+    let reapRoot: @Sendable (pid_t) throws -> Void
+    let waitCallStarted: @Sendable () -> Void
 
     static let live = FoundationProcessSystem(
         liveIdentity: { ProcessIdentityReader.identity(for: $0) },
         members: { try OwnedProcessGroupInspector.members(in: $0) },
         processGroup: { OwnedProcessGroupInspector.processGroup(of: $0) },
         signal: { Darwin.kill($0, $1) },
-        waitForRoot: { pid in
+        observeRootExit: { pid in
+            // Keep the exited leader waitable so its PID cannot be reused while
+            // descendants are inventoried and cleaned. The zombie is excluded
+            // from live-membership checks and reaped exactly once afterwards.
+            var info = siginfo_t()
+            while true {
+                if waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) == 0 {
+                    return info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status
+                }
+                if errno != EINTR { throw ProcessCleanupError() }
+            }
+        },
+        reapRoot: { pid in
             var status: Int32 = 0
             while true {
                 let result = Darwin.waitpid(pid, &status, 0)
-                if result == pid { return decodedExitStatus(status) }
-                if result == -1, errno != EINTR { return 1 }
+                if result == pid { return }
+                if result == -1, errno != EINTR { throw ProcessCleanupError() }
             }
-        }
+        },
+        waitCallStarted: {}
     )
 }
 
@@ -324,8 +384,10 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     private let recordingError = ErrorBox()
     private var monitor: DispatchSourceTimer?
     private var observed = Set<OwnedProcessIdentity>()
+    private var completionTask: Task<ProcessResult, Error>?
     private var finished = false
     private var cancellationRequested = false
+    private var rootExitObserved = false
 
     init(
         pid: pid_t,
@@ -348,17 +410,56 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     }
 
     func wait() async throws -> ProcessResult {
-        let status = await withTaskCancellationHandler(operation: {
-            await Task.detached(priority: .utility) { self.waitForRoot() }.value
-        }, onCancel: { self.cancel() })
+        system.waitCallStarted()
+        let completion = lifecycleLock.withLock { () -> Task<ProcessResult, Error> in
+            if let completionTask { return completionTask }
+            let task = Task.detached(priority: .utility) { try await self.performWait() }
+            completionTask = task
+            return task
+        }
+        return try await withTaskCancellationHandler(
+            operation: { try await completion.value },
+            onCancel: { self.cancel() }
+        )
+    }
+
+    private func performWait() async throws -> ProcessResult {
+        let status: Int32
+        do {
+            status = try await Task.detached(priority: .utility) {
+                try self.system.observeRootExit(self.pid)
+            }.value
+            lifecycleLock.withLock { rootExitObserved = true }
+        } catch {
+            recordingError.retain(error)
+            stopMonitor()
+            closeReadHandles()
+            _ = await waitForReaders()
+            throw ProcessCleanupError()
+        }
         let cleaned = await waitForGroupAbsence()
         stopMonitor()
-        if !cleaned {
-            try? stdout.close()
-            try? stderr.close()
+        do {
+            try system.reapRoot(pid)
+        } catch {
+            recordingError.retain(error)
         }
-        let readersFinished = await waitForReaders()
-        if !cleaned || !readersFinished || recordingError.hasError { throw ProcessCleanupError() }
+        if !cleaned {
+            closeReadHandles()
+        }
+        var readersFinished = await waitForReaders()
+        let inheritedWriterTimedOut = !readersFinished
+        if inheritedWriterTimedOut {
+            // An unobserved process may have detached before the first group
+            // inventory and retained inherited output writers. Darwin has no
+            // supported recursive fork-tracking primitive, so fail closed and
+            // force our blocking readers to complete without clearing ownership.
+            closeReadHandles()
+            readersFinished = await waitForReaders()
+        }
+        if !cleaned || inheritedWriterTimedOut || !readersFinished || recordingError.hasError {
+            throw ProcessCleanupError()
+        }
         return ProcessResult(exitStatus: status, stdout: String(decoding: stdoutData.get(), as: UTF8.self), stderr: String(decoding: stderrData.get(), as: UTF8.self))
     }
 
@@ -438,10 +539,6 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
         }
     }
 
-    private func waitForRoot() -> Int32 {
-        system.waitForRoot(pid)
-    }
-
     private func waitForGroupAbsence() async -> Bool {
         let termDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         while ContinuousClock.now < termDeadline {
@@ -461,12 +558,19 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     }
 
     private func ownedProcessesAreAbsent() -> Bool {
-        let observed = lifecycleLock.withLock { self.observed }
+        let state = lifecycleLock.withLock {
+            (observed: self.observed, rootExitObserved: self.rootExitObserved)
+        }
+        let observed = state.rootExitObserved ? state.observed.subtracting([group.leader]) : state.observed
         do {
             return try OwnedProcessGroupInspector.allOwnedProcessesAreAbsent(
                 processGroupID: group.processGroupID,
                 observed: observed,
-                members: system.members,
+                members: { processGroupID in
+                    let members = try self.system.members(processGroupID)
+                    guard state.rootExitObserved else { return members }
+                    return members.filter { $0 != self.pid }
+                },
                 liveIdentity: system.liveIdentity
             )
         } catch {
@@ -476,6 +580,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
     }
 
     private func signalVerifiedGroup(_ signal: Int32) {
+        let rootExitObserved = lifecycleLock.withLock { self.rootExitObserved }
         let liveLeader = system.liveIdentity(group.leader.pid)
         let leaderWasReused = liveLeader != nil && liveLeader != group.leader
         if leaderWasReused {
@@ -492,7 +597,7 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
             // Keep the root reaping path live even on a Darwin configuration
             // that rejects a negative-PGID signal despite accepting the exact
             // same child PID.
-            if system.liveIdentity(group.leader.pid) == group.leader {
+            if !rootExitObserved, system.liveIdentity(group.leader.pid) == group.leader {
                 if system.signal(group.leader.pid, signal) != 0, groupResult != 0 {
                     recordingError.retain(ProcessCleanupError())
                 }
@@ -513,12 +618,16 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
             }
         }
         let observed = lifecycleLock.withLock { self.observed }
-        for identity in observed {
+        for identity in observed where !rootExitObserved || identity != group.leader {
             signalExactIdentity(identity, signal: signal)
         }
     }
 
     private func signalExactIdentity(_ identity: OwnedProcessIdentity, signal: Int32) {
+        // Darwin has no pidfd-style identity-bound signal operation: kill(2)
+        // accepts only a PID. Full birth identity checks immediately before
+        // each signal are therefore the strongest available Darwin primitive,
+        // but they cannot make validation plus kill atomic.
         guard system.liveIdentity(identity.pid) == identity,
               system.liveIdentity(identity.pid) == identity else { return }
         if system.signal(identity.pid, signal) != 0,
@@ -533,6 +642,11 @@ private final class FoundationProcessHandle: ProcessHandle, @unchecked Sendable 
                 continuation.resume(returning: self.readers.wait(timeout: .now() + timeout) == .success)
             }
         }
+    }
+
+    private func closeReadHandles() {
+        try? stdout.close()
+        try? stderr.close()
     }
 
 #if DEBUG

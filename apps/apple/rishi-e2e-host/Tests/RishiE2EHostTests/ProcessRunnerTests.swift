@@ -14,6 +14,7 @@ final class ProcessRunnerTests: XCTestCase {
         let firstEntered = DispatchSemaphore(value: 0)
         let releaseFirst = DispatchSemaphore(value: 0)
         let firstFinished = DispatchSemaphore(value: 0)
+        let secondAttemptStarted = DispatchSemaphore(value: 0)
         let secondEntered = DispatchSemaphore(value: 0)
         let secondFinished = DispatchSemaphore(value: 0)
 
@@ -27,9 +28,13 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(firstEntered.wait(timeout: .now() + 1), .success)
 
         DispatchQueue.global().async {
-            FoundationProcessRunner.withSpawnLockForTesting { secondEntered.signal() }
+            FoundationProcessRunner.withSpawnLockForTesting(
+                beforeLock: { secondAttemptStarted.signal() },
+                body: { secondEntered.signal() }
+            )
             secondFinished.signal()
         }
+        XCTAssertEqual(secondAttemptStarted.wait(timeout: .now() + 1), .success)
         XCTAssertEqual(secondEntered.wait(timeout: .now() + .milliseconds(100)), .timedOut)
         releaseFirst.signal()
         XCTAssertEqual(firstFinished.wait(timeout: .now() + 1), .success)
@@ -125,6 +130,127 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertTrue(state.writersWereClosed)
     }
 
+    func testInheritedWriterTimeoutFailsClosedAndFinishesReaders() async throws {
+        let root = OwnedProcessIdentity(pid: 730, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let group = OwnedProcessGroup(processGroupID: root.pid, leader: root)
+        let recorder = ProcessRecorder()
+        try recorder.recordOwnedProcess(root)
+        try recorder.recordOwnedProcessGroup(group)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        defer {
+            try? stdout.fileHandleForWriting.close()
+            try? stderr.fileHandleForWriting.close()
+        }
+        let testHandle = FoundationProcessRunner.makeHandleForTesting(
+            group: group,
+            observed: [root],
+            recorder: recorder,
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            liveIdentity: { _ in nil },
+            members: { _ in [] },
+            processGroup: { _ in nil },
+            signal: { _, _ in XCTFail("No process should be signalled"); return -1 },
+            observeRootExit: { _ in 0 },
+            reapRoot: { _ in },
+            waitCallStarted: {}
+        )
+        let started = ContinuousClock.now
+
+        do {
+            _ = try await testHandle.handle.wait()
+            XCTFail("Expected inherited writer timeout to fail closed")
+        } catch is ProcessCleanupError {
+            // Expected: ownership remains recorded because cleanup is unproven.
+        }
+
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
+        XCTAssertTrue(testHandle.cleanupState().readersFinished)
+        XCTAssertEqual(recorder.processes, [root])
+        XCTAssertEqual(recorder.groups, [group])
+    }
+
+    func testConcurrentWaitsShareExitObservationCleanupAndSingleReap() async throws {
+        let root = OwnedProcessIdentity(pid: 731, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let group = OwnedProcessGroup(processGroupID: root.pid, leader: root)
+        let state = ConcurrentWaitState(root: root)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        try stdout.fileHandleForWriting.close()
+        try stderr.fileHandleForWriting.close()
+        let testHandle = FoundationProcessRunner.makeHandleForTesting(
+            group: group,
+            observed: [root],
+            recorder: ProcessRecorder(),
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            liveIdentity: { state.identity(for: $0) },
+            members: { state.members(in: $0) },
+            processGroup: { state.processGroup(of: $0) },
+            signal: { state.signal(pid: $0, signal: $1) },
+            observeRootExit: { state.observeRootExit(pid: $0) },
+            reapRoot: { try state.reapRoot(pid: $0) },
+            waitCallStarted: { state.waitCallStarted() }
+        )
+
+        let first = Task { try await testHandle.handle.wait() }
+        XCTAssertEqual(state.exitObservationStarted.wait(timeout: .now() + 1), .success)
+        let second = Task { try await testHandle.handle.wait() }
+        XCTAssertEqual(state.waitCallsReachedTwo.wait(timeout: .now() + 1), .success)
+        state.allowExitObservation.signal()
+        state.allowExitObservation.signal()
+        let firstResult = try await first.value
+        let secondResult = try await second.value
+
+        XCTAssertEqual(firstResult, secondResult)
+        XCTAssertEqual(state.exitObservationCount, 1)
+        XCTAssertEqual(state.reapCount, 1)
+        XCTAssertTrue(state.checkedRootGroupBeforeReap)
+        XCTAssertTrue(state.signals.isEmpty)
+    }
+
+    func testConcurrentWaitsShareInheritedWriterFailure() async throws {
+        let root = OwnedProcessIdentity(pid: 732, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let group = OwnedProcessGroup(processGroupID: root.pid, leader: root)
+        let state = ConcurrentWaitState(root: root)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        defer {
+            try? stdout.fileHandleForWriting.close()
+            try? stderr.fileHandleForWriting.close()
+        }
+        let testHandle = FoundationProcessRunner.makeHandleForTesting(
+            group: group,
+            observed: [root],
+            recorder: ProcessRecorder(),
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            liveIdentity: { _ in nil },
+            members: { _ in [] },
+            processGroup: { _ in nil },
+            signal: { _, _ in XCTFail("No process should be signalled"); return -1 },
+            observeRootExit: { state.observeRootExit(pid: $0) },
+            reapRoot: { try state.reapRoot(pid: $0) },
+            waitCallStarted: { state.waitCallStarted() }
+        )
+
+        let first = Task { await cleanupErrorFromWait(testHandle.handle) }
+        XCTAssertEqual(state.exitObservationStarted.wait(timeout: .now() + 1), .success)
+        let second = Task { await cleanupErrorFromWait(testHandle.handle) }
+        XCTAssertEqual(state.waitCallsReachedTwo.wait(timeout: .now() + 1), .success)
+        state.allowExitObservation.signal()
+        state.allowExitObservation.signal()
+
+        let firstFailedClosed = await first.value
+        let secondFailedClosed = await second.value
+        XCTAssertTrue(firstFailedClosed)
+        XCTAssertTrue(secondFailedClosed)
+        XCTAssertEqual(state.exitObservationCount, 1)
+        XCTAssertEqual(state.reapCount, 1)
+        XCTAssertTrue(testHandle.cleanupState().readersFinished)
+    }
+
     func testGateEOFExitsWithStatus125WithoutExecutingRequestedChild() throws {
         let marker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: marker) }
@@ -146,14 +272,22 @@ final class ProcessRunnerTests: XCTestCase {
     }
 
     func testFoundationRunnerRecordsStableRootAndDescendantIdentities() async throws {
+        let release = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        XCTAssertEqual(mkfifo(release.path, S_IRUSR | S_IWUSR), 0)
+        defer { try? FileManager.default.removeItem(at: release) }
         let recorder = ProcessRecorder()
         let handle = try FoundationProcessRunner(recorder: recorder).start(ProcessRequest(
             executablePath: "/bin/sh",
-            arguments: ["-c", "sleep 0.2 & wait"]
+            arguments: ["-c", "IFS= read -r release < \"$1\" & wait", "rishi-e2e-test", release.path]
         ))
 
+        let descendantObserved = recorder.waitForProcessCount(2, timeout: .now() + 1)
+        let writer = FileHandle(forWritingAtPath: release.path)
+        writer?.write(Data("go\n".utf8))
+        try? writer?.close()
         _ = try await handle.wait()
 
+        XCTAssertTrue(descendantObserved)
         XCTAssertEqual(recorder.groups.count, 1)
         XCTAssertGreaterThanOrEqual(recorder.processes.count, 2)
         XCTAssertEqual(recorder.groups[0].leader, recorder.processes[0])
@@ -245,6 +379,7 @@ private final class ProcessRecorder: OwnedProcessRecording, @unchecked Sendable 
     private let lock = NSLock()
     private var storedGroups: [OwnedProcessGroup] = []
     private var storedProcesses: [OwnedProcessIdentity] = []
+    private let processRecorded = DispatchSemaphore(value: 0)
     private let failGroup: Bool
     private let failAfterProcessCount: Int?
 
@@ -268,6 +403,14 @@ private final class ProcessRecorder: OwnedProcessRecording, @unchecked Sendable 
             }
             storedProcesses.append(identity)
         }
+        processRecorded.signal()
+    }
+
+    func waitForProcessCount(_ count: Int, timeout: DispatchTime) -> Bool {
+        while processes.count < count {
+            if processRecorded.wait(timeout: timeout) == .timedOut { return false }
+        }
+        return true
     }
 
     func recordOwnedSimulatorDevice(_: OwnedSimulatorDevice) throws {}
@@ -277,6 +420,79 @@ private final class ProcessRecorder: OwnedProcessRecording, @unchecked Sendable 
 
 private enum ProcessRecorderError: Error { case failed }
 private enum ProcessInspectionTestError: Error { case unavailable }
+
+private func cleanupErrorFromWait(_ handle: any ProcessHandle) async -> Bool {
+    do {
+        _ = try await handle.wait()
+        return false
+    } catch is ProcessCleanupError {
+        return true
+    } catch {
+        return false
+    }
+}
+
+private final class ConcurrentWaitState: @unchecked Sendable {
+    let exitObservationStarted = DispatchSemaphore(value: 0)
+    let allowExitObservation = DispatchSemaphore(value: 0)
+    let waitCallsReachedTwo = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let root: OwnedProcessIdentity
+    private var storedWaitCalls = 0
+    private var storedExitObservations = 0
+    private var storedReaps = 0
+    private var storedCheckedBeforeReap = false
+    private var storedSignals: [(Int32, Int32)] = []
+
+    init(root: OwnedProcessIdentity) { self.root = root }
+
+    func waitCallStarted() {
+        let reachedTwo = lock.withLock { () -> Bool in
+            storedWaitCalls += 1
+            return storedWaitCalls == 2
+        }
+        if reachedTwo { waitCallsReachedTwo.signal() }
+    }
+
+    func observeRootExit(pid: pid_t) -> Int32 {
+        XCTAssertEqual(pid, root.pid)
+        lock.withLock { storedExitObservations += 1 }
+        exitObservationStarted.signal()
+        allowExitObservation.wait()
+        return 0
+    }
+
+    func reapRoot(pid: pid_t) throws {
+        XCTAssertEqual(pid, root.pid)
+        lock.withLock { storedReaps += 1 }
+    }
+
+    func identity(for pid: Int32) -> OwnedProcessIdentity? {
+        lock.withLock { storedReaps == 0 && pid == root.pid ? root : nil }
+    }
+
+    func members(in processGroupID: Int32) -> [Int32] {
+        lock.withLock {
+            guard processGroupID == root.pid, storedReaps == 0 else { return [] }
+            storedCheckedBeforeReap = true
+            return [root.pid]
+        }
+    }
+
+    func processGroup(of pid: Int32) -> Int32? {
+        lock.withLock { storedReaps == 0 && pid == root.pid ? root.pid : nil }
+    }
+
+    func signal(pid: Int32, signal: Int32) -> Int32 {
+        lock.withLock { storedSignals.append((pid, signal)) }
+        return 0
+    }
+
+    var exitObservationCount: Int { lock.withLock { storedExitObservations } }
+    var reapCount: Int { lock.withLock { storedReaps } }
+    var checkedRootGroupBeforeReap: Bool { lock.withLock { storedCheckedBeforeReap } }
+    var signals: [(Int32, Int32)] { lock.withLock { storedSignals } }
+}
 
 private final class CleanupProcessState: @unchecked Sendable {
     private let lock = NSLock()
