@@ -718,6 +718,100 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     }
 }
 
+public extension SharedReadingRecoveryJournal {
+    /// Recover recorded individual identities without ever treating a reused
+    /// PID as owned. A missing or birth-mismatched PID is already absent.
+    static func recoverProcesses(
+        _ processes: [OwnedProcessIdentity],
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
+        signal: @escaping @Sendable (Int32, Int32) -> Void,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
+    ) async throws {
+        var failures = false
+        for process in processes {
+            guard liveIdentity(process.pid) == process else { continue }
+            signal(process.pid, SIGTERM)
+            if try await waitForIdentityAbsence(process, liveIdentity: liveIdentity, sleep: sleep) { continue }
+            guard liveIdentity(process.pid) == process else { continue }
+            signal(process.pid, SIGKILL)
+            if try await waitForIdentityAbsence(process, liveIdentity: liveIdentity, sleep: sleep) { continue }
+            failures = true
+        }
+        if failures { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+    }
+
+    /// Group recovery has explicit inventory seams so unit tests never signal a
+    /// real process. A live PGID leader whose birth time differs is a reused
+    /// group and therefore an error, not cleanup authority.
+    static func recoverProcessGroups(
+        _ groups: [OwnedProcessGroup],
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
+        members: @escaping @Sendable (Int32) -> [Int32],
+        processGroup: @escaping @Sendable (Int32) -> Int32?,
+        signal: @escaping @Sendable (Int32, Int32) -> Void,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
+    ) async throws {
+        var failures = false
+        for group in groups {
+            do {
+                try await recoverProcessGroup(
+                    group,
+                    liveIdentity: liveIdentity,
+                    members: members,
+                    processGroup: processGroup,
+                    signal: signal,
+                    sleep: sleep
+                )
+            } catch {
+                failures = true
+            }
+        }
+        if failures { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+    }
+
+    private static func recoverProcessGroup(
+        _ group: OwnedProcessGroup,
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
+        members: @escaping @Sendable (Int32) -> [Int32],
+        processGroup: @escaping @Sendable (Int32) -> Int32?,
+        signal: @escaping @Sendable (Int32, Int32) -> Void,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
+    ) async throws {
+        for phase in [SIGTERM, SIGKILL] {
+            for _ in 0..<6 {
+                let leader = liveIdentity(group.leader.pid)
+                if let leader, leader != group.leader { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+                let snapshot = members(group.processGroupID)
+                if snapshot.isEmpty { return }
+                for pid in snapshot {
+                    // A current process whose PID equals the old PGID can only
+                    // be trusted when it is the original leader identity.
+                    if pid == group.processGroupID, let identity = liveIdentity(pid), identity != group.leader {
+                        throw SharedReadingRecoveryJournalError.cleanupIncomplete
+                    }
+                    guard let identity = liveIdentity(pid), processGroup(pid) == group.processGroupID,
+                          liveIdentity(pid) == identity, processGroup(pid) == group.processGroupID else { continue }
+                    signal(pid, phase)
+                }
+                try await sleep(.milliseconds(25))
+            }
+        }
+        if !members(group.processGroupID).isEmpty { throw SharedReadingRecoveryJournalError.cleanupIncomplete }
+    }
+
+    private static func waitForIdentityAbsence(
+        _ identity: OwnedProcessIdentity,
+        liveIdentity: @escaping @Sendable (Int32) -> OwnedProcessIdentity?,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
+    ) async throws -> Bool {
+        for _ in 0..<6 {
+            if liveIdentity(identity.pid) != identity { return true }
+            try await sleep(.milliseconds(25))
+        }
+        return liveIdentity(identity.pid) != identity
+    }
+}
+
 private struct RecoveryState: Codable, Equatable {
     var runID: String
     var accounts: [RecordedAccount] = []

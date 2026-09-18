@@ -4,6 +4,122 @@ import XCTest
 @testable import RishiE2EHost
 
 final class SharedReadingRecoveryJournalTests: XCTestCase {
+    func testRecoveryNeverSignalsReusedProcessIdentity() async throws {
+        let recorded = OwnedProcessIdentity(pid: 701, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let reused = OwnedProcessIdentity(pid: 701, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let signals = SignalRecorder()
+
+        try await SharedReadingRecoveryJournal.recoverProcesses(
+            [recorded],
+            liveIdentity: { _ in reused },
+            signal: { pid, _ in signals.append(pid) },
+            sleep: { _ in }
+        )
+
+        XCTAssertEqual(signals.values, [])
+    }
+
+    func testRecoverySignalsOnlyMatchingIdentityAndWaitsForAbsence() async throws {
+        let process = OwnedProcessIdentity(pid: 702, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let state = RecoveryProcessState(identity: process, remainsAfterKill: false)
+
+        try await SharedReadingRecoveryJournal.recoverProcesses(
+            [process],
+            liveIdentity: { _ in state.identity },
+            signal: { _, signal in state.signal(signal) },
+            sleep: { _ in }
+        )
+
+        XCTAssertEqual(state.signals, [SIGTERM])
+        XCTAssertNil(state.identity)
+    }
+
+    func testRecoveryFailsWhenMatchingProcessCannotBeProvenAbsent() async throws {
+        let process = OwnedProcessIdentity(pid: 703, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let state = RecoveryProcessState(identity: process, remainsAfterKill: true)
+
+        do {
+            try await SharedReadingRecoveryJournal.recoverProcesses(
+                [process],
+                liveIdentity: { _ in state.identity },
+                signal: { _, signal in state.signal(signal) },
+                sleep: { _ in }
+            )
+            XCTFail("Expected failed absence proof")
+        } catch {
+            XCTAssertEqual(state.signals, [SIGTERM, SIGKILL])
+        }
+    }
+
+    func testUnprovenRecoveryRetainsJournalProcessRecord() async throws {
+        let journal = try makeJournal()
+        let process = OwnedProcessIdentity(pid: 707, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let state = RecoveryProcessState(identity: process, remainsAfterKill: true)
+        try journal.recordOwnedProcess(process)
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recoverProcesses(
+            [process],
+            liveIdentity: { _ in state.identity },
+            signal: { _, signal in state.signal(signal) },
+            sleep: { _ in }
+        ))
+
+        XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
+    }
+
+    func testRecoveryRefusesReusedGroupWhenLeaderIdentityDoesNotMatch() async throws {
+        let leader = OwnedProcessIdentity(pid: 704, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let group = OwnedProcessGroup(processGroupID: 704, leader: leader)
+        let signals = SignalRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recoverProcessGroups(
+            [group],
+            liveIdentity: { _ in OwnedProcessIdentity(pid: 704, birthTimeSeconds: 9, birthTimeMicroseconds: 9) },
+            members: { _ in [704] },
+            processGroup: { _ in 704 },
+            signal: { pid, _ in signals.append(pid) },
+            sleep: { _ in }
+        ))
+        XCTAssertEqual(signals.values, [])
+    }
+
+    func testRecoveryCleansOriginalGroupMembersAfterLeaderExits() async throws {
+        let leader = OwnedProcessIdentity(pid: 705, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let child = OwnedProcessIdentity(pid: 706, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let state = GroupRecoveryState(identities: [706: child], group: 705)
+
+        try await SharedReadingRecoveryJournal.recoverProcessGroups(
+            [OwnedProcessGroup(processGroupID: 705, leader: leader)],
+            liveIdentity: { pid in state.identity(for: pid) },
+            members: { _ in state.members },
+            processGroup: { pid in state.processGroup(for: pid) },
+            signal: { pid, signal in state.signal(pid, signal: signal) },
+            sleep: { _ in }
+        )
+
+        XCTAssertEqual(state.signals.count, 1)
+        XCTAssertEqual(state.signals.first?.0, 706)
+        XCTAssertEqual(state.signals.first?.1, SIGTERM)
+    }
+
+    func testCrashAfterGateReleaseRecoversIdentityBoundGroupBeforeDescendantJournal() async throws {
+        let root = OwnedProcessIdentity(pid: 708, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let state = GroupRecoveryState(identities: [708: root], group: 708)
+
+        try await SharedReadingRecoveryJournal.recoverProcessGroups(
+            [OwnedProcessGroup(processGroupID: 708, leader: root)],
+            liveIdentity: { pid in state.identity(for: pid) },
+            members: { _ in state.members },
+            processGroup: { pid in state.processGroup(for: pid) },
+            signal: { pid, signal in state.signal(pid, signal: signal) },
+            sleep: { _ in }
+        )
+
+        XCTAssertEqual(state.signals.count, 1)
+        XCTAssertEqual(state.signals.first?.0, root.pid)
+        XCTAssertEqual(state.signals.first?.1, SIGTERM)
+    }
+
     func testJournalPersistsOnlyRecoverySafeFieldsAtomically() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -768,4 +884,69 @@ private final class LockedBoolean: @unchecked Sendable {
         get { lock.withLock { storedValue } }
         set { lock.withLock { storedValue = newValue } }
     }
+}
+
+private final class SignalRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Int32] = []
+
+    var values: [Int32] { lock.withLock { stored } }
+    func append(_ pid: Int32) { lock.withLock { stored.append(pid) } }
+}
+
+private final class RecoveryProcessState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedIdentity: OwnedProcessIdentity?
+    private var storedSignals: [Int32] = []
+    private let remainsAfterKill: Bool
+
+    init(identity: OwnedProcessIdentity, remainsAfterKill: Bool) {
+        storedIdentity = identity
+        self.remainsAfterKill = remainsAfterKill
+    }
+
+    var identity: OwnedProcessIdentity? { lock.withLock { storedIdentity } }
+    var signals: [Int32] { lock.withLock { storedSignals } }
+
+    func signal(_ signal: Int32) {
+        lock.withLock {
+            storedSignals.append(signal)
+            if !remainsAfterKill { storedIdentity = nil }
+        }
+    }
+}
+
+private final class GroupRecoveryState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedIdentities: [Int32: OwnedProcessIdentity]
+    private let group: Int32
+    private var storedSignals: [(Int32, Int32)] = []
+
+    init(identities: [Int32: OwnedProcessIdentity], group: Int32) {
+        storedIdentities = identities
+        self.group = group
+    }
+
+    var members: [Int32] { lock.withLock { Array(storedIdentities.keys) } }
+    var signals: [(Int32, Int32)] { lock.withLock { storedSignals } }
+    func identity(for pid: Int32) -> OwnedProcessIdentity? { lock.withLock { storedIdentities[pid] } }
+    func processGroup(for pid: Int32) -> Int32? { lock.withLock { storedIdentities[pid] == nil ? nil : group } }
+
+    func signal(_ pid: Int32, signal: Int32) {
+        lock.withLock {
+            storedSignals.append((pid, signal))
+            storedIdentities[pid] = nil
+        }
+    }
+}
+
+private func XCTAssertThrowsErrorAsync(
+    _ expression: @autoclosure () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await expression()
+        XCTFail("Expected error", file: file, line: line)
+    } catch {}
 }
