@@ -405,6 +405,56 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertEqual(recorder.recordedOwnership, lock.ownership)
     }
 
+    func testPreparedProductionLockIsJournaledBeforeHostConstructionAndManagedByHost() async throws {
+        let events = EventRecorder()
+        let lock = FakeBuildLock(events: events)
+        let recorder = FakeBuildLockRecorder(events: events)
+
+        let prepared = try SharedReadingHost.prepareBuildLock(
+            recorder: recorder,
+            acquire: {
+                events.append("lock:acquire")
+                return lock
+            }
+        )
+        XCTAssertEqual(events.values, ["lock:acquire", "journal:record-lock"])
+
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: FakeAccounts(events: events),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events),
+            preparedBuildLock: prepared
+        )
+
+        try await host.run()
+
+        XCTAssertEqual(events.values.filter { $0 == "lock:acquire" }.count, 1)
+        XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
+        XCTAssertEqual(Array(events.values.suffix(2)), ["lock:release", "journal:clear-lock"])
+    }
+
+    func testCLIProductionSourceCreatesDurableJournalAndDelegatesLockOwnershipToHost() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot.appendingPathComponent("Sources/RishiE2EHostCLI/main.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("SharedReadingRecoveryJournal("))
+        XCTAssertTrue(source.contains("SharedReadingHost.prepareBuildLock("))
+        XCTAssertTrue(source.contains("preparedBuildLock: preparedBuildLock"))
+        XCTAssertFalse(source.contains("keepBuildLockForRecovery"))
+        XCTAssertFalse(source.contains("let buildLock = try AppleXcodeBuildLock.acquire()"))
+
+        let prepareIndex = try XCTUnwrap(source.range(of: "SharedReadingHost.prepareBuildLock(")?.lowerBound)
+        let relayIndex = try XCTUnwrap(source.range(of: "let relay = RendezvousRelayServer()")?.lowerBound)
+        XCTAssertLessThan(prepareIndex, relayIndex)
+    }
+
     func testRedactedManifestContainsNoCredentialsOrSourcePath() throws {
         let fixturePath = "/private/user/book.pdf"
         let fixture = RealBookFixture.Manifest(role: .owner, format: .pdf, basename: "book.pdf", sha256: String(repeating: "a", count: 64), byteSize: 10)
@@ -472,18 +522,22 @@ final class SharedReadingHostTests: XCTestCase {
         acquireBuildLock: @escaping @Sendable () throws -> any AppleXcodeBuildLockHolding
     ) -> SharedReadingHost {
         SharedReadingHost(
-            configuration: .init(
-                runID: "run-build-lock",
-                fixture: .init(role: .owner, format: .pdf, basename: "book.pdf", sha256: String(repeating: "d", count: 64), byteSize: 10),
-                manifestURL: manifestURL,
-                ownerDestination: .catalyst,
-                participantDestination: .iPhone17Pro
-            ),
+            configuration: makeConfiguration(manifestURL: manifestURL),
             accounts: accounts ?? FakeAccounts(events: events),
             peers: FakePeers(events: events),
             rendezvous: FakeRendezvous(events: events),
             buildLockRecorder: buildLockRecorder,
             acquireBuildLock: acquireBuildLock
+        )
+    }
+
+    private func makeConfiguration(manifestURL: URL) -> SharedReadingHost.Configuration {
+        .init(
+            runID: "run-build-lock",
+            fixture: .init(role: .owner, format: .pdf, basename: "book.pdf", sha256: String(repeating: "d", count: 64), byteSize: 10),
+            manifestURL: manifestURL,
+            ownerDestination: .catalyst,
+            participantDestination: .iPhone17Pro
         )
     }
 

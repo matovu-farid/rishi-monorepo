@@ -72,6 +72,7 @@ public enum ResourcePreflight {
 public final class AppleXcodeBuildLock: @unchecked Sendable {
     private static let coordinationLock = NSLock()
     private static let metadataFilename = "owner.json"
+    private static let maximumMetadataBytes = 64 * 1024
 
     private let lockURL: URL
     public let ownership: AppleXcodeBuildLockOwnership
@@ -87,8 +88,8 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
     public static func acquire(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> AppleXcodeBuildLock {
         let lockURL = try configuredLockURL(environment: environment)
         return try coordinationLock.withLock {
-            try withCrossProcessCoordination(at: lockURL) {
-                try acquireWhileCoordinated(at: lockURL)
+            try withCrossProcessCoordination(at: lockURL) { coordination in
+                try acquireWhileCoordinated(at: lockURL, coordination: coordination)
             }
         }
     }
@@ -118,26 +119,27 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         return lockURL
     }
 
-    private static func acquireWhileCoordinated(at lockURL: URL) throws -> AppleXcodeBuildLock {
-        do {
-            try FileManager.default.createDirectory(at: lockURL, withIntermediateDirectories: false)
-        } catch {
+    private static func acquireWhileCoordinated(
+        at lockURL: URL,
+        coordination: Coordination
+    ) throws -> AppleXcodeBuildLock {
+        if mkdirat(coordination.parentFD, coordination.lockName, mode_t(0o700)) != 0 {
             // A force-quit or interrupted host can leave its lock directory
             // behind after the Xcode child has exited. Recover only when the
             // lock metadata proves its recorded owner PID is dead; missing or
             // malformed metadata remains fail-closed.
-            guard recoverStaleLock(at: lockURL) else {
+            guard errno == EEXIST, recoverStaleLock(at: lockURL, coordination: coordination) else {
                 throw ResourcePreflightError("Another Apple build is using the shared build lock: \(lockURL.path)")
             }
-            do {
-                try FileManager.default.createDirectory(at: lockURL, withIntermediateDirectories: false)
-            } catch {
+            guard mkdirat(coordination.parentFD, coordination.lockName, mode_t(0o700)) == 0 else {
                 throw ResourcePreflightError("Another Apple build is using the shared build lock: \(lockURL.path)")
             }
         }
+        let lockDirectory = try openLockDirectory(coordination)
+        defer { close(lockDirectory.fd) }
         let pid = ProcessInfo.processInfo.processIdentifier
         guard let owner = ProcessIdentityReader.identity(for: pid) else {
-            try? FileManager.default.removeItem(at: lockURL)
+            try? removeEmptyLockDirectory(lockDirectory, coordination: coordination)
             throw ResourcePreflightError("Could not establish stable ownership for Apple build lock: \(lockURL.path)")
         }
         let ownership = AppleXcodeBuildLockOwnership(
@@ -149,13 +151,14 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
-            try encoder.encode(ownership).write(
-                to: lockURL.appendingPathComponent(metadataFilename),
-                options: [.atomic]
-            )
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: lockURL.path)
+            try writeOwnership(encoder.encode(ownership), lockDirectoryFD: lockDirectory.fd)
+            guard fchmod(lockDirectory.fd, mode_t(0o700)) == 0,
+                  try persistedOwnership(lockDirectoryFD: lockDirectory.fd, lockURL: lockURL) == ownership,
+                  validateLockDirectory(lockDirectory, coordination: coordination) else {
+                throw ResourcePreflightError("Could not verify Apple build lock ownership: \(lockURL.path)")
+            }
         } catch {
-            try? FileManager.default.removeItem(at: lockURL)
+            try? removeLockDirectory(lockDirectory, coordination: coordination)
             throw error
         }
         return AppleXcodeBuildLock(lockURL: lockURL, ownership: ownership)
@@ -168,8 +171,8 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
                 throw ResourcePreflightError("Apple build lock was transferred to recovery: \(lockURL.path)")
             }
             try Self.coordinationLock.withLock {
-                try Self.withCrossProcessCoordination(at: lockURL) {
-                    try Self.removePresentLock(at: lockURL, matching: ownership)
+                try Self.withCrossProcessCoordination(at: lockURL) { coordination in
+                    try Self.removePresentLock(at: lockURL, matching: ownership, coordination: coordination)
                 }
             }
             released = true
@@ -197,7 +200,8 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         try reconcileRetainedLock(
             ownership: ownership,
             liveIdentity: liveIdentity,
-            afterValidationBeforeRemoval: {}
+            afterValidationBeforeRemoval: {},
+            afterCoordinationLockBeforePathValidation: {}
         )
     }
 
@@ -206,29 +210,67 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
         liveIdentity: (Int32) -> OwnedProcessIdentity?,
         afterValidationBeforeRemoval: () -> Void
     ) throws {
+        try reconcileRetainedLock(
+            ownership: ownership,
+            liveIdentity: liveIdentity,
+            afterValidationBeforeRemoval: afterValidationBeforeRemoval,
+            afterCoordinationLockBeforePathValidation: {}
+        )
+    }
+
+    static func reconcileRetainedLock(
+        ownership: AppleXcodeBuildLockOwnership,
+        liveIdentity: (Int32) -> OwnedProcessIdentity?,
+        afterCoordinationLockBeforePathValidation: () -> Void
+    ) throws {
+        try reconcileRetainedLock(
+            ownership: ownership,
+            liveIdentity: liveIdentity,
+            afterValidationBeforeRemoval: {},
+            afterCoordinationLockBeforePathValidation: afterCoordinationLockBeforePathValidation
+        )
+    }
+
+    private static func reconcileRetainedLock(
+        ownership: AppleXcodeBuildLockOwnership,
+        liveIdentity: (Int32) -> OwnedProcessIdentity?,
+        afterValidationBeforeRemoval: () -> Void,
+        afterCoordinationLockBeforePathValidation: () -> Void
+    ) throws {
         let lockURL = try validatedLockURL(path: ownership.path)
-        guard pathExistsNoFollow(lockURL.path) else { return }
+        guard parentDirectoryExistsNoFollow(lockURL.deletingLastPathComponent().path) else { return }
         try coordinationLock.withLock {
-            try withCrossProcessCoordination(at: lockURL) {
-                guard pathExistsNoFollow(lockURL.path) else { return }
+            try withCrossProcessCoordination(
+                at: lockURL,
+                afterLockBeforePathValidation: afterCoordinationLockBeforePathValidation
+            ) { coordination in
+                guard lockDirectoryExists(coordination) else { return }
                 guard liveIdentity(ownership.owner.pid) != ownership.owner else {
                     throw ResourcePreflightError("Apple build lock owner is still running: \(lockURL.path)")
                 }
                 try removePresentLock(
                     at: lockURL,
                     matching: ownership,
+                    coordination: coordination,
                     afterValidationBeforeRemoval: afterValidationBeforeRemoval
                 )
             }
         }
     }
 
-    private static func recoverStaleLock(at lockURL: URL) -> Bool {
-        guard let ownership = try? persistedOwnership(at: lockURL),
+    private static func recoverStaleLock(at lockURL: URL, coordination: Coordination) -> Bool {
+        guard let lockDirectory = try? openLockDirectory(coordination) else { return false }
+        defer { close(lockDirectory.fd) }
+        guard let ownership = try? persistedOwnership(lockDirectoryFD: lockDirectory.fd, lockURL: lockURL),
               ownership.path == lockURL.path,
               ProcessIdentityReader.identity(for: ownership.owner.pid) != ownership.owner else { return false }
         do {
-            try removePresentLock(at: lockURL, matching: ownership)
+            try removePresentLock(
+                at: lockURL,
+                matching: ownership,
+                coordination: coordination,
+                openedLockDirectory: lockDirectory
+            )
             return true
         } catch {
             return false
@@ -238,38 +280,66 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
     private static func removePresentLock(
         at lockURL: URL,
         matching ownership: AppleXcodeBuildLockOwnership,
+        coordination: Coordination,
+        openedLockDirectory: OpenedLockDirectory? = nil,
         afterValidationBeforeRemoval: () -> Void = {}
     ) throws {
+        let lockDirectory = try openedLockDirectory ?? openLockDirectory(coordination)
+        defer { if openedLockDirectory == nil { close(lockDirectory.fd) } }
         guard lockURL.path == ownership.path,
-              try persistedOwnership(at: lockURL) == ownership else {
+              validateLockDirectory(lockDirectory, coordination: coordination),
+              try persistedOwnership(lockDirectoryFD: lockDirectory.fd, lockURL: lockURL) == ownership else {
             throw ResourcePreflightError("Apple build lock ownership changed; refusing to remove \(lockURL.path)")
         }
         afterValidationBeforeRemoval()
-        // Re-read immediately before removal so a cooperative replacement
-        // cannot be mistaken for the generation validated above.
-        guard try persistedOwnership(at: lockURL) == ownership else {
+        guard coordination.validatePathIdentity(),
+              validateLockDirectory(lockDirectory, coordination: coordination),
+              try persistedOwnership(lockDirectoryFD: lockDirectory.fd, lockURL: lockURL) == ownership,
+              coordination.validatePathIdentity() else {
             throw ResourcePreflightError("Apple build lock ownership changed; refusing to remove \(lockURL.path)")
         }
-        try FileManager.default.removeItem(at: lockURL)
+        try removeLockDirectory(lockDirectory, coordination: coordination)
     }
 
-    private static func persistedOwnership(at lockURL: URL) throws -> AppleXcodeBuildLockOwnership {
+    private static func persistedOwnership(
+        lockDirectoryFD: Int32,
+        lockURL: URL
+    ) throws -> AppleXcodeBuildLockOwnership {
         do {
-            var directoryInfo = stat()
-            guard lstat(lockURL.path, &directoryInfo) == 0,
-                  directoryInfo.st_mode & S_IFMT == S_IFDIR else {
-                throw ResourcePreflightError("Apple build lock path is not a real directory: \(lockURL.path)")
-            }
-            let metadataURL = lockURL.appendingPathComponent(metadataFilename)
-            var metadataInfo = stat()
-            guard lstat(metadataURL.path, &metadataInfo) == 0,
-                  metadataInfo.st_mode & S_IFMT == S_IFREG else {
+            let descriptor = openat(lockDirectoryFD, metadataFilename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+            guard descriptor >= 0 else {
                 throw ResourcePreflightError("Apple build lock metadata is missing or unsafe: \(lockURL.path)")
             }
-            return try JSONDecoder().decode(
-                AppleXcodeBuildLockOwnership.self,
-                from: Data(contentsOf: metadataURL)
-            )
+            defer { close(descriptor) }
+            var openedInfo = stat()
+            var namedInfo = stat()
+            guard fstat(descriptor, &openedInfo) == 0,
+                  openedInfo.st_mode & S_IFMT == S_IFREG,
+                  openedInfo.st_nlink == 1,
+                  openedInfo.st_size >= 0,
+                  openedInfo.st_size <= maximumMetadataBytes,
+                  fstatat(lockDirectoryFD, metadataFilename, &namedInfo, AT_SYMLINK_NOFOLLOW) == 0,
+                  sameFile(openedInfo, namedInfo) else {
+                throw ResourcePreflightError("Apple build lock metadata is missing or unsafe: \(lockURL.path)")
+            }
+            var data = Data(count: Int(openedInfo.st_size))
+            let count = data.withUnsafeMutableBytes { bytes -> Int in
+                guard let base = bytes.baseAddress else { return 0 }
+                var offset = 0
+                while offset < bytes.count {
+                    let amount = read(descriptor, base.advanced(by: offset), bytes.count - offset)
+                    if amount > 0 { offset += amount; continue }
+                    if amount == -1 && errno == EINTR { continue }
+                    return -1
+                }
+                return offset
+            }
+            guard count == data.count,
+                  fstatat(lockDirectoryFD, metadataFilename, &namedInfo, AT_SYMLINK_NOFOLLOW) == 0,
+                  sameFile(openedInfo, namedInfo) else {
+                throw ResourcePreflightError("Apple build lock metadata changed while reading: \(lockURL.path)")
+            }
+            return try JSONDecoder().decode(AppleXcodeBuildLockOwnership.self, from: data)
         } catch {
             throw ResourcePreflightError("Apple build lock metadata is missing or malformed: \(lockURL.path)")
         }
@@ -294,15 +364,23 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
 
     private static func withCrossProcessCoordination<T>(
         at lockURL: URL,
-        _ operation: () throws -> T
+        afterLockBeforePathValidation: () -> Void = {},
+        _ operation: (Coordination) throws -> T
     ) throws -> T {
-        let coordinationURL = try coordinationURL(for: lockURL)
-        let descriptor = open(
-            coordinationURL.path,
-            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
-            mode_t(0o600)
-        )
+        let parentURL = lockURL.deletingLastPathComponent()
+        let parentFD = open(parentURL.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard parentFD >= 0 else {
+            throw ResourcePreflightError("Could not pin Apple build lock parent directory: \(parentURL.path)")
+        }
+        defer { close(parentFD) }
+        var parentInfo = stat()
+        guard fstat(parentFD, &parentInfo) == 0, parentInfo.st_mode & S_IFMT == S_IFDIR else {
+            throw ResourcePreflightError("Apple build lock parent is unsafe: \(parentURL.path)")
+        }
+        let coordinationName = ".\(lockURL.lastPathComponent).coordination"
+        let descriptor = openat(parentFD, coordinationName, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600))
         guard descriptor >= 0 else {
+            let coordinationURL = try coordinationURL(for: lockURL)
             throw ResourcePreflightError("Could not open Apple build lock coordination file: \(coordinationURL.path)")
         }
         defer { close(descriptor) }
@@ -312,24 +390,173 @@ public final class AppleXcodeBuildLock: @unchecked Sendable {
               info.st_mode & S_IFMT == S_IFREG,
               info.st_uid == geteuid(),
               info.st_nlink == 1 else {
+            let coordinationURL = try coordinationURL(for: lockURL)
             throw ResourcePreflightError("Apple build lock coordination file is unsafe: \(coordinationURL.path)")
         }
         guard fchmod(descriptor, mode_t(0o600)) == 0 else {
+            let coordinationURL = try coordinationURL(for: lockURL)
             throw ResourcePreflightError("Could not secure Apple build lock coordination file: \(coordinationURL.path)")
         }
         while flock(descriptor, LOCK_EX) == -1 {
             guard errno == EINTR else {
+                let coordinationURL = try coordinationURL(for: lockURL)
                 throw ResourcePreflightError("Could not coordinate Apple build lock: \(coordinationURL.path)")
             }
         }
         defer { _ = flock(descriptor, LOCK_UN) }
-        return try operation()
+        afterLockBeforePathValidation()
+        let coordination = Coordination(
+            parentFD: parentFD,
+            lockName: lockURL.lastPathComponent,
+            coordinationName: coordinationName,
+            coordinationDevice: info.st_dev,
+            coordinationInode: info.st_ino
+        )
+        guard coordination.validatePathIdentity() else {
+            throw ResourcePreflightError("Apple build lock coordination pathname changed: \(lockURL.path)")
+        }
+        let result = try operation(coordination)
+        guard coordination.validatePathIdentity() else {
+            throw ResourcePreflightError("Apple build lock coordination pathname changed: \(lockURL.path)")
+        }
+        return result
     }
 
-    private static func pathExistsNoFollow(_ path: String) -> Bool {
+    private static func parentDirectoryExistsNoFollow(_ path: String) -> Bool {
         var info = stat()
-        if lstat(path, &info) == 0 { return true }
+        if lstat(path, &info) == 0 { return info.st_mode & S_IFMT == S_IFDIR }
         return errno != ENOENT ? true : false
+    }
+
+    private static func lockDirectoryExists(_ coordination: Coordination) -> Bool {
+        var info = stat()
+        if fstatat(coordination.parentFD, coordination.lockName, &info, AT_SYMLINK_NOFOLLOW) == 0 {
+            return info.st_mode & S_IFMT == S_IFDIR
+        }
+        return errno != ENOENT
+    }
+
+    private static func openLockDirectory(_ coordination: Coordination) throws -> OpenedLockDirectory {
+        let descriptor = openat(
+            coordination.parentFD,
+            coordination.lockName,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
+        guard descriptor >= 0 else { throw ResourcePreflightError("Could not open Apple build lock directory.") }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_mode & S_IFMT == S_IFDIR else {
+            close(descriptor)
+            throw ResourcePreflightError("Apple build lock path is unsafe.")
+        }
+        let opened = OpenedLockDirectory(fd: descriptor, device: info.st_dev, inode: info.st_ino)
+        guard validateLockDirectory(opened, coordination: coordination) else {
+            close(descriptor)
+            throw ResourcePreflightError("Apple build lock directory changed while opening.")
+        }
+        return opened
+    }
+
+    private static func validateLockDirectory(
+        _ lockDirectory: OpenedLockDirectory,
+        coordination: Coordination
+    ) -> Bool {
+        var info = stat()
+        return fstatat(coordination.parentFD, coordination.lockName, &info, AT_SYMLINK_NOFOLLOW) == 0
+            && info.st_mode & S_IFMT == S_IFDIR
+            && info.st_dev == lockDirectory.device
+            && info.st_ino == lockDirectory.inode
+    }
+
+    private static func writeOwnership(_ data: Data, lockDirectoryFD: Int32) throws {
+        let temporaryName = ".owner-\(UUID().uuidString).tmp"
+        let descriptor = openat(
+            lockDirectoryFD,
+            temporaryName,
+            O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+            mode_t(0o600)
+        )
+        guard descriptor >= 0 else { throw ResourcePreflightError("Could not create Apple build lock metadata.") }
+        var shouldRemoveTemporary = true
+        defer {
+            close(descriptor)
+            if shouldRemoveTemporary { _ = unlinkat(lockDirectoryFD, temporaryName, 0) }
+        }
+        let wroteAll = data.withUnsafeBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress else { return true }
+            var offset = 0
+            while offset < bytes.count {
+                let amount = write(descriptor, base.advanced(by: offset), bytes.count - offset)
+                if amount > 0 { offset += amount; continue }
+                if amount == -1 && errno == EINTR { continue }
+                return false
+            }
+            return true
+        }
+        guard wroteAll, fsync(descriptor) == 0,
+              renameat(lockDirectoryFD, temporaryName, lockDirectoryFD, metadataFilename) == 0,
+              fsync(lockDirectoryFD) == 0 else {
+            throw ResourcePreflightError("Could not persist Apple build lock metadata.")
+        }
+        shouldRemoveTemporary = false
+    }
+
+    private static func removeLockDirectory(
+        _ lockDirectory: OpenedLockDirectory,
+        coordination: Coordination
+    ) throws {
+        // Darwin has no directory equivalent of pidfd-based, identity-bound
+        // unlink. A hostile same-UID process can still rename a pathname in
+        // the final syscall interval. Every detectable change fails closed;
+        // compliant runners cannot enter this interval because they hold this
+        // exact sidecar flock for all acquire/release/reconcile operations.
+        guard coordination.validatePathIdentity(),
+              validateLockDirectory(lockDirectory, coordination: coordination),
+              unlinkat(lockDirectory.fd, metadataFilename, 0) == 0,
+              validateLockDirectory(lockDirectory, coordination: coordination),
+              coordination.validatePathIdentity(),
+              unlinkat(coordination.parentFD, coordination.lockName, AT_REMOVEDIR) == 0 else {
+            throw ResourcePreflightError("Could not safely remove Apple build lock directory.")
+        }
+    }
+
+    private static func removeEmptyLockDirectory(
+        _ lockDirectory: OpenedLockDirectory,
+        coordination: Coordination
+    ) throws {
+        guard coordination.validatePathIdentity(),
+              validateLockDirectory(lockDirectory, coordination: coordination),
+              unlinkat(coordination.parentFD, coordination.lockName, AT_REMOVEDIR) == 0 else {
+            throw ResourcePreflightError("Could not safely remove empty Apple build lock directory.")
+        }
+    }
+
+    private static func sameFile(_ left: stat, _ right: stat) -> Bool {
+        left.st_dev == right.st_dev && left.st_ino == right.st_ino
+    }
+
+    private struct OpenedLockDirectory {
+        let fd: Int32
+        let device: dev_t
+        let inode: ino_t
+    }
+
+    private struct Coordination {
+        let parentFD: Int32
+        let lockName: String
+        let coordinationName: String
+        let coordinationDevice: dev_t
+        let coordinationInode: ino_t
+
+        func validatePathIdentity() -> Bool {
+            var info = stat()
+            return fstatat(parentFD, coordinationName, &info, AT_SYMLINK_NOFOLLOW) == 0
+                && info.st_mode & S_IFMT == S_IFREG
+                && info.st_dev == coordinationDevice
+                && info.st_ino == coordinationInode
+                && info.st_uid == geteuid()
+                && info.st_nlink == 1
+        }
     }
 
     deinit {

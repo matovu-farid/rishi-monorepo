@@ -256,6 +256,43 @@ final class ResourcePreflightTests: XCTestCase {
         try replacement.release()
     }
 
+    func testSidecarReplacementAfterFlockFailsClosedBeforeReplacementLockRemoval() throws {
+        let lockPath = temporaryLockPath()
+        let coordinationURL = try AppleXcodeBuildLock.coordinationURLForTesting(lockPath: lockPath)
+        defer {
+            try? FileManager.default.removeItem(at: lockPath)
+            try? FileManager.default.removeItem(at: coordinationURL)
+        }
+        let original = try AppleXcodeBuildLock.acquire(environment: lockEnvironment(lockPath))
+        let replacementOwnership = AppleXcodeBuildLockOwnership(
+            path: lockPath.path,
+            token: "replacement-token",
+            generation: "replacement-generation",
+            owner: OwnedProcessIdentity(pid: 2_147_483_647, birthTimeSeconds: 7, birthTimeMicroseconds: 8)
+        )
+
+        XCTAssertThrowsError(try AppleXcodeBuildLock.reconcileRetainedLock(
+            ownership: original.ownership,
+            liveIdentity: { _ in nil },
+            afterCoordinationLockBeforePathValidation: {
+                try! FileManager.default.removeItem(at: coordinationURL)
+                FileManager.default.createFile(atPath: coordinationURL.path, contents: Data(), attributes: [.posixPermissions: 0o600])
+                try! FileManager.default.removeItem(at: lockPath)
+                try! FileManager.default.createDirectory(at: lockPath, withIntermediateDirectories: false)
+                try! JSONEncoder().encode(replacementOwnership).write(
+                    to: lockPath.appendingPathComponent("owner.json"),
+                    options: .atomic
+                )
+            }
+        ))
+
+        let persisted = try JSONDecoder().decode(
+            AppleXcodeBuildLockOwnership.self,
+            from: Data(contentsOf: lockPath.appendingPathComponent("owner.json"))
+        )
+        XCTAssertEqual(persisted, replacementOwnership)
+    }
+
     private func temporaryLockPath() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("rishi-build-lock-\(UUID().uuidString)", isDirectory: true)

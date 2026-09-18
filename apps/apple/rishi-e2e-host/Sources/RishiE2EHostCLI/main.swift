@@ -29,11 +29,12 @@ struct RishiE2EHostCLI {
               baseURL.password == nil else {
             throw CLIError.invalidProductionEndpoint
         }
-        let accountClient = TestAccountClient(configuration: .init(
+        let accountConfiguration = TestAccountClient.Configuration(
             baseURL: baseURL,
             testAuthSecret: try required(environment, key: "RISHI_E2E_TEST_AUTH_SECRET"),
             testDomain: try required(environment, key: "RISHI_E2E_TEST_DOMAIN")
-        ))
+        )
+        let accountClient = TestAccountClient(configuration: accountConfiguration)
         if let cleanupArgument = arguments.first(where: { $0.hasPrefix("--cleanup-manifest=") }) {
             let path = String(cleanupArgument.dropFirst("--cleanup-manifest=".count))
             try await cleanupManifest(at: URL(fileURLWithPath: path), with: accountClient)
@@ -68,7 +69,6 @@ struct RishiE2EHostCLI {
             usePreparedProducts: usePreparedProducts
         )
         let peerPreflightRunner = XCTestPeerProcessRunner(configuration: peerConfiguration)
-        var keepBuildLockForRecovery = false
         // Check resources, Xcode, and the exact simulator before creating any
         // run artifacts, starting a relay, or taking the global build lock.
         // An unsafe machine must not accumulate state on each rejected
@@ -80,25 +80,10 @@ struct RishiE2EHostCLI {
             return
         }
 
-        let buildLock = try AppleXcodeBuildLock.acquire()
-        defer {
-            if !keepBuildLockForRecovery { try? buildLock.release() }
-        }
-        let relay = RendezvousRelayServer()
-        let relayConfiguration = try relay.start()
-        defer { relay.stop() }
-        let peerRunner = XCTestPeerProcessRunner(configuration: .init(
-            projectPath: projectPath,
-            simulatorID: simulatorID,
-            derivedDataRoot: derivedDataRoot,
-            resultBundleRoot: resultBundleRoot,
-            allowSimulatorReset: allowReset,
-            fixturePath: nil,
-            rendezvousEnvironment: relayConfiguration.environment,
-            usePreparedProducts: usePreparedProducts
-        ))
-
-        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        let recoveryJournal = try SharedReadingRecoveryJournal(
+            url: runRoot.appendingPathComponent("recovery.json"),
+            runID: runID
+        )
         var runCompleted = false
         defer {
             removeStagedFixture(for: fixtureURL)
@@ -111,6 +96,28 @@ struct RishiE2EHostCLI {
                 }
             }
         }
+        let preparedBuildLock = try SharedReadingHost.prepareBuildLock(
+            recoveryJournal: recoveryJournal,
+            environment: environment
+        )
+        let relay = RendezvousRelayServer()
+        let relayConfiguration = try relay.start()
+        defer { relay.stop() }
+        let liveAccountClient = TestAccountClient(
+            configuration: accountConfiguration,
+            lifecycleRecorder: recoveryJournal
+        )
+        let peerRunner = XCTestPeerProcessRunner(configuration: .init(
+            projectPath: projectPath,
+            simulatorID: simulatorID,
+            derivedDataRoot: derivedDataRoot,
+            resultBundleRoot: resultBundleRoot,
+            allowSimulatorReset: allowReset,
+            fixturePath: nil,
+            rendezvousEnvironment: relayConfiguration.environment,
+            usePreparedProducts: usePreparedProducts
+        ), processRunner: FoundationProcessRunner(recorder: recoveryJournal))
+
         let manifestURL = runRoot.appendingPathComponent("manifest.json")
         try FileManager.default.createDirectory(at: resultBundleRoot, withIntermediateDirectories: true)
         let host = SharedReadingHost(
@@ -122,10 +129,11 @@ struct RishiE2EHostCLI {
                 participantDestination: .iPhone17Pro,
                 fixturePath: fixtureURL
             ),
-            accounts: accountClient,
+            accounts: liveAccountClient,
             peers: peerRunner,
             rendezvous: relay,
-            fixtureProvisioner: FixtureBookProvisioner(configuration: .init(baseURL: baseURL))
+            fixtureProvisioner: FixtureBookProvisioner(configuration: .init(baseURL: baseURL)),
+            preparedBuildLock: preparedBuildLock
         )
         let runTask = Task {
             await host.runReport(preflightAlreadyCompleted: true)
@@ -147,7 +155,6 @@ struct RishiE2EHostCLI {
                 return try await group.next()!
             }
             guard report.succeeded else {
-                if report.cleanupFailed { keepBuildLockForRecovery = true }
                 if let primaryFailure = report.primaryFailure {
                     FileHandle.standardError.write(Data("Shared-reading primary failure: \(primaryFailure.localizedDescription)\n".utf8))
                 }
@@ -165,12 +172,6 @@ struct RishiE2EHostCLI {
             // that phase has returned; otherwise a second run could start
             // while the cancelled XCTest process still owns resources.
             let report = await runTask.value
-            // A cleanup failure means an owned process, account, or manifest
-            // may still require recovery. Keep the shared build lock so a
-            // second run cannot collide with retained derived-data state.
-            if report.cleanupFailed {
-                keepBuildLockForRecovery = true
-            }
             if let primaryFailure = report.primaryFailure {
                 FileHandle.standardError.write(Data("Shared-reading primary failure: \(primaryFailure.localizedDescription)\n".utf8))
             }

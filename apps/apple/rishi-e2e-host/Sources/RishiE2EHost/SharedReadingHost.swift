@@ -449,6 +449,20 @@ extension AppleXcodeBuildLock: AppleXcodeBuildLockHolding {}
 private struct BuildLockLifecycle: Sendable {
     let recorder: any BuildLockOwnershipRecording
     let acquire: @Sendable () throws -> any AppleXcodeBuildLockHolding
+    let ownershipAlreadyRecorded: Bool
+}
+
+public struct SharedReadingPreparedBuildLock: @unchecked Sendable {
+    fileprivate let lock: any AppleXcodeBuildLockHolding
+    fileprivate let recorder: any BuildLockOwnershipRecording
+
+    fileprivate init(
+        lock: any AppleXcodeBuildLockHolding,
+        recorder: any BuildLockOwnershipRecording
+    ) {
+        self.lock = lock
+        self.recorder = recorder
+    }
 }
 
 public struct SharedReadingHost: Sendable {
@@ -483,25 +497,39 @@ public struct SharedReadingHost: Sendable {
     private let fixtureProvisioner: (any FixtureBookProvisioning)?
     private let buildLockLifecycle: BuildLockLifecycle?
 
-    public init(
+    init(
         configuration: Configuration,
         accounts: any TestAccountManaging,
         peers: any SharedReadingPeerRunner,
         rendezvous: any SharedReadingRendezvous = RendezvousFileStore(),
-        fixtureProvisioner: (any FixtureBookProvisioning)? = nil,
-        recoveryJournal: SharedReadingRecoveryJournal? = nil
+        fixtureProvisioner: (any FixtureBookProvisioning)? = nil
     ) {
         self.configuration = configuration
         self.accounts = accounts
         self.peers = peers
         self.rendezvous = rendezvous
         self.fixtureProvisioner = fixtureProvisioner
-        self.buildLockLifecycle = recoveryJournal.map { journal in
-            BuildLockLifecycle(
-                recorder: journal,
-                acquire: { try AppleXcodeBuildLock.acquire() }
-            )
-        }
+        self.buildLockLifecycle = nil
+    }
+
+    public init(
+        configuration: Configuration,
+        accounts: any TestAccountManaging,
+        peers: any SharedReadingPeerRunner,
+        rendezvous: any SharedReadingRendezvous = RendezvousFileStore(),
+        fixtureProvisioner: (any FixtureBookProvisioning)? = nil,
+        preparedBuildLock: SharedReadingPreparedBuildLock
+    ) {
+        self.configuration = configuration
+        self.accounts = accounts
+        self.peers = peers
+        self.rendezvous = rendezvous
+        self.fixtureProvisioner = fixtureProvisioner
+        self.buildLockLifecycle = BuildLockLifecycle(
+            recorder: preparedBuildLock.recorder,
+            acquire: { preparedBuildLock.lock },
+            ownershipAlreadyRecorded: true
+        )
     }
 
     init(
@@ -520,8 +548,39 @@ public struct SharedReadingHost: Sendable {
         self.fixtureProvisioner = fixtureProvisioner
         self.buildLockLifecycle = BuildLockLifecycle(
             recorder: buildLockRecorder,
-            acquire: acquireBuildLock
+            acquire: acquireBuildLock,
+            ownershipAlreadyRecorded: false
         )
+    }
+
+    public static func prepareBuildLock(
+        recoveryJournal: SharedReadingRecoveryJournal,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> SharedReadingPreparedBuildLock {
+        try prepareBuildLock(
+            recorder: recoveryJournal,
+            acquire: { try AppleXcodeBuildLock.acquire(environment: environment) }
+        )
+    }
+
+    static func prepareBuildLock(
+        recorder: any BuildLockOwnershipRecording,
+        acquire: @escaping @Sendable () throws -> any AppleXcodeBuildLockHolding
+    ) throws -> SharedReadingPreparedBuildLock {
+        let acquired = try acquire()
+        do {
+            try recorder.recordBuildLock(acquired.ownership)
+            return SharedReadingPreparedBuildLock(lock: acquired, recorder: recorder)
+        } catch {
+            do {
+                try acquired.release()
+            } catch {
+                throw ResourcePreflightError(
+                    "Could not record or release Apple build lock \(acquired.ownership.path)"
+                )
+            }
+            throw error
+        }
     }
 
     @discardableResult
@@ -547,21 +606,25 @@ public struct SharedReadingHost: Sendable {
         do {
             if let lifecycle = buildLockLifecycle {
                 let acquired = try lifecycle.acquire()
-                do {
-                    try lifecycle.recorder.recordBuildLock(acquired.ownership)
+                if lifecycle.ownershipAlreadyRecorded {
                     buildLock = acquired
-                } catch {
-                    // Ownership is not recoverable until the exact journal
-                    // entry exists. Release this generation before any host
-                    // action and surface either failure to the caller.
+                } else {
                     do {
-                        try acquired.release()
+                        try lifecycle.recorder.recordBuildLock(acquired.ownership)
+                        buildLock = acquired
                     } catch {
-                        throw ResourcePreflightError(
-                            "Could not record or release Apple build lock \(acquired.ownership.path)"
-                        )
+                        // Ownership is not recoverable until the exact journal
+                        // entry exists. Release this generation before any host
+                        // action and surface either failure to the caller.
+                        do {
+                            try acquired.release()
+                        } catch {
+                            throw ResourcePreflightError(
+                                "Could not record or release Apple build lock \(acquired.ownership.path)"
+                            )
+                        }
+                        throw error
                     }
-                    throw error
                 }
             }
             if !preflightAlreadyCompleted {
