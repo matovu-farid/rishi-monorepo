@@ -88,6 +88,43 @@ final class ProcessRunnerTests: XCTestCase {
         ))
     }
 
+    func testCleanupSignalsEscapedObservedDescendantWhenLeaderPIDWasReused() async throws {
+        let originalLeader = OwnedProcessIdentity(pid: 720, birthTimeSeconds: 1, birthTimeMicroseconds: 2)
+        let reusedLeader = OwnedProcessIdentity(pid: 720, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+        let escapedDescendant = OwnedProcessIdentity(pid: 721, birthTimeSeconds: 5, birthTimeMicroseconds: 6)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        let state = CleanupProcessState(
+            identities: [reusedLeader.pid: reusedLeader, escapedDescendant.pid: escapedDescendant],
+            descendant: escapedDescendant,
+            writers: [stdout.fileHandleForWriting, stderr.fileHandleForWriting]
+        )
+        let clock = ContinuousClock()
+        let started = clock.now
+
+        let result = await FoundationProcessRunner.runCleanupPathForTesting(
+            group: OwnedProcessGroup(processGroupID: originalLeader.pid, leader: originalLeader),
+            observed: [originalLeader, escapedDescendant],
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            liveIdentity: { state.identity(for: $0) },
+            members: { _ in [] },
+            processGroup: { _ in nil },
+            signal: { state.signal(pid: $0, signal: $1) },
+            waitForRoot: { _ in 0 }
+        )
+
+        XCTAssertLessThan(clock.now - started, .seconds(1))
+        XCTAssertTrue(result.waitThrewCleanupError)
+        XCTAssertTrue(result.ownedProcessesAreAbsent)
+        XCTAssertTrue(result.readersFinished)
+        XCTAssertEqual(state.signals(for: escapedDescendant.pid), [SIGTERM, SIGKILL])
+        XCTAssertTrue(state.signals(for: -originalLeader.pid).isEmpty)
+        XCTAssertTrue(state.signals(for: reusedLeader.pid).isEmpty)
+        XCTAssertNil(state.identity(for: escapedDescendant.pid))
+        XCTAssertTrue(state.writersWereClosed)
+    }
+
     func testGateEOFExitsWithStatus125WithoutExecutingRequestedChild() throws {
         let marker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: marker) }
@@ -240,6 +277,44 @@ private final class ProcessRecorder: OwnedProcessRecording, @unchecked Sendable 
 
 private enum ProcessRecorderError: Error { case failed }
 private enum ProcessInspectionTestError: Error { case unavailable }
+
+private final class CleanupProcessState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var identities: [Int32: OwnedProcessIdentity]
+    private var recordedSignals: [(Int32, Int32)] = []
+    private let descendant: OwnedProcessIdentity
+    private var writers: [FileHandle]
+    private var closedWriters = false
+
+    init(identities: [Int32: OwnedProcessIdentity], descendant: OwnedProcessIdentity, writers: [FileHandle]) {
+        self.identities = identities
+        self.descendant = descendant
+        self.writers = writers
+    }
+
+    func identity(for pid: Int32) -> OwnedProcessIdentity? {
+        lock.withLock { identities[pid] }
+    }
+
+    func signal(pid: Int32, signal: Int32) -> Int32 {
+        lock.withLock {
+            recordedSignals.append((pid, signal))
+            if pid == descendant.pid, signal == SIGKILL {
+                identities[pid] = nil
+                writers.forEach { try? $0.close() }
+                writers.removeAll()
+                closedWriters = true
+            }
+        }
+        return 0
+    }
+
+    func signals(for pid: Int32) -> [Int32] {
+        lock.withLock { recordedSignals.compactMap { $0.0 == pid ? $0.1 : nil } }
+    }
+
+    var writersWereClosed: Bool { lock.withLock { closedWriters } }
+}
 
 private final class SequencedValues<Value>: @unchecked Sendable {
     private let lock = NSLock()
