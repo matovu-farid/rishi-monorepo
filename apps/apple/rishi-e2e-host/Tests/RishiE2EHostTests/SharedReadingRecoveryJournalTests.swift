@@ -808,12 +808,35 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         try journal.recordBuildLock(lock)
 
         XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
-        XCTAssertThrowsError(try journal.recordVerifiedBuildLockRelease(AppleXcodeBuildLockOwnership(
-            path: lock.path,
-            token: lock.token,
-            generation: "generation-2",
-            owner: lock.owner
-        )))
+        let mismatches = [
+            AppleXcodeBuildLockOwnership(
+                path: "\(lock.path)-replacement",
+                token: lock.token,
+                generation: lock.generation,
+                owner: lock.owner
+            ),
+            AppleXcodeBuildLockOwnership(
+                path: lock.path,
+                token: "token-2",
+                generation: lock.generation,
+                owner: lock.owner
+            ),
+            AppleXcodeBuildLockOwnership(
+                path: lock.path,
+                token: lock.token,
+                generation: "generation-2",
+                owner: lock.owner
+            ),
+            AppleXcodeBuildLockOwnership(
+                path: lock.path,
+                token: lock.token,
+                generation: lock.generation,
+                owner: OwnedProcessIdentity(pid: 43, birthTimeSeconds: 3, birthTimeMicroseconds: 4)
+            ),
+        ]
+        for mismatch in mismatches {
+            XCTAssertThrowsError(try journal.recordVerifiedBuildLockRelease(mismatch))
+        }
         XCTAssertThrowsError(try journal.finalizeAfterSuccessfulCleanup())
         try journal.recordVerifiedBuildLockRelease(lock)
         try journal.finalizeAfterSuccessfulCleanup()
