@@ -158,44 +158,51 @@ public enum SharedReadingRecoveryJournalError: Error, Equatable {
     case cleanupIncomplete
     case journalRemovalFailed
     case permissionsNotApplied
+    case journalFinalized
 }
 
 public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccountLifecycleRecording, OwnedProcessRecording {
     public let url: URL
 
     private static let inProcessInterprocessLock = NSLock()
+    private static let maximumEncodedJournalBytes = 1_048_576
     private let lock = NSLock()
     private let rootDirectoryFD: Int32
     private let runDirectoryFD: Int32
-    private let lockFD: Int32
     private let runDirectoryName: String
     private let journalFilename: String
     private let runDirectoryDevice: dev_t
     private let runDirectoryInode: ino_t
     private var state: RecoveryState
+    private var hasObservedJournal: Bool
+    private var finalized = false
 
     public init(url: URL, runID: String) throws {
         let storage = try Self.openStorage(for: url)
         do {
-            let decoded = try Self.withInterprocessLock(storage.lockFD) {
+            let (decoded, hasObservedJournal) = try Self.withInterprocessLock(storage.runDirectoryFD) {
                 try Self.validateRunDirectory(storage)
-                return try Self.loadState(
+                let hasJournal = try Self.fileKind(
+                    at: storage.journalFilename,
+                    directoryFD: storage.runDirectoryFD
+                ) != nil
+                let state = try Self.loadState(
                     from: storage.runDirectoryFD,
                     filename: storage.journalFilename,
                     runID: runID
                 )
+                return (state, hasJournal)
             }
             self.url = url
             self.rootDirectoryFD = storage.rootDirectoryFD
             self.runDirectoryFD = storage.runDirectoryFD
-            self.lockFD = storage.lockFD
             self.runDirectoryName = storage.runDirectoryName
             self.journalFilename = storage.journalFilename
             self.runDirectoryDevice = storage.runDirectoryDevice
             self.runDirectoryInode = storage.runDirectoryInode
             self.state = decoded
+            self.hasObservedJournal = hasObservedJournal
         } catch {
-            close(storage.lockFD)
             close(storage.runDirectoryFD)
             close(storage.rootDirectoryFD)
             throw error
@@ -203,7 +210,6 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     }
 
     deinit {
-        close(lockFD)
         close(runDirectoryFD)
         close(rootDirectoryFD)
     }
@@ -376,7 +382,8 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
 
     public func finalizeAfterSuccessfulCleanup() throws {
         try lock.withLock {
-            try Self.withInterprocessLock(lockFD) {
+            guard !finalized else { throw SharedReadingRecoveryJournalError.journalFinalized }
+            try Self.withInterprocessLock(runDirectoryFD) {
                 try validateRunDirectory()
                 let current = try Self.loadState(from: runDirectoryFD, filename: journalFilename, runID: state.runID)
                 guard current.isEmpty else {
@@ -384,6 +391,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
                 }
                 guard let kind = try Self.fileKind(at: journalFilename, directoryFD: runDirectoryFD) else {
                     state = current
+                    finalized = true
                     return
                 }
                 guard kind == S_IFREG else {
@@ -396,12 +404,13 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
                     throw SharedReadingRecoveryJournalError.journalRemovalFailed
                 }
                 state = current
+                finalized = true
             }
         }
     }
 
     public static func unresolvedArtifact(in root: URL) throws -> URL? {
-        let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        let rootFD = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         if rootFD < 0 {
             if errno == ENOENT { return nil }
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
@@ -412,7 +421,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
                 guard try fileKind(at: name, directoryFD: rootFD) == S_IFDIR else {
                     throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
                 }
-                let childFD = openat(rootFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+                let childFD = openat(rootFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                 guard childFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
                 defer { close(childFD) }
                 for candidate in ["recovery.json", "manifest.json"] {
@@ -429,21 +438,33 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
 
     private func mutate(_ update: (inout RecoveryState) throws -> Void) throws {
         try lock.withLock {
-            try Self.withInterprocessLock(lockFD) {
+            guard !finalized else { throw SharedReadingRecoveryJournalError.journalFinalized }
+            try Self.withInterprocessLock(runDirectoryFD) {
                 try validateRunDirectory()
+                let journalExists = try Self.fileKind(at: journalFilename, directoryFD: runDirectoryFD) != nil
+                guard journalExists || !hasObservedJournal else {
+                    throw SharedReadingRecoveryJournalError.journalFinalized
+                }
                 var candidate = try Self.loadState(from: runDirectoryFD, filename: journalFilename, runID: state.runID)
                 try update(&candidate)
                 try Self.writeAtomically(candidate, to: runDirectoryFD, filename: journalFilename)
                 state = candidate
+                hasObservedJournal = true
             }
         }
+    }
+
+    func descriptorFlagsForTesting() -> [Int32] {
+        [
+            fcntl(rootDirectoryFD, F_GETFD),
+            fcntl(runDirectoryFD, F_GETFD),
+        ]
     }
 
     private func validateRunDirectory() throws {
         try Self.validateRunDirectory(Storage(
             rootDirectoryFD: rootDirectoryFD,
             runDirectoryFD: runDirectoryFD,
-            lockFD: lockFD,
             runDirectoryName: runDirectoryName,
             journalFilename: journalFilename,
             runDirectoryDevice: runDirectoryDevice,
@@ -464,7 +485,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         let fileFD = openat(
             directoryFD,
             temporaryName,
-            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
             mode_t(S_IRUSR | S_IWUSR)
         )
         guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.permissionsNotApplied }
@@ -514,7 +535,7 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         }
     }
 
-    private static func readAll(from fileDescriptor: Int32) throws -> Data {
+    private static func readAll(from fileDescriptor: Int32, maximumBytes: Int) throws -> Data {
         var result = Data()
         var buffer = [UInt8](repeating: 0, count: 8_192)
         while true {
@@ -522,6 +543,9 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             if count == 0 { return result }
             if count < 0 {
                 if errno == EINTR { continue }
+                throw SharedReadingRecoveryJournalError.malformedArtifact
+            }
+            guard Int(count) <= maximumBytes - result.count else {
                 throw SharedReadingRecoveryJournalError.malformedArtifact
             }
             result.append(contentsOf: buffer.prefix(Int(count)))
@@ -533,15 +557,21 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
             return RecoveryState(runID: runID)
         }
         guard kind == S_IFREG else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-        let fileFD = openat(directoryFD, filename, O_RDONLY | O_NOFOLLOW)
+        let fileFD = openat(directoryFD, filename, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard fileFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
         defer { close(fileFD) }
         var details = stat()
         guard fstat(fileFD, &details) == 0, details.st_mode & S_IFMT == S_IFREG else {
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
+        guard details.st_size >= 0, details.st_size <= off_t(maximumEncodedJournalBytes) else {
+            throw SharedReadingRecoveryJournalError.malformedArtifact
+        }
         do {
-            let decoded = try JSONDecoder().decode(RecoveryState.self, from: try readAll(from: fileFD))
+            let decoded = try JSONDecoder().decode(
+                RecoveryState.self,
+                from: try readAll(from: fileFD, maximumBytes: maximumEncodedJournalBytes)
+            )
             guard decoded.runID == runID else { throw SharedReadingRecoveryJournalError.runIDMismatch }
             return decoded
         } catch let error as SharedReadingRecoveryJournalError {
@@ -551,16 +581,16 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         }
     }
 
-    private static func withInterprocessLock<T>(_ lockFD: Int32, _ operation: () throws -> T) throws -> T {
+    private static func withInterprocessLock<T>(_ directoryFD: Int32, _ operation: () throws -> T) throws -> T {
         try inProcessInterprocessLock.withLock {
-            guard flock(lockFD, LOCK_EX) == 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-            defer { _ = flock(lockFD, LOCK_UN) }
+            guard flock(directoryFD, LOCK_EX) == 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
+            defer { _ = flock(directoryFD, LOCK_UN) }
             return try operation()
         }
     }
 
     private static func withDirectoryEntries<T>(_ directoryFD: Int32, _ operation: ([String]) throws -> T) throws -> T {
-        let duplicateFD = dup(directoryFD)
+        let duplicateFD = fcntl(directoryFD, F_DUPFD_CLOEXEC, 0)
         guard duplicateFD >= 0, let directory = fdopendir(duplicateFD) else {
             if duplicateFD >= 0 { close(duplicateFD) }
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
@@ -590,41 +620,27 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
         guard !runName.isEmpty, runName != ".", !filename.isEmpty, filename != "." else {
             throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
         }
-        let rootFD = open(rootDirectory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        let rootFD = open(rootDirectory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard rootFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
         do {
             if mkdirat(rootFD, runName, mode_t(S_IRWXU)) != 0 && errno != EEXIST {
                 throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
             }
-            let runFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            let runFD = openat(rootFD, runName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             guard runFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
             do {
                 var details = stat()
                 guard fstat(runFD, &details) == 0, details.st_mode & S_IFMT == S_IFDIR else {
                     throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
                 }
-                let lockName = ".\(filename).lock"
-                let lockFD = openat(runFD, lockName, O_RDWR | O_CREAT | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
-                guard lockFD >= 0 else { throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact }
-                do {
-                    var lockDetails = stat()
-                    guard fstat(lockFD, &lockDetails) == 0, lockDetails.st_mode & S_IFMT == S_IFREG,
-                          fchmod(lockFD, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
-                        throw SharedReadingRecoveryJournalError.unsafeRecoveryArtifact
-                    }
-                    return Storage(
-                        rootDirectoryFD: rootFD,
-                        runDirectoryFD: runFD,
-                        lockFD: lockFD,
-                        runDirectoryName: runName,
-                        journalFilename: filename,
-                        runDirectoryDevice: details.st_dev,
-                        runDirectoryInode: details.st_ino
-                    )
-                } catch {
-                    close(lockFD)
-                    throw error
-                }
+                return Storage(
+                    rootDirectoryFD: rootFD,
+                    runDirectoryFD: runFD,
+                    runDirectoryName: runName,
+                    journalFilename: filename,
+                    runDirectoryDevice: details.st_dev,
+                    runDirectoryInode: details.st_ino
+                )
             } catch {
                 close(runFD)
                 throw error
@@ -648,7 +664,6 @@ public final class SharedReadingRecoveryJournal: @unchecked Sendable, TestAccoun
     private struct Storage {
         let rootDirectoryFD: Int32
         let runDirectoryFD: Int32
-        let lockFD: Int32
         let runDirectoryName: String
         let journalFilename: String
         let runDirectoryDevice: dev_t

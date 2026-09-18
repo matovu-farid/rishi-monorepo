@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import RishiE2EHost
@@ -298,6 +299,70 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         writing.value = false
         XCTAssertEqual(readerDone.wait(timeout: .now() + 5), .success)
         XCTAssertTrue(errors.values.isEmpty)
+    }
+
+    func testFinalizationLeavesRunDirectoryEmptyAndFinalizedInstanceCannotResurrectJournal() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runDirectory = root.appendingPathComponent("rishi-shared-reading-run")
+        let url = runDirectory.appendingPathComponent("recovery.json")
+        let first = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+        let second = try SharedReadingRecoveryJournal(url: url, runID: "run-1")
+
+        try first.recordProvisioningAddress("owner@example.test", role: .owner)
+        try second.recordOwnedProcess(OwnedProcessIdentity(
+            pid: 42,
+            birthTimeSeconds: 1,
+            birthTimeMicroseconds: 2
+        ))
+        let state = try readJSONState(at: url)
+        XCTAssertEqual((state["accounts"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((state["processes"] as? [[String: Any]])?.count, 1)
+
+        try first.recordVerifiedDeletion("owner@example.test")
+        try second.recordVerifiedProcessAbsence(OwnedProcessIdentity(
+            pid: 42,
+            birthTimeSeconds: 1,
+            birthTimeMicroseconds: 2
+        ))
+        try first.finalizeAfterSuccessfulCleanup()
+
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: runDirectory.path), [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertThrowsError(try first.recordOwnedProcess(OwnedProcessIdentity(
+            pid: 43,
+            birthTimeSeconds: 3,
+            birthTimeMicroseconds: 4
+        )))
+        XCTAssertThrowsError(try second.recordOwnedProcess(OwnedProcessIdentity(
+            pid: 44,
+            birthTimeSeconds: 5,
+            birthTimeMicroseconds: 6
+        )))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testOversizedSparseRecoveryArtifactFailsClosed() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("rishi-shared-reading-run/recovery.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(S_IRUSR | S_IWUSR))
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        defer { close(descriptor) }
+        XCTAssertEqual(ftruncate(descriptor, off_t(64 * 1_024 * 1_024)), 0)
+
+        XCTAssertThrowsError(try SharedReadingRecoveryJournal(url: url, runID: "run-1")) { error in
+            XCTAssertEqual(error as? SharedReadingRecoveryJournalError, .malformedArtifact)
+        }
+    }
+
+    func testJournalPersistentDescriptorsAreCloseOnExec() throws {
+        let journal = try makeJournal()
+
+        let flags = journal.descriptorFlagsForTesting()
+        XCTAssertEqual(flags.count, 2)
+        XCTAssertTrue(flags.allSatisfy { $0 & FD_CLOEXEC != 0 })
     }
 
     func testJournalFinalizesOnlyAfterExactVerifiedProcessGroupAbsence() throws {
