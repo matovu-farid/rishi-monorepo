@@ -269,7 +269,7 @@ final class SharedReadingHostTests: XCTestCase {
             rendezvous: rendezvous
         )
 
-        let report = await host.runReport()
+        let report = try await host.runReport()
 
         XCTAssertEqual(report.primaryFailure, .processFailed(role: .owner, status: 9))
         XCTAssertTrue(report.cleanupFailed)
@@ -298,7 +298,7 @@ final class SharedReadingHostTests: XCTestCase {
             rendezvous: rendezvous
         )
 
-        let report = await host.runReport()
+        let report = try await host.runReport()
 
         XCTAssertEqual(report.primaryFailure, .processFailed(role: .owner, status: 9))
         XCTAssertFalse(events.values.contains("launch:participant"))
@@ -346,7 +346,7 @@ final class SharedReadingHostTests: XCTestCase {
             }
         )
 
-        let report = await host.runReport()
+        let report = try await host.runReport()
 
         XCTAssertNotNil(report.primaryFailure)
         XCTAssertEqual(Array(events.values.prefix(3)), ["lock:acquire", "journal:record-lock", "lock:release"])
@@ -373,7 +373,7 @@ final class SharedReadingHostTests: XCTestCase {
             }
         )
 
-        let report = await host.runReport()
+        let report = try await host.runReport()
 
         XCTAssertTrue(report.cleanupFailed)
         XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
@@ -398,7 +398,7 @@ final class SharedReadingHostTests: XCTestCase {
             }
         )
 
-        let report = await host.runReport()
+        let report = try await host.runReport()
 
         XCTAssertTrue(report.cleanupFailed)
         XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
@@ -488,6 +488,70 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertEqual(outcomes.filter { !$0 }.count, 1)
     }
 
+    func testPreparedHostCanRunOnlyOnceSequentiallyWithoutRepeatingSideEffects() async throws {
+        let events = EventRecorder()
+        let prepared = try SharedReadingHost.prepareBuildLock(
+            recorder: FakeBuildLockRecorder(events: events),
+            acquire: { FakeBuildLock(events: events) }
+        )
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = try makeHost(preparedBuildLock: prepared, events: events, manifestURL: manifestURL)
+
+        _ = try await host.runReport()
+        let eventsAfterFirstRun = events.values
+        do {
+            _ = try await host.runReport()
+            XCTFail("A second host execution must throw")
+        } catch {
+            XCTAssertEqual(error as? HostError, .alreadyExecuted)
+        }
+
+        XCTAssertEqual(events.values, eventsAfterFirstRun)
+        XCTAssertEqual(events.values.filter { $0 == "account:preflight" }.count, 1)
+        XCTAssertEqual(events.values.filter { $0 == "lock:release" }.count, 1)
+    }
+
+    func testConcurrentHostExecutionRejectsSecondCallBeforeAnySideEffect() async throws {
+        let events = EventRecorder()
+        let barrier = RunPreflightBarrier()
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+        let host = SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: HoldingPreflightAccounts(events: events, barrier: barrier),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events)
+        )
+
+        let first = Task {
+            do {
+                _ = try await host.runReport()
+                return true
+            } catch {
+                return false
+            }
+        }
+        await barrier.waitUntilEntered()
+        let second = Task {
+            do {
+                _ = try await host.runReport()
+                return true
+            } catch {
+                return false
+            }
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        let entriesBeforeRelease = await barrier.entryCount
+        await barrier.release()
+        let outcomes = await [first.value, second.value]
+
+        XCTAssertEqual(entriesBeforeRelease, 1)
+        XCTAssertEqual(outcomes.filter { $0 }.count, 1)
+        XCTAssertEqual(outcomes.filter { !$0 }.count, 1)
+        XCTAssertEqual(events.values.filter { $0 == "account:preflight" }.count, 1)
+    }
+
     func testUnprovenCleanupTransfersPreparedLockWithoutRedundantJournalMutation() async throws {
         let events = EventRecorder()
         weak var releasedLock: FakeBuildLock?
@@ -509,7 +573,7 @@ final class SharedReadingHostTests: XCTestCase {
                 preparedBuildLock: prepared
             )
 
-            let report = await host.runReport()
+            let report = try await host.runReport()
 
             XCTAssertTrue(report.cleanupFailed)
             XCTAssertEqual(events.values.filter { $0 == "journal:record-lock" }.count, 1)
@@ -621,6 +685,18 @@ final class SharedReadingHostTests: XCTestCase {
         let prepareIndex = try XCTUnwrap(source.range(of: "SharedReadingHost.withPreparedBuildLockForHost(")?.lowerBound)
         let relayStartIndex = try XCTUnwrap(source.range(of: "let relayConfiguration = try relay.start()")?.lowerBound)
         XCTAssertLessThan(prepareIndex, relayStartIndex)
+    }
+
+    func testRawPreparedBuildLockFactoryIsNotPublicAPI() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot.appendingPathComponent("Sources/RishiE2EHost/SharedReadingHost.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("public static func prepareBuildLock("))
+        XCTAssertTrue(source.contains("public static func withPreparedBuildLockForHost<Output>("))
     }
 
     func testRedactedManifestContainsNoCredentialsOrSourcePath() throws {
@@ -845,6 +921,60 @@ final class SharedReadingHostTests: XCTestCase {
             if account.role == deleteErrorRole { throw TestAccountClientError.httpFailure(statusCode: 500) }
         }
         func verifyDeleted(_ account: TestAccount) async throws { events.append("account:verify:\(account.role.rawValue)") }
+    }
+
+    private actor RunPreflightBarrier {
+        private var entries = 0
+        private var released = false
+        private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+        var entryCount: Int { entries }
+
+        func enterAndWait() async {
+            entries += 1
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            guard !released else { return }
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+
+        func waitUntilEntered() async {
+            guard entries == 0 else { return }
+            await withCheckedContinuation { entryWaiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            let waiters = releaseWaiters
+            releaseWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    private struct HoldingPreflightAccounts: TestAccountManaging {
+        let events: EventRecorder
+        let barrier: RunPreflightBarrier
+
+        func preflight() async throws {
+            events.append("account:preflight")
+            await barrier.enterAndWait()
+        }
+
+        func create(role: TestAccountRole) async throws -> TestAccount {
+            TestAccount(
+                role: role,
+                email: "\(role.rawValue)@example.test",
+                password: "pw",
+                userID: role.rawValue,
+                bearerToken: "token"
+            )
+        }
+
+        func waitForBookUpload(_ account: TestAccount, expectedSHA256: String, timeout: Duration) async throws {}
+        func delete(_ account: TestAccount) async throws {}
+        func verifyDeleted(_ account: TestAccount) async throws {}
     }
 
     private struct FakeFixtureProvisioner: FixtureBookProvisioning {

@@ -136,13 +136,13 @@ struct RishiE2EHostCLI {
             )
         }
         let runTask = Task {
-            await host.runReport(preflightAlreadyCompleted: true)
+            try await host.runReport(preflightAlreadyCompleted: true)
         }
         let signalSources = installRunCancellationSignals(task: runTask)
         defer { signalSources.forEach { $0.cancel() } }
         do {
             let report = try await withThrowingTaskGroup(of: SharedReadingRunReport.self) { group in
-                group.addTask { await runTask.value }
+                group.addTask { try await runTask.value }
                 group.addTask {
                     let error = try await ResourceWatchdog.run(
                         sleep: { try await Task.sleep(for: .seconds(5)) },
@@ -171,7 +171,7 @@ struct RishiE2EHostCLI {
             // uncancelled phase. Do not release the shared build lock until
             // that phase has returned; otherwise a second run could start
             // while the cancelled XCTest process still owns resources.
-            let report = await runTask.value
+            let report = try await runTask.value
             if let primaryFailure = report.primaryFailure {
                 FileHandle.standardError.write(Data("Shared-reading primary failure: \(primaryFailure.localizedDescription)\n".utf8))
             }

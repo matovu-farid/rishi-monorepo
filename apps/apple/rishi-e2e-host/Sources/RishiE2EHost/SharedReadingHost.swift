@@ -398,6 +398,7 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
 }
 
 public enum HostError: Error, LocalizedError, Equatable {
+    case alreadyExecuted
     case simulatorResetNotPermitted
     case simulatorServiceUnavailable
     case simulatorNotFound
@@ -414,6 +415,7 @@ public enum HostError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .alreadyExecuted: return "A shared-reading host can be executed only once."
         case .simulatorResetNotPermitted: return "Simulator reset requires explicit permission."
         case .simulatorServiceUnavailable: return "CoreSimulatorService is unavailable; no simulator state was changed."
         case .simulatorNotFound: return "The configured device is not an available iPhone 17 Pro simulator."
@@ -427,6 +429,18 @@ public enum HostError: Error, LocalizedError, Equatable {
         case .resourcePressure(let message): return "Apple E2E stopped to protect system resources: \(message)"
         case .unexpected(let message): return "Shared-reading E2E failed unexpectedly: \(message)"
         case .cleanupFailed: return "Shared-reading E2E cleanup failed."
+        }
+    }
+}
+
+private final class HostExecutionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = false
+
+    func begin() throws {
+        try lock.withLock {
+            guard !started else { throw HostError.alreadyExecuted }
+            started = true
         }
     }
 }
@@ -537,6 +551,7 @@ public struct SharedReadingHost: Sendable {
     private let rendezvous: any SharedReadingRendezvous
     private let fixtureProvisioner: (any FixtureBookProvisioning)?
     private let buildLockLifecycle: BuildLockLifecycle?
+    private let executionGate: HostExecutionGate
 
     init(
         configuration: Configuration,
@@ -551,6 +566,7 @@ public struct SharedReadingHost: Sendable {
         self.rendezvous = rendezvous
         self.fixtureProvisioner = fixtureProvisioner
         self.buildLockLifecycle = nil
+        self.executionGate = HostExecutionGate()
     }
 
     public init(
@@ -572,6 +588,7 @@ public struct SharedReadingHost: Sendable {
             acquire: { consumedLock },
             ownershipAlreadyRecorded: true
         )
+        self.executionGate = HostExecutionGate()
     }
 
     init(
@@ -593,9 +610,10 @@ public struct SharedReadingHost: Sendable {
             acquire: acquireBuildLock,
             ownershipAlreadyRecorded: false
         )
+        self.executionGate = HostExecutionGate()
     }
 
-    public static func prepareBuildLock(
+    private static func prepareBuildLock(
         recoveryJournal: SharedReadingRecoveryJournal,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> SharedReadingPreparedBuildLock {
@@ -669,7 +687,7 @@ public struct SharedReadingHost: Sendable {
 
     @discardableResult
     public func run(preflightAlreadyCompleted: Bool = false) async throws -> SharedReadingHostResult {
-        let report = await runReport(preflightAlreadyCompleted: preflightAlreadyCompleted)
+        let report = try await runReport(preflightAlreadyCompleted: preflightAlreadyCompleted)
         if report.cleanupFailed { throw HostError.cleanupFailed }
         if let primaryFailure = report.primaryFailure { throw primaryFailure }
         return SharedReadingHostResult(runID: configuration.runID)
@@ -677,7 +695,8 @@ public struct SharedReadingHost: Sendable {
 
     /// Runs the lifecycle without allowing a teardown failure to erase the
     /// operation failure that caused teardown to begin.
-    public func runReport(preflightAlreadyCompleted: Bool = false) async -> SharedReadingRunReport {
+    public func runReport(preflightAlreadyCompleted: Bool = false) async throws -> SharedReadingRunReport {
+        try executionGate.begin()
         var owner: TestAccount?
         var participant: TestAccount?
         var ownerHandle: SharedReadingPeerHandle?
