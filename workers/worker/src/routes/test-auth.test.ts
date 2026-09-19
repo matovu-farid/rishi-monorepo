@@ -329,6 +329,14 @@ function cleanupCall(
   }, env)
 }
 
+function cleanupLifecycleCallOrder(): string[] {
+  return [
+    ...sharingService.getRoomStatus.mock.invocationCallOrder.map((order: number) => ({ order, name: "status" })),
+    ...sharingService.endRoom.mock.invocationCallOrder.map((order: number) => ({ order, name: "end" })),
+    ...sharingService.purgeAppleRoom.mock.invocationCallOrder.map((order: number) => ({ order, name: "purge" })),
+  ].sort((left, right) => left.order - right.order).map(({ name }) => name)
+}
+
 beforeEach(() => {
   resetState()
   authBehavior.signUpEmail.mockReset()
@@ -566,6 +574,7 @@ describe("POST /test/rooms/cleanup", () => {
     })
     expect(sharingService.purgeAppleRoom).toHaveBeenCalledWith({ sessionId: "room-1" })
     expect(sharingService.getRoomStatus).toHaveBeenCalledTimes(3)
+    expect(cleanupLifecycleCallOrder()).toEqual(["status", "end", "status", "purge", "status"])
   })
 
   it("treats already-ended and already-absent generated rooms as idempotent successes", async () => {
@@ -614,6 +623,15 @@ describe("POST /test/rooms/cleanup", () => {
       actingUserId: PARTICIPANT_ID,
       expectedControllerGeneration: 2,
     })
+    expect(cleanupLifecycleCallOrder()).toEqual([
+      "status",
+      "end",
+      "status",
+      "end",
+      "status",
+      "purge",
+      "status",
+    ])
   })
 
   it("fails closed for an unknown refreshed controller or a second stale-generation response", async () => {
@@ -759,22 +777,34 @@ describe("DELETE /test/users/:email — canonical deletion", () => {
     expect(deleteAccount).toHaveBeenCalledOnce()
   })
 
-  it("returns the exact authoritative second-delete 404 only after canonical deletion reports absence", async () => {
+  it("returns the exact authoritative second-delete 404 after canonical deletion removes the user", async () => {
     state.users.push({ id: OWNER_ID, email: OWNER_EMAIL })
-    deleteAccount.mockResolvedValue({
-      deletionId: "delete-2",
-      alreadyDeleted: true,
-      revocationStatus: "legacy_no_token",
-      r2ObjectsRemoved: 0,
+    deleteAccount.mockImplementation(async (_db: unknown, _env: unknown, userId: string) => {
+      const index = state.users.findIndex((user) => user.id === userId)
+      if (index >= 0) state.users.splice(index, 1)
+      return {
+        deletionId: "delete-2",
+        alreadyDeleted: false,
+        revocationStatus: "legacy_no_token",
+        r2ObjectsRemoved: 0,
+      }
     })
 
-    const response = await call(`/users/${OWNER_EMAIL}`, {
+    const first = await call(`/users/${OWNER_EMAIL}`, {
+      method: "DELETE",
+      headers: { "X-Test-Auth-Secret": SECRET },
+    })
+    expect(first.status).toBe(200)
+    expect(state.users).not.toContainEqual({ id: OWNER_ID, email: OWNER_EMAIL })
+    expect(deleteAccount).toHaveBeenCalledOnce()
+
+    const second = await call(`/users/${OWNER_EMAIL}`, {
       method: "DELETE",
       headers: { "X-Test-Auth-Secret": SECRET },
     })
 
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: "user not found" })
+    expect(second.status).toBe(404)
+    expect(await second.json()).toEqual({ error: "user not found" })
     expect(deleteAccount).toHaveBeenCalledOnce()
   })
 })

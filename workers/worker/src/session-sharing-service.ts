@@ -2,6 +2,7 @@ const enc = new TextEncoder();
 
 const DEFAULT_BASE_URL = "https://sharing-worker.internal";
 const DEFAULT_TOKEN_TTL_MS = 60_000;
+const EMPTY_RESPONSE_BODY = Symbol("empty session sharing response body");
 
 function toBase64Url(bytes: Uint8Array): string {
   let s = "";
@@ -312,7 +313,7 @@ function mapResponseError(
 
 async function readJsonResponse(response: Response): Promise<unknown> {
   const text = await response.text();
-  if (text.length === 0) return null;
+  if (text.length === 0) return EMPTY_RESPONSE_BODY;
   try {
     return JSON.parse(text) as unknown;
   } catch (cause) {

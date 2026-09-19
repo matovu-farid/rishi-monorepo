@@ -17,6 +17,7 @@ import {
   chapterIndexChapters,
   chapterIndexes,
   conversations,
+  deletionState,
   retainedAppleEntitlement,
   retainedAppleTransaction,
   restoredAppleEntitlement,
@@ -535,6 +536,12 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
     } as unknown as Env;
 
     await expect(deleteAccount(db, env, "retry-user")).rejects.toThrow("temporary R2 failure");
+    expect(await db.select().from(user).where(eq(user.id, "retry-user")).all()).toHaveLength(1);
+    expect(await db.select().from(deletionState).where(eq(deletionState.userId, "retry-user")).get()).toMatchObject({
+      userId: "retry-user",
+      status: "pending",
+    });
+
     const resumed = await deleteAccount(db, env, "retry-user");
     expect(resumed.alreadyDeleted).toBe(false);
     expect(await db.select().from(user).where(eq(user.id, "retry-user")).all()).toHaveLength(0);
