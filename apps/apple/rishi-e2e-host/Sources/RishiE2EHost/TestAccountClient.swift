@@ -235,17 +235,13 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
         }
 
         guard (200..<300).contains(response.statusCode) else {
-            // A 5xx can mean the Worker created the account and then failed
-            // while signing in or granting credits. A 4xx remains recorded as
-            // recoverable too: sending the valid generated-address request is
-            // never proof that the account was not created.
-            if response.statusCode >= 500 {
-                try await cleanupAfterProvisioningFailure(
-                    email: email,
-                    original: TestAccountClientError.httpFailure(statusCode: response.statusCode)
-                )
-            }
-            throw TestAccountClientError.httpFailure(statusCode: response.statusCode)
+            // Any non-2xx response is ambiguous: signUpEmail may have created
+            // the account before the subsequent sign-in step failed. Prove
+            // absence before returning, including for 4xx responses.
+            try await cleanupAfterProvisioningFailure(
+                email: email,
+                original: TestAccountClientError.httpFailure(statusCode: response.statusCode)
+            )
         }
 
         do {

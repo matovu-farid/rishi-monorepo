@@ -229,20 +229,24 @@ vi.mock("../db/drizzle", () => {
 })
 
 // ─── Mock createAuth (Better-Auth API) ────────────────────────────────────────
-const { authBehavior } = vi.hoisted(() => ({
+const { authBehavior, createAuthMock } = vi.hoisted(() => ({
   authBehavior: {
     signUpEmail: vi.fn(),
     signInEmail: vi.fn(),
   },
+  createAuthMock: vi.fn(),
 }))
 
 vi.mock("../auth", () => ({
-  createAuth: () => ({
-    api: {
-      signUpEmail: authBehavior.signUpEmail,
-      signInEmail: authBehavior.signInEmail,
-    },
-  }),
+  createAuth: () => {
+    createAuthMock()
+    return {
+      api: {
+        signUpEmail: authBehavior.signUpEmail,
+        signInEmail: authBehavior.signInEmail,
+      },
+    }
+  },
 }))
 
 vi.mock("../account-deletion", () => ({ deleteAccount }))
@@ -341,6 +345,7 @@ beforeEach(() => {
   resetState()
   authBehavior.signUpEmail.mockReset()
   authBehavior.signInEmail.mockReset()
+  createAuthMock.mockClear()
   fakeR2.delete.mockClear()
   deleteAccount.mockReset()
   sharingService.getRoomStatus.mockReset()
@@ -436,11 +441,11 @@ describe("POST /test/sign-in — gating", () => {
 describe("POST /test/sign-in — happy paths", () => {
   it("creates a new user when one doesn't exist + returns session token", async () => {
     authBehavior.signUpEmail.mockResolvedValue({
-      user: { id: "user_new", email: "new@x.co" },
+      user: { id: "user_new", email: "rishi-e2e-new@example.test" },
       token: "tok_new",
     })
     authBehavior.signInEmail.mockResolvedValue({
-      user: { id: "user_new", email: "new@x.co" },
+      user: { id: "user_new", email: "rishi-e2e-new@example.test" },
       token: "tok_new",
     })
 
@@ -450,7 +455,7 @@ describe("POST /test/sign-in — happy paths", () => {
         "Content-Type": "application/json",
         "X-Test-Auth-Secret": SECRET,
       },
-      body: JSON.stringify({ email: "new@x.co", password: "pw12345678" }),
+      body: JSON.stringify({ email: "rishi-e2e-new@example.test", password: "pw12345678" }),
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
@@ -460,15 +465,31 @@ describe("POST /test/sign-in — happy paths", () => {
     }
     expect(body.token).toBe("tok_new")
     expect(body.userId).toBe("user_new")
-    expect(body.email).toBe("new@x.co")
+    expect(body.email).toBe("rishi-e2e-new@example.test")
     expect(authBehavior.signUpEmail).toHaveBeenCalledOnce()
+  })
+
+  it("rejects an address outside the generated namespace before createAuth", async () => {
+    const res = await call("/sign-in", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Test-Auth-Secret": SECRET,
+      },
+      body: JSON.stringify({ email: "new@x.co", password: "pw12345678" }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(createAuthMock).not.toHaveBeenCalled()
+    expect(authBehavior.signUpEmail).not.toHaveBeenCalled()
+    expect(authBehavior.signInEmail).not.toHaveBeenCalled()
   })
 
   it("signs in an existing user when signUpEmail rejects with 'user exists'", async () => {
     // signUpEmail throws when user already exists — caller falls through to signInEmail.
     authBehavior.signUpEmail.mockRejectedValue(new Error("user already exists"))
     authBehavior.signInEmail.mockResolvedValue({
-      user: { id: "user_existing", email: "old@x.co" },
+      user: { id: "user_existing", email: "rishi-e2e-existing@example.test" },
       token: "tok_existing",
     })
 
@@ -478,7 +499,7 @@ describe("POST /test/sign-in — happy paths", () => {
         "Content-Type": "application/json",
         "X-Test-Auth-Secret": SECRET,
       },
-      body: JSON.stringify({ email: "old@x.co", password: "pw12345678" }),
+      body: JSON.stringify({ email: "rishi-e2e-existing@example.test", password: "pw12345678" }),
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { token: string; userId: string }

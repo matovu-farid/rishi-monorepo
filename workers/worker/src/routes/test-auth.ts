@@ -32,7 +32,7 @@ export const testAuthRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
-const GENERATED_E2E_EMAIL = /^rishi-e2e-[^@\s]+@[^@\s]+$/;
+const GENERATED_E2E_EMAIL = /^rishi-e2e-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
 
 type RemoteCleanupFailure = {
   sessionId: string;
@@ -195,6 +195,9 @@ testAuthRoutes.post("/sign-in", async (c) => {
     password.length < 1
   ) {
     return c.json({ error: "email and password required" }, 400);
+  }
+  if (!GENERATED_E2E_EMAIL.test(email)) {
+    return c.json({ error: "email must belong to the generated E2E namespace" }, 400);
   }
 
   const auth = await createAuth(c.env);

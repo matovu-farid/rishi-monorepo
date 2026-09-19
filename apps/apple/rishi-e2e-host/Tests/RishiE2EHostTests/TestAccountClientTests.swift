@@ -353,10 +353,14 @@ final class TestAccountClientTests: XCTestCase {
         ])
     }
 
-    func testEveryClientProvisioning4xxRemainsRecoverableUntilVerifiedAbsent() async throws {
-        for statusCode in 400..<500 {
+    func testEveryClientProvisioningNon2xxRemainsRecoverableUntilVerifiedAbsent() async throws {
+        for statusCode in [300, 400, 401, 499, 500, 503, 599] {
             let recorder = LifecycleRecorder()
-            let transport = RecordingTransport(responses: [.status(statusCode)])
+            let transport = RecordingTransport(responses: [
+                .status(statusCode),
+                .status(200),
+                .json(["error": "user not found"], statusCode: 404),
+            ])
             let client = makeClient(transport: transport, lifecycleRecorder: recorder)
 
             await XCTAssertThrowsErrorAsync(try await client.create(role: .participant), "HTTP \(statusCode)")
@@ -364,8 +368,9 @@ final class TestAccountClientTests: XCTestCase {
             XCTAssertEqual(recorder.events, [
                 "pending:rishi-e2e-fixed@example.test:participant",
                 "recoverable:rishi-e2e-fixed@example.test",
+                "verified:rishi-e2e-fixed@example.test",
             ], "HTTP \(statusCode)")
-            XCTAssertEqual(transport.requests.count, 1, "HTTP \(statusCode)")
+            XCTAssertEqual(transport.requests.count, 3, "HTTP \(statusCode)")
         }
     }
 
@@ -478,8 +483,12 @@ final class TestAccountClientTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, 2)
     }
 
-    func testCreateDoesNotDeleteOnKnownHTTPFailure() async throws {
-        let transport = RecordingTransport(responses: [.status(401)])
+    func testCreateCompensatesAfterKnownHTTPFailure() async throws {
+        let transport = RecordingTransport(responses: [
+            .status(401),
+            .status(200),
+            .json(["error": "user not found"], statusCode: 404),
+        ])
         let client = TestAccountClient(
             configuration: .init(
                 baseURL: URL(string: "https://api.example.test")!,
@@ -496,7 +505,10 @@ final class TestAccountClientTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? TestAccountClientError, .httpFailure(statusCode: 401))
         }
-        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(transport.requests[1].url?.path, "/test/users/rishi-e2e-fixed@example.test")
+        XCTAssertEqual(transport.requests[1].httpMethod, "DELETE")
+        XCTAssertEqual(transport.requests[2].url?.path, "/test/users/rishi-e2e-fixed@example.test")
     }
 
     func testCreateCompensatesAfterServerFailureThatMayFollowAccountCreation() async throws {
