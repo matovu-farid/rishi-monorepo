@@ -172,6 +172,27 @@ describe("session-sharing-service", () => {
     await expect(service.purgeAppleRoom({ sessionId: "session-123" })).resolves.toBeUndefined();
   });
 
+  it("treats only the sharing worker's literal null status as authoritative room absence", async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(Response.json(null))
+      .mockResolvedValueOnce(Response.json({ code: "SESSION_NOT_FOUND" }, { status: 404 }))
+      .mockResolvedValueOnce(Response.json({}));
+    const service = new SessionSharingService(
+      { fetch: fetchSpy },
+      { internalTokenSecret: "shared-secret", internalPathPrefix: "/v2/internal", now: () => 1_000 },
+    );
+
+    await expect(service.getRoomStatus({ sessionId: "session-123" })).resolves.toBeNull();
+    await expect(service.getRoomStatus({ sessionId: "session-123" })).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+      status: 404,
+      responseCode: "SESSION_NOT_FOUND",
+    });
+    await expect(service.getRoomStatus({ sessionId: "session-123" })).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
   it("exposes a stable error class for local transport failures", async () => {
     const service = new SessionSharingService(
       {

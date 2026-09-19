@@ -28,11 +28,19 @@ interface FakeUser {
   email: string
 }
 
-const { state, COLS, deleteCalls } = vi.hoisted(() => {
+interface FakeSessionInvite {
+  id: string
+  ownerUserId: string
+  sessionId: string
+}
+
+const { state, COLS, deleteCalls, dbCalls, deleteAccount, sharingService, SessionSharingService } = vi.hoisted(() => {
   const COLS = {
     id: { __col: "id" } as const,
     email: { __col: "email" } as const,
     userId: { __col: "userId" } as const,
+    ownerUserId: { __col: "ownerUserId" } as const,
+    sessionId: { __col: "sessionId" } as const,
     fileR2Key: { __col: "fileR2Key" } as const,
     coverR2Key: { __col: "coverR2Key" } as const,
     bookId: { __col: "bookId" } as const,
@@ -48,9 +56,20 @@ const { state, COLS, deleteCalls } = vi.hoisted(() => {
       bookmarks: [] as Array<{ id: string; userId: string }>,
       sessions: [] as Array<{ id: string; userId: string }>,
       accounts: [] as Array<{ id: string; userId: string }>,
+      sessionInvites: [] as Array<FakeSessionInvite>,
     },
     COLS,
     deleteCalls: { r2: [] as string[] },
+    dbCalls: { createDb: 0 },
+    deleteAccount: vi.fn(),
+    sharingService: {
+      getRoomStatus: vi.fn(),
+      endRoom: vi.fn(),
+      purgeAppleRoom: vi.fn(),
+    },
+    SessionSharingService: vi.fn(function SessionSharingService() {
+      return sharingService
+    }),
   }
 })
 
@@ -63,7 +82,9 @@ function resetState() {
   state.bookmarks.length = 0
   state.sessions.length = 0
   state.accounts.length = 0
+  state.sessionInvites.length = 0
   deleteCalls.r2.length = 0
+  dbCalls.createDb = 0
 }
 
 // ─── Mock schema ──────────────────────────────────────────────────────────────
@@ -76,19 +97,27 @@ vi.mock("@rishi/shared/schema", () => ({
   user: { ...COLS, __table: "user" },
   session: { ...COLS, __table: "session" },
   account: { ...COLS, __table: "account" },
+  sessionInvites: { ...COLS, __table: "sessionInvites" },
   verification: { ...COLS, __table: "verification" },
   passkey: { ...COLS, __table: "passkey" },
   syncMeta: { ...COLS, __table: "syncMeta" },
 }))
 
 // ─── Mock drizzle-orm ────────────────────────────────────────────────────────
-type Pred = { kind: "eq"; col: string; value: unknown }
+type Pred =
+  | { kind: "eq"; col: string; value: unknown }
+  | { kind: "inArray"; col: string; values: unknown[] }
 
 vi.mock("drizzle-orm", () => ({
   eq: (col: { __col: string }, value: unknown): Pred => ({
     kind: "eq",
     col: col.__col,
     value,
+  }),
+  inArray: (col: { __col: string }, values: unknown[]): Pred => ({
+    kind: "inArray",
+    col: col.__col,
+    values,
   }),
   and: (...preds: Pred[]) => ({ kind: "and", preds } as unknown as Pred),
   sql: (s: TemplateStringsArray) => ({ __sql: s.join("?") }),
@@ -114,6 +143,8 @@ function tableKey(table: { __table?: string }): keyof typeof state | null {
       return "sessions"
     case "account":
       return "accounts"
+    case "sessionInvites":
+      return "sessionInvites"
     default:
       return null
   }
@@ -121,8 +152,12 @@ function tableKey(table: { __table?: string }): keyof typeof state | null {
 
 function evalPred(pred: Pred | { kind: "and"; preds: Pred[] }, row: Record<string, unknown>): boolean {
   if ((pred as Pred).kind === "eq") {
-    const p = pred as Pred
+    const p = pred as Extract<Pred, { kind: "eq" }>
     return row[p.col] === p.value
+  }
+  if ((pred as { kind?: string }).kind === "inArray") {
+    const p = pred as Extract<Pred, { kind: "inArray" }>
+    return p.values.includes(row[p.col])
   }
   if ((pred as { kind: "and" }).kind === "and") {
     return (pred as { preds: Pred[] }).preds.every((p) => evalPred(p, row))
@@ -132,6 +167,7 @@ function evalPred(pred: Pred | { kind: "and"; preds: Pred[] }, row: Record<strin
 
 vi.mock("../db/drizzle", () => {
   function createDb() {
+    dbCalls.createDb += 1
     return {
       select(_fields?: unknown) {
         return {
@@ -209,6 +245,13 @@ vi.mock("../auth", () => ({
   }),
 }))
 
+vi.mock("../account-deletion", () => ({ deleteAccount }))
+
+vi.mock("../session-sharing-service", () => ({
+  SessionSharingService,
+  isSessionSharingServiceError: () => false,
+}))
+
 // ─── Now import the route under test ──────────────────────────────────────────
 import { testAuthRoutes } from "./test-auth"
 
@@ -225,6 +268,8 @@ const baseEnv = {
   PUBLIC_WEB_URL: "https://rishi.fidexa.org",
   DB: {} as unknown,
   BOOK_STORAGE: fakeR2 as unknown,
+  SHARING_WORKER: {} as unknown,
+  SHARING_INTERNAL_SECRET: "test-sharing-secret",
 } as unknown as Record<string, unknown>
 
 const SECRET = "super-secret-token"
@@ -249,11 +294,51 @@ async function call(
   return testAuthRoutes.fetch(new Request(url, init), env)
 }
 
+const OWNER_EMAIL = "rishi-e2e-owner@example.test"
+const PARTICIPANT_EMAIL = "rishi-e2e-participant@example.test"
+const OWNER_ID = "e2e-owner"
+const PARTICIPANT_ID = "e2e-participant"
+
+function roomStatus(
+  sessionId: string,
+  status: "waiting" | "active" | "ended",
+  controllerUserId = OWNER_ID,
+  controllerGeneration = 1,
+) {
+  return { sessionId, status, controllerUserId, controllerGeneration }
+}
+
+function seedGeneratedUsers() {
+  state.users.push(
+    { id: OWNER_ID, email: OWNER_EMAIL },
+    { id: PARTICIPANT_ID, email: PARTICIPANT_EMAIL },
+  )
+}
+
+function cleanupCall(
+  body: Record<string, unknown> = { emails: [OWNER_EMAIL, PARTICIPANT_EMAIL] },
+  env: Record<string, unknown> = envWithGate(),
+) {
+  return call("/rooms/cleanup", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Test-Auth-Secret": SECRET,
+    },
+    body: JSON.stringify(body),
+  }, env)
+}
+
 beforeEach(() => {
   resetState()
   authBehavior.signUpEmail.mockReset()
   authBehavior.signInEmail.mockReset()
   fakeR2.delete.mockClear()
+  deleteAccount.mockReset()
+  sharingService.getRoomStatus.mockReset()
+  sharingService.endRoom.mockReset()
+  sharingService.purgeAppleRoom.mockReset()
+  SessionSharingService.mockClear()
 })
 
 // ─── Gating: POST /test/sign-in ───────────────────────────────────────────────
@@ -433,102 +518,263 @@ describe("DELETE /test/users/:email — gating", () => {
   })
 })
 
-// ─── Happy path: DELETE /test/users/:email ────────────────────────────────────
-describe("DELETE /test/users/:email — happy paths", () => {
-  it("cascades books + highlights + conversations + messages + bookmarks and R2 objects", async () => {
-    // Seed
-    state.users.push({ id: "u1", email: "del@x.co" })
-    state.users.push({ id: "u2", email: "other@x.co" }) // unrelated — must survive
-    state.books.push({
-      id: "b1",
-      userId: "u1",
-      fileR2Key: "books/u1/hashA",
-      coverR2Key: "covers/u1/hashA",
+// ─── Gated remote room cleanup ───────────────────────────────────────────────
+describe("POST /test/rooms/cleanup", () => {
+  it("returns the same 404 as an unknown route when its gate is not satisfied", async () => {
+    const blocked = await call("/rooms/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emails: [OWNER_EMAIL, PARTICIPANT_EMAIL] }),
     })
-    state.books.push({
-      id: "b2",
-      userId: "u1",
-      fileR2Key: "books/u1/hashB",
-      coverR2Key: null,
-    })
-    state.books.push({
-      id: "b3",
-      userId: "u2",
-      fileR2Key: "books/u2/keep",
-      coverR2Key: null,
-    })
-    state.highlights.push({ id: "h1", userId: "u1" })
-    state.highlights.push({ id: "h2", userId: "u2" })
-    state.conversations.push({ id: "c1", userId: "u1" })
-    state.messages.push({ id: "m1", conversationId: "c1" })
-    state.bookmarks.push({ id: "bm1", userId: "u1" })
-    state.sessions.push({ id: "s1", userId: "u1" })
-    state.accounts.push({ id: "a1", userId: "u1" })
+    const unknown = await call("/not-a-test-route", { method: "POST" })
 
-    const res = await call("/users/del@x.co", {
-      method: "DELETE",
-      headers: { "X-Test-Auth-Secret": SECRET },
+    expect({ status: blocked.status, body: await blocked.text() }).toEqual({
+      status: unknown.status,
+      body: await unknown.text(),
     })
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      deleted: boolean
-      userId: string
-      booksRemoved: number
-      r2ObjectsRemoved: number
-    }
-    expect(body.deleted).toBe(true)
-    expect(body.userId).toBe("u1")
-    expect(body.booksRemoved).toBe(2)
-    // 3 R2 keys: 2 fileR2Key (b1, b2) + 1 coverR2Key (b1 only — b2's was null)
-    expect(body.r2ObjectsRemoved).toBe(3)
+  })
 
-    // u1's data gone
-    expect(state.books.find((b) => b.userId === "u1")).toBeUndefined()
-    expect(state.highlights.find((h) => h.userId === "u1")).toBeUndefined()
-    expect(state.conversations.find((c) => c.userId === "u1")).toBeUndefined()
-    expect(state.bookmarks.find((b) => b.userId === "u1")).toBeUndefined()
-    expect(state.sessions.find((s) => s.userId === "u1")).toBeUndefined()
-    expect(state.accounts.find((a) => a.userId === "u1")).toBeUndefined()
-    expect(state.users.find((u) => u.id === "u1")).toBeUndefined()
-    // u2 untouched
-    expect(state.books.find((b) => b.userId === "u2")).toBeDefined()
-    expect(state.highlights.find((h) => h.userId === "u2")).toBeDefined()
-    expect(state.users.find((u) => u.id === "u2")).toBeDefined()
+  it("rejects a non-generated address before opening D1 or the sharing service", async () => {
+    const response = await cleanupCall({ emails: ["person@example.test", PARTICIPANT_EMAIL] })
 
-    // R2 deletes
-    expect(deleteCalls.r2.sort()).toEqual(
-      ["books/u1/hashA", "books/u1/hashB", "covers/u1/hashA"].sort(),
+    expect(response.status).toBe(400)
+    expect(dbCalls.createDb).toBe(0)
+    expect(SessionSharingService).not.toHaveBeenCalled()
+  })
+
+  it("ends, verifies, purges, and authoritatively verifies an active generated room", async () => {
+    seedGeneratedUsers()
+    state.sessionInvites.push({ id: "invite-1", ownerUserId: OWNER_ID, sessionId: "room-1" })
+    sharingService.getRoomStatus
+      .mockResolvedValueOnce(roomStatus("room-1", "active"))
+      .mockResolvedValueOnce(roomStatus("room-1", "ended"))
+      .mockResolvedValueOnce(null)
+    sharingService.endRoom.mockResolvedValue(roomStatus("room-1", "ended"))
+    sharingService.purgeAppleRoom.mockResolvedValue(undefined)
+
+    const response = await cleanupCall({
+      emails: [OWNER_EMAIL, PARTICIPANT_EMAIL],
+      sessionIds: ["caller-controlled-room"],
+      userIds: ["caller-controlled-user"],
+    })
+
+    expect(response.status).toBe(200)
+    expect(sharingService.endRoom).toHaveBeenCalledWith({
+      sessionId: "room-1",
+      actingUserId: OWNER_ID,
+      expectedControllerGeneration: 1,
+    })
+    expect(sharingService.purgeAppleRoom).toHaveBeenCalledWith({ sessionId: "room-1" })
+    expect(sharingService.getRoomStatus).toHaveBeenCalledTimes(3)
+  })
+
+  it("treats already-ended and already-absent generated rooms as idempotent successes", async () => {
+    seedGeneratedUsers()
+    state.sessionInvites.push(
+      { id: "invite-ended", ownerUserId: OWNER_ID, sessionId: "ended-room" },
+      { id: "invite-absent", ownerUserId: PARTICIPANT_ID, sessionId: "absent-room" },
     )
+    sharingService.getRoomStatus
+      .mockResolvedValueOnce(roomStatus("ended-room", "ended", "unknown-controller"))
+      .mockResolvedValueOnce(roomStatus("ended-room", "ended", "unknown-controller"))
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+    sharingService.purgeAppleRoom.mockResolvedValue(undefined)
+
+    const response = await cleanupCall()
+
+    expect(response.status).toBe(200)
+    expect(sharingService.endRoom).not.toHaveBeenCalled()
+    expect(sharingService.purgeAppleRoom).toHaveBeenCalledTimes(1)
   })
 
-  it("returns 404 when user doesn't exist", async () => {
-    const res = await call("/users/ghost@x.co", {
+  it("refreshes once after a stale controller generation and retries as the transferred generated controller", async () => {
+    seedGeneratedUsers()
+    state.sessionInvites.push({ id: "invite-1", ownerUserId: OWNER_ID, sessionId: "room-1" })
+    sharingService.getRoomStatus
+      .mockResolvedValueOnce(roomStatus("room-1", "active", OWNER_ID, 1))
+      .mockResolvedValueOnce(roomStatus("room-1", "active", PARTICIPANT_ID, 2))
+      .mockResolvedValueOnce(roomStatus("room-1", "ended", PARTICIPANT_ID, 2))
+      .mockResolvedValueOnce(null)
+    sharingService.endRoom
+      .mockRejectedValueOnce({ code: "STALE_CONTROLLER_GENERATION" })
+      .mockResolvedValueOnce(roomStatus("room-1", "ended", PARTICIPANT_ID, 2))
+    sharingService.purgeAppleRoom.mockResolvedValue(undefined)
+
+    const response = await cleanupCall()
+
+    expect(response.status).toBe(200)
+    expect(sharingService.endRoom).toHaveBeenNthCalledWith(1, {
+      sessionId: "room-1",
+      actingUserId: OWNER_ID,
+      expectedControllerGeneration: 1,
+    })
+    expect(sharingService.endRoom).toHaveBeenNthCalledWith(2, {
+      sessionId: "room-1",
+      actingUserId: PARTICIPANT_ID,
+      expectedControllerGeneration: 2,
+    })
+  })
+
+  it("fails closed for an unknown refreshed controller or a second stale-generation response", async () => {
+    seedGeneratedUsers()
+    state.sessionInvites.push({ id: "invite-1", ownerUserId: OWNER_ID, sessionId: "room-1" })
+    sharingService.getRoomStatus
+      .mockResolvedValueOnce(roomStatus("room-1", "active", OWNER_ID, 1))
+      .mockResolvedValueOnce(roomStatus("room-1", "active", "unknown-controller", 2))
+    sharingService.endRoom.mockRejectedValueOnce({ code: "STALE_CONTROLLER_GENERATION" })
+
+    const unknownController = await cleanupCall()
+
+    expect(unknownController.status).toBe(500)
+    expect(sharingService.endRoom).toHaveBeenCalledTimes(1)
+    expect(sharingService.purgeAppleRoom).not.toHaveBeenCalled()
+
+    sharingService.getRoomStatus.mockReset()
+    sharingService.endRoom.mockReset()
+    sharingService.getRoomStatus
+      .mockResolvedValueOnce(roomStatus("room-1", "active", OWNER_ID, 1))
+      .mockResolvedValueOnce(roomStatus("room-1", "active", PARTICIPANT_ID, 2))
+    sharingService.endRoom
+      .mockRejectedValueOnce({ code: "STALE_CONTROLLER_GENERATION" })
+      .mockRejectedValueOnce({ code: "STALE_CONTROLLER_GENERATION" })
+
+    const secondStale = await cleanupCall()
+
+    expect(secondStale.status).toBe(500)
+    expect(sharingService.endRoom).toHaveBeenCalledTimes(2)
+    expect(sharingService.purgeAppleRoom).not.toHaveBeenCalled()
+  })
+
+  it("retains each cleanup failure for conflict, failed end verification, failed purge, or non-authoritative absence", async () => {
+    seedGeneratedUsers()
+    state.sessionInvites.push({ id: "invite-1", ownerUserId: OWNER_ID, sessionId: "room-1" })
+    const cases = [
+      {
+        name: "conflict",
+        statuses: [roomStatus("room-1", "active")],
+        end: () => sharingService.endRoom.mockRejectedValueOnce({ code: "CONFLICT" }),
+        purge: () => undefined,
+      },
+      {
+        name: "end verification",
+        statuses: [roomStatus("room-1", "active"), roomStatus("room-1", "active")],
+        end: () => sharingService.endRoom.mockResolvedValueOnce(roomStatus("room-1", "active")),
+        purge: () => undefined,
+      },
+      {
+        name: "purge",
+        statuses: [roomStatus("room-1", "active"), roomStatus("room-1", "ended")],
+        end: () => sharingService.endRoom.mockResolvedValueOnce(roomStatus("room-1", "ended")),
+        purge: () => sharingService.purgeAppleRoom.mockRejectedValueOnce(new Error("purge failed")),
+      },
+      {
+        name: "absence verification",
+        statuses: [roomStatus("room-1", "active"), roomStatus("room-1", "ended"), roomStatus("room-1", "ended")],
+        end: () => sharingService.endRoom.mockResolvedValueOnce(roomStatus("room-1", "ended")),
+        purge: () => sharingService.purgeAppleRoom.mockResolvedValueOnce(undefined),
+      },
+    ]
+
+    for (const testCase of cases) {
+      sharingService.getRoomStatus.mockReset()
+      sharingService.endRoom.mockReset()
+      sharingService.purgeAppleRoom.mockReset()
+      sharingService.getRoomStatus.mockResolvedValueOnce(testCase.statuses.shift())
+      for (const status of testCase.statuses) sharingService.getRoomStatus.mockResolvedValueOnce(status)
+      testCase.end()
+      testCase.purge()
+
+      const response = await cleanupCall()
+      const body = await response.json() as { failures: Array<{ sessionId: string }> }
+
+      expect(response.status, testCase.name).toBe(500)
+      expect(body.failures).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sessionId: "room-1" }),
+      ]))
+      expect(deleteAccount).not.toHaveBeenCalled()
+    }
+  })
+
+  it("attempts every owned room and accumulates failures without suppressing later cleanup", async () => {
+    seedGeneratedUsers()
+    state.sessionInvites.push(
+      { id: "invite-bad", ownerUserId: OWNER_ID, sessionId: "room-bad" },
+      { id: "invite-good", ownerUserId: PARTICIPANT_ID, sessionId: "room-good" },
+    )
+    const statuses = new Map<string, Array<ReturnType<typeof roomStatus> | null>>([
+      ["room-bad", [roomStatus("room-bad", "active", "unknown-controller")]],
+      ["room-good", [roomStatus("room-good", "active"), roomStatus("room-good", "ended"), null]],
+    ])
+    sharingService.getRoomStatus.mockImplementation(async ({ sessionId }: { sessionId: string }) => statuses.get(sessionId)?.shift())
+    sharingService.endRoom.mockResolvedValue(roomStatus("room-good", "ended"))
+    sharingService.purgeAppleRoom.mockResolvedValue(undefined)
+
+    const response = await cleanupCall()
+    const body = await response.json() as { failures: Array<{ sessionId: string }> }
+
+    expect(response.status).toBe(500)
+    expect(body.failures).toEqual([{ sessionId: "room-bad", code: "UNKNOWN_CONTROLLER" }])
+    expect(sharingService.endRoom).toHaveBeenCalledWith({
+      sessionId: "room-good",
+      actingUserId: OWNER_ID,
+      expectedControllerGeneration: 1,
+    })
+    expect(sharingService.purgeAppleRoom).toHaveBeenCalledWith({ sessionId: "room-good" })
+  })
+})
+
+// ─── Canonical gated account deletion ────────────────────────────────────────
+describe("DELETE /test/users/:email — canonical deletion", () => {
+  it("delegates to canonical deletion and reports success only after it completes", async () => {
+    state.users.push({ id: OWNER_ID, email: OWNER_EMAIL })
+    deleteAccount.mockResolvedValue({
+      deletionId: "delete-1",
+      alreadyDeleted: false,
+      revocationStatus: "legacy_no_token",
+      r2ObjectsRemoved: 2,
+    })
+
+    const response = await call(`/users/${OWNER_EMAIL}`, {
       method: "DELETE",
       headers: { "X-Test-Auth-Secret": SECRET },
     })
-    expect(res.status).toBe(404)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ deleted: true, userId: OWNER_ID, r2ObjectsRemoved: 2 })
+    expect(deleteAccount).toHaveBeenCalledWith(expect.anything(), expect.anything(), OWNER_ID)
   })
 
-  it("is resilient when R2 delete throws (still reports remaining work)", async () => {
-    state.users.push({ id: "u1", email: "del@x.co" })
-    state.books.push({
-      id: "b1",
-      userId: "u1",
-      fileR2Key: "books/u1/willFail",
-      coverR2Key: null,
-    })
-    fakeR2.delete.mockImplementationOnce(async () => {
-      throw new Error("R2 down")
-    })
-    const res = await call("/users/del@x.co", {
+  it("returns non-2xx without deleting account state when canonical R2 cleanup fails", async () => {
+    state.users.push({ id: OWNER_ID, email: OWNER_EMAIL })
+    deleteAccount.mockRejectedValue(new Error("temporary R2 failure"))
+
+    const response = await call(`/users/${OWNER_EMAIL}`, {
       method: "DELETE",
       headers: { "X-Test-Auth-Secret": SECRET },
     })
-    // We still want a 2xx — partial R2 failures shouldn't strand the test
-    // teardown.
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { deleted: boolean; booksRemoved: number }
-    expect(body.deleted).toBe(true)
-    expect(body.booksRemoved).toBe(1)
+
+    expect(response.status).toBe(500)
+    expect(state.users).toContainEqual({ id: OWNER_ID, email: OWNER_EMAIL })
+    expect(deleteAccount).toHaveBeenCalledOnce()
+  })
+
+  it("returns the exact authoritative second-delete 404 only after canonical deletion reports absence", async () => {
+    state.users.push({ id: OWNER_ID, email: OWNER_EMAIL })
+    deleteAccount.mockResolvedValue({
+      deletionId: "delete-2",
+      alreadyDeleted: true,
+      revocationStatus: "legacy_no_token",
+      r2ObjectsRemoved: 0,
+    })
+
+    const response = await call(`/users/${OWNER_EMAIL}`, {
+      method: "DELETE",
+      headers: { "X-Test-Auth-Secret": SECRET },
+    })
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: "user not found" })
+    expect(deleteAccount).toHaveBeenCalledOnce()
   })
 })

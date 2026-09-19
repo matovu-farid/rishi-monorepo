@@ -1,17 +1,14 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
-import {
-  books,
-  highlights,
-  conversations,
-  messages,
-  bookmarks,
-  user,
-  session,
-  account,
-} from "../db/schema";
+import { eq, inArray } from "drizzle-orm";
+import { sessionInvites, user } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { createAuth } from "../auth";
+import { deleteAccount } from "../account-deletion";
+import {
+  isSessionSharingServiceError,
+  SessionSharingService,
+  type SessionSharingRoomStatus,
+} from "../session-sharing-service";
 
 
 /**
@@ -34,6 +31,97 @@ export const testAuthRoutes = new Hono<{
   Bindings: Env;
   Variables: { userId: string };
 }>();
+
+const GENERATED_E2E_EMAIL = /^rishi-e2e-[^@\s]+@[^@\s]+$/;
+
+type RemoteCleanupFailure = {
+  sessionId: string;
+  code: string;
+};
+
+class RemoteCleanupError extends Error {
+  constructor(readonly code: string) {
+    super(code);
+  }
+}
+
+function cleanupErrorCode(error: unknown): string {
+  if (error instanceof RemoteCleanupError) return error.code;
+  if (isSessionSharingServiceError(error)) return error.code;
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string") {
+    return error.code;
+  }
+  return "CLEANUP_FAILED";
+}
+
+function requireGeneratedController(
+  room: SessionSharingRoomStatus,
+  generatedUserIds: ReadonlySet<string>,
+): void {
+  if (!generatedUserIds.has(room.controllerUserId)) {
+    throw new RemoteCleanupError("UNKNOWN_CONTROLLER");
+  }
+}
+
+async function endRoomWithOneStaleRetry(
+  service: SessionSharingService,
+  room: SessionSharingRoomStatus,
+  generatedUserIds: ReadonlySet<string>,
+): Promise<boolean> {
+  if (room.status === "ended") return true;
+  requireGeneratedController(room, generatedUserIds);
+
+  try {
+    await service.endRoom({
+      sessionId: room.sessionId,
+      actingUserId: room.controllerUserId,
+      expectedControllerGeneration: room.controllerGeneration,
+    });
+    return true;
+  } catch (error) {
+    if (cleanupErrorCode(error) !== "STALE_CONTROLLER_GENERATION") throw error;
+  }
+
+  const refreshed = await service.getRoomStatus({ sessionId: room.sessionId });
+  if (!refreshed || refreshed.status === "ended") return Boolean(refreshed);
+  requireGeneratedController(refreshed, generatedUserIds);
+  // A second stale-generation response is deliberately not retried.
+  await service.endRoom({
+    sessionId: refreshed.sessionId,
+    actingUserId: refreshed.controllerUserId,
+    expectedControllerGeneration: refreshed.controllerGeneration,
+  });
+  return true;
+}
+
+async function cleanupRoom(
+  service: SessionSharingService,
+  sessionId: string,
+  generatedUserIds: ReadonlySet<string>,
+): Promise<void> {
+  const initial = await service.getRoomStatus({ sessionId });
+  if (!initial) return;
+
+  const roomRemainedPresent = await endRoomWithOneStaleRetry(service, initial, generatedUserIds);
+  if (!roomRemainedPresent) return;
+
+  const ended = await service.getRoomStatus({ sessionId });
+  // A room that disappears after a successful end is already authoritatively
+  // absent, so it is an idempotent success rather than a purge failure.
+  if (!ended) return;
+  if (ended.status !== "ended") throw new RemoteCleanupError("END_NOT_VERIFIED");
+
+  await service.purgeAppleRoom({ sessionId });
+  const absent = await service.getRoomStatus({ sessionId });
+  if (absent !== null) throw new RemoteCleanupError("ROOM_NOT_ABSENT");
+}
+
+function sessionSharingService(c: { env: Env }): SessionSharingService {
+  return new SessionSharingService(c.env.SHARING_WORKER, {
+    internalTokenSecret: c.env.SHARING_INTERNAL_SECRET,
+    internalPathPrefix: "/v2/internal",
+  });
+}
 
 /**
  * Constant-time string comparison.
@@ -67,15 +155,15 @@ function gateOrNotFound(c: {
 }): Response | null {
   const enabled = c.env.ENABLE_TEST_AUTH;
   if (!enabled || enabled !== "true") {
-    return new Response("Not Found", { status: 404 });
+    return new Response("404 Not Found", { status: 404 });
   }
   const expected = c.env.TEST_AUTH_SECRET;
   if (!expected) {
-    return new Response("Not Found", { status: 404 });
+    return new Response("404 Not Found", { status: 404 });
   }
   const provided = c.req.header("X-Test-Auth-Secret");
   if (!provided || !timingSafeEqual(provided, expected)) {
-    return new Response("Not Found", { status: 404 });
+    return new Response("404 Not Found", { status: 404 });
   }
   return null;
 }
@@ -152,116 +240,83 @@ testAuthRoutes.post("/sign-in", async (c) => {
   return c.json({ token, userId, email });
 });
 
+// ─── POST /rooms/cleanup ──────────────────────────────────────────────────────
+// Resolve two generated test accounts server-side, remove every room owned by
+// either account, and prove each room absent before callers delete accounts.
+// Caller-supplied user and session identifiers are intentionally ignored.
+testAuthRoutes.post("/rooms/cleanup", async (c) => {
+  const gate = gateOrNotFound(c);
+  if (gate) return gate;
+
+  const body = await c.req.json().catch(() => null) as { emails?: unknown } | null;
+  const suppliedEmails = body?.emails;
+  if (
+    !Array.isArray(suppliedEmails) ||
+    suppliedEmails.length !== 2 ||
+    suppliedEmails.some((email) => typeof email !== "string")
+  ) {
+    return c.json({ error: "exactly two generated emails are required" }, 400);
+  }
+  const emails = suppliedEmails.map((email) => email.toLowerCase());
+  if (new Set(emails).size !== 2 || emails.some((email) => !GENERATED_E2E_EMAIL.test(email))) {
+    return c.json({ error: "exactly two generated emails are required" }, 400);
+  }
+
+  const db = createDb(c.env.DB);
+  const users = await db.select({ id: user.id }).from(user).where(inArray(user.email, emails)).all();
+  const generatedUserIds = new Set(users.map((row) => row.id));
+  const ownedRooms = generatedUserIds.size === 0
+    ? []
+    : await db.select({ sessionId: sessionInvites.sessionId })
+      .from(sessionInvites)
+      .where(inArray(sessionInvites.ownerUserId, [...generatedUserIds]))
+      .all();
+  const service = sessionSharingService(c);
+  const failures: RemoteCleanupFailure[] = [];
+
+  for (const sessionId of new Set(ownedRooms.map((room) => room.sessionId))) {
+    try {
+      await cleanupRoom(service, sessionId, generatedUserIds);
+    } catch (error) {
+      failures.push({ sessionId, code: cleanupErrorCode(error) });
+    }
+  }
+
+  if (failures.length > 0) {
+    return c.json({ error: "remote room cleanup failed", failures }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 // ─── DELETE /users/:email ─────────────────────────────────────────────────────
-// Cascades a user's data:
-//   1. R2 objects for every book (fileR2Key + coverR2Key)
-//   2. D1 rows: books, highlights, conversations, messages (via convs), bookmarks
-//   3. Better-Auth rows: session, account, user
-// Returns { deleted, userId, booksRemoved, r2ObjectsRemoved }. Returns 404 if
-// the user doesn't exist (also returns 404 on gating failures — same code so
-// probers can't distinguish).
+// This bearer-independent recovery route is intentionally only for generated
+// E2E accounts. It delegates all mutation and verification to the canonical
+// deletion workflow rather than attempting a best-effort local teardown.
 testAuthRoutes.delete("/users/:email", async (c) => {
   const gate = gateOrNotFound(c);
   if (gate) return gate;
 
-  // Better-Auth lowercases emails on storage, so we normalize on lookup
-  // — otherwise a mixed-case test email (e.g. nanoid-generated) creates
-  // the user as `foo@x` but the delete looks up `FoO@x` and 404s.
   const email = decodeURIComponent(c.req.param("email")).toLowerCase();
+  if (!GENERATED_E2E_EMAIL.test(email)) {
+    return c.json({ error: "user not found" }, 404);
+  }
   const db = createDb(c.env.DB);
-
-  // Look up the user by email (case-insensitive normalized above).
-  const userRow = await db
-    .select()
-    .from(user)
-    .where(eq(user.email, email))
-    .get();
+  const userRow = await db.select({ id: user.id }).from(user).where(eq(user.email, email)).get();
   if (!userRow) {
     return c.json({ error: "user not found" }, 404);
   }
-  const userId = userRow.id;
-
-  // ── R2 teardown ──────────────────────────────────────────────────────────
-  const userBooks = await db
-    .select()
-    .from(books)
-    .where(eq(books.userId, userId))
-    .all();
-  const otherUserBooks = await db
-    .select()
-    .from(books)
-    .all();
-  const referencedByOtherUsers = new Set(
-    otherUserBooks
-      .filter((book) => book.userId !== userId)
-      .flatMap((book) => [book.fileR2Key, book.coverR2Key])
-      .filter((key): key is string => Boolean(key)),
-  );
-
-  let r2ObjectsRemoved = 0;
-  for (const b of userBooks) {
-    for (const key of [b.fileR2Key, b.coverR2Key]) {
-      if (!key || referencedByOtherUsers.has(key)) continue;
-      try {
-        await c.env.BOOK_STORAGE.delete(key);
-        r2ObjectsRemoved++;
-      } catch (err) {
-        // Don't strand teardown on a transient R2 failure — the row will still
-        // be removed so a retry can target only the remaining objects.
-        console.error("R2 delete failed:", key, err);
-      }
-    }
+  try {
+    const result = await deleteAccount(db, c.env, userRow.id);
+    if (result.alreadyDeleted) return c.json({ error: "user not found" }, 404);
+    return c.json({
+      deleted: true,
+      userId: userRow.id,
+      r2ObjectsRemoved: result.r2ObjectsRemoved,
+    });
+  } catch (error) {
+    console.error("test account deletion failed", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return c.json({ error: "Failed to delete user" }, 500);
   }
-  const booksRemoved = userBooks.length;
-
-  // ── Messages: scoped via conversationId since the messages row lacks
-  // userId. Collect this user's conversation ids first, then delete by each.
-  // Each table-delete is wrapped — `no such table` errors (which surface on
-  // a fresh local D1 that's missing a migration) shouldn't strand teardown.
-  const safeRun = async (label: string, fn: () => Promise<unknown>) => {
-    try {
-      await fn();
-    } catch (err) {
-      console.error(`teardown ${label} failed:`, err);
-    }
-  };
-
-  await safeRun("messages-by-conv", async () => {
-    const userConvs = await db
-      .select()
-      .from(conversations)
-      .where(eq(conversations.userId, userId))
-      .all();
-    for (const conv of userConvs) {
-      await db
-        .delete(messages)
-        .where(eq(messages.conversationId, conv.id))
-        .run();
-    }
-  });
-
-  // ── D1 user-scoped tables ────────────────────────────────────────────────
-  await safeRun("books", () =>
-    db.delete(books).where(eq(books.userId, userId)).run(),
-  );
-  await safeRun("highlights", () =>
-    db.delete(highlights).where(eq(highlights.userId, userId)).run(),
-  );
-  await safeRun("conversations", () =>
-    db.delete(conversations).where(eq(conversations.userId, userId)).run(),
-  );
-  await safeRun("bookmarks", () =>
-    db.delete(bookmarks).where(eq(bookmarks.userId, userId)).run(),
-  );
-
-  // ── Better-Auth rows (verification + passkey cascade via FK ON DELETE) ──
-  await safeRun("session", () =>
-    db.delete(session).where(eq(session.userId, userId)).run(),
-  );
-  await safeRun("account", () =>
-    db.delete(account).where(eq(account.userId, userId)).run(),
-  );
-  await safeRun("user", () => db.delete(user).where(eq(user.id, userId)).run());
-
-  return c.json({ deleted: true, userId, booksRemoved, r2ObjectsRemoved });
 });

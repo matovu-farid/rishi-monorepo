@@ -272,6 +272,17 @@ function isOkSentinel(value: unknown): boolean {
   return isRecord(value) && value.ok === true && Object.keys(value).length === 1;
 }
 
+function isRoomStatus(value: unknown): value is SessionSharingRoomStatus {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.sessionId === "string" &&
+    (value.status === "waiting" || value.status === "active" || value.status === "ended") &&
+    typeof value.roomEpoch === "number" &&
+    typeof value.controllerGeneration === "number" &&
+    typeof value.controllerUserId === "string"
+  );
+}
+
 function responseCodeFromBody(body: unknown): string | undefined {
   if (!isRecord(body)) return undefined;
   return typeof body.code === "string" && body.code.length > 0 ? body.code : undefined;
@@ -345,7 +356,16 @@ export class SessionSharingService {
   }
 
   async getRoomStatus(input: SessionSharingGetRoomStatusRequest): Promise<SessionSharingRoomStatusResponse> {
-    return this.request<SessionSharingRoomStatusResponse>(input.sessionId, "getRoomStatus", {});
+    const response = await this.request<unknown>(input.sessionId, "getRoomStatus", {});
+    // AppleSessionRoom.getRoomStatus returns literal JSON null when its durable
+    // object has no room state. Do not treat malformed payloads or HTTP errors
+    // as absence: cleanup callers need this to be an authoritative proof.
+    if (response === null) return null;
+    if (isRoomStatus(response)) return response;
+    throw new SessionSharingServiceError(
+      "INVALID_RESPONSE",
+      "Session sharing service returned an invalid room status",
+    );
   }
 
   async getRedeemInfo(input: SessionSharingGetRedeemInfoRequest): Promise<SessionSharingRedeemInfoResponse> {
