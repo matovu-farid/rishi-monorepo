@@ -356,7 +356,9 @@ struct RootView: View {
             let response = try await sessionAPI.redeem(token: token)
             Log.event("sharing.session.redeem.completed", data: ["session_id": response.sessionId])
             guard let userID = signedInUserID else { return }
-            let transport = SharedReadingSignalingClient()
+            let transport = SharedReadingSignalingClient(
+                expectedSharingWebSocketOrigin: sessionAPI.expectedSharingWebSocketOrigin
+            )
             let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
                 try await sessionAPI.markBookReady(sessionId: response.sessionId, token: token, contentHash: response.book.contentHash)
             }

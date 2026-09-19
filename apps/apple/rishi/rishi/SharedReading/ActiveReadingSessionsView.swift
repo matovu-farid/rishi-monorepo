@@ -130,7 +130,9 @@ struct ActiveReadingSessionsView: View {
                     throw SharedReadingError.from(code: .bookHashMismatch)
                 }
                 let admission = try await api.rejoin(sessionId: session.sessionId, contentHash: importedHash)
-                let transport = SharedReadingSignalingClient()
+                let transport = SharedReadingSignalingClient(
+                    expectedSharingWebSocketOrigin: api.expectedSharingWebSocketOrigin
+                )
                 let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
                     try await api.rejoin(sessionId: session.sessionId, contentHash: session.book.contentHash)
                 }

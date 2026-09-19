@@ -48,6 +48,7 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         let idempotencyKey: String
     }
     private let baseURL: URL
+    nonisolated let expectedSharingWebSocketOrigin: URL
     private let session: URLSession
     private let tokenProvider: any TokenProvider
     private let refreshAuthentication: (@Sendable () async throws -> Void)?
@@ -57,12 +58,14 @@ actor SharedReadingAPI: SharedReadingAPIClient {
 
     init(
         baseURL: URL,
+        expectedSharingWebSocketOrigin: URL,
         session: URLSession = .shared,
         tokenProvider: any TokenProvider,
         refreshAuthentication: (@Sendable () async throws -> Void)? = nil,
         requestTimeout: TimeInterval = 30
     ) {
         self.baseURL = baseURL
+        self.expectedSharingWebSocketOrigin = expectedSharingWebSocketOrigin
         self.session = session
         self.tokenProvider = tokenProvider
         self.refreshAuthentication = refreshAuthentication
@@ -88,11 +91,21 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
 
     func markBookReady(sessionId: String, token: String, contentHash: String) async throws -> SharedReadingAdmission {
-        try await send(path: "\(Self.routePrefix)/\(sessionId)/book-ready", method: "POST", body: ["token": token, "contentHash": contentHash])
+        let admission: SharedReadingAdmission = try await send(
+            path: "\(Self.routePrefix)/\(sessionId)/book-ready",
+            method: "POST",
+            body: ["token": token, "contentHash": contentHash]
+        )
+        return try validated(admission)
     }
 
     func rejoin(sessionId: String, contentHash: String) async throws -> SharedReadingAdmission {
-        try await send(path: "\(Self.routePrefix)/\(sessionId)/rejoin", method: "POST", body: ["contentHash": contentHash])
+        let admission: SharedReadingAdmission = try await send(
+            path: "\(Self.routePrefix)/\(sessionId)/rejoin",
+            method: "POST",
+            body: ["contentHash": contentHash]
+        )
+        return try validated(admission)
     }
 
     func start(sessionId: String) async throws -> SharedReadingSessionControlResponse {
@@ -161,6 +174,19 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
 
     private struct EmptyBody: Encodable {}
+
+    private func validated(_ admission: SharedReadingAdmission) throws -> SharedReadingAdmission {
+        guard SharedReadingWebSocketOriginValidator.matches(
+            admission.websocketURL,
+            expectedOrigin: expectedSharingWebSocketOrigin
+        ) else {
+            throw SharedReadingError.from(
+                code: .serviceUnavailable,
+                message: "Rishi returned an invalid reading-session connection endpoint. Try again."
+            )
+        }
+        return admission
+    }
 
     private func send<Response: Decodable, Body: Encodable>(path: String, method: String, body: Body?) async throws -> Response {
         try await send(
@@ -296,5 +322,37 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         if status == 410 { return .from(code: .sessionEnded) }
         if status == 422 { return .from(code: .bookHashMismatch) }
         return .from(code: .serviceUnavailable)
+    }
+}
+
+enum SharedReadingWebSocketOriginValidator {
+    static func matches(_ websocketURL: URL, expectedOrigin: URL) -> Bool {
+        guard let websocket = components(for: websocketURL, requireSecureWebSocket: true),
+              let expected = components(for: expectedOrigin, requireSecureWebSocket: true)
+        else { return false }
+        return websocket.host == expected.host && websocket.port == expected.port
+    }
+
+    private static func components(
+        for url: URL,
+        requireSecureWebSocket: Bool
+    ) -> (host: String, port: Int)? {
+        guard let scheme = url.scheme?.lowercased(),
+              (!requireSecureWebSocket || scheme == "wss"),
+              let host = url.host?.lowercased(),
+              !host.isEmpty,
+              url.user == nil,
+              url.password == nil,
+              url.query == nil,
+              url.fragment == nil
+        else { return nil }
+
+        let defaultPort: Int
+        switch scheme {
+        case "wss": defaultPort = 443
+        case "ws": defaultPort = 80
+        default: return nil
+        }
+        return (host, url.port ?? defaultPort)
     }
 }

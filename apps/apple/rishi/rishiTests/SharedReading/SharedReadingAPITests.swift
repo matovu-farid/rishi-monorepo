@@ -5,6 +5,44 @@ import Testing
 
 @Suite("Shared reading API", .serialized)
 struct SharedReadingAPITests {
+    @Test("accepts same-origin secure websocket admissions for book-ready and rejoin")
+    func acceptsSameOriginAdmissions() async throws {
+        let expectedOrigin = URL(string: "wss://sharing.rishi.test")!
+        let api = makeAdmissionAPI(
+            websocketURL: "wss://sharing.rishi.test/v2/sessions/s_123/wss",
+            expectedOrigin: expectedOrigin
+        )
+
+        let bookReady = try await api.markBookReady(
+            sessionId: "s_123",
+            token: "invite-token",
+            contentHash: "content-hash"
+        )
+        let rejoined = try await api.rejoin(sessionId: "s_123", contentHash: "content-hash")
+
+        #expect(bookReady.websocketURL == URL(string: "wss://sharing.rishi.test/v2/sessions/s_123/wss"))
+        #expect(rejoined.websocketURL == URL(string: "wss://sharing.rishi.test/v2/sessions/s_123/wss"))
+    }
+
+    @Test("rejects book-ready and rejoin admissions from another websocket origin")
+    func rejectsMismatchedAdmissionOrigins() async {
+        let api = makeAdmissionAPI(
+            websocketURL: "wss://sharing.rishi.test/v2/sessions/s_123/wss",
+            expectedOrigin: URL(string: "wss://sharing-e2e.rishi.test")!
+        )
+
+        await assertRetryableUnavailable {
+            _ = try await api.markBookReady(
+                sessionId: "s_123",
+                token: "invite-token",
+                contentHash: "content-hash"
+            )
+        }
+        await assertRetryableUnavailable {
+            _ = try await api.rejoin(sessionId: "s_123", contentHash: "content-hash")
+        }
+    }
+
     @Test("refreshes once after an expired bearer token")
     func refreshesAfterUnauthorizedResponse() async throws {
         let tokenProvider = TestTokenProvider(value: "expired-token")
@@ -42,6 +80,7 @@ struct SharedReadingAPITests {
 
         let api = SharedReadingAPI(
             baseURL: baseURL,
+            expectedSharingWebSocketOrigin: URL(string: "wss://sharing.rishi.test")!,
             session: session,
             tokenProvider: tokenProvider,
             refreshAuthentication: {
@@ -80,6 +119,7 @@ struct SharedReadingAPITests {
 
         let api = SharedReadingAPI(
             baseURL: URL(string: "https://api.rishi.test")!,
+            expectedSharingWebSocketOrigin: URL(string: "wss://sharing.rishi.test")!,
             session: session,
             tokenProvider: tokenProvider,
             requestTimeout: 0.5
@@ -114,6 +154,7 @@ struct SharedReadingAPITests {
 
         let api = SharedReadingAPI(
             baseURL: URL(string: "https://api.rishi.test")!,
+            expectedSharingWebSocketOrigin: URL(string: "wss://sharing.rishi.test")!,
             session: session,
             tokenProvider: tokenProvider,
             requestTimeout: 0.01
@@ -127,6 +168,47 @@ struct SharedReadingAPITests {
             #expect(error.message == "The reading-session service did not respond in time. Try again.")
         } catch {
             Issue.record("wrong error \(error)")
+        }
+    }
+
+    private func makeAdmissionAPI(websocketURL: String, expectedOrigin: URL) -> SharedReadingAPI {
+        let tokenProvider = TestTokenProvider(value: "test-token")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        MockURLProtocol.reset()
+        MockURLProtocol.setHandler { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )!,
+                Data("""
+                {"admissionTicket":"ticket","wsUrl":"\(websocketURL)","roomEpoch":1,"connectionGeneration":1,"status":"waiting"}
+                """.utf8)
+            )
+        }
+        return SharedReadingAPI(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            expectedSharingWebSocketOrigin: expectedOrigin,
+            session: session,
+            tokenProvider: tokenProvider
+        )
+    }
+
+    private func assertRetryableUnavailable(
+        operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            Issue.record("expected an invalid websocket origin to be rejected")
+        } catch let error as SharedReadingError {
+            #expect(error.code == .serviceUnavailable)
+            #expect(error.retryable)
+        } catch {
+            Issue.record("expected SharedReadingError, got \(error)")
         }
     }
 }

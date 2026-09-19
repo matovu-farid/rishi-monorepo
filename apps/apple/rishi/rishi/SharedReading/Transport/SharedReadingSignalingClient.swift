@@ -524,6 +524,8 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
 
     private let urlSession: URLSession
     private let backoff: @Sendable (Int) -> Duration
+    private let expectedSharingWebSocketOrigin: URL
+    private let webSocketTaskFactory: (@Sendable (URL, [String]) -> URLSessionWebSocketTask)?
 
     nonisolated let eventHub = SharedReadingSignalingEventHub()
     nonisolated var events: AsyncStream<SharedReadingSignalingEvent> {
@@ -543,12 +545,15 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     private var refreshBearerToken: (@Sendable () async throws -> String)?
 
     init(
+        expectedSharingWebSocketOrigin: URL,
         urlSession: URLSession = .shared,
-        backoff: @escaping @Sendable (Int) -> Duration = sharedReadingSignalingDefaultBackoff
+        backoff: @escaping @Sendable (Int) -> Duration = sharedReadingSignalingDefaultBackoff,
+        webSocketTaskFactory: (@Sendable (URL, [String]) -> URLSessionWebSocketTask)? = nil
     ) {
         self.urlSession = urlSession
         self.backoff = backoff
-
+        self.expectedSharingWebSocketOrigin = expectedSharingWebSocketOrigin
+        self.webSocketTaskFactory = webSocketTaskFactory
     }
 
     func connect(
@@ -563,6 +568,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         guard !isTerminal else {
             throw SharedReadingError.from(code: .sessionEnded)
         }
+        try validate(admission)
 
         currentAdmission = admission
         self.bearerToken = bearerToken
@@ -578,7 +584,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         currentTask?.cancel(with: .goingAway, reason: nil)
         currentTask = nil
 
-        await open()
+        try await open()
     }
 
     func disconnect() async {
@@ -610,9 +616,10 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         }
     }
 
-    private func open() async {
+    private func open() async throws {
         guard !isTerminal, !isDisconnecting else { return }
         guard let admission = currentAdmission, let bearerToken else { return }
+        try validate(admission)
 
         generation += 1
         let currentGeneration = generation
@@ -622,7 +629,8 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
             "jwt.\(Data(bearerToken.utf8).base64URLString())",
             "admission.\(admission.admissionTicket)",
         ]
-        let task = urlSession.webSocketTask(with: admission.websocketURL, protocols: protocols)
+        let task = webSocketTaskFactory?(admission.websocketURL, protocols)
+            ?? urlSession.webSocketTask(with: admission.websocketURL, protocols: protocols)
         currentTask = task
         task.resume()
         reconnectAttempt = 0
@@ -757,7 +765,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         eventHub.finish()
     }
 
-    private func handleDisconnect(generation: Int) async {
+    func handleDisconnect(generation: Int) async {
         guard generation == self.generation else { return }
         currentTask = nil
         receiveTask = nil
@@ -793,7 +801,25 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                     return
                 }
             }
-            await self?.open()
+            do {
+                try await self?.open()
+            } catch let error as SharedReadingError {
+                self?.eventHub.yield(.error(error))
+            } catch {
+                self?.eventHub.yield(.error(.from(code: .serviceUnavailable)))
+            }
+        }
+    }
+
+    private func validate(_ admission: SharedReadingAdmission) throws {
+        guard SharedReadingWebSocketOriginValidator.matches(
+            admission.websocketURL,
+            expectedOrigin: expectedSharingWebSocketOrigin
+        ) else {
+            throw SharedReadingError.from(
+                code: .serviceUnavailable,
+                message: "Rishi returned an invalid reading-session connection endpoint. Try again."
+            )
         }
     }
 

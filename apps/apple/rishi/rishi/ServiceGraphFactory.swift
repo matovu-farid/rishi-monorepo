@@ -573,6 +573,7 @@ enum ServiceGraphFactory {
             workerClient: workerClient,
             sharedReadingAPI: SharedReadingAPI(
                 baseURL: baseURL,
+                expectedSharingWebSocketOrigin: apiEnvironment.sharingWebSocketURL,
                 tokenProvider: tokenProvider,
                 refreshAuthentication: { try await workerClient.refreshAuthentication() }
             ),
