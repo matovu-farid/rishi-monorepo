@@ -1,37 +1,31 @@
-// Bun provides this module at test runtime, but Worker production types do not include it.
-// @ts-ignore -- test-only Bun module
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const dbState = ((globalThis as unknown as {
-  __sessionSharesTestState?: { created: boolean; selectCalls: number; mode: "create" | "email" };
-}).__sessionSharesTestState ??= { created: false, selectCalls: 0, mode: "create" });
+const { dbState, sendSessionInviteEmails, captureWorkerTelemetryError } = vi.hoisted(() => ({
+  dbState: { created: false, selectCalls: 0, mode: "create" as "create" | "email" },
+  sendSessionInviteEmails: vi.fn(async (_input: { shareUrl: string }) => ({ attempted: 1, sent: 1, failed: 0, results: [] })),
+  captureWorkerTelemetryError: vi.fn(),
+}));
 
-const sendSessionInviteEmails = mock(async () => ({ attempted: 1, sent: 1, failed: 0, results: [] }));
-const captureWorkerTelemetryError = mock(() => {});
-
-mock.module("../middleware", () => ({
+vi.mock("../middleware", () => ({
   requireAuth: async (c: { set: (key: string, value: string) => void }, next: () => Promise<void>) => {
     c.set("userId", "owner-1");
     await next();
   },
 }));
 
-mock.module("../db/drizzle", () => ({
+vi.mock("../db/drizzle", () => ({
   createDb: () => ({
     select: () => ({
       from: () => ({
         where: () => ({
           get: async () => {
-            const state = (globalThis as unknown as {
-              __sessionSharesTestState: { created: boolean; selectCalls: number; mode: "create" | "email" };
-            }).__sessionSharesTestState;
-            state.selectCalls += 1;
-            if (state.mode === "email") return testInvite;
-            if (!state.created) {
-              return state.selectCalls === 1 ? undefined : testBook;
+            dbState.selectCalls += 1;
+            if (dbState.mode === "email") return testInvite;
+            if (!dbState.created) {
+              return dbState.selectCalls === 1 ? undefined : testBook;
             }
-            if (state.selectCalls === 3) return testInvite;
-            if (state.selectCalls === 4) return testInviteItem;
+            if (dbState.selectCalls === 3) return testInvite;
+            if (dbState.selectCalls === 4) return testInviteItem;
             return testBook;
           },
         }),
@@ -40,19 +34,17 @@ mock.module("../db/drizzle", () => ({
     insert: () => ({
       values: () => ({
         run: async () => {
-          (globalThis as unknown as {
-            __sessionSharesTestState: { created: boolean; selectCalls: number; mode: "create" | "email" };
-          }).__sessionSharesTestState.created = true;
+          dbState.created = true;
         },
       }),
     }),
   }),
 }));
 
-mock.module("../session-invite-email", () => ({ sendSessionInviteEmails }));
-mock.module("../ops/error-reporting", () => ({ captureWorkerTelemetryError }));
+vi.mock("../session-invite-email", () => ({ sendSessionInviteEmails }));
+vi.mock("../ops/error-reporting", () => ({ captureWorkerTelemetryError }));
 
-const { sessionSharesRoutes } = await import("./session-shares");
+import { sessionSharesRoutes } from "./session-shares";
 
 const baseEnv = {
   BETTER_AUTH_SECRET: "test-share-secret",
@@ -62,7 +54,7 @@ const baseEnv = {
   BOOK_STORAGE_BUCKET_NAME: "rishi-books",
   SHARING_INTERNAL_SECRET: "test-sharing-secret",
   SHARING_WORKER: {
-    fetch: mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    fetch: vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { action: string; payload: { sessionId: string } };
       if (request.action === "createRoom") {
         return Response.json({ sessionId: request.payload.sessionId, roomEpoch: 1, controllerGeneration: 1 });
@@ -130,7 +122,7 @@ beforeEach(() => {
   dbState.created = false;
   dbState.selectCalls = 0;
   dbState.mode = "create";
-  (baseEnv.SHARING_WORKER.fetch as unknown as { mockClear: () => void }).mockClear();
+  baseEnv.SHARING_WORKER.fetch.mockClear();
   sendSessionInviteEmails.mockClear();
   captureWorkerTelemetryError.mockClear();
 });
@@ -178,14 +170,15 @@ describe("session share links", () => {
 
     expect(response.status).toBe(200);
     expect(sendSessionInviteEmails).toHaveBeenCalledTimes(1);
-    const [{ shareUrl }] = sendSessionInviteEmails.mock.calls[0] as [{ shareUrl: string }];
-    expect(new URL(shareUrl).origin).toBe(publicWebURL);
+    const emailInput = sendSessionInviteEmails.mock.calls[0]?.[0];
+    expect(emailInput).toBeDefined();
+    expect(new URL(emailInput!.shareUrl).origin).toBe(publicWebURL);
   });
 
   it.each([
     ["create", () => createInvite(makeEnv("https://rishi.fidexa.org?next=e2e")), "session_share.create"],
     ["email", () => emailInvite(makeEnv("https://rishi.fidexa.org?next=e2e")), "session_share.email"],
-  ])("fails closed and reports sanitized telemetry for an invalid PUBLIC_WEB_URL on %s", async (_path: string, request: () => Promise<Response>, operation: string) => {
+  ])("fails closed and reports sanitized telemetry for an invalid PUBLIC_WEB_URL on %s", async (_path: string, request: () => Response | Promise<Response>, operation: string) => {
     const response = await request();
 
     expect(response.status).toBe(503);
