@@ -822,10 +822,21 @@ final class SharedReadingTestSupport {
     }
 
     static func inviteToken(from link: String) -> String? {
-        guard let url = URL(string: link),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              url.scheme == "https" && url.host == "api-e2e.fidexa.org" && url.path == "/sharing/session",
-              let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+        guard let components = URLComponents(string: link),
+              components.scheme == "https",
+              components.host == "api-e2e.fidexa.org",
+              components.user == nil,
+              components.password == nil,
+              components.port == nil,
+              components.fragment == nil,
+              components.percentEncodedPath == "/sharing/session",
+              let encodedQuery = components.percentEncodedQuery,
+              encodedQuery.hasPrefix("token="),
+              !encodedQuery.contains("&"),
+              let queryItems = components.queryItems,
+              queryItems.count == 1,
+              queryItems[0].name == "token",
+              let token = queryItems[0].value,
               !token.isEmpty else {
             return nil
         }

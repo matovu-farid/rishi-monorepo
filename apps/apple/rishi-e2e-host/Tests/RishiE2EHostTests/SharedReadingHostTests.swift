@@ -150,6 +150,8 @@ final class SharedReadingHostTests: XCTestCase {
 
         let remote = try XCTUnwrap(events.values.firstIndex(of: "account:remote-room-cleanup:owner,participant"))
         XCTAssertEqual(events.values.filter { $0.hasPrefix("account:remote-room-cleanup:") }.count, 1)
+        XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "cancel:owner")), remote)
+        XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "cancel:participant")), remote)
         XCTAssertLessThan(remote, try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner")))
         XCTAssertLessThan(remote, try XCTUnwrap(events.values.firstIndex(of: "account:delete:participant")))
     }
@@ -341,7 +343,8 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "account:wait-book:owner")), rendezvousIndex)
         XCTAssertEqual(Array(events.values.suffix(from: rendezvousIndex)), [
             "rendezvous:wait", "launch:participant",
-            "wait:participant", "account:remote-room-cleanup:owner,participant",
+            "wait:participant", "cancel:owner", "cancel:participant",
+            "account:remote-room-cleanup:owner,participant",
             "account:delete:owner", "account:verify:owner",
             "account:delete:participant", "account:verify:participant", "manifest:remove"
         ])
@@ -442,7 +445,7 @@ final class SharedReadingHostTests: XCTestCase {
         try? FileManager.default.removeItem(at: manifestURL)
     }
 
-    func testFailedOwnerStopStillAttemptsIndependentParticipantCleanup() async throws {
+    func testFailedOwnerStopSkipsRemoteAndAccountCleanupAndRetainsRecoveryState() async throws {
         let events = EventRecorder()
         let accounts = FakeAccounts(events: events)
         let peers = FakePeers(events: events, cancelErrorRole: .owner)
@@ -458,7 +461,8 @@ final class SharedReadingHostTests: XCTestCase {
             ),
             accounts: accounts,
             peers: peers,
-            rendezvous: rendezvous
+            rendezvous: rendezvous,
+            preAccountCleanup: { events.append("owned-resources:cleanup") }
         )
 
         do {
@@ -467,9 +471,51 @@ final class SharedReadingHostTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? HostError, .cleanupFailed)
         }
-        XCTAssertTrue(events.values.contains("account:delete:participant"))
-        XCTAssertTrue(events.values.contains("account:verify:participant"))
+        XCTAssertLessThan(
+            try XCTUnwrap(events.values.firstIndex(of: "cancel:owner")),
+            try XCTUnwrap(events.values.firstIndex(of: "cancel:participant"))
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(events.values.firstIndex(of: "cancel:participant")),
+            try XCTUnwrap(events.values.firstIndex(of: "owned-resources:cleanup"))
+        )
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:remote-room-cleanup:") }))
         XCTAssertFalse(events.values.contains("account:delete:owner"))
+        XCTAssertFalse(events.values.contains("account:delete:participant"))
+        XCTAssertFalse(events.values.contains("account:verify:owner"))
+        XCTAssertFalse(events.values.contains("account:verify:participant"))
+        XCTAssertFalse(events.values.contains("manifest:remove"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
+        try? FileManager.default.removeItem(at: manifestURL)
+    }
+
+    func testFailedParticipantStopSkipsRemoteAndAccountCleanupAndRetainsRecoveryState() async throws {
+        let events = EventRecorder()
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-participant-stop-failure-\(UUID().uuidString).json")
+        let host = SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: FakeAccounts(events: events),
+            peers: FakePeers(events: events, cancelErrorRole: .participant),
+            rendezvous: FakeRendezvous(events: events),
+            preAccountCleanup: { events.append("owned-resources:cleanup") }
+        )
+
+        let report = try await host.runReport()
+
+        XCTAssertTrue(report.cleanupFailed)
+        XCTAssertLessThan(
+            try XCTUnwrap(events.values.firstIndex(of: "cancel:owner")),
+            try XCTUnwrap(events.values.firstIndex(of: "cancel:participant"))
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(events.values.firstIndex(of: "cancel:participant")),
+            try XCTUnwrap(events.values.firstIndex(of: "owned-resources:cleanup"))
+        )
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:remote-room-cleanup:") }))
+        XCTAssertFalse(events.values.contains("account:delete:owner"))
+        XCTAssertFalse(events.values.contains("account:delete:participant"))
+        XCTAssertFalse(events.values.contains("account:verify:owner"))
+        XCTAssertFalse(events.values.contains("account:verify:participant"))
         XCTAssertFalse(events.values.contains("manifest:remove"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
         try? FileManager.default.removeItem(at: manifestURL)
@@ -499,7 +545,8 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertEqual(report.primaryFailure, .processFailed(role: .owner, status: 9))
         XCTAssertTrue(report.cleanupFailed)
         XCTAssertFalse(events.values.contains("account:delete:owner"))
-        XCTAssertTrue(events.values.contains("account:delete:participant"))
+        XCTAssertFalse(events.values.contains("account:delete:participant"))
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:remote-room-cleanup:") }))
         XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
         try? FileManager.default.removeItem(at: manifestURL)
     }
@@ -1335,6 +1382,7 @@ final class SharedReadingHostTests: XCTestCase {
             return ProcessResult(exitStatus: handle.status, stdout: "", stderr: "")
         }
         func cancel(_ handle: SharedReadingPeerHandle) async throws {
+            events.append("cancel:\(handle.role.rawValue)")
             if handle.role == cancelErrorRole { throw TestAccountClientError.httpFailure(statusCode: 500) }
         }
     }

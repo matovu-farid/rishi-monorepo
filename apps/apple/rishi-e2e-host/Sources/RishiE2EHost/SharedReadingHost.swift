@@ -1046,8 +1046,9 @@ public struct SharedReadingHost: Sendable {
         } catch {
             cleanupFailed = true
         }
+        let peersStopped = ownerStopped && participantStopped
         var remoteRoomsAbsent = false
-        if ownedResourcesAbsent {
+        if peersStopped && ownedResourcesAbsent {
             let emails = [owner?.email, participant?.email].compactMap { $0 }
             if emails.count == 2 {
                 do {
@@ -1060,11 +1061,11 @@ public struct SharedReadingHost: Sendable {
                 remoteRoomsAbsent = true
             }
         }
-        // Delete each account independently once its own peer is stopped. A
-        // failed stop must preserve that account's credentials, but must not
-        // prevent cleanup of the other account.
+        // Shared rooms span both accounts, so no remote state can be removed
+        // until both peer processes are proven stopped. A failed stop retains
+        // both accounts and the recovery state for a later complete cleanup.
         var accountsDeletedAndVerified = true
-        if let owner, ownerStopped, ownedResourcesAbsent, remoteRoomsAbsent {
+        if let owner, peersStopped, ownedResourcesAbsent, remoteRoomsAbsent {
             do {
                 try await accounts.delete(owner)
                 try await accounts.verifyDeleted(owner)
@@ -1078,7 +1079,7 @@ public struct SharedReadingHost: Sendable {
         } else if owner != nil {
             accountsDeletedAndVerified = false
         }
-        if let participant, participantStopped, ownedResourcesAbsent, remoteRoomsAbsent {
+        if let participant, peersStopped, ownedResourcesAbsent, remoteRoomsAbsent {
             do {
                 try await accounts.delete(participant)
                 try await accounts.verifyDeleted(participant)
