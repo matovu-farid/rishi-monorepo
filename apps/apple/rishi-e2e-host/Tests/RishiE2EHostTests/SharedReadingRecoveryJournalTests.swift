@@ -1119,6 +1119,46 @@ final class SharedReadingRecoveryJournalTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "simulator:absent:simulator-1")), try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner")))
     }
 
+    func testRecoveryRunsOneBatchedRemoteRoomCleanupBeforeTheFirstAccountDelete() async throws {
+        let fixture = try makeOrchestrationFixture(includeProcess: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL),
+            cleanupSharedReadingRooms: { emails in
+                events.append("remote-room-cleanup:\(emails.sorted().joined(separator: ","))")
+            }
+        )
+
+        let remote = try XCTUnwrap(events.values.firstIndex(where: { $0.hasPrefix("remote-room-cleanup:") }))
+        XCTAssertEqual(events.values.filter { $0.hasPrefix("remote-room-cleanup:") }.count, 1)
+        XCTAssertLessThan(remote, try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner")))
+    }
+
+    func testRecoveryRetainsJournalAndSkipsAccountDeletionWhenRemoteRoomCleanupFails() async throws {
+        let fixture = try makeOrchestrationFixture(includeProcess: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let events = RecoveryEventRecorder()
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingRecoveryJournal.recover(
+            at: fixture.artifactURL,
+            temporaryRoot: fixture.root,
+            configuredBuildLockURL: fixture.lockURL,
+            validation: recoveryValidation,
+            operations: recoveryOperations(events: events, artifactURL: fixture.artifactURL),
+            cleanupSharedReadingRooms: { _ in throw RecoveryInspectionTestError.unavailable }
+        ))
+
+        XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:") }))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifactURL.path))
+        XCTAssertEqual(try SharedReadingRecoveryJournal.unresolvedArtifact(in: fixture.root), fixture.artifactURL)
+    }
+
     func testRecoveryStopsMatchingProcessesBeforeDeletingAccounts() async throws {
         let fixture = try makeOrchestrationFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

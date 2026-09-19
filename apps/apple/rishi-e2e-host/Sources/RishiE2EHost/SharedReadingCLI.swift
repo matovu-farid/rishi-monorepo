@@ -101,8 +101,7 @@ public enum SharedReadingCLI {
             throw Error.missing("RISHI_E2E_ALLOW_NETWORK=1")
         }
         let baseURL = try requiredURL(environment, key: "RISHI_E2E_API_BASE_URL")
-        guard baseURL.scheme?.lowercased() == "https",
-              baseURL.host?.lowercased() == "api.fidexa.org",
+        guard baseURL.absoluteString == "https://api-e2e.fidexa.org",
               baseURL.path.isEmpty || baseURL.path == "/",
               baseURL.query == nil,
               baseURL.fragment == nil,
@@ -200,7 +199,7 @@ public enum SharedReadingCLI {
             case .invalidPath(let key):
                 return "E2E path must be absolute and canonical: \(key)"
             case .invalidProductionEndpoint:
-                return "RISHI_E2E_API_BASE_URL must be the canonical https://api.fidexa.org endpoint."
+                return "RISHI_E2E_API_BASE_URL must be the exact isolated https://api-e2e.fidexa.org endpoint."
             case .invalidArguments:
                 return "Invalid arguments. Use --help for supported routes."
             }

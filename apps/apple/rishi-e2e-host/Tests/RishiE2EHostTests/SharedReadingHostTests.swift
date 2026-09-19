@@ -66,7 +66,7 @@ final class SharedReadingHostTests: XCTestCase {
             simulatorID: "sim",
             derivedDataRoot: root.deletingLastPathComponent(),
             resultBundleRoot: root,
-            rendezvousEnvironment: ["RISHI_E2E_RENDEZVOUS_SECRET": "relay-secret"],
+            launchEnvironment: ["RISHI_E2E_RENDEZVOUS_SECRET": "relay-secret"],
             catalystRegistration: .init(runnerNonce: "runner-nonce", appNonce: "app-nonce")
         ))
         let account = TestAccount(role: .owner, email: "owner@example.test", password: "pw", userID: "id", bearerToken: "token")
@@ -89,6 +89,69 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertNil(appEnvironment["RISHI_E2E_RUNNER_REGISTRATION_NONCE"])
         XCTAssertEqual(runnerEnvironment["RISHI_E2E_RENDEZVOUS_SECRET"], "relay-secret")
         XCTAssertEqual(appEnvironment["RISHI_E2E_RENDEZVOUS_SECRET"], "relay-secret")
+    }
+
+    func testBothE2EEndpointsAreInjectedIntoAllXCTestEnvironmentDictionaries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-xctestrun-endpoints-\(UUID().uuidString)", isDirectory: true)
+        let products = root.appendingPathComponent("Build/Products", isDirectory: true)
+        try FileManager.default.createDirectory(at: products, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = products.appendingPathComponent("source.xctestrun")
+        let plist: [String: Any] = ["UITests": ["TestBundlePath": "__TESTROOT__/rishiUITests.xctest"]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0).write(to: source)
+        let runner = XCTestPeerProcessRunner(configuration: .init(
+            projectPath: URL(fileURLWithPath: "/private/tmp/rishi.xcodeproj"),
+            simulatorID: "sim",
+            derivedDataRoot: root.deletingLastPathComponent(),
+            resultBundleRoot: root,
+            launchEnvironment: [
+                "RISHI_E2E_API_BASE_URL": "https://api-e2e.fidexa.org",
+                "RISHI_E2E_SHARING_WS_URL": "wss://sharing-e2e.fidexa.org",
+            ],
+            catalystRegistration: .init(runnerNonce: "runner-nonce", appNonce: "app-nonce")
+        ))
+        let account = TestAccount(role: .owner, email: "owner@example.test", password: "pw", userID: "id", bearerToken: "token")
+        let manifest = HostRunManifest(
+            runID: "run-endpoints", owner: account,
+            participant: TestAccount(role: .participant, email: "p@example.test", password: "pw", userID: "p", bearerToken: "token"),
+            fixture: .init(role: .owner, format: .epub, basename: "book.epub", sha256: String(repeating: "a", count: 64), byteSize: 1),
+            ownerDestination: .catalyst, participantDestination: .iPhone17Pro,
+            rendezvousPath: "/private/tmp/invite"
+        )
+
+        for role in [TestAccountRole.owner, .participant] {
+            let clone = try runner.makeRoleTestRunSpecification(
+                role: role,
+                derivedData: root,
+                manifest: manifest,
+                inviteToken: role == .participant ? "raw-token" : nil
+            )
+            let decoded = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: clone), format: nil) as? [String: Any])
+            let target = try XCTUnwrap(decoded["UITests"] as? [String: Any])
+            for key in ["EnvironmentVariables", "TestingEnvironmentVariables", "UITargetAppEnvironmentVariables"] {
+                let values = try XCTUnwrap(target[key] as? [String: String])
+                XCTAssertEqual(values["RISHI_E2E_API_BASE_URL"], "https://api-e2e.fidexa.org", "\(role) \(key)")
+                XCTAssertEqual(values["RISHI_E2E_SHARING_WS_URL"], "wss://sharing-e2e.fidexa.org", "\(role) \(key)")
+            }
+        }
+    }
+
+    func testRemoteRoomCleanupCompletesBeforeEitherAccountDeletion() async throws {
+        let events = EventRecorder()
+        let manifestURL = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-host-cleanup-\(UUID().uuidString).json")
+        let host = SharedReadingHost(
+            configuration: makeConfiguration(manifestURL: manifestURL),
+            accounts: FakeAccounts(events: events),
+            peers: FakePeers(events: events),
+            rendezvous: FakeRendezvous(events: events)
+        )
+
+        try await host.run()
+
+        let remote = try XCTUnwrap(events.values.firstIndex(of: "account:remote-room-cleanup:owner,participant"))
+        XCTAssertEqual(events.values.filter { $0.hasPrefix("account:remote-room-cleanup:") }.count, 1)
+        XCTAssertLessThan(remote, try XCTUnwrap(events.values.firstIndex(of: "account:delete:owner")))
+        XCTAssertLessThan(remote, try XCTUnwrap(events.values.firstIndex(of: "account:delete:participant")))
     }
 
     func testPeerRegistrationNonceAndRoleAreWrittenToXctestrunEnvironment() throws {
@@ -278,7 +341,8 @@ final class SharedReadingHostTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(events.values.firstIndex(of: "account:wait-book:owner")), rendezvousIndex)
         XCTAssertEqual(Array(events.values.suffix(from: rendezvousIndex)), [
             "rendezvous:wait", "launch:participant",
-            "wait:participant", "account:delete:owner", "account:verify:owner",
+            "wait:participant", "account:remote-room-cleanup:owner,participant",
+            "account:delete:owner", "account:verify:owner",
             "account:delete:participant", "account:verify:participant", "manifest:remove"
         ])
         XCTAssertFalse(FileManager.default.fileExists(atPath: manifestURL.path))
@@ -1172,6 +1236,9 @@ final class SharedReadingHostTests: XCTestCase {
                 }
             }
         }
+        func cleanupSharedReadingRooms(_ emails: [String]) async throws {
+            events.append("account:remote-room-cleanup:\(emails.map { $0.components(separatedBy: "@").first ?? $0 }.sorted().joined(separator: ","))")
+        }
         func delete(_ account: TestAccount) async throws {
             events.append("account:delete:\(account.role.rawValue)")
             if account.role == deleteErrorRole { throw TestAccountClientError.httpFailure(statusCode: 500) }
@@ -1229,6 +1296,7 @@ final class SharedReadingHostTests: XCTestCase {
         }
 
         func waitForBookUpload(_ account: TestAccount, expectedSHA256: String, timeout: Duration) async throws {}
+        func cleanupSharedReadingRooms(_ emails: [String]) async throws {}
         func delete(_ account: TestAccount) async throws {}
         func verifyDeleted(_ account: TestAccount) async throws {}
     }

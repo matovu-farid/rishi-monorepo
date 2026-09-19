@@ -706,6 +706,35 @@ final class TestAccountClientTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, 2)
     }
 
+    func testCleanupSharedReadingRoomsSendsOnlyTheTwoGeneratedEmailsAndIsIdempotent() async throws {
+        let transport = RecordingTransport(responses: [
+            .json(["ok": true]),
+            .json(["ok": true]),
+        ])
+        let client = makeClient(transport: transport)
+
+        try await client.cleanupSharedReadingRooms([
+            "rishi-e2e-owner@example.test",
+            "RISHI-E2E-PARTICIPANT@example.test",
+        ])
+        try await client.cleanupSharedReadingRooms([
+            "rishi-e2e-owner@example.test",
+            "rishi-e2e-participant@example.test",
+        ])
+
+        XCTAssertEqual(transport.requests.map(\.url?.path), ["/test/rooms/cleanup", "/test/rooms/cleanup"])
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "POST"])
+        for request in transport.requests {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Test-Auth-Secret"), "gate")
+            let body = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(Set(json["emails"] as? [String] ?? []), Set([
+                "rishi-e2e-owner@example.test",
+                "rishi-e2e-participant@example.test",
+            ]))
+        }
+    }
+
     private final class RecordingTransport: TestAccountTransport, @unchecked Sendable {
         struct Response: Sendable {
             let statusCode: Int

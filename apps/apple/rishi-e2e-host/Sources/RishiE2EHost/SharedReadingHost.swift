@@ -39,6 +39,7 @@ public protocol TestAccountManaging: Sendable {
     func preflight() async throws
     func create(role: TestAccountRole) async throws -> TestAccount
     func waitForBookUpload(_ account: TestAccount, expectedSHA256: String, timeout: Duration) async throws
+    func cleanupSharedReadingRooms(_ emails: [String]) async throws
     func delete(_ account: TestAccount) async throws
     func verifyDeleted(_ account: TestAccount) async throws
 }
@@ -147,11 +148,11 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
         public let resultBundleRoot: URL
         public let allowSimulatorReset: Bool
         public let fixturePath: URL?
-        public let rendezvousEnvironment: [String: String]
+        public let launchEnvironment: [String: String]
         public let usePreparedProducts: Bool
         public let catalystRegistration: CatalystRegistration?
 
-        public init(projectPath: URL, scheme: String = "rishi-mcp", simulatorID: String, derivedDataRoot: URL, resultBundleRoot: URL, allowSimulatorReset: Bool = false, fixturePath: URL? = nil, rendezvousEnvironment: [String: String] = [:], usePreparedProducts: Bool = false, catalystRegistration: CatalystRegistration? = nil) {
+        public init(projectPath: URL, scheme: String = "rishi-mcp", simulatorID: String, derivedDataRoot: URL, resultBundleRoot: URL, allowSimulatorReset: Bool = false, fixturePath: URL? = nil, launchEnvironment: [String: String] = [:], usePreparedProducts: Bool = false, catalystRegistration: CatalystRegistration? = nil) {
             self.projectPath = projectPath
             self.scheme = scheme
             self.simulatorID = simulatorID
@@ -159,7 +160,7 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
             self.resultBundleRoot = resultBundleRoot
             self.allowSimulatorReset = allowSimulatorReset
             self.fixturePath = fixturePath
-            self.rendezvousEnvironment = rendezvousEnvironment
+            self.launchEnvironment = launchEnvironment
             self.usePreparedProducts = usePreparedProducts
             self.catalystRegistration = catalystRegistration
         }
@@ -357,20 +358,23 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
             for (name, value) in environment { values[name] = value }
             testConfiguration[key] = values
         }
-        if role == .owner, let registration = configuration.catalystRegistration {
-            var appEnvironment = (testConfiguration["UITargetAppEnvironmentVariables"] as? [String: Any]) ?? [:]
-            let relayEnvironment = configuration.rendezvousEnvironment.merging([
+        var appEnvironment = (testConfiguration["UITargetAppEnvironmentVariables"] as? [String: Any]) ?? [:]
+        let relayEnvironment = configuration.launchEnvironment.merging([
                 "RISHI_UITEST": "1",
                 "RISHI_E2E_REAL_AUTH": "1",
                 "RISHI_E2E_RUN_ID": manifest.runID,
                 "RISHI_E2E_ROLE": role.rawValue,
-                "RISHI_E2E_PROCESS_KIND": PendingCatalystLaunch.Kind.app.rawValue,
-                "RISHI_E2E_APP_REGISTRATION_NONCE": registration.appNonce,
-                "RISHI_E2E_BUNDLE_IDENTIFIER": registration.appBundleIdentifier,
+                "RISHI_E2E_EMAIL": environment["RISHI_E2E_EMAIL"] ?? "",
+                "RISHI_E2E_PASSWORD": environment["RISHI_E2E_PASSWORD"] ?? "",
+                "RISHI_E2E_TEST_AUTH_SECRET": environment["RISHI_E2E_TEST_AUTH_SECRET"] ?? "",
             ]) { _, new in new }
-            for (name, value) in relayEnvironment { appEnvironment[name] = value }
-            testConfiguration["UITargetAppEnvironmentVariables"] = appEnvironment
+        for (name, value) in relayEnvironment { appEnvironment[name] = value }
+        if role == .owner, let registration = configuration.catalystRegistration {
+            appEnvironment["RISHI_E2E_PROCESS_KIND"] = PendingCatalystLaunch.Kind.app.rawValue
+            appEnvironment["RISHI_E2E_APP_REGISTRATION_NONCE"] = registration.appNonce
+            appEnvironment["RISHI_E2E_BUNDLE_IDENTIFIER"] = registration.appBundleIdentifier
         }
+        testConfiguration["UITargetAppEnvironmentVariables"] = appEnvironment
         root[testKey] = testConfiguration
 
         // Keep the clone beside the generated specification. Xcode resolves
@@ -465,7 +469,7 @@ public struct XCTestPeerProcessRunner: SharedReadingPeerRunner {
     }
 
     private func environment(for role: TestAccountRole, email: String, password: String, manifest: HostRunManifest, inviteToken: String?) -> [String: String] {
-        var values = configuration.rendezvousEnvironment.merging([
+        var values = configuration.launchEnvironment.merging([
             "RISHI_UITEST": "1",
             "RISHI_E2E_REAL_AUTH": "1",
             "RISHI_E2E_RESET_ON_LAUNCH": "1",
@@ -1042,11 +1046,25 @@ public struct SharedReadingHost: Sendable {
         } catch {
             cleanupFailed = true
         }
+        var remoteRoomsAbsent = false
+        if ownedResourcesAbsent {
+            let emails = [owner?.email, participant?.email].compactMap { $0 }
+            if emails.count == 2 {
+                do {
+                    try await accounts.cleanupSharedReadingRooms(emails)
+                    remoteRoomsAbsent = true
+                } catch {
+                    cleanupFailed = true
+                }
+            } else {
+                remoteRoomsAbsent = true
+            }
+        }
         // Delete each account independently once its own peer is stopped. A
         // failed stop must preserve that account's credentials, but must not
         // prevent cleanup of the other account.
         var accountsDeletedAndVerified = true
-        if let owner, ownerStopped, ownedResourcesAbsent {
+        if let owner, ownerStopped, ownedResourcesAbsent, remoteRoomsAbsent {
             do {
                 try await accounts.delete(owner)
                 try await accounts.verifyDeleted(owner)
@@ -1060,7 +1078,7 @@ public struct SharedReadingHost: Sendable {
         } else if owner != nil {
             accountsDeletedAndVerified = false
         }
-        if let participant, participantStopped, ownedResourcesAbsent {
+        if let participant, participantStopped, ownedResourcesAbsent, remoteRoomsAbsent {
             do {
                 try await accounts.delete(participant)
                 try await accounts.verifyDeleted(participant)

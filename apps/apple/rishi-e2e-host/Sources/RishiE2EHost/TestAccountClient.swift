@@ -96,6 +96,7 @@ public enum TestAccountClientError: Error, LocalizedError, Equatable {
     case bookUploadTimedOut
     case deletionCleanupFailed
     case deletionVerificationFoundResidue
+    case remoteRoomCleanupFailed
 
     public var errorDescription: String? {
         switch self {
@@ -108,6 +109,7 @@ public enum TestAccountClientError: Error, LocalizedError, Equatable {
         case .bookUploadTimedOut: return "The uploaded book did not become server-ready before the timeout."
         case .deletionCleanupFailed: return "Authenticated deletion failed and the gated test-account cleanup could not be confirmed."
         case .deletionVerificationFoundResidue: return "Account deletion verification found remaining account data."
+        case .remoteRoomCleanupFailed: return "The gated shared-reading room cleanup could not be confirmed."
         }
     }
 }
@@ -128,6 +130,7 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
         public let signInPath: String
         public let deletionPath: String
         public let provisioningCleanupPath: String
+        public let remoteRoomCleanupPath: String
         public let verificationPath: String
         public let bookReadinessPath: String
         public let dataUseConsent: String
@@ -140,6 +143,7 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
             signInPath: String = "/test/sign-in",
             deletionPath: String = "/api/user",
             provisioningCleanupPath: String = "/test/users",
+            remoteRoomCleanupPath: String = "/test/rooms/cleanup",
             verificationPath: String = "/api/user",
             bookReadinessPath: String = "/api/sync/changes?scope=full",
             dataUseConsent: String = "2026-07-29",
@@ -151,6 +155,7 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
             self.signInPath = signInPath
             self.deletionPath = deletionPath
             self.provisioningCleanupPath = provisioningCleanupPath
+            self.remoteRoomCleanupPath = remoteRoomCleanupPath
             self.verificationPath = verificationPath
             self.bookReadinessPath = bookReadinessPath
             self.dataUseConsent = dataUseConsent
@@ -354,6 +359,28 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
         }
         if !failures.isEmpty {
             throw ProvisionedAccountRecoveryError(emails: failures)
+        }
+    }
+
+    /// Remove every shared-reading room owned by the two generated accounts.
+    /// The server resolves ownership from these addresses; callers never
+    /// supply room or user identifiers.
+    public func cleanupSharedReadingRooms(_ emails: [String]) async throws {
+        let normalized = emails.map { $0.lowercased() }
+        guard normalized.count == 2,
+              Set(normalized).count == 2,
+              normalized.allSatisfy(isGeneratedRecoveryEmail) else {
+            throw TestAccountClientError.invalidConfiguration("Shared-reading cleanup requires two distinct generated test emails.")
+        }
+        var request = try makeRequest(path: configuration.remoteRoomCleanupPath, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(configuration.testAuthSecret, forHTTPHeaderField: "X-Test-Auth-Secret")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["emails": normalized.sorted()])
+        let response = try await transport.send(request)
+        guard (200..<300).contains(response.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+              object["ok"] as? Bool == true else {
+            throw TestAccountClientError.remoteRoomCleanupFailed
         }
     }
 

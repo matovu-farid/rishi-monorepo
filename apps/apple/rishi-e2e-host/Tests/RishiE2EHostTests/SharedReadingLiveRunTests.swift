@@ -115,6 +115,16 @@ final class SharedReadingLiveRunTests: XCTestCase {
         XCTAssertEqual(calls.values, [])
     }
 
+    func testLiveRunRequiresExactE2EWebSocketOriginBeforeAnyDependencyCall() async throws {
+        let calls = LiveRunCallRecorder()
+        let dependencies = SharedReadingLiveRun.Dependencies.probe { calls.append($0) }
+        var environment = SharedReadingLiveRun.validTestEnvironment
+        environment["RISHI_E2E_SHARING_WS_URL"] = "wss://sharing.fidexa.org"
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingLiveRun.execute(environment: environment, dependencies: dependencies))
+        XCTAssertEqual(calls.values, [])
+    }
+
     func testLiveRunRejectsExternalPreparedDerivedRootBeforeSideEffects() async throws {
         let calls = LiveRunCallRecorder()
         let dependencies = SharedReadingLiveRun.Dependencies.probe { calls.append($0) }

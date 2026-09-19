@@ -942,7 +942,10 @@ extension SharedReadingRecoveryJournal {
         try await orchestrateRecovery(
             artifact,
             configuredBuildLockURL: configuredBuildLockURL,
-            operations: operations
+            operations: operations,
+            cleanupSharedReadingRooms: { emails in
+                try await accountClient.cleanupSharedReadingRooms(emails)
+            }
         )
     }
 
@@ -1029,7 +1032,8 @@ extension SharedReadingRecoveryJournal {
         temporaryRoot: URL,
         configuredBuildLockURL: URL,
         validation: RecoveryArtifactValidation,
-        operations: RecoveryOperations
+        operations: RecoveryOperations,
+        cleanupSharedReadingRooms: @escaping @Sendable ([String]) async throws -> Void = { _ in }
     ) async throws {
         let artifact = try decodeRecoveryArtifact(
             at: artifactURL,
@@ -1041,14 +1045,16 @@ extension SharedReadingRecoveryJournal {
         try await orchestrateRecovery(
             artifact,
             configuredBuildLockURL: configuredBuildLockURL,
-            operations: operations
+            operations: operations,
+            cleanupSharedReadingRooms: cleanupSharedReadingRooms
         )
     }
 
     private static func orchestrateRecovery(
         _ artifact: RecoveryArtifact,
         configuredBuildLockURL: URL,
-        operations: RecoveryOperations
+        operations: RecoveryOperations,
+        cleanupSharedReadingRooms: @escaping @Sendable ([String]) async throws -> Void = { _ in }
     ) async throws {
         var failures = 0
         if artifact.isLegacy {
@@ -1089,6 +1095,13 @@ extension SharedReadingRecoveryJournal {
                 do { try operations.removeSecretArtifact(secretURL) }
                 catch { failures += 1 }
             }
+        }
+        guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
+
+        if artifact.accounts.count == 2 {
+            do {
+                try await cleanupSharedReadingRooms(artifact.accounts.map(\.email))
+            } catch { failures += 1 }
         }
         guard failures == 0 else { throw RecoveryCombinedError(failureCount: failures) }
 

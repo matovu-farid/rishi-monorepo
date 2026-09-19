@@ -124,6 +124,7 @@ final class SharedReadingTestSupport {
     func launch(role: Role) throws -> XCUIApplication {
         recordStage("launch.begin")
         let app = XCUIApplication()
+        let endpointEnvironment = try Self.requiredEndpointEnvironment(from: ProcessInfo.processInfo.environment)
         if role == .owner {
             try registerRunner()
             try prepareAppLaunch()
@@ -142,6 +143,9 @@ final class SharedReadingTestSupport {
         app.launchEnvironment["RISHI_UITEST"] = "1"
         app.launchEnvironment["RISHI_E2E_REAL_AUTH"] = "1"
         app.launchEnvironment["RISHI_E2E_ROLE"] = role.rawValue
+        for (key, value) in endpointEnvironment {
+            app.launchEnvironment[key] = value
+        }
         // The host keeps credentials out of the on-disk manifest, but the
         // launched app must receive the same disposable values so its
         // DEBUG-only visible form can prefill them without Catalyst keyboard
@@ -155,7 +159,10 @@ final class SharedReadingTestSupport {
         if let secret = ProcessInfo.processInfo.environment["RISHI_E2E_TEST_AUTH_SECRET"], !secret.isEmpty {
             app.launchEnvironment["RISHI_E2E_TEST_AUTH_SECRET"] = secret
         }
-        app.launch()
+        try Self.launchWithRequiredEndpoints(
+            from: ProcessInfo.processInfo.environment,
+            launch: { app.launch() }
+        )
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         bringToFront(app)
         recordStage("launch.foreground")
@@ -325,10 +332,9 @@ final class SharedReadingTestSupport {
         let create = app.buttons["shared-reading-create-link"]
         XCTAssertTrue(create.waitForExistence(timeout: 15))
         activate(create)
-        // The production API returns the canonical HTTPS universal link. Some
-        // local/debug builds may expose the equivalent native scheme, so read
-        // either supported representation and normalize it to the raw token.
-        let link = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'rishi.fidexa.org/sharing/session?token=' OR label CONTAINS 'rishi://sharing/session?token='")).firstMatch
+        // The isolated API returns the canonical HTTPS universal link. Relay
+        // only its extracted raw token to the participant.
+        let link = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'api-e2e.fidexa.org/sharing/session?token='")).firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 45))
         let value = link.label
         guard let rawToken = Self.inviteToken(from: value) else {
@@ -554,9 +560,21 @@ final class SharedReadingTestSupport {
     /// sharing flow to rebuild its in-memory transport and coordinator.
     @MainActor
     func restartPreservingLocalState(_ app: XCUIApplication) {
-        app.terminate()
-        app.launchArguments.removeAll { $0 == "--rishi-e2e-reset" }
-        app.launch()
+        do {
+            let endpointEnvironment = try Self.requiredEndpointEnvironment(from: ProcessInfo.processInfo.environment)
+            for (key, value) in endpointEnvironment {
+                app.launchEnvironment[key] = value
+            }
+            app.terminate()
+            app.launchArguments.removeAll { $0 == "--rishi-e2e-reset" }
+            try Self.launchWithRequiredEndpoints(
+                from: ProcessInfo.processInfo.environment,
+                launch: { app.launch() }
+            )
+        } catch {
+            XCTFail("shared-reading restart requires exact E2E endpoints: \(error)")
+            return
+        }
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
     }
 
@@ -806,12 +824,37 @@ final class SharedReadingTestSupport {
     static func inviteToken(from link: String) -> String? {
         guard let url = URL(string: link),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              ((url.scheme == "rishi" && url.host == "sharing" && url.path == "/session")
-               || (url.scheme == "https" && url.host == "rishi.fidexa.org" && url.path == "/sharing/session")),
+              url.scheme == "https" && url.host == "api-e2e.fidexa.org" && url.path == "/sharing/session",
               let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
               !token.isEmpty else {
             return nil
         }
         return token
+    }
+
+    /// Validate the two endpoint values before any application launch. The
+    /// closure seam keeps the negative contract executable without creating a
+    /// simulator or app process.
+    @discardableResult
+    static func launchWithRequiredEndpoints(
+        from environment: [String: String],
+        launch: () -> Void
+    ) throws -> [String: String] {
+        let endpointEnvironment = try requiredEndpointEnvironment(from: environment)
+        launch()
+        return endpointEnvironment
+    }
+
+    static func requiredEndpointEnvironment(
+        from environment: [String: String]
+    ) throws -> [String: String] {
+        guard environment["RISHI_E2E_API_BASE_URL"] == "https://api-e2e.fidexa.org",
+              environment["RISHI_E2E_SHARING_WS_URL"] == "wss://sharing-e2e.fidexa.org" else {
+            throw NSError(domain: "SharedReadingTestSupport", code: 1)
+        }
+        return [
+            "RISHI_E2E_API_BASE_URL": "https://api-e2e.fidexa.org",
+            "RISHI_E2E_SHARING_WS_URL": "wss://sharing-e2e.fidexa.org",
+        ]
     }
 }

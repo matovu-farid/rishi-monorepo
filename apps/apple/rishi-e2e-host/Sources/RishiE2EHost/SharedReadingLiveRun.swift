@@ -31,7 +31,7 @@ public enum SharedReadingLiveRunError: Error, LocalizedError, Equatable, Sendabl
     public var errorDescription: String? {
         switch self {
         case .missingConfiguration(let value): return "Missing required live E2E configuration: \(value)"
-        case .invalidProductionEndpoint: return "RISHI_E2E_API_BASE_URL must be the canonical https://api.fidexa.org endpoint."
+        case .invalidProductionEndpoint: return "RISHI_E2E_API_BASE_URL and RISHI_E2E_SHARING_WS_URL must be the exact isolated E2E origins."
         case .externalPreparedDerivedRoot: return "Live E2E derived data must be owned by its run directory."
         case .retainedRecoveryArtifact: return "A retained live E2E recovery artifact must be reconciled first."
         case .insufficientParticipantProgress: return "The participant did not observe the required progress sequence."
@@ -90,7 +90,8 @@ public enum SharedReadingLiveRun {
 
     static let validTestEnvironment: [String: String] = [
         "RISHI_E2E_ALLOW_NETWORK": "1", "RISHI_E2E_ALLOW_SIMULATOR_RESET": "1",
-        "RISHI_E2E_API_BASE_URL": "https://api.fidexa.org",
+        "RISHI_E2E_API_BASE_URL": "https://api-e2e.fidexa.org",
+        "RISHI_E2E_SHARING_WS_URL": "wss://sharing-e2e.fidexa.org",
         "RISHI_E2E_TEST_AUTH_SECRET": "test-secret", "RISHI_E2E_TEST_DOMAIN": "example.test",
         "RISHI_E2E_PROJECT": "/private/tmp/rishi.xcodeproj", "RISHI_E2E_FIXTURE": "/private/tmp/book.epub",
         "RISHI_E2E_IPHONE17_UDID": "source-udid",
@@ -186,9 +187,12 @@ public enum SharedReadingLiveRun {
         if requireSimulatorReset, environment["RISHI_E2E_ALLOW_SIMULATOR_RESET"] != "1" { throw SharedReadingLiveRunError.missingConfiguration("RISHI_E2E_ALLOW_SIMULATOR_RESET=1") }
         guard environment["RISHI_E2E_PREPARED_DERIVED_ROOT"] == nil else { throw SharedReadingLiveRunError.externalPreparedDerivedRoot }
         guard let rawURL = environment["RISHI_E2E_API_BASE_URL"], let url = URL(string: rawURL), url.absoluteString == rawURL,
-              url.scheme?.lowercased() == "https", url.host?.lowercased() == "api.fidexa.org",
+              rawURL == "https://api-e2e.fidexa.org",
               url.path.isEmpty || url.path == "/", url.query == nil, url.fragment == nil,
               url.port == nil, url.user == nil, url.password == nil else { throw SharedReadingLiveRunError.invalidProductionEndpoint }
+        guard environment["RISHI_E2E_SHARING_WS_URL"] == "wss://sharing-e2e.fidexa.org" else {
+            throw SharedReadingLiveRunError.invalidProductionEndpoint
+        }
         for key in ["RISHI_E2E_TEST_AUTH_SECRET", "RISHI_E2E_TEST_DOMAIN", "RISHI_E2E_PROJECT", "RISHI_E2E_FIXTURE", "RISHI_E2E_IPHONE17_UDID"] {
             guard let value = environment[key], !value.isEmpty else { throw SharedReadingLiveRunError.missingConfiguration(key) }
         }
@@ -364,12 +368,15 @@ private final class ProductionState: @unchecked Sendable {
         let derived = runRoot.appendingPathComponent("derived", isDirectory: true)
         let results = runRoot.appendingPathComponent("results", isDirectory: true)
         try FileManager.default.createDirectory(at: results, withIntermediateDirectories: true)
+        var launchEnvironment = relayConfiguration.environment
+        launchEnvironment["RISHI_E2E_API_BASE_URL"] = environment["RISHI_E2E_API_BASE_URL"]
+        launchEnvironment["RISHI_E2E_SHARING_WS_URL"] = environment["RISHI_E2E_SHARING_WS_URL"]
         let peerRunner = XCTestPeerProcessRunner(
             configuration: .init(
                 projectPath: projectURL, simulatorID: simulatorID,
                 derivedDataRoot: derived, resultBundleRoot: results,
                 allowSimulatorReset: true, fixturePath: fixtureURL,
-                rendezvousEnvironment: relayConfiguration.environment,
+                launchEnvironment: launchEnvironment,
                 catalystRegistration: .init(runnerNonce: runnerNonce, appNonce: appNonce)
             ),
             processRunner: FoundationProcessRunner(recorder: journal),
