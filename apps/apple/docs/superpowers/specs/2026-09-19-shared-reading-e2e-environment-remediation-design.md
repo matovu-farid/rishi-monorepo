@@ -1,6 +1,6 @@
 # Shared-Reading Live E2E Isolated Environment Remediation Design
 
-> **Status:** Adversarial review loop complete — **PASS** (2 rounds, 0 open issues).
+> **Status:** Adversarial review loop active — four completed design rounds; independent implementation-plan remediations pending re-review.
 >
 > **Amends:** [2026-09-17 Shared-Reading Repeatable Local End-to-End Test Design](2026-09-17-shared-reading-live-e2e-test-design.md). This amendment supersedes that design's production-API assumption and its Worker-out-of-scope statement for the live shared-reading path only. It does not change ordinary application launches, Electron, MCP, or GitHub workflows.
 
@@ -95,6 +95,7 @@ The E2E API vars are explicit rather than inherited:
   "PUBLIC_WEB_URL": "https://api-e2e.fidexa.org",
   "SHARING_WORKER_WS_URL": "wss://sharing-e2e.fidexa.org",
   "ENABLE_TEST_AUTH": "true",
+  "CLOUDFLARE_ACCOUNT_ID": "b700cf80e995aacbfa27aaa8d2084d18",
   "BOOK_STORAGE_BUCKET_NAME": "rishi-books-e2e",
   "BOOK_MAX_FILE_BYTES": "838860800",
   "BOOK_MAX_PER_USER": "500",
@@ -104,7 +105,7 @@ The E2E API vars are explicit rather than inherited:
 
 `PUBLIC_WEB_URL` is deliberately an E2E origin even though browser-based web authentication is outside this test. This prevents the E2E script from producing a production web redirect if a non-exercised route is accidentally reached. No E2E test flow needs an additional web custom domain.
 
-The production/default configuration retains `PUBLIC_API_URL=https://api.fidexa.org`, `SHARING_WORKER_WS_URL=wss://sharing.fidexa.org`, no `ENABLE_TEST_AUTH`, and no E2E route or resource ID.
+The production/default configuration retains `PUBLIC_API_URL=https://api.fidexa.org`, `PUBLIC_WEB_URL=https://rishi.fidexa.org`, `SHARING_WORKER_WS_URL=wss://sharing.fidexa.org`, `BOOK_STORAGE_BUCKET_NAME=rishi-books` matching its production `BOOK_STORAGE` binding, no `ENABLE_TEST_AUTH`, and no E2E route or resource ID.
 
 ### Sharing Worker: `rishi-sharing-worker-e2e`
 
@@ -119,13 +120,17 @@ The block explicitly redeclares both Durable Object bindings, their existing SQL
 }
 ```
 
-`TEST_AUTH_ALLOWED=1` exists only in the E2E sharing environment. Production keeps the variable absent, so the `userId--DisplayName` test bearer and the relay-only test path remain rejected. The E2E `SESSION_ROOM` and `APPLE_SESSION_ROOM` namespaces are owned by `rishi-sharing-worker-e2e`; production retains ownership of its own namespaces. No DO binding is shared between these two scripts.
+`TEST_AUTH_ALLOWED=1` exists only in the E2E sharing environment. Production keeps the variable absent, so the `userId--DisplayName` test bearer and the relay-only test path remain rejected. The E2E `SESSION_ROOM` and `APPLE_SESSION_ROOM` namespaces are owned by `rishi-sharing-worker-e2e`; production retains ownership of its own namespaces. No DO binding is shared between these two scripts, and the E2E sharing Worker has no service bindings.
 
 ## R2 presigning remediation
 
 `workers/worker/src/r2-presign.ts` currently hard-codes `rishi-books`. That makes a correctly isolated `BOOK_STORAGE` binding insufficient: a presigned URL would still name the production bucket. This is a correctness and isolation defect.
 
-Replace the constant with the required `R2SigningEnv.BOOK_STORAGE_BUCKET_NAME` value. Production configuration sets it to `rishi-books`; `env.e2e` sets it to `rishi-books-e2e`. The signer must form its path from that value, and its unit tests must prove both the production and E2E bucket paths. The R2 credentials used by the E2E worker must be restricted to Object Read and Object Write on `rishi-books-e2e` only; they must not grant list, delete, account-wide, or production-bucket access. Provisioning these credentials is a secure Cloudflare secret-management operation, not a checked-in value.
+Replace the constant with the required `R2SigningEnv.BOOK_STORAGE_BUCKET_NAME` value. Production configuration sets it to `rishi-books`; `env.e2e` sets it to `rishi-books-e2e`. The signer must form its path from that value, and its unit tests must prove both the production and E2E bucket paths. The R2 credentials used by the E2E worker must use Cloudflare's bucket-scoped Object Read & Write permission on `rishi-books-e2e` only. Cloudflare defines that permission as read, write, and list objects in the selected bucket, so object listing is an unavoidable capability; the credential must not grant bucket administration, account-wide access, or access to any other bucket. Provisioning these credentials is a secure Cloudflare secret-management operation, not a checked-in value.
+
+## Environment-specific share links
+
+`workers/worker/src/routes/session-shares.ts` currently hard-codes `https://rishi.fidexa.org` in both new and idempotently returned share links. Replace that literal with the required, validated `PUBLIC_WEB_URL` environment origin. Production keeps `PUBLIC_WEB_URL=https://rishi.fidexa.org`; E2E uses exactly `PUBLIC_WEB_URL=https://api-e2e.fidexa.org`, so an E2E response cannot direct a test client to the production web origin. The value must be an HTTPS origin with no user info, alternate port, path, query, or fragment. Route tests must cover production preservation, the E2E origin, and malformed-value rejection. The Apple E2E harness must accept only the exact E2E share-link origin during a gated run and continue to extract only the raw invite token for relay to the participant.
 
 ## Minimum secret model
 
@@ -142,7 +147,7 @@ Secrets are set directly on the E2E script/environment through the deployment op
 | `VOICE_SESSION_NONCE_SECRET` | Independently generated for `rishi-worker-e2e`; required by the exercised Worker/ledger flow. |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | A separately provisioned E2E credential pair with Cloudflare's bucket-scoped Object Read and Write permission on `rishi-books-e2e`, installed only on `rishi-worker-e2e`. It has no access to another bucket or account-level administration. |
 
-`CLOUDFLARE_ACCOUNT_ID` may be supplied as the non-secret account identifier needed to construct the R2 hostname. It does not grant access by itself. The E2E environment must not copy Apple Sign in, APNs, Resend, Stripe, Google, OpenAI, Deepgram, ElevenLabs, Upstash, or other external email, payment, or AI secrets merely to satisfy the production `secrets.required` declaration. The E2E config's required-secret validation lists only the secret set above. Routes requiring omitted capabilities fail closed or remain unexercised.
+`CLOUDFLARE_ACCOUNT_ID=b700cf80e995aacbfa27aaa8d2084d18` is a required non-secret E2E variable because every presigned fixture upload and download uses it to construct the R2 hostname. It does not grant access by itself. The config-isolation verifier must require that exact account ID together with the E2E bucket name, and deployment smoke must complete a signed PUT and GET against `rishi-books-e2e`. The E2E environment must not copy Apple Sign in, APNs, Resend, Stripe, Google, OpenAI, Deepgram, ElevenLabs, Upstash, or other external email, payment, or AI secrets merely to satisfy the production `secrets.required` declaration. The E2E config's required-secret validation lists only the secret set above. Routes requiring omitted capabilities fail closed or remain unexercised.
 
 TURN is optional. Do not provision `TURN_KEY_ID` or `TURN_API_TOKEN` initially. The live flow uses the existing STUN fallback. Add E2E-only TURN secrets only after a recorded live run proves that STUN cannot establish the required peer path; production TURN credentials are never copied.
 
@@ -200,9 +205,9 @@ No Electron, MCP, or GitHub workflow change is part of this sequence. The live c
 
 Completion requires all of the following fresh evidence, with secrets redacted:
 
-1. Deterministic Swift and Worker tests pass. They cover gated E2E endpoint selection, normal-launch production preservation, injection into all three xctestrun environment dictionaries for both roles, recovery acceptance of only `https://api-e2e.fidexa.org`, returned-`wsUrl` origin rejection before socket creation, E2E presigned bucket paths, and production bucket preservation.
-2. A config-isolation verifier parses both resolved E2E configs and proves the exact script names, custom domains, API/sharing origins, `ENABLE_TEST_AUTH=true`, `TEST_AUTH_ALLOWED=1`, service target, D1 name/ID inequality, four R2 names, two KV IDs distinct from production and from each other, E2E DO ownership, empty E2E cron set, and absence of production resource identifiers. It also proves production has no `ENABLE_TEST_AUTH` or `TEST_AUTH_ALLOWED` variable.
-3. Deployment smoke proves `GET https://api-e2e.fidexa.org/health` and `GET https://sharing-e2e.fidexa.org/health` return their expected healthy responses; an E2E test-auth sign-in followed by the gated remote-cleanup operation and canonical deletion proves the E2E API-to-D1/service-binding path without using production. The deployed E2E sharing origin and the exact E2E service-binding target are independently established by the sharing health check, a created-and-purged smoke room, and the config-isolation verifier. The smoke account and room are independently verified absent.
+1. Deterministic Swift and Worker tests pass. They cover gated E2E endpoint selection, ordinary Debug and Release-build production preservation, executable owner/participant/restart launch-environment injection with fail-before-launch behavior, recovery acceptance of only `https://api-e2e.fidexa.org`, returned-`wsUrl` origin rejection at the API and signaling-client socket boundary without creating a task, E2E presigned bucket paths, production bucket preservation, E2E share-link origin selection, and production share-link preservation.
+2. A config-isolation verifier parses both resolved E2E configs and proves the exact script names, custom domains, API/sharing origins, `ENABLE_TEST_AUTH=true`, `TEST_AUTH_ALLOWED=1`, exact API service target, no sharing service bindings, D1 name/ID inequality, four R2 names, two KV IDs distinct from production and from each other, E2E DO ownership, empty E2E cron set, exact required `CLOUDFLARE_ACCOUNT_ID`, and absence of production resource identifiers. It also proves each environment's `BOOK_STORAGE_BUCKET_NAME` exactly equals that environment's `BOOK_STORAGE.bucket_name`, and production has no `ENABLE_TEST_AUTH` or `TEST_AUTH_ALLOWED` variable.
+3. Deployment smoke proves `GET https://api-e2e.fidexa.org/health` and `GET https://sharing-e2e.fidexa.org/health` return their expected healthy responses; an E2E test-auth sign-in, signed fixture PUT/GET against `rishi-books-e2e`, real session creation, authoritative room-exists check, gated remote cleanup, authoritative room-absence check, and canonical deletion prove the E2E API-to-D1/R2/service-binding path without using production. The share URL uses the exact E2E origin, and the smoke account, object, and room are independently verified absent.
 4. The production negative gate proves `https://api.fidexa.org/test/sign-in` returns `404` without presenting an E2E secret, and proves the production sharing Worker rejects a synthetic `userId--DisplayName` test bearer. This evidence confirms that production test-auth and sharing test-bearer shortcuts remain disabled.
 5. Two consecutive focused Apple live runs use the exact E2E API and WSS origins. Each result identifies its unique run ID, has participant-observed sequence `>= 2`, records exactly two generated disposable accounts, and records two independently verified deleted accounts.
 6. Each completed run proves no residue: no retained recovery journal/manifest/secret `.xctestrun` clone/staged fixture/local owned process, no account rows for either recorded address, no E2E R2 object under either generated account prefix, and no active or unpurged E2E shared-reading room owned by either account. The E2E remote-cleanup operation verifies every enumerated room absent before account deletion, and canonical account deletion verifies R2/account absence; cleanup failure is a failed run, not a note.
@@ -241,6 +246,8 @@ Each round reviewed the amendment against the existing live-host implementation,
 | --- | --- | --- | --- |
 | 1 | Medium | The completion gate required immediate room/R2 absence, but the existing public end route only schedules room deletion and the gated fallback account route swallowed R2 failures before deleting identifying rows. | Added an idempotent E2E-only cleanup-and-verification operation used by normal teardown and recovery before account deletion, and required the gated bearer-independent deletion route to delegate to canonical fail-closed account deletion. |
 
+**Round 3 result:** Re-review required. The cleanup and deletion remediations were added before Round 4.
+
 ### Round 4 — Re-review
 
 | # | Sev | Finding | Resolution |
@@ -248,3 +255,15 @@ Each round reviewed the amendment against the existing live-host implementation,
 | 1 | High | `purgeAppleRoom` rejects an active room, while normal live teardown can begin before the room is ended. | Required cleanup to fetch current status/controller generation, end as the recorded owner, verify ended state, then purge and verify authoritative absence; already-ended and already-absent rooms remain idempotent successes. |
 
 **Round 4 result:** **PASS** — 0 open Critical, High, or Medium issues.
+
+### Round 5 — Independent implementation-plan review
+
+| # | Sev | Finding | Resolution |
+| --- | --- | --- | --- |
+| 1 | High | The plan could pass smoke without creating a room, could mismatch the presign bucket variable and binding, and omitted the real recovery-journal deletion boundary. | Required a real created-and-purged room, exact variable/binding equality, and cleanup-before-delete tests at `SharedReadingRecoveryJournal`. |
+| 2 | High | API-only WebSocket validation did not satisfy the before-socket invariant. | Required independent validation immediately before every initial/reconnect task creation and a test factory proving no task is created on rejection. |
+| 3 | Medium | R2 permission wording prohibited list access even though Cloudflare's bucket-scoped Object Read & Write permission includes object listing. | Allowed listing only within `rishi-books-e2e`, while prohibiting bucket administration, account-wide access, and every other bucket. |
+| 4 | Medium | A hard-coded production share-link origin and optional account ID could redirect E2E responses or break presigning. | Required environment-specific validated share links, exact account ID configuration, verifier coverage, and signed PUT/GET smoke. |
+| 5 | Medium | Launch/release/service-binding/evidence-retention gates were incomplete. | Required executable launch and Release tests, no sharing service bindings, and retention of redacted evidence through final comparison. |
+
+**Round 5 result:** remediations applied; independent re-review required before implementation.

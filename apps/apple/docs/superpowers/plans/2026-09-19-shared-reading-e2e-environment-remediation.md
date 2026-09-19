@@ -34,8 +34,11 @@
 
 - `workers/worker/src/r2-presign.ts`
 - `workers/worker/src/r2-presign.test.ts`
+- `workers/worker/src/routes/session-shares.ts`
+- `workers/worker/src/routes/session-shares.test.ts`
 - `workers/worker/src/routes/test-auth.ts`
 - `workers/worker/src/routes/test-auth.test.ts`
+- `workers/worker/src/account-deletion.integration.test.ts`
 - `workers/worker/src/session-sharing-service.ts`
 - `workers/worker/src/session-sharing-service.test.ts`
 - `workers/worker/wrangler.jsonc`
@@ -45,17 +48,24 @@
 - `apps/apple/rishi/rishi/Networking/RishiAPIEnvironment.swift`
 - `apps/apple/rishi/rishiTests/Networking/RishiAPIEnvironmentTests.swift`
 - `apps/apple/rishi/rishi/SharedReading/SharedReadingAPI.swift`
+- `apps/apple/rishi/rishi/SharedReading/Transport/SharedReadingSignalingClient.swift`
 - `apps/apple/rishi/rishi/ServiceGraphFactory.swift`
+- `apps/apple/rishi/rishi/RootView.swift`
+- `apps/apple/rishi/rishi/SharedReading/ActiveReadingSessionsView.swift`
 - `apps/apple/rishi/rishiTests/SharedReading/SharedReadingAPITests.swift`
+- `apps/apple/rishi/rishiTests/SharedReading/SharedReadingSignalingClientTests.swift`
 - `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/TestAccountClient.swift`
 - `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingHost.swift`
 - `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingLiveRun.swift`
 - `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingCLI.swift`
+- `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingRecoveryJournal.swift`
 - `apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/TestAccountClientTests.swift`
 - `apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SharedReadingHostTests.swift`
 - `apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SharedReadingLiveRunTests.swift`
 - `apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SharedReadingCLITests.swift`
+- `apps/apple/rishi-e2e-host/Tests/RishiE2EHostTests/SharedReadingRecoveryJournalTests.swift`
 - `apps/apple/rishi/rishiUITests/SharedReadingTestSupport.swift`
+- `apps/apple/rishi/rishiUITests/SharedReadingLaunchEnvironmentTests.swift`
 - `apps/apple/scripts/validate-shared-reading.sh`
 - `apps/apple/scripts/validate-shared-reading.test.sh`
 - `apps/apple/rishi-e2e-host/README.md`
@@ -74,45 +84,51 @@
 
 ---
 
-### Task 1: Make R2 presigning environment-specific
+### Task 1: Make generated storage and share URLs environment-specific
 
 **Files:**
 - Modify: `workers/worker/src/r2-presign.ts`
 - Modify: `workers/worker/src/r2-presign.test.ts`
+- Modify: `workers/worker/src/routes/session-shares.ts`
+- Modify: `workers/worker/src/routes/session-shares.test.ts`
 - Modify: `workers/worker/wrangler.jsonc`
 
 - [ ] **Step 1: Write failing production/E2E bucket tests**
 
 Add tests that pass `BOOK_STORAGE_BUCKET_NAME: "rishi-books"` and `BOOK_STORAGE_BUCKET_NAME: "rishi-books-e2e"`, sign one PUT request for each, and assert the URL pathname begins with the corresponding bucket. Add a test proving an empty bucket name is rejected before signing.
 
-- [ ] **Step 2: Run the red test**
+- [ ] **Step 2: Write failing share-link origin tests**
+
+Cover both a newly created invite and an idempotently returned invite. Assert production `PUBLIC_WEB_URL=https://rishi.fidexa.org` is preserved, E2E `PUBLIC_WEB_URL=https://api-e2e.fidexa.org` produces only that origin, and missing/malformed/non-HTTPS/user-info/alternate-port/path/query/fragment values fail before returning a share link.
+
+- [ ] **Step 3: Run the red tests**
 
 Run from `workers/worker`:
 
 ```sh
-bun test src/r2-presign.test.ts
+bun test src/r2-presign.test.ts src/routes/session-shares.test.ts
 ```
 
-Expected: FAIL because `R2SigningEnv` has no bucket-name field and the signer still hard-codes `rishi-books`.
+Expected: FAIL because the signer and share route still hard-code production names.
 
-- [ ] **Step 3: Implement the minimal signer contract**
+- [ ] **Step 4: Implement the minimal environment contracts**
 
-Extend `R2SigningEnv` with `BOOK_STORAGE_BUCKET_NAME: string`. Validate a non-empty, R2-safe bucket name and construct the URL from that value. Add top-level production var `BOOK_STORAGE_BUCKET_NAME: "rishi-books"` without changing production credentials or bindings.
+Extend `R2SigningEnv` with `BOOK_STORAGE_BUCKET_NAME: string`. Validate a non-empty, R2-safe bucket name and construct the URL from that value. Build share links from a required validated `PUBLIC_WEB_URL` origin. Add top-level production var `BOOK_STORAGE_BUCKET_NAME: "rishi-books"` without changing production credentials, bindings, or `PUBLIC_WEB_URL`.
 
-- [ ] **Step 4: Run focused and type checks**
+- [ ] **Step 5: Run focused and type checks**
 
 ```sh
-bun test src/r2-presign.test.ts
+bun test src/r2-presign.test.ts src/routes/session-shares.test.ts
 bun run type-check
 ```
 
 Expected: all signer tests pass and type-check exits `0`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```sh
-git add workers/worker/src/r2-presign.ts workers/worker/src/r2-presign.test.ts workers/worker/wrangler.jsonc
-git commit -m "fix(worker): isolate presigned book buckets"
+git add workers/worker/src/r2-presign.ts workers/worker/src/r2-presign.test.ts workers/worker/src/routes/session-shares.ts workers/worker/src/routes/session-shares.test.ts workers/worker/wrangler.jsonc
+git commit -m "fix(worker): isolate generated e2e URLs"
 ```
 
 ---
@@ -159,7 +175,7 @@ Remove the raw SQL/R2 best-effort deletion body. Call the same `deleteAccount` i
 - [ ] **Step 6: Run Worker tests**
 
 ```sh
-bun test src/routes/test-auth.test.ts src/session-sharing-service.test.ts src/account-deletion.test.ts
+bun test src/routes/test-auth.test.ts src/session-sharing-service.test.ts src/account-deletion.integration.test.ts
 bun run type-check
 ```
 
@@ -168,7 +184,7 @@ Expected: all focused tests pass; type-check exits `0`.
 - [ ] **Step 7: Commit**
 
 ```sh
-git add workers/worker/src/routes/test-auth.ts workers/worker/src/routes/test-auth.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts
+git add workers/worker/src/routes/test-auth.ts workers/worker/src/routes/test-auth.test.ts workers/worker/src/session-sharing-service.ts workers/worker/src/session-sharing-service.test.ts workers/worker/src/account-deletion.integration.test.ts
 git commit -m "fix(worker): verify shared reading e2e cleanup"
 ```
 
@@ -192,7 +208,7 @@ Expected: `package.json` and `bun.lockb` record the direct development dependenc
 
 - [ ] **Step 2: Write failing verifier tests**
 
-Use temporary JSONC fixtures to prove the verifier rejects each production leak independently: production D1 ID/name, any production R2 bucket, either production KV ID, production service target, production custom domain, missing E2E DO bindings/migrations, E2E cron, missing gates, a gate present in production, duplicate KV IDs, and missing required secret names. Include one complete isolated fixture that passes.
+Use temporary JSONC fixtures to prove the verifier rejects each production leak independently: production D1 ID/name, any production R2 bucket, either production KV ID, production service target, production custom domain, missing E2E DO bindings/migrations, E2E cron, missing gates, a gate present in production, duplicate KV IDs, a missing/wrong `CLOUDFLARE_ACCOUNT_ID`, a production/malformed E2E `PUBLIC_WEB_URL`, `BOOK_STORAGE_BUCKET_NAME` missing or unequal to the same environment's `BOOK_STORAGE.bucket_name`, any E2E sharing service binding, and missing required secret names. Include one complete isolated fixture that passes and prove the production bucket variable equals production `BOOK_STORAGE.bucket_name` while the E2E variable equals `rishi-books-e2e`.
 
 - [ ] **Step 3: Run the red verifier test**
 
@@ -266,7 +282,7 @@ Expected: each command creates exactly one named resource and prints its Cloudfl
 
 - [ ] **Step 3: Add complete `env.e2e` blocks**
 
-Use `apply_patch` to insert the exact emitted D1/KV IDs. The API block must redeclare the script name, custom domain, vars, service binding, four R2 bindings, two KV bindings, D1 migration configuration, `UserUsageLedger` DO/migration, SQL text rule, version metadata, compatibility settings, minimum required-secret names, and no cron. The sharing block must redeclare its script name/domain, `AUTH_BASE_URL`, `TEST_AUTH_ALLOWED: "1"`, both DO bindings/migrations, compatibility, observability, and required `WORKER_HMAC_SECRET` only; TURN remains omitted initially.
+Use `apply_patch` to insert the exact emitted D1/KV IDs. The API block must redeclare the script name, custom domain, vars including exact `CLOUDFLARE_ACCOUNT_ID=b700cf80e995aacbfa27aaa8d2084d18`, `PUBLIC_WEB_URL=https://api-e2e.fidexa.org`, and `BOOK_STORAGE_BUCKET_NAME=rishi-books-e2e`, service binding, four R2 bindings, two KV bindings, D1 migration configuration, `UserUsageLedger` DO/migration, SQL text rule, version metadata, compatibility settings, minimum required-secret names, and no cron. The sharing block must redeclare its script name/domain, `AUTH_BASE_URL`, `TEST_AUTH_ALLOWED: "1"`, both DO bindings/migrations, compatibility, observability, and required `WORKER_HMAC_SECRET` only; it must have no service binding, and TURN remains omitted initially.
 
 - [ ] **Step 4: Prove config isolation before deployment**
 
@@ -300,7 +316,7 @@ Rollback at this stage means removing only the un-deployed `env.e2e` blocks from
 
 - [ ] **Step 1: Create the bucket-scoped R2 credential checkpoint**
 
-Using the signed-in Cloudflare browser, create one R2 Object Read & Write token scoped only to `rishi-books-e2e`. Capture its Access Key ID and Secret Access Key once into a mode-`0600` temporary credential file outside the repository. Do not paste either value into chat, command arguments, source, or logs. If browser authentication or this scope cannot be completed, stop this task as `BLOCKED` without weakening scope.
+Using the signed-in Cloudflare browser, create one R2 Object Read & Write token scoped only to `rishi-books-e2e`. Cloudflare includes read, write, and list-object capability in this permission; accept listing only inside this isolated bucket, with no bucket administration, account-wide access, or access to another bucket. Capture its Access Key ID and Secret Access Key once into a mode-`0600` temporary credential file outside the repository. Do not paste either value into chat, command arguments, source, or logs. If browser authentication or this exact scope cannot be completed, stop this task as `BLOCKED` without weakening scope.
 
 - [ ] **Step 2: Generate and install E2E-only secrets**
 
@@ -354,7 +370,7 @@ Expected: deployment reports `rishi-worker-e2e`, `api-e2e.fidexa.org`, the E2E s
 
 - [ ] **Step 6: Run non-secret smoke and production-negative gates**
 
-Verify both health endpoints return the expected versioned health body. Probe E2E test auth with the secret and an incomplete body: exact `400`. Probe E2E without a secret: `404`. Probe production without any E2E secret: `404`. Send a synthetic test bearer to the production sharing endpoint and require rejection without creating a room. Then create one E2E smoke account, exercise the E2E remote cleanup, delete it, and independently require exact absence.
+Verify both health endpoints return the expected versioned health body. Probe E2E test auth with the secret and an incomplete body: exact `400`. Probe E2E without a secret: `404`. Probe production without any E2E secret: `404`. Send a synthetic test bearer to the production sharing endpoint and require rejection without creating a room. Then create one E2E smoke account, obtain an E2E presigned PUT, upload a small non-sensitive fixture, obtain a presigned GET and verify the bytes came from `rishi-books-e2e`, create a real shared-reading session through the E2E API, verify its share-link origin is exactly `https://api-e2e.fidexa.org`, prove the resulting room exists through the API-to-service-binding path, exercise the E2E remote cleanup, verify authoritative room absence, delete the account, and independently require exact account/object/room absence.
 
 Expected: all E2E checks pass; production rejects both test paths; the smoke account/room are absent.
 
@@ -388,7 +404,7 @@ Add an injectable environment dictionary to `load`. Keep the exact E2E allowlist
 
 - [ ] **Step 4: Run focused tests and commit**
 
-Run the command from Step 2; expect PASS. Then:
+Run the command from Step 2; expect PASS. Then run the same focused suite with `-configuration Release` while supplying E2E variables through the test environment and require production endpoint selection, proving release code cannot enter E2E mode. Then:
 
 ```sh
 git add apps/apple/rishi/rishi/Networking/RishiAPIEnvironment.swift apps/apple/rishi/rishiTests/Networking/RishiAPIEnvironmentTests.swift
@@ -401,31 +417,35 @@ git commit -m "test(apple): isolate live e2e endpoints"
 
 **Files:**
 - Modify: `apps/apple/rishi/rishi/SharedReading/SharedReadingAPI.swift`
+- Modify: `apps/apple/rishi/rishi/SharedReading/Transport/SharedReadingSignalingClient.swift`
 - Modify: `apps/apple/rishi/rishi/ServiceGraphFactory.swift`
+- Modify: `apps/apple/rishi/rishi/RootView.swift`
+- Modify: `apps/apple/rishi/rishi/SharedReading/ActiveReadingSessionsView.swift`
 - Modify: `apps/apple/rishi/rishiTests/SharedReading/SharedReadingAPITests.swift`
+- Create: `apps/apple/rishi/rishiTests/SharedReading/SharedReadingSignalingClientTests.swift`
 
 - [ ] **Step 1: Write failing response-origin tests**
 
-For both mark-book-ready and rejoin responses, prove matching `wss` scheme/host/effective-port with a session path succeeds. Prove different host, production host, `ws`, user info, query, fragment, and alternate port fail before a signaling transport can open.
+For both mark-book-ready and rejoin responses, prove matching `wss` scheme/host/effective-port with a session path succeeds. At the transport boundary, inject a recording WebSocket-task factory and prove different host, production host, `ws`, user info, query, fragment, and alternate port fail without creating a task. Exercise the initial connection and every reconnect/refresh path that can consume a new admission.
 
 - [ ] **Step 2: Run the red tests**
 
 ```sh
-xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiTests/SharedReadingAPITests
+xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiTests/SharedReadingAPITests -only-testing:rishiTests/SharedReadingSignalingClientTests
 ```
 
 Expected: mismatched origins are currently accepted.
 
-- [ ] **Step 3: Implement validation at the API boundary**
+- [ ] **Step 3: Implement validation at both admission and socket boundaries**
 
-Pass the active environment’s expected sharing origin from `ServiceGraphFactory` into `SharedReadingAPI`. Validate decoded admissions before returning them to coordinators. Use the existing typed retryable service failure and return no admission on mismatch.
+Pass the active environment's expected sharing origin from `ServiceGraphFactory` into `SharedReadingAPI` and every `SharedReadingSignalingClient` construction in `RootView` and `ActiveReadingSessionsView`. Validate decoded admissions at the API boundary, then independently revalidate immediately before each `URLSessionWebSocketTask` creation, including reconnect/refresh admissions. Use the existing typed retryable service failure and create no socket task on mismatch.
 
 - [ ] **Step 4: Run focused tests and commit**
 
 Run Step 2; expect PASS. Then:
 
 ```sh
-git add apps/apple/rishi/rishi/SharedReading/SharedReadingAPI.swift apps/apple/rishi/rishi/ServiceGraphFactory.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingAPITests.swift
+git add apps/apple/rishi/rishi/SharedReading/SharedReadingAPI.swift apps/apple/rishi/rishi/SharedReading/Transport/SharedReadingSignalingClient.swift apps/apple/rishi/rishi/ServiceGraphFactory.swift apps/apple/rishi/rishi/RootView.swift apps/apple/rishi/rishi/SharedReading/ActiveReadingSessionsView.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingAPITests.swift apps/apple/rishi/rishiTests/SharedReading/SharedReadingSignalingClientTests.swift
 git commit -m "fix(apple): validate shared reading websocket origin"
 ```
 
@@ -434,7 +454,14 @@ git commit -m "fix(apple): validate shared reading websocket origin"
 ### Task 8: Wire host injection, remote cleanup, and recovery
 
 **Files:**
-- Modify the host/client/UI-test files listed in the file structure for this task.
+- Modify: `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/TestAccountClient.swift`
+- Modify: `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingHost.swift`
+- Modify: `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingLiveRun.swift`
+- Modify: `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingCLI.swift`
+- Modify: `apps/apple/rishi-e2e-host/Sources/RishiE2EHost/SharedReadingRecoveryJournal.swift`
+- Modify the corresponding host tests listed in the file structure.
+- Modify: `apps/apple/rishi/rishiUITests/SharedReadingTestSupport.swift`
+- Create: `apps/apple/rishi/rishiUITests/SharedReadingLaunchEnvironmentTests.swift`
 
 - [ ] **Step 1: Write failing host configuration tests**
 
@@ -442,11 +469,11 @@ git commit -m "fix(apple): validate shared reading websocket origin"
 
 - [ ] **Step 2: Write failing `.xctestrun` and app-handoff tests**
 
-For owner and participant, assert both endpoint keys occur in `EnvironmentVariables`, `TestingEnvironmentVariables`, and `UITargetAppEnvironmentVariables`. Retain existing registration nonce separation. Add UI-support tests or source-level build coverage proving every initial/restart launch copies both values and fails before app launch when either is absent.
+For owner and participant, assert both endpoint keys occur in `EnvironmentVariables`, `TestingEnvironmentVariables`, and `UITargetAppEnvironmentVariables`. Retain existing registration nonce separation. Add executable UI-support tests proving owner initial launch, participant initial launch, and participant restart each copy both values and that `app.launch()` is not reached when either value is absent. During a gated run, the owner must accept only a share link at exact origin `https://api-e2e.fidexa.org`, reject `rishi.fidexa.org` or any other origin, and relay only the extracted raw token.
 
 - [ ] **Step 3: Write failing remote-cleanup orchestration tests**
 
-Extend `TestAccountManaging` with an idempotent remote shared-reading cleanup method. Prove `SharedReadingHost.cleanup` stops both peers, calls remote cleanup once with both generated accounts, and only after verified success deletes accounts independently. Recovery must call the same remote cleanup before bearer-independent account recovery. A remote-cleanup failure must retain journal/manifest/lock and skip account deletion.
+Extend `TestAccountManaging` with an idempotent remote shared-reading cleanup method. Prove `SharedReadingHost.cleanup` stops both peers, calls remote cleanup once with both generated accounts, and only after verified success deletes accounts independently. In `SharedReadingRecoveryJournal`, update the actual per-account `deleteProvisionedAccount` recovery path (or its callback contract) so one batched remote room cleanup for the journaled addresses completes before the first account deletion. `SharedReadingRecoveryJournalTests` must prove ordering, exactly-once room cleanup, no account deletion on cleanup failure, and retained journal/manifest/lock state.
 
 - [ ] **Step 4: Run red host tests**
 
@@ -455,6 +482,8 @@ swift test --package-path apps/apple/rishi-e2e-host --jobs 1 --filter SharedRead
 swift test --package-path apps/apple/rishi-e2e-host --jobs 1 --filter SharedReadingHostTests
 swift test --package-path apps/apple/rishi-e2e-host --jobs 1 --filter SharedReadingCLITests
 swift test --package-path apps/apple/rishi-e2e-host --jobs 1 --filter TestAccountClientTests
+swift test --package-path apps/apple/rishi-e2e-host --jobs 1 --filter SharedReadingRecoveryJournalTests
+xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiUITests/SharedReadingLaunchEnvironmentTests
 ```
 
 Expected: new contracts fail.
@@ -465,13 +494,14 @@ Rename `rendezvousEnvironment` to `launchEnvironment` and include both endpoint 
 
 - [ ] **Step 6: Implement remote cleanup and recovery order**
 
-Add the gated API client request with only generated addresses and secret header. Call it through the existing `preAccountCleanup` stage after exact local process/simulator cleanup and before account deletion. Add the same call to recovery before `recoverProvisionedAccounts`. Persist no room ID or response secret.
+Add the gated API client request with only generated addresses and secret header. Call it through the existing `preAccountCleanup` stage after exact local process/simulator cleanup and before account deletion. Wire the same batched call into `SharedReadingRecoveryJournal` before its real `deleteProvisionedAccount` loop; do not rely on a nonexistent `recoverProvisionedAccounts` boundary. Persist no room ID or response secret.
 
 - [ ] **Step 7: Run host and app tests**
 
 ```sh
 swift test --package-path apps/apple/rishi-e2e-host --jobs 1
 xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiTests/RishiAPIEnvironmentTests -only-testing:rishiTests/SharedReadingAPITests
+xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiUITests/SharedReadingLaunchEnvironmentTests
 ```
 
 Expected: host suite passes with only intentional live skips; focused app tests pass.
@@ -546,7 +576,7 @@ Expected: unique run ID, participant sequence `>= 2`, exactly two deleted accoun
 
 - [ ] **Step 3: Audit first-run residue**
 
-Prove no local journal/manifest/staged fixture/secret `.xctestrun`/owned process/build lock/disposable simulator remains. Use the gated cleanup/absence API and E2E resource inspection to prove both accounts, all owned rooms, and both generated-account R2 prefixes are absent. Remove the local redacted evidence file after recording non-secret assertions.
+Prove no local journal/manifest/staged fixture/secret `.xctestrun`/owned process/build lock/disposable simulator remains. Use the gated cleanup/absence API and E2E resource inspection to prove both accounts, all owned rooms, and both generated-account R2 prefixes are absent. Retain the mode-`0600`, redacted evidence record outside the repository until Task 11 compares both runs; it must contain no credential, bearer, raw invite token, or secret path.
 
 - [ ] **Step 4: Run the same validation a second time**
 
@@ -562,7 +592,7 @@ Repeat Step 3. Re-run the config verifier and the non-mutating production negati
 
 - [ ] **Step 1: Luna specification review**
 
-Review commits from `ef6cb378a` through HEAD against the approved remediation design and every completion gate. Include deployment/live evidence. Fix and re-review until 0 open Critical/High/Medium findings.
+Review commits from `89dc464c2` through HEAD against the approved remediation design and every completion gate. Include deployment/live evidence. Fix and re-review until 0 open Critical/High/Medium findings.
 
 - [ ] **Step 2: Terra code-quality/security review**
 
@@ -570,7 +600,7 @@ Review exact process ownership, secret handling, production isolation, Cloudflar
 
 - [ ] **Step 3: Final evidence audit**
 
-Run `git status --short`, `git diff --check`, all deterministic suites, config verifier, deployment smoke, production negatives, and compare both redacted live evidence records. Confirm the only remaining uncommitted files are the five pre-existing unrelated MCP/UI-test edits.
+Run `git status --short`, `git diff --check`, all deterministic suites, config verifier, deployment smoke, production negatives, and compare both mode-`0600` redacted live evidence records retained outside the repository. Confirm the only remaining uncommitted files are the five pre-existing unrelated MCP/UI-test edits, then securely remove the two temporary evidence records.
 
 - [ ] **Step 4: Prepare integration**
 
@@ -587,3 +617,17 @@ Use the finishing-development-branch workflow. Do not merge until the two live r
 - Required exact production-negative checks and a resolved-config isolation verifier.
 
 **Self-review result:** ready for independent plan review; no known Critical/High/Medium gap.
+
+### Independent plan review round 1
+
+- Corrected the R2 token constraint to match Cloudflare's bucket-scoped Object Read & Write capability, which necessarily includes listing objects in that one isolated bucket.
+- Added the previously missed hard-coded production share-link origin and required environment-specific route, harness, verifier, smoke, and regression coverage.
+- Made the exact Cloudflare account ID mandatory in E2E config and added a real signed PUT/GET smoke check.
+- Retained both redacted live evidence records through final comparison instead of deleting them during each residue audit.
+- Required smoke to create and authoritatively purge a real room, not merely call cleanup on an empty account.
+- Bound `BOOK_STORAGE_BUCKET_NAME` to the same environment's actual R2 binding and prohibited service bindings on the sharing Worker.
+- Mapped recovery to `SharedReadingRecoveryJournal`'s real per-account deletion path and added ordering/failure-retention tests.
+- Added signaling-client validation immediately before task creation, including reconnect/refresh paths, with a recording factory that proves no task is created on rejection.
+- Replaced source-level launch coverage with executable owner/participant/restart tests, added a Release-build gate, and corrected the canonical account-deletion test filename.
+
+**Round 1 result:** fixes applied; pending independent re-review.
