@@ -30,6 +30,16 @@ export interface WranglerConfig extends JsonObject {
 export interface E2EConfigPaths {
   apiConfigPath: string;
   sharingConfigPath: string;
+  approvedResourcesPath?: string;
+  approvedResources?: ApprovedResourceInventory;
+}
+
+export interface ApprovedResourceInventory {
+  d1DatabaseId: string;
+  kvNamespaceIds: {
+    RISHI_DESKTOP_STATE: string;
+    RATE_LIMIT_KV: string;
+  };
 }
 
 export interface E2EVerificationResult {
@@ -132,8 +142,70 @@ function readJsoncConfig(path: string, label: string): WranglerConfig {
   return value as WranglerConfig;
 }
 
+function readApprovedResources(paths: E2EConfigPaths, errors: string[]): ApprovedResourceInventory | undefined {
+  if (paths.approvedResources) return normalizeApprovedResources(paths.approvedResources, errors);
+  if (!paths.approvedResourcesPath) {
+    errors.push("approved E2E resource manifest is required");
+    return undefined;
+  }
+  let source: string;
+  try {
+    source = readFileSync(paths.approvedResourcesPath, "utf8");
+  } catch {
+    errors.push("approved E2E resource manifest is missing");
+    return undefined;
+  }
+  const parseErrors: ParseError[] = [];
+  const value = parse(source, parseErrors, { allowTrailingComma: true, disallowComments: false });
+  if (parseErrors.length > 0) {
+    errors.push(`approved E2E resource manifest JSONC parse error: ${printParseErrorCode(parseErrors[0].error)}`);
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    errors.push("approved E2E resource manifest must be an object");
+    return undefined;
+  }
+  return normalizeApprovedResources({
+    d1DatabaseId: value.d1_database_id,
+    kvNamespaceIds: isRecord(value.kv_namespace_ids) ? {
+      RISHI_DESKTOP_STATE: value.kv_namespace_ids.RISHI_DESKTOP_STATE,
+      RATE_LIMIT_KV: value.kv_namespace_ids.RATE_LIMIT_KV,
+    } : undefined,
+  }, errors);
+}
+
 function isRecord(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeApprovedResources(value: unknown, errors: string[]): ApprovedResourceInventory | undefined {
+  if (!isRecord(value) || typeof value.d1DatabaseId !== "string" || !isRecord(value.kvNamespaceIds)
+    || typeof value.kvNamespaceIds.RISHI_DESKTOP_STATE !== "string"
+    || typeof value.kvNamespaceIds.RATE_LIMIT_KV !== "string") {
+    errors.push("approved E2E resource manifest must contain d1_database_id and both kv_namespace_ids");
+    return undefined;
+  }
+  const d1DatabaseId = value.d1DatabaseId;
+  const kvNamespaceIds = {
+    RISHI_DESKTOP_STATE: value.kvNamespaceIds.RISHI_DESKTOP_STATE,
+    RATE_LIMIT_KV: value.kvNamespaceIds.RATE_LIMIT_KV,
+  };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(d1DatabaseId)) {
+    errors.push("approved E2E D1 database ID is malformed");
+  }
+  if (Object.values(kvNamespaceIds).some((id) => !/^[a-f0-9]{32}$/.test(id))) {
+    errors.push("approved E2E KV namespace ID is malformed");
+  }
+  if (d1DatabaseId === PRODUCTION_D1_ID) errors.push("approved E2E D1 database ID must not be production");
+  const productionKvIds = new Set([
+    ...Object.values(PRODUCTION_KV_IDS),
+    ...Object.values(PRODUCTION_KV_PREVIEW_IDS),
+  ]);
+  if (Object.values(kvNamespaceIds).some((id) => productionKvIds.has(id))) {
+    errors.push("approved E2E KV namespace IDs must not be production IDs or production preview IDs");
+  }
+  if (new Set(Object.values(kvNamespaceIds)).size !== 2) errors.push("approved E2E KV namespace IDs must be distinct");
+  return { d1DatabaseId, kvNamespaceIds };
 }
 
 function equal(left: unknown, right: unknown): boolean {
@@ -153,6 +225,28 @@ function namedEntries(value: unknown, key: string): Map<string, JsonObject> {
     if (isRecord(entry) && typeof entry[key] === "string") result.set(entry[key], entry);
   }
   return result;
+}
+
+function rawBindingEntries(
+  value: unknown,
+  kind: "R2" | "KV",
+  expectedLength: number,
+  label: string,
+  errors: string[],
+): JsonObject[] {
+  if (!Array.isArray(value)) {
+    errors.push(`${label} ${kind} binding array is required`);
+    return [];
+  }
+  if (value.length !== expectedLength) {
+    errors.push(`${label} ${kind} binding array must contain exactly ${expectedLength} entries`);
+  }
+  const entries = value.filter(isRecord);
+  if (entries.length !== value.length) errors.push(`${label} ${kind} binding entries must be objects`);
+  const names = entries.map((entry) => entry.binding).filter((binding): binding is string => typeof binding === "string");
+  if (new Set(names).size !== names.length) errors.push(`${label} ${kind} binding names must be unique`);
+  if (names.length !== entries.length) errors.push(`${label} ${kind} binding names are required`);
+  return entries;
 }
 
 function exactNames(actual: unknown, expected: string[]): boolean {
@@ -207,7 +301,7 @@ function validateD1(
   if (typeof database.database_id !== "string" || database.database_id.length === 0) {
     errors.push(`${label} D1 database ID is required`);
   } else if (expectedId && database.database_id !== expectedId) {
-    errors.push(`${label} D1 database ID must remain the production ID`);
+    errors.push(`${label} D1 database ID must ${expectedName === E2E_D1_NAME ? "match the approved E2E resource inventory" : "remain the production ID"}`);
   } else if (!expectedId && database.database_id === PRODUCTION_D1_ID) {
     errors.push(`${label} D1 database ID must be E2E-only`);
   }
@@ -221,7 +315,8 @@ function validateBuckets(
   label: string,
   errors: string[],
 ): Map<string, JsonObject> {
-  const entries = namedEntries(config.r2_buckets, "binding");
+  const rawEntries = rawBindingEntries(config.r2_buckets, "R2", Object.keys(expected).length, label, errors);
+  const entries = new Map(rawEntries.map((entry) => [entry.binding as string, entry]));
   if (entries.size !== Object.keys(expected).length) errors.push(`${label} R2 bindings must be complete and contain no extras`);
   for (const [binding, bucketName] of Object.entries(expected)) {
     const entry = entries.get(binding);
@@ -236,8 +331,10 @@ function validateKv(
   expected: Record<string, string> | undefined,
   label: string,
   errors: string[],
+  mode: "production" | "e2e",
 ): Map<string, JsonObject> {
-  const entries = namedEntries(config.kv_namespaces, "binding");
+  const rawEntries = rawBindingEntries(config.kv_namespaces, "KV", 2, label, errors);
+  const entries = new Map(rawEntries.map((entry) => [entry.binding as string, entry]));
   if (entries.size !== 2) errors.push(`${label} KV bindings must contain exactly two namespaces`);
   const ids = [...entries.values()].map((entry) => entry.id).filter((id): id is string => typeof id === "string");
   if (new Set(ids).size !== ids.length) errors.push(`${label} KV namespace IDs must be distinct`);
@@ -248,14 +345,20 @@ function validateKv(
       continue;
     }
     if (typeof entry.id !== "string" || !/^[a-f0-9]{32}$/.test(entry.id)) errors.push(`${label} KV namespace ID ${binding} is malformed`);
-    if (expected && entry.id !== expected[binding]) errors.push(`${label} KV namespace ID ${binding} must remain the production ID`);
-    if (!expected && (entry.id === PRODUCTION_KV_IDS.RISHI_DESKTOP_STATE || entry.id === PRODUCTION_KV_IDS.RATE_LIMIT_KV)) {
-      errors.push(`${label} KV namespace ID ${binding} must be E2E-only`);
+    if (mode === "production" && expected && entry.id !== expected[binding]) errors.push(`${label} KV namespace ID ${binding} must remain the production ID`);
+    if (mode === "e2e" && expected && entry.id !== expected[binding]) errors.push(`${label} KV namespace ID ${binding} must match the approved E2E resource inventory`);
+    if (mode === "e2e" && (entry.id === PRODUCTION_KV_IDS.RISHI_DESKTOP_STATE
+      || entry.id === PRODUCTION_KV_IDS.RATE_LIMIT_KV)) {
+      errors.push(`${label} KV namespace ID ${binding} must not match a production ID`);
     }
-    if (expected && entry.preview_id !== PRODUCTION_KV_PREVIEW_IDS[binding as keyof typeof PRODUCTION_KV_PREVIEW_IDS]) {
+    if (mode === "e2e" && (entry.id === PRODUCTION_KV_PREVIEW_IDS.RISHI_DESKTOP_STATE
+      || entry.id === PRODUCTION_KV_PREVIEW_IDS.RATE_LIMIT_KV)) {
+      errors.push(`${label} KV namespace ID ${binding} must not match a production preview ID`);
+    }
+    if (mode === "production" && expected && entry.preview_id !== PRODUCTION_KV_PREVIEW_IDS[binding as keyof typeof PRODUCTION_KV_PREVIEW_IDS]) {
       errors.push(`${label} KV preview ID ${binding} must remain the production preview ID`);
     }
-    if (!expected && Object.prototype.hasOwnProperty.call(entry, "preview_id")) errors.push(`${label} KV namespace ${binding} must not declare a preview ID`);
+    if (mode === "e2e" && Object.prototype.hasOwnProperty.call(entry, "preview_id")) errors.push(`${label} KV namespace ${binding} must not declare a preview ID`);
   }
   return entries;
 }
@@ -331,7 +434,7 @@ function validateApi(api: WranglerConfig, errors: string[]): void {
   requireExact(errors, api.services, [{ binding: "SHARING_WORKER", service: "rishi-sharing-worker" }], "production API service target must be rishi-sharing-worker");
   validateD1(api, PRODUCTION_D1_NAME, PRODUCTION_D1_ID, "production API", errors);
   validateBuckets(api, PRODUCTION_BUCKETS, "production API", errors);
-  validateKv(api, PRODUCTION_KV_IDS, "production API", errors);
+  validateKv(api, PRODUCTION_KV_IDS, "production API", errors, "production");
   validateDurableObjects(api, API_DO_BINDINGS, API_DO_MIGRATIONS, "production API", errors);
   requireExact(errors, api.rules, API_SQL_RULES, "production API SQL text rule is required");
   validateVars(api.vars, API_VARS, "production API", errors);
@@ -342,7 +445,12 @@ function validateApi(api: WranglerConfig, errors: string[]): void {
   validateRoutes(api, "api.fidexa.org", "production API", errors);
 }
 
-function validateApiE2E(api: WranglerConfig, productionApi: WranglerConfig, errors: string[]): void {
+function validateApiE2E(
+  api: WranglerConfig,
+  productionApi: WranglerConfig,
+  approvedResources: ApprovedResourceInventory | undefined,
+  errors: string[],
+): void {
   const e2e = api.env?.e2e;
   if (!e2e) {
     errors.push("API env.e2e block is missing");
@@ -353,11 +461,11 @@ function validateApiE2E(api: WranglerConfig, productionApi: WranglerConfig, erro
   requireOwn(e2e, "version_metadata", "E2E API CF_VERSION_METADATA binding is required", errors);
   requireExact(errors, e2e.version_metadata, { binding: "CF_VERSION_METADATA" }, "E2E API CF_VERSION_METADATA binding is required");
   requireExact(errors, e2e.services, [{ binding: "SHARING_WORKER", service: E2E_SHARING_NAME }], "E2E API service target must be rishi-sharing-worker-e2e");
-  validateD1(e2e, E2E_D1_NAME, undefined, "E2E API", errors);
+  validateD1(e2e, E2E_D1_NAME, approvedResources?.d1DatabaseId, "E2E API", errors);
   const database = e2e.d1_databases?.[0];
   if (database?.database_id === productionApi.d1_databases?.[0]?.database_id) errors.push("E2E API D1 database ID must differ from production");
   validateBuckets(e2e, E2E_BUCKETS, "E2E API", errors);
-  validateKv(e2e, undefined, "E2E API", errors);
+  validateKv(e2e, approvedResources?.kvNamespaceIds, "E2E API", errors, "e2e");
   validateDurableObjects(e2e, API_DO_BINDINGS, API_DO_MIGRATIONS, "E2E API", errors);
   requireExact(errors, e2e.rules, API_SQL_RULES, "E2E API SQL text rule is required");
   validateVars(e2e.vars, API_E2E_VARS, "E2E API", errors);
@@ -430,6 +538,7 @@ function summary(api: WranglerConfig, sharing: WranglerConfig): string {
 
 export function verifyE2EEnvironment(paths: E2EConfigPaths): E2EVerificationResult {
   const errors: string[] = [];
+  const approvedResources = readApprovedResources(paths, errors);
   let api: WranglerConfig | undefined;
   let sharing: WranglerConfig | undefined;
   try {
@@ -444,7 +553,7 @@ export function verifyE2EEnvironment(paths: E2EConfigPaths): E2EVerificationResu
   }
   if (!api || !sharing) return { errors, summary: "" };
   validateApi(api, errors);
-  validateApiE2E(api, api, errors);
+  validateApiE2E(api, api, approvedResources, errors);
   validateSharing(sharing, errors);
   return { errors, summary: summary(api, sharing) };
 }
@@ -461,7 +570,12 @@ export function main(arguments_: string[] = process.argv.slice(2)): number {
   const workerDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const apiConfigPath = argumentValue(arguments_, ["--api-config", "--api"], resolve(workerDirectory, "wrangler.jsonc"));
   const sharingConfigPath = argumentValue(arguments_, ["--sharing-config", "--sharing"], resolve(workerDirectory, "..", "sharing-worker", "wrangler.jsonc"));
-  const result = verifyE2EEnvironment({ apiConfigPath, sharingConfigPath });
+  const approvedResourcesPath = argumentValue(
+    arguments_,
+    ["--approved-manifest", "--approved-resources"],
+    resolve(workerDirectory, "e2e-approved-resources.json"),
+  );
+  const result = verifyE2EEnvironment({ apiConfigPath, sharingConfigPath, approvedResourcesPath });
   if (result.errors.length > 0) {
     for (const error of result.errors) console.error(`E2E environment verification failed: ${error}`);
     return 1;
