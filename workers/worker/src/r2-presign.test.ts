@@ -40,10 +40,10 @@ describe("signR2Url — presigned R2 URL shape", () => {
     expect(url.searchParams.get("X-Amz-Credential")).toContain("/auto/s3/aws4_request");
   });
 
-  it("rejects an empty configured bucket name before signing", async () => {
+  it.each(["", undefined, null, new String("rishi-books")])("rejects a non-string or unsafe configured bucket name before signing", async (bucketName) => {
     await expect(
       signR2Url(
-        { ...env, BOOK_STORAGE_BUCKET_NAME: "" },
+        { ...env, BOOK_STORAGE_BUCKET_NAME: bucketName } as unknown as typeof env,
         { key: "books/u/b.pdf", method: "PUT", expiresSec: 600 },
       ),
     ).rejects.toThrow("BOOK_STORAGE_BUCKET_NAME");

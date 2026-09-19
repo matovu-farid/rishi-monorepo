@@ -5,6 +5,7 @@ import { books, sessionInviteItems, sessionInviteRedemptions, sessionInvites, us
 import { requireAuth } from "../middleware";
 import { createShareTokenFromSecret, hashShareToken } from "../shares/shareTokens";
 import { signR2Url } from "../r2-presign";
+import { captureWorkerTelemetryError } from "../ops/error-reporting";
 import { SessionSharingService, SessionSharingServiceError } from "../session-sharing-service";
 import { sendSessionInviteEmails } from "../session-invite-email";
 
@@ -47,7 +48,12 @@ function sessionShareURL(origin: string, token: string): string {
   return url.toString();
 }
 
-function publicWebURLConfigurationError(c: any) {
+function publicWebURLConfigurationError(c: any, error: unknown, operation: "session_share.create" | "session_share.email") {
+  captureWorkerTelemetryError(error, {
+    feature: "shared_reading",
+    operation,
+    error_code: "invalid_public_web_url",
+  });
   return c.json({ code: "SERVICE_UNAVAILABLE", error: "Rishi could not complete this action." }, 503);
 }
 
@@ -100,8 +106,8 @@ routes.post("/", async (c) => {
   let webOrigin: string;
   try {
     webOrigin = publicWebOrigin(c.env.PUBLIC_WEB_URL);
-  } catch {
-    return publicWebURLConfigurationError(c);
+  } catch (error) {
+    return publicWebURLConfigurationError(c, error, "session_share.create");
   }
   const db = createDb(c.env.DB);
   const existing = await db.select().from(sessionInvites).where(and(eq(sessionInvites.ownerUserId, userId), eq(sessionInvites.idempotencyKey, body.idempotencyKey))).get();
@@ -355,8 +361,8 @@ routes.post("/:id/email", async (c) => {
   let webOrigin: string;
   try {
     webOrigin = publicWebOrigin(c.env.PUBLIC_WEB_URL);
-  } catch {
-    return publicWebURLConfigurationError(c);
+  } catch (error) {
+    return publicWebURLConfigurationError(c, error, "session_share.email");
   }
   const db = createDb(c.env.DB);
   const invite = await db.select().from(sessionInvites).where(and(eq(sessionInvites.sessionId, id), eq(sessionInvites.ownerUserId, userId), eq(sessionInvites.status, "open"))).get();

@@ -3,8 +3,11 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 const dbState = ((globalThis as unknown as {
-  __sessionSharesTestState?: { created: boolean; selectCalls: number };
-}).__sessionSharesTestState ??= { created: false, selectCalls: 0 });
+  __sessionSharesTestState?: { created: boolean; selectCalls: number; mode: "create" | "email" };
+}).__sessionSharesTestState ??= { created: false, selectCalls: 0, mode: "create" });
+
+const sendSessionInviteEmails = mock(async () => ({ attempted: 1, sent: 1, failed: 0, results: [] }));
+const captureWorkerTelemetryError = mock(() => {});
 
 mock.module("../middleware", () => ({
   requireAuth: async (c: { set: (key: string, value: string) => void }, next: () => Promise<void>) => {
@@ -20,9 +23,10 @@ mock.module("../db/drizzle", () => ({
         where: () => ({
           get: async () => {
             const state = (globalThis as unknown as {
-              __sessionSharesTestState: { created: boolean; selectCalls: number };
+              __sessionSharesTestState: { created: boolean; selectCalls: number; mode: "create" | "email" };
             }).__sessionSharesTestState;
             state.selectCalls += 1;
+            if (state.mode === "email") return testInvite;
             if (!state.created) {
               return state.selectCalls === 1 ? undefined : testBook;
             }
@@ -37,13 +41,16 @@ mock.module("../db/drizzle", () => ({
       values: () => ({
         run: async () => {
           (globalThis as unknown as {
-            __sessionSharesTestState: { created: boolean; selectCalls: number };
+            __sessionSharesTestState: { created: boolean; selectCalls: number; mode: "create" | "email" };
           }).__sessionSharesTestState.created = true;
         },
       }),
     }),
   }),
 }));
+
+mock.module("../session-invite-email", () => ({ sendSessionInviteEmails }));
+mock.module("../ops/error-reporting", () => ({ captureWorkerTelemetryError }));
 
 const { sessionSharesRoutes } = await import("./session-shares");
 
@@ -110,10 +117,22 @@ function createInvite(env: Env, idempotencyKey = "invite-1") {
   }, env);
 }
 
+function emailInvite(env: Env) {
+  dbState.mode = "email";
+  return sessionSharesRoutes.request("/session-1/email", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ recipients: ["reader@example.com"], idempotencyKey: "email-1" }),
+  }, env);
+}
+
 beforeEach(() => {
   dbState.created = false;
   dbState.selectCalls = 0;
+  dbState.mode = "create";
   (baseEnv.SHARING_WORKER.fetch as unknown as { mockClear: () => void }).mockClear();
+  sendSessionInviteEmails.mockClear();
+  captureWorkerTelemetryError.mockClear();
 });
 
 describe("session share links", () => {
@@ -149,5 +168,31 @@ describe("session share links", () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.not.toHaveProperty("shareURL");
     expect(baseEnv.SHARING_WORKER.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["production", "https://rishi.fidexa.org"],
+    ["e2e", "https://api-e2e.fidexa.org"],
+  ])("passes only the configured %s origin to session-invite email delivery", async (_environment: string, publicWebURL: string) => {
+    const response = await emailInvite(makeEnv(publicWebURL));
+
+    expect(response.status).toBe(200);
+    expect(sendSessionInviteEmails).toHaveBeenCalledTimes(1);
+    const [{ shareUrl }] = sendSessionInviteEmails.mock.calls[0] as [{ shareUrl: string }];
+    expect(new URL(shareUrl).origin).toBe(publicWebURL);
+  });
+
+  it.each([
+    ["create", () => createInvite(makeEnv("https://rishi.fidexa.org?next=e2e")), "session_share.create"],
+    ["email", () => emailInvite(makeEnv("https://rishi.fidexa.org?next=e2e")), "session_share.email"],
+  ])("fails closed and reports sanitized telemetry for an invalid PUBLIC_WEB_URL on %s", async (_path: string, request: () => Promise<Response>, operation: string) => {
+    const response = await request();
+
+    expect(response.status).toBe(503);
+    expect(sendSessionInviteEmails).not.toHaveBeenCalled();
+    expect(captureWorkerTelemetryError).toHaveBeenCalledWith(
+      expect.any(Error),
+      { feature: "shared_reading", operation, error_code: "invalid_public_web_url" },
+    );
   });
 });

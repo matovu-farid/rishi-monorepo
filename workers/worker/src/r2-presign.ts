@@ -12,7 +12,10 @@ export interface R2SigningEnv {
 const R2_BUCKET_NAME = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/;
 
 function bookStorageBucketName(env: R2SigningEnv): string {
-  if (!R2_BUCKET_NAME.test(env.BOOK_STORAGE_BUCKET_NAME)) {
+  if (
+    typeof env.BOOK_STORAGE_BUCKET_NAME !== "string"
+    || !R2_BUCKET_NAME.test(env.BOOK_STORAGE_BUCKET_NAME)
+  ) {
     throw new Error("BOOK_STORAGE_BUCKET_NAME must be an R2-safe bucket name");
   }
   return env.BOOK_STORAGE_BUCKET_NAME;

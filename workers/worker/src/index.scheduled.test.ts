@@ -46,6 +46,7 @@ const env = {
   PUBLIC_API_URL: "https://api.fidexa.org",
   PUBLIC_WEB_URL: "https://rishi.fidexa.org",
   SHARING_WORKER_WS_URL: "wss://sharing.fidexa.org",
+  BOOK_STORAGE_BUCKET_NAME: "rishi-books",
   BOOK_MAX_FILE_BYTES: "838860800",
   BOOK_MAX_PER_USER: "500",
   BOOK_MAX_USER_BYTES: "10737418240",
