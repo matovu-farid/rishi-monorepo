@@ -83,12 +83,17 @@ struct RishiAPIEnvironmentTests {
         ]
 
         for (http, webSocket) in invalidPairs {
+            var launchEnvironment = e2eGates
+            if let http {
+                launchEnvironment["RISHI_E2E_API_BASE_URL"] = http
+            }
+            if let webSocket {
+                launchEnvironment["RISHI_E2E_SHARING_WS_URL"] = webSocket
+            }
+
             let environment = RishiAPIEnvironment.load(
                 info: productionInfo,
-                environment: e2eGates.merging([
-                    "RISHI_E2E_API_BASE_URL": http ?? "",
-                    "RISHI_E2E_SHARING_WS_URL": webSocket ?? ""
-                ]) { _, new in new }
+                environment: launchEnvironment
             )
 
             #if DEBUG
@@ -114,6 +119,28 @@ struct RishiAPIEnvironmentTests {
         #expect(environment?.mode == .production)
         #expect(environment?.httpBaseURL.absoluteString == "https://api.fidexa.org")
         #expect(environment?.sharingWebSocketURL.absoluteString == "wss://sharing.fidexa.org")
+    }
+
+    @Test("requires both E2E gates")
+    func requiresBothE2EGates() {
+        let endpointValues = [
+            "RISHI_E2E_API_BASE_URL": "https://api-e2e.fidexa.org",
+            "RISHI_E2E_SHARING_WS_URL": "wss://sharing-e2e.fidexa.org"
+        ]
+
+        for singleGate in [
+            ["RISHI_UITEST": "1"],
+            ["RISHI_E2E_REAL_AUTH": "1"]
+        ] {
+            let environment = RishiAPIEnvironment.load(
+                info: productionInfo,
+                environment: endpointValues.merging(singleGate) { _, new in new }
+            )
+
+            #expect(environment?.mode == .production)
+            #expect(environment?.httpBaseURL.absoluteString == "https://api.fidexa.org")
+            #expect(environment?.sharingWebSocketURL.absoluteString == "wss://sharing.fidexa.org")
+        }
     }
 
     @Test("accepts production endpoints")
