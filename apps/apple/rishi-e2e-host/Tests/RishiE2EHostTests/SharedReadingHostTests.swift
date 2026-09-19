@@ -475,10 +475,7 @@ final class SharedReadingHostTests: XCTestCase {
             try XCTUnwrap(events.values.firstIndex(of: "cancel:owner")),
             try XCTUnwrap(events.values.firstIndex(of: "cancel:participant"))
         )
-        XCTAssertLessThan(
-            try XCTUnwrap(events.values.firstIndex(of: "cancel:participant")),
-            try XCTUnwrap(events.values.firstIndex(of: "owned-resources:cleanup"))
-        )
+        XCTAssertFalse(events.values.contains("owned-resources:cleanup"))
         XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:remote-room-cleanup:") }))
         XCTAssertFalse(events.values.contains("account:delete:owner"))
         XCTAssertFalse(events.values.contains("account:delete:participant"))
@@ -507,10 +504,7 @@ final class SharedReadingHostTests: XCTestCase {
             try XCTUnwrap(events.values.firstIndex(of: "cancel:owner")),
             try XCTUnwrap(events.values.firstIndex(of: "cancel:participant"))
         )
-        XCTAssertLessThan(
-            try XCTUnwrap(events.values.firstIndex(of: "cancel:participant")),
-            try XCTUnwrap(events.values.firstIndex(of: "owned-resources:cleanup"))
-        )
+        XCTAssertFalse(events.values.contains("owned-resources:cleanup"))
         XCTAssertFalse(events.values.contains(where: { $0.hasPrefix("account:remote-room-cleanup:") }))
         XCTAssertFalse(events.values.contains("account:delete:owner"))
         XCTAssertFalse(events.values.contains("account:delete:participant"))

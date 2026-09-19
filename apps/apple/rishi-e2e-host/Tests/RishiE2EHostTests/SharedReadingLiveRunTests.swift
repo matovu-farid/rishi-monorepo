@@ -55,22 +55,14 @@ final class SharedReadingLiveRunTests: XCTestCase {
         XCTAssertEqual(state.current(SIGTERM), "original-\(SIGTERM)")
     }
 
-    func testSignalInstallationFailureCancelsAndAwaitsStartedOperation() async throws {
+    func testSignalInstallationFailurePreventsJournaledLifecycleFromStarting() async throws {
         let calls = LiveRunCallRecorder()
-        let started = DispatchSemaphore(value: 0)
         let dependencies = makeDependencies(
             calls: calls,
             preparePackages: {
                 calls.append("packages:started")
-                started.signal()
-                do { try await Task.sleep(for: .milliseconds(250)) }
-                catch {
-                    calls.append("packages:cleanup")
-                    throw error
-                }
             },
             installSignals: { _ in
-                _ = started.wait(timeout: .now() + 2)
                 throw ResourcePreflightError("signal install failed")
             }
         )
@@ -80,10 +72,8 @@ final class SharedReadingLiveRunTests: XCTestCase {
             dependencies: dependencies
         ))
 
-        XCTAssertLessThan(
-            try XCTUnwrap(calls.values.firstIndex(of: "packages:cleanup")),
-            try XCTUnwrap(calls.values.firstIndex(of: "finish:false:true"))
-        )
+        XCTAssertFalse(calls.values.contains("packages:started"))
+        XCTAssertEqual(calls.values.last, "finish:false:true")
     }
     func testLiveRunRequiresNetworkAcknowledgementBeforeAnyDependencyCall() async throws {
         let calls = LiveRunCallRecorder()
@@ -226,6 +216,94 @@ final class SharedReadingLiveRunTests: XCTestCase {
             try XCTUnwrap(calls.values.firstIndex(of: "host:cleanup")),
             try XCTUnwrap(calls.values.firstIndex(of: "finish:false:true"))
         )
+    }
+
+    func testSignalCancellationDuringRelayStartupPreventsSimulatorCreationAndAwaitsFailureCleanup() async throws {
+        let calls = LiveRunCallRecorder()
+        let signals = SignalProbe()
+        let dependencies = makeDependencies(
+            calls: calls,
+            startRelay: {
+                calls.append("relay:start")
+                signals.fire()
+            },
+            installSignals: { callback in signals.install(callback) }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingLiveRun.execute(
+            environment: SharedReadingLiveRun.validTestEnvironment,
+            dependencies: dependencies
+        ))
+
+        XCTAssertFalse(calls.values.contains("simulator:create"))
+        XCTAssertFalse(calls.values.contains("host:run"))
+        XCTAssertEqual(calls.values.last, "finish:false:true")
+        XCTAssertFalse(signals.isInstalled)
+    }
+
+    func testSignalCancellationDuringSimulatorCreationPreventsHostExecutionAndAwaitsFailureCleanup() async throws {
+        let calls = LiveRunCallRecorder()
+        let signals = SignalProbe()
+        let dependencies = makeDependencies(
+            calls: calls,
+            createDisposableSimulator: {
+                calls.append("simulator:create")
+                signals.fire()
+            },
+            installSignals: { callback in signals.install(callback) }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingLiveRun.execute(
+            environment: SharedReadingLiveRun.validTestEnvironment,
+            dependencies: dependencies
+        ))
+
+        XCTAssertFalse(calls.values.contains("host:run"))
+        XCTAssertEqual(calls.values.last, "finish:false:true")
+        XCTAssertFalse(signals.isInstalled)
+    }
+
+    func testSignalHandlerRemainsInstalledWhileSuccessTeardownRuns() async throws {
+        let calls = LiveRunCallRecorder()
+        let signals = SignalProbe()
+        let dependencies = makeDependencies(
+            calls: calls,
+            finish: { success, keep in
+                XCTAssertTrue(signals.isInstalled)
+                calls.append("finish:\(success):\(keep)")
+            },
+            installSignals: { callback in signals.install(callback) }
+        )
+
+        _ = try await SharedReadingLiveRun.execute(
+            environment: SharedReadingLiveRun.validTestEnvironment,
+            dependencies: dependencies
+        )
+        XCTAssertFalse(signals.isInstalled)
+    }
+
+    func testSimulatorInventoryRequiresBothRecordedUDIDAndNameToBeAbsent() throws {
+        let expected = OwnedSimulatorDevice(
+            udid: "AAA", name: "rishi-e2e-run", deviceTypeIdentifier: "type", runtimeIdentifier: "runtime"
+        )
+        XCTAssertFalse(try SharedReadingLiveRun.simulatorInventoryConfirmsAbsence(
+            "{\"devices\":{\"runtime\":[{\"udid\":\"AAA\",\"name\":\"renamed\"}]}}",
+            expected: expected
+        ))
+        XCTAssertFalse(try SharedReadingLiveRun.simulatorInventoryConfirmsAbsence(
+            "{\"devices\":{\"runtime\":[{\"udid\":\"BBB\",\"name\":\"rishi-e2e-run\"}]}}",
+            expected: expected
+        ))
+        XCTAssertTrue(try SharedReadingLiveRun.simulatorInventoryConfirmsAbsence(
+            "{\"devices\":{\"runtime\":[{\"udid\":\"BBB\",\"name\":\"other\"}]}}",
+            expected: expected
+        ))
+    }
+
+    func testProductionTeardownDoesNotDeleteFixedSharedContainerFixtureNames() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: packageRoot.appendingPathComponent("Sources/RishiE2EHost/SharedReadingLiveRun.swift"))
+        XCTAssertFalse(source.contains("rishi-e2e-fixture."))
     }
 
     func testPackageResolutionUsesJournalAwareRunnerAndSignalCancellation() async throws {
@@ -381,6 +459,8 @@ private func makeDependencies(
     unresolvedArtifact: Bool = false,
     report: SharedReadingRunReport = .init(runID: "probe", primaryFailure: nil, cleanupFailed: false),
     preparePackages: (@Sendable () async throws -> Void)? = nil,
+    startRelay: (@Sendable () throws -> Void)? = nil,
+    createDisposableSimulator: (@Sendable () async throws -> Void)? = nil,
     runHost: (@Sendable () async throws -> SharedReadingRunReport)? = nil,
     finish: (@Sendable (Bool, Bool) async throws -> Void)? = nil,
     installSignals: (@Sendable (@escaping @Sendable () -> Void) throws -> SharedReadingLiveRun.SignalInstallation)? = nil
@@ -392,8 +472,8 @@ private func makeDependencies(
         beginRun: { _, _ in calls.append("journal:create") },
         acquireAndJournalLock: { calls.append("lock:acquire+journal") },
         preparePackages: preparePackages ?? { calls.append("packages:resolve") },
-        startRelay: { calls.append("relay:start") },
-        createDisposableSimulator: { calls.append("simulator:create") },
+        startRelay: startRelay ?? { calls.append("relay:start") },
+        createDisposableSimulator: createDisposableSimulator ?? { calls.append("simulator:create") },
         runHost: runHost ?? { calls.append("host:run"); return report },
         participantProgress: { calls.append("relay:progress"); return 2 },
         finish: finish ?? { success, keep in calls.append("finish:\(success):\(keep)") },
@@ -404,17 +484,19 @@ private func makeDependencies(
 
 private final class SignalProbe: @unchecked Sendable {
     private let lock = NSLock()
-    private var callbacks: [@Sendable () -> Void] = []
+    private var callback: (@Sendable () -> Void)?
 
     func install(_ callback: @escaping @Sendable () -> Void) -> SharedReadingLiveRun.SignalInstallation {
-        lock.withLock { callbacks.append(callback) }
-        return .init(cancel: {})
+        lock.withLock { self.callback = callback }
+        return .init(cancel: { [weak self] in self?.lock.withLock { self?.callback = nil } })
     }
 
     func fire() {
-        let callback = lock.withLock { callbacks.last }
+        let callback = lock.withLock { self.callback }
         callback?()
     }
+
+    var isInstalled: Bool { lock.withLock { callback != nil } }
 }
 
 private final class FakeSignalDispositionState: @unchecked Sendable {

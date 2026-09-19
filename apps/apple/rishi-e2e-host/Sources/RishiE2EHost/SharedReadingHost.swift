@@ -1039,14 +1039,20 @@ public struct SharedReadingHost: Sendable {
         if let participantHandle {
             do { try await peers.cancel(participantHandle); participantStopped = true } catch { cleanupFailed = true }
         }
-        var ownedResourcesAbsent = false
-        do {
-            try await inputs.preAccountCleanup()
-            ownedResourcesAbsent = true
-        } catch {
-            cleanupFailed = true
-        }
         let peersStopped = ownerStopped && participantStopped
+        // The pre-account phase owns the simulator, Catalyst identities, and
+        // xctestrun artifacts. Do not touch any of them until both XCTest
+        // peers are conclusively stopped; a failed cancellation must retain
+        // the entire recovery state unchanged.
+        var ownedResourcesAbsent = false
+        if peersStopped {
+            do {
+                try await inputs.preAccountCleanup()
+                ownedResourcesAbsent = true
+            } catch {
+                cleanupFailed = true
+            }
+        }
         var remoteRoomsAbsent = false
         if peersStopped && ownedResourcesAbsent {
             let emails = [owner?.email, participant?.email].compactMap { $0 }

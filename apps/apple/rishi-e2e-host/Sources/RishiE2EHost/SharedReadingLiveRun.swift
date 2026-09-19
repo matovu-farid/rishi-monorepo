@@ -49,6 +49,29 @@ public enum SharedReadingLiveRun {
         static let none = SignalInstallation(cancel: {})
     }
 
+    private final class LifecycleCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancellationRequested = false
+        private var cancelOperation: (@Sendable () -> Void)?
+
+        func requestCancellation() {
+            let operation = lock.withLock { () -> (@Sendable () -> Void)? in
+                cancellationRequested = true
+                return cancelOperation
+            }
+            operation?()
+        }
+
+        func register(_ operation: @escaping @Sendable () -> Void) {
+            let shouldCancel = lock.withLock { () -> Bool in
+                if cancellationRequested { return true }
+                cancelOperation = operation
+                return false
+            }
+            if shouldCancel { operation() }
+        }
+    }
+
     struct Dependencies: Sendable {
         let unresolvedArtifact: @Sendable (URL) throws -> Bool
         let accountPreflight: @Sendable () async throws -> Void
@@ -115,22 +138,33 @@ public enum SharedReadingLiveRun {
         let runID = dependencies.makeRunID()
         let runRoot = configuration.temporaryRoot.appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
         try dependencies.beginRun(runID, runRoot)
+        var signals: SignalInstallation?
         do {
             try dependencies.acquireAndJournalLock()
-            try await runWithSignals(dependencies: dependencies) {
+            let cancellation = LifecycleCancellation()
+            signals = try dependencies.installSignals { cancellation.requestCancellation() }
+            let lifecycle = Task { () throws -> SharedReadingLiveRunEvidence in
                 try await dependencies.preparePackages()
+                try Task.checkCancellation()
+                try dependencies.startRelay()
+                try Task.checkCancellation()
+                try await dependencies.createDisposableSimulator()
+                try Task.checkCancellation()
+                let report = try await dependencies.runHost()
+                try Task.checkCancellation()
+                guard report.primaryFailure == nil, !report.cleanupFailed else { throw report.primaryFailure ?? SharedReadingLiveRunError.cleanupIncomplete }
+                guard let progress = dependencies.participantProgress(), progress >= 2 else { throw SharedReadingLiveRunError.insufficientParticipantProgress }
+                return SharedReadingLiveRunEvidence(runID: report.runID, participantProgressSequence: progress, deletedAccountCount: 2)
             }
-            try dependencies.startRelay()
-            try await dependencies.createDisposableSimulator()
-            let report = try await runWithSignals(dependencies: dependencies) {
-                try await dependencies.runHost()
-            }
-            guard report.primaryFailure == nil, !report.cleanupFailed else { throw report.primaryFailure ?? SharedReadingLiveRunError.cleanupIncomplete }
-            guard let progress = dependencies.participantProgress(), progress >= 2 else { throw SharedReadingLiveRunError.insufficientParticipantProgress }
+            cancellation.register { lifecycle.cancel() }
+            let evidence = try await lifecycle.value
             try await dependencies.finish(true, configuration.keepArtifacts)
-            return SharedReadingLiveRunEvidence(runID: report.runID, participantProgressSequence: progress, deletedAccountCount: 2)
+            try signals?.cancel()
+            signals = nil
+            return evidence
         } catch {
             try? await dependencies.finish(false, true)
+            try? signals?.cancel()
             throw error
         }
     }
@@ -143,42 +177,41 @@ public enum SharedReadingLiveRun {
         let runID = "preflight-\(dependencies.makeRunID())"
         let root = configuration.temporaryRoot.appendingPathComponent("rishi-shared-reading-\(runID)", isDirectory: true)
         try dependencies.beginRun(runID, root)
+        var signals: SignalInstallation?
         do {
             try dependencies.acquireAndJournalLock()
-            try await runWithSignals(dependencies: dependencies) {
+            let cancellation = LifecycleCancellation()
+            signals = try dependencies.installSignals { cancellation.requestCancellation() }
+            let lifecycle = Task {
                 try await dependencies.preparePackages()
             }
+            cancellation.register { lifecycle.cancel() }
+            _ = try await lifecycle.value
             try await dependencies.finish(true, false)
+            try signals?.cancel()
+            signals = nil
         } catch {
             try? await dependencies.finish(false, true)
+            try? signals?.cancel()
             throw error
         }
     }
 
     private struct ValidatedConfiguration { let temporaryRoot: URL; let keepArtifacts: Bool }
 
-    private static func runWithSignals<T: Sendable>(
-        dependencies: Dependencies,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        let task = Task { try await operation() }
-        let installation: SignalInstallation
-        do {
-            installation = try dependencies.installSignals { task.cancel() }
-        } catch {
-            task.cancel()
-            _ = try? await task.value
-            throw error
+    static func simulatorInventoryConfirmsAbsence(
+        _ inventoryJSON: String,
+        expected: OwnedSimulatorDevice
+    ) throws -> Bool {
+        guard let expectedUDID = expected.udid,
+              let data = inventoryJSON.data(using: .utf8),
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let devices = root["devices"] as? [String: [[String: Any]]] else {
+            throw SharedReadingLiveRunError.cleanupIncomplete
         }
-        do {
-            let value = try await task.value
-            try installation.cancel()
-            return value
-        } catch {
-            task.cancel()
-            _ = try? await task.value
-            try? installation.cancel()
-            throw error
+        return !devices.values.joined().contains { device in
+            device["udid"] as? String == expectedUDID
+                || device["name"] as? String == expected.name
         }
     }
 
@@ -444,11 +477,24 @@ private final class ProductionState: @unchecked Sendable {
             _ = try await runner.run(.init(executablePath: "/usr/bin/xcrun", arguments: ["simctl", "shutdown", udid]))
             let deleted = try await runner.run(.init(executablePath: "/usr/bin/xcrun", arguments: ["simctl", "delete", udid]))
             guard deleted.succeeded else { throw SharedReadingLiveRunError.cleanupIncomplete }
+            var absent = false
+            for _ in 0..<6 {
+                let inventory = try await runner.run(.init(
+                    executablePath: "/usr/bin/xcrun",
+                    arguments: ["simctl", "list", "devices", "--json"]
+                ))
+                guard inventory.succeeded else { throw SharedReadingLiveRunError.cleanupIncomplete }
+                if try SharedReadingLiveRun.simulatorInventoryConfirmsAbsence(inventory.stdout, expected: simulator) {
+                    absent = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            guard absent else { throw SharedReadingLiveRunError.cleanupIncomplete }
             try journal.recordVerifiedSimulatorDeletion(simulator)
             self.simulator = nil
         }
         try removeSecretSpecifications(journal: journal)
-        try removeStagedFixtures()
     }
 
     private func removeSecretSpecifications(journal: SharedReadingRecoveryJournal) throws {
@@ -459,17 +505,6 @@ private final class ProductionState: @unchecked Sendable {
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
             guard !FileManager.default.fileExists(atPath: url.path) else { throw SharedReadingLiveRunError.cleanupIncomplete }
             try journal.recordVerifiedSecretArtifactDeletion(relativePath: relative)
-        }
-    }
-
-    private func removeStagedFixtures() throws {
-        let group = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Group Containers", isDirectory: true)
-            .appendingPathComponent("group.org.fidexa.rishi", isDirectory: true)
-        for fileExtension in ["pdf", "epub"] {
-            let url = group.appendingPathComponent("rishi-e2e-fixture.\(fileExtension)")
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-            guard !FileManager.default.fileExists(atPath: url.path) else { throw SharedReadingLiveRunError.cleanupIncomplete }
         }
     }
 
