@@ -75,6 +75,51 @@ final class SharedReadingLiveRunTests: XCTestCase {
         XCTAssertFalse(calls.values.contains("packages:started"))
         XCTAssertEqual(calls.values.last, "finish:false:true")
     }
+
+    func testSignalDuringLockAcquisitionCancelsBeforePackagesAndAwaitsFailureFinish() async throws {
+        let calls = LiveRunCallRecorder()
+        let signals = SignalProbe()
+        let dependencies = makeDependencies(
+            calls: calls,
+            acquireAndJournalLock: {
+                calls.append("lock:begin")
+                signals.fire()
+                calls.append("lock:end")
+            },
+            finish: { success, keep in
+                calls.append("finish:begin:\(success):\(keep)")
+                try await Task.sleep(for: .milliseconds(10))
+                calls.append("finish:end:\(success):\(keep)")
+            },
+            installSignals: { callback in
+                calls.append("signals:install")
+                return signals.install(callback)
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await SharedReadingLiveRun.execute(
+            environment: SharedReadingLiveRun.validTestEnvironment,
+            dependencies: dependencies
+        ))
+
+        XCTAssertFalse(calls.values.contains("packages:resolve"))
+        XCTAssertFalse(calls.values.contains("relay:start"))
+        XCTAssertEqual(calls.values.suffix(2), ["finish:begin:false:true", "finish:end:false:true"])
+        XCTAssertLessThan(
+            try XCTUnwrap(calls.values.firstIndex(of: "journal:create")),
+            try XCTUnwrap(calls.values.firstIndex(of: "signals:install"))
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(calls.values.firstIndex(of: "signals:install")),
+            try XCTUnwrap(calls.values.firstIndex(of: "lock:begin"))
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(calls.values.firstIndex(of: "lock:end")),
+            try XCTUnwrap(calls.values.firstIndex(of: "finish:begin:false:true"))
+        )
+        XCTAssertFalse(signals.isInstalled)
+    }
+
     func testLiveRunRequiresNetworkAcknowledgementBeforeAnyDependencyCall() async throws {
         let calls = LiveRunCallRecorder()
         let dependencies = SharedReadingLiveRun.Dependencies.probe { calls.append($0) }
@@ -458,6 +503,7 @@ private func makeDependencies(
     calls: LiveRunCallRecorder,
     unresolvedArtifact: Bool = false,
     report: SharedReadingRunReport = .init(runID: "probe", primaryFailure: nil, cleanupFailed: false),
+    acquireAndJournalLock: (@Sendable () throws -> Void)? = nil,
     preparePackages: (@Sendable () async throws -> Void)? = nil,
     startRelay: (@Sendable () throws -> Void)? = nil,
     createDisposableSimulator: (@Sendable () async throws -> Void)? = nil,
@@ -470,7 +516,7 @@ private func makeDependencies(
         accountPreflight: { calls.append("account:preflight") },
         destinationPreflight: { calls.append("destination:preflight") },
         beginRun: { _, _ in calls.append("journal:create") },
-        acquireAndJournalLock: { calls.append("lock:acquire+journal") },
+        acquireAndJournalLock: acquireAndJournalLock ?? { calls.append("lock:acquire+journal") },
         preparePackages: preparePackages ?? { calls.append("packages:resolve") },
         startRelay: startRelay ?? { calls.append("relay:start") },
         createDisposableSimulator: createDisposableSimulator ?? { calls.append("simulator:create") },

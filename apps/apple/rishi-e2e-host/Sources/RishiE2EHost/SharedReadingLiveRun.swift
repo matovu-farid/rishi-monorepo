@@ -140,10 +140,11 @@ public enum SharedReadingLiveRun {
         try dependencies.beginRun(runID, runRoot)
         var signals: SignalInstallation?
         do {
-            try dependencies.acquireAndJournalLock()
             let cancellation = LifecycleCancellation()
             signals = try dependencies.installSignals { cancellation.requestCancellation() }
             let lifecycle = Task { () throws -> SharedReadingLiveRunEvidence in
+                try dependencies.acquireAndJournalLock()
+                try Task.checkCancellation()
                 try await dependencies.preparePackages()
                 try Task.checkCancellation()
                 try dependencies.startRelay()
@@ -179,10 +180,11 @@ public enum SharedReadingLiveRun {
         try dependencies.beginRun(runID, root)
         var signals: SignalInstallation?
         do {
-            try dependencies.acquireAndJournalLock()
             let cancellation = LifecycleCancellation()
             signals = try dependencies.installSignals { cancellation.requestCancellation() }
             let lifecycle = Task {
+                try dependencies.acquireAndJournalLock()
+                try Task.checkCancellation()
                 try await dependencies.preparePackages()
             }
             cancellation.register { lifecycle.cancel() }
