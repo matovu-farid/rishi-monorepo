@@ -7,6 +7,7 @@ const env = {
   CLOUDFLARE_ACCOUNT_ID: "b700cf80e995aacbfa27aaa8d2084d18",
   R2_ACCESS_KEY_ID: "test-access-key-id",
   R2_SECRET_ACCESS_KEY: "test-secret-access-key",
+  BOOK_STORAGE_BUCKET_NAME: "rishi-books",
 };
 
 describe("signR2Url — presigned R2 URL shape", () => {
@@ -26,13 +27,25 @@ describe("signR2Url — presigned R2 URL shape", () => {
     expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
   });
 
-  it("produces a query-signed URL targeting the rishi-books bucket on the account host", async () => {
+  it.each(["rishi-books", "rishi-books-e2e"])("signs a PUT URL for the configured %s bucket", async (bucketName) => {
     const url = new URL(
-      await signR2Url(env, { key: "books/u/b.pdf", method: "GET", expiresSec: 600 }),
+      await signR2Url(
+        { ...env, BOOK_STORAGE_BUCKET_NAME: bucketName },
+        { key: "books/u/b.pdf", method: "PUT", expiresSec: 600 },
+      ),
     );
     expect(url.host).toBe(`${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`);
-    expect(url.pathname).toBe("/rishi-books/books/u/b.pdf");
+    expect(url.pathname).toBe(`/${bucketName}/books/u/b.pdf`);
     expect(url.searchParams.get("X-Amz-Signature")).toBeTruthy();
     expect(url.searchParams.get("X-Amz-Credential")).toContain("/auto/s3/aws4_request");
+  });
+
+  it("rejects an empty configured bucket name before signing", async () => {
+    await expect(
+      signR2Url(
+        { ...env, BOOK_STORAGE_BUCKET_NAME: "" },
+        { key: "books/u/b.pdf", method: "PUT", expiresSec: 600 },
+      ),
+    ).rejects.toThrow("BOOK_STORAGE_BUCKET_NAME");
   });
 });

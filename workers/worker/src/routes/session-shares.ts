@@ -17,6 +17,40 @@ type SessionContext = { Bindings: SessionEnv; Variables: { userId: string } };
 const routes = new Hono<SessionContext>();
 routes.use("*", requireAuth as never);
 
+function publicWebOrigin(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("PUBLIC_WEB_URL must be a configured HTTPS origin");
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("PUBLIC_WEB_URL must be a configured HTTPS origin");
+  }
+  if (
+    url.protocol !== "https:"
+    || url.username !== ""
+    || url.password !== ""
+    || url.port !== ""
+    || url.pathname !== "/"
+    || url.search !== ""
+    || url.hash !== ""
+  ) {
+    throw new Error("PUBLIC_WEB_URL must be a configured HTTPS origin");
+  }
+  return url.origin;
+}
+
+function sessionShareURL(origin: string, token: string): string {
+  const url = new URL("/sharing/session", origin);
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function publicWebURLConfigurationError(c: any) {
+  return c.json({ code: "SERVICE_UNAVAILABLE", error: "Rishi could not complete this action." }, 503);
+}
+
 function service(c: any) {
   return new SessionSharingService(c.env.SHARING_WORKER, {
     internalTokenSecret: c.env.SHARING_INTERNAL_SECRET,
@@ -63,6 +97,12 @@ routes.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json().catch(() => ({})) as { bookId?: string; idempotencyKey?: string };
   if (!body.bookId || !body.idempotencyKey || body.idempotencyKey.length > 128) return c.json({ code: "BAD_REQUEST", error: "bookId and idempotencyKey are required" }, 400);
+  let webOrigin: string;
+  try {
+    webOrigin = publicWebOrigin(c.env.PUBLIC_WEB_URL);
+  } catch {
+    return publicWebURLConfigurationError(c);
+  }
   const db = createDb(c.env.DB);
   const existing = await db.select().from(sessionInvites).where(and(eq(sessionInvites.ownerUserId, userId), eq(sessionInvites.idempotencyKey, body.idempotencyKey))).get();
   if (existing) {
@@ -77,7 +117,7 @@ routes.post("/", async (c) => {
       return c.json({ code: "SESSION_ENDED", error: "This reading session has ended; create a new link to start again" }, 410);
     }
     const token = await sessionToken(c, userId, existing.idempotencyKey);
-    return c.json({ sessionId: existing.sessionId, book: payload, shareURL: `https://rishi.fidexa.org/sharing/session?token=${encodeURIComponent(token)}`, status: room.status });
+    return c.json({ sessionId: existing.sessionId, book: payload, shareURL: sessionShareURL(webOrigin, token), status: room.status });
   }
   const book = await db.select().from(books).where(and(eq(books.id, body.bookId), eq(books.userId, userId), eq(books.isDeleted, false))).get();
   if (!book) return c.json({ code: "SESSION_LINK_INVALID", error: "Book not found" }, 404);
@@ -96,7 +136,7 @@ routes.post("/", async (c) => {
     if (error instanceof SessionSharingServiceError) return errorResponse(c, error);
     return c.json({ code: "SERVICE_UNAVAILABLE", error: "Could not create reading session" }, 503);
   }
-  return c.json({ sessionId, book: payload, shareURL: `https://rishi.fidexa.org/sharing/session?token=${encodeURIComponent(token)}`, status: "waiting" }, 201);
+  return c.json({ sessionId, book: payload, shareURL: sessionShareURL(webOrigin, token), status: "waiting" }, 201);
 });
 
 routes.post("/redeem", async (c) => {
@@ -312,12 +352,19 @@ routes.post("/:id/email", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json().catch(() => ({})) as { recipients?: string[]; idempotencyKey?: string };
   if (!Array.isArray(body.recipients) || !body.idempotencyKey) return c.json({ code: "BAD_REQUEST", error: "recipients and idempotencyKey are required" }, 400);
+  let webOrigin: string;
+  try {
+    webOrigin = publicWebOrigin(c.env.PUBLIC_WEB_URL);
+  } catch {
+    return publicWebURLConfigurationError(c);
+  }
   const db = createDb(c.env.DB);
   const invite = await db.select().from(sessionInvites).where(and(eq(sessionInvites.sessionId, id), eq(sessionInvites.ownerUserId, userId), eq(sessionInvites.status, "open"))).get();
   if (!invite) return c.json({ code: "SESSION_LINK_INVALID", error: "Session not found" }, 404);
   const token = await sessionToken(c, userId, invite.idempotencyKey);
-  const result = await sendSessionInviteEmails({ db, sessionId: id, inviteId: invite.id, shareUrl: `https://rishi.fidexa.org/sharing/session?token=${token}`, recipients: body.recipients, resendApiKey: c.env.RESEND_API_KEY });
-  return c.json({ shareURL: `https://rishi.fidexa.org/sharing/session?token=${token}`, ...result });
+  const shareURL = sessionShareURL(webOrigin, token);
+  const result = await sendSessionInviteEmails({ db, sessionId: id, inviteId: invite.id, shareUrl: shareURL, recipients: body.recipients, resendApiKey: c.env.RESEND_API_KEY });
+  return c.json({ shareURL, ...result });
 });
 
 export { routes as sessionSharesRoutes };

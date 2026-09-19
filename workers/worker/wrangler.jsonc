@@ -97,6 +97,7 @@
 		"PUBLIC_API_URL": "https://api.fidexa.org",
 		"PUBLIC_WEB_URL": "https://rishi.fidexa.org",
 		"SHARING_WORKER_WS_URL": "wss://sharing.fidexa.org",
+		"BOOK_STORAGE_BUCKET_NAME": "rishi-books",
 		// ─── /api/sync/upload-url storage caps ───────────────────────────────
 		// wrangler passes numeric vars as strings; defaults in upload.ts kick in
 		// if these are unset. Override per-environment as needed.

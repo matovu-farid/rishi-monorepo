@@ -1,0 +1,153 @@
+// Bun provides this module at test runtime, but Worker production types do not include it.
+// @ts-ignore -- test-only Bun module
+import { beforeEach, describe, expect, it, mock } from "bun:test";
+
+const dbState = ((globalThis as unknown as {
+  __sessionSharesTestState?: { created: boolean; selectCalls: number };
+}).__sessionSharesTestState ??= { created: false, selectCalls: 0 });
+
+mock.module("../middleware", () => ({
+  requireAuth: async (c: { set: (key: string, value: string) => void }, next: () => Promise<void>) => {
+    c.set("userId", "owner-1");
+    await next();
+  },
+}));
+
+mock.module("../db/drizzle", () => ({
+  createDb: () => ({
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          get: async () => {
+            const state = (globalThis as unknown as {
+              __sessionSharesTestState: { created: boolean; selectCalls: number };
+            }).__sessionSharesTestState;
+            state.selectCalls += 1;
+            if (!state.created) {
+              return state.selectCalls === 1 ? undefined : testBook;
+            }
+            if (state.selectCalls === 3) return testInvite;
+            if (state.selectCalls === 4) return testInviteItem;
+            return testBook;
+          },
+        }),
+      }),
+    }),
+    insert: () => ({
+      values: () => ({
+        run: async () => {
+          (globalThis as unknown as {
+            __sessionSharesTestState: { created: boolean; selectCalls: number };
+          }).__sessionSharesTestState.created = true;
+        },
+      }),
+    }),
+  }),
+}));
+
+const { sessionSharesRoutes } = await import("./session-shares");
+
+const baseEnv = {
+  BETTER_AUTH_SECRET: "test-share-secret",
+  CLOUDFLARE_ACCOUNT_ID: "test-account",
+  R2_ACCESS_KEY_ID: "test-key",
+  R2_SECRET_ACCESS_KEY: "test-secret",
+  BOOK_STORAGE_BUCKET_NAME: "rishi-books",
+  SHARING_INTERNAL_SECRET: "test-sharing-secret",
+  SHARING_WORKER: {
+    fetch: mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { action: string; payload: { sessionId: string } };
+      if (request.action === "createRoom") {
+        return Response.json({ sessionId: request.payload.sessionId, roomEpoch: 1, controllerGeneration: 1 });
+      }
+      if (request.action === "getRoomStatus") {
+        return Response.json({
+          sessionId: request.payload.sessionId,
+          status: "waiting",
+          roomEpoch: 1,
+          controllerGeneration: 1,
+          controllerUserId: "owner-1",
+          participants: [],
+          maxParticipants: 5,
+          removedUserIds: [],
+        });
+      }
+      throw new Error(`unexpected session-sharing action: ${request.action}`);
+    }),
+  },
+};
+
+const testBook = {
+  id: "book-1",
+  fileR2Key: "books/owner-1/book-1.epub",
+  coverR2Key: null,
+  fileHash: "book-hash",
+  fileSize: 42,
+  format: "epub",
+};
+
+const testInvite = {
+  id: "invite-1",
+  idempotencyKey: "invite-1",
+  sessionId: "session-1",
+  sourceBookId: "book-1",
+};
+
+const testInviteItem = { inviteId: "invite-1" };
+
+function makeEnv(publicWebURL?: string) {
+  return {
+    ...baseEnv,
+    ...(publicWebURL === undefined ? {} : { PUBLIC_WEB_URL: publicWebURL }),
+  } as unknown as Env;
+}
+
+function createInvite(env: Env, idempotencyKey = "invite-1") {
+  return sessionSharesRoutes.request("/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bookId: "book-1", idempotencyKey }),
+  }, env);
+}
+
+beforeEach(() => {
+  dbState.created = false;
+  dbState.selectCalls = 0;
+  (baseEnv.SHARING_WORKER.fetch as unknown as { mockClear: () => void }).mockClear();
+});
+
+describe("session share links", () => {
+  it.each([
+    ["production", "https://rishi.fidexa.org"],
+    ["e2e", "https://api-e2e.fidexa.org"],
+  ])("uses only the configured %s origin for newly created and idempotent invites", async (_environment: string, publicWebURL: string) => {
+    const env = makeEnv(publicWebURL);
+
+    const created = await createInvite(env);
+    const repeated = await createInvite(env);
+
+    expect(created.status).toBe(201);
+    expect(repeated.status).toBe(200);
+    const createdBody = await created.json() as { shareURL: string };
+    const repeatedBody = await repeated.json() as { shareURL: string };
+    expect(new URL(createdBody.shareURL).origin).toBe(publicWebURL);
+    expect(new URL(repeatedBody.shareURL).origin).toBe(publicWebURL);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["malformed", "not a URL"],
+    ["non-HTTPS", "http://rishi.fidexa.org"],
+    ["user info", "https://reader:secret@rishi.fidexa.org"],
+    ["alternate port", "https://rishi.fidexa.org:8443"],
+    ["path", "https://rishi.fidexa.org/sharing"],
+    ["query", "https://rishi.fidexa.org?next=e2e"],
+    ["fragment", "https://rishi.fidexa.org#e2e"],
+  ])("fails closed when PUBLIC_WEB_URL is %s", async (_description: string, publicWebURL: string | undefined) => {
+    const response = await createInvite(makeEnv(publicWebURL));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.not.toHaveProperty("shareURL");
+    expect(baseEnv.SHARING_WORKER.fetch).not.toHaveBeenCalled();
+  });
+});
