@@ -59,6 +59,7 @@ fi
 
 failures=0
 checks=0
+typeset -a wrapper_args=()
 
 fail() {
   print -u2 -r -- "FAIL: $1"
@@ -150,13 +151,14 @@ run_wrapper() {
     RISHI_E2E_RUN_LIVE="inherited-but-must-be-removed" \
     RISHI_E2E_ALLOW_NETWORK="${RISHI_E2E_ALLOW_NETWORK-1}" \
     RISHI_E2E_ALLOW_SIMULATOR_RESET="${RISHI_E2E_ALLOW_SIMULATOR_RESET-1}" \
-    RISHI_E2E_API_BASE_URL="${RISHI_E2E_API_BASE_URL-https://api.fidexa.org}" \
+    RISHI_E2E_API_BASE_URL="${RISHI_E2E_API_BASE_URL-https://api-e2e.fidexa.org}" \
+    RISHI_E2E_SHARING_WS_URL="${RISHI_E2E_SHARING_WS_URL-wss://sharing-e2e.fidexa.org}" \
     RISHI_E2E_TEST_AUTH_SECRET="${RISHI_E2E_TEST_AUTH_SECRET-do-not-print-this-secret}" \
     RISHI_E2E_TEST_DOMAIN="${RISHI_E2E_TEST_DOMAIN-example.test}" \
     RISHI_E2E_IPHONE17_UDID="${RISHI_E2E_IPHONE17_UDID-00000000-0000-0000-0000-000000000000}" \
     RISHI_E2E_PROJECT="${RISHI_E2E_PROJECT-/tmp/rishi.xcodeproj}" \
     RISHI_E2E_FIXTURE="${RISHI_E2E_FIXTURE-/tmp/book.pdf}" \
-    /bin/zsh "$wrapper" > "$stdout_path" 2> "$stderr_path"
+    /bin/zsh "$wrapper" "${wrapper_args[@]}" > "$stdout_path" 2> "$stderr_path"
 }
 
 print -r -- "TEST: runs deterministic suite with live mode off, then focused test with live mode on"
@@ -194,23 +196,40 @@ assert_equal 23 "$exit_status" "deterministic failure status should be preserved
 assert_call_count "$fake_log" 1 "deterministic failure should stop before the live phase"
 assert_contains "$stderr_path" "failed during deterministic package tests" "deterministic failure should identify its phase"
 
-print -r -- "TEST: rejects missing or invalid live configuration before focused test"
-for invalid_case in missing_fixture network_ack reset_ack api_url; do
+print -r -- "TEST: rejects missing, production, or malformed live endpoints before any Swift invocation"
+for invalid_case in missing_api missing_wss production_api production_wss malformed_api malformed_wss; do
   reset_fake "invalid_$invalid_case"
-  unset RISHI_E2E_FIXTURE RISHI_E2E_ALLOW_NETWORK RISHI_E2E_ALLOW_SIMULATOR_RESET RISHI_E2E_API_BASE_URL
+  unset RISHI_E2E_API_BASE_URL RISHI_E2E_SHARING_WS_URL
   case "$invalid_case" in
-    missing_fixture) RISHI_E2E_FIXTURE='' ;;
-    network_ack) RISHI_E2E_ALLOW_NETWORK=0 ;;
-    reset_ack) RISHI_E2E_ALLOW_SIMULATOR_RESET=yes ;;
-    api_url) RISHI_E2E_API_BASE_URL=https://example.invalid ;;
+    missing_api) RISHI_E2E_API_BASE_URL='' ;;
+    missing_wss) RISHI_E2E_SHARING_WS_URL='' ;;
+    production_api) RISHI_E2E_API_BASE_URL=https://api.fidexa.org ;;
+    production_wss) RISHI_E2E_SHARING_WS_URL=wss://sharing.fidexa.org ;;
+    malformed_api) RISHI_E2E_API_BASE_URL=https://api-e2e.fidexa.org/ ;;
+    malformed_wss) RISHI_E2E_SHARING_WS_URL=wss://attacker@sharing-e2e.fidexa.org ;;
   esac
   FAKE_SWIFT_STATUS_1=0 FAKE_SWIFT_STATUS_2=0 run_wrapper
   exit_status=$?
   assert_equal 2 "$exit_status" "$invalid_case should exit with configuration status 2"
-  assert_call_count "$fake_log" 1 "$invalid_case should not invoke the live phase"
+  assert_call_count "$fake_log" 0 "$invalid_case should reject before any Swift invocation"
   assert_not_contains "$stderr_path" "do-not-print-this-secret" "$invalid_case diagnostics must not print the secret"
 done
-unset RISHI_E2E_FIXTURE RISHI_E2E_ALLOW_NETWORK RISHI_E2E_ALLOW_SIMULATOR_RESET RISHI_E2E_API_BASE_URL
+unset RISHI_E2E_API_BASE_URL RISHI_E2E_SHARING_WS_URL
+
+print -r -- "TEST: recovery is API-only and does not require a sharing URL or simulator reset acknowledgement"
+reset_fake recovery
+unset RISHI_E2E_SHARING_WS_URL RISHI_E2E_ALLOW_SIMULATOR_RESET
+recovery_manifest="$test_root/recovery.json"
+print -r -- '{}' > "$recovery_manifest" || setup_error "recovery manifest"
+wrapper_args=("--cleanup-manifest=$recovery_manifest")
+FAKE_SWIFT_STATUS_1=0 run_wrapper
+exit_status=$?
+assert_equal 0 "$exit_status" "API-only recovery should exit zero"
+assert_call_count "$fake_log" 1 "API-only recovery should invoke Swift once"
+assert_contains "$fake_log" "ARG=run" "recovery should run the host executable"
+assert_contains "$fake_log" "ARG=--cleanup-manifest=$recovery_manifest" "recovery should pass through the exact manifest"
+wrapper_args=()
+unset RISHI_E2E_SHARING_WS_URL RISHI_E2E_ALLOW_SIMULATOR_RESET
 
 print -r -- "TEST: preserves focused live test failure and reports the live phase"
 reset_fake live_failure
