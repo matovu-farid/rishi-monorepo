@@ -24,6 +24,31 @@ struct SharedReadingAPITests {
         #expect(rejoined.websocketURL == URL(string: "wss://sharing.rishi.test/v2/sessions/s_123/wss"))
     }
 
+    @Test("treats omitted and explicit secure websocket default ports as the same origin")
+    func acceptsEquivalentSecureWebSocketPorts() async throws {
+        let bookReadyAPI = makeAdmissionAPI(
+            websocketURL: "wss://sharing.rishi.test/v2/sessions/s_123/wss",
+            expectedOrigin: URL(string: "wss://sharing.rishi.test:443")!
+        )
+        let bookReady = try await bookReadyAPI.markBookReady(
+            sessionId: "s_123",
+            token: "invite-token",
+            contentHash: "content-hash"
+        )
+
+        let rejoinAPI = makeAdmissionAPI(
+            websocketURL: "wss://sharing.rishi.test:443/v2/sessions/s_123/wss",
+            expectedOrigin: URL(string: "wss://sharing.rishi.test")!
+        )
+        let rejoined = try await rejoinAPI.rejoin(
+            sessionId: "s_123",
+            contentHash: "content-hash"
+        )
+
+        #expect(bookReady.websocketURL.port == nil)
+        #expect(rejoined.websocketURL.port == 443)
+    }
+
     @Test("rejects book-ready and rejoin admissions from another websocket origin")
     func rejectsMismatchedAdmissionOrigins() async {
         let api = makeAdmissionAPI(

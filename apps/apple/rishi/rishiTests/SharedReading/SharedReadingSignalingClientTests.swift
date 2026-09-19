@@ -76,6 +76,27 @@ struct SharedReadingSignalingClientTests {
         await client.disconnect()
     }
 
+    @Test("creates a second websocket task after a valid refreshed admission")
+    func reconnectsWithValidRefreshedAdmission() async throws {
+        let recorder = RecordingWebSocketTaskFactory()
+        let client = makeClient(recorder: recorder, backoff: { _ in .zero })
+
+        try await client.connect(
+            admission: admission(url: "wss://sharing-e2e.fidexa.org/v2/sessions/s_123/wss"),
+            bearerToken: "bearer-token",
+            refreshAdmission: {
+                self.admission(url: "wss://sharing-e2e.fidexa.org:443/v2/sessions/s_123/wss")
+            },
+            refreshBearerToken: nil
+        )
+        await client.handleDisconnect(generation: 1)
+
+        let didReconnect = await waitForTaskCount(2, recorder: recorder)
+        #expect(didReconnect)
+        #expect(recorder.count == 2)
+        await client.disconnect()
+    }
+
     private func makeClient(
         recorder: RecordingWebSocketTaskFactory,
         backoff: @escaping @Sendable (Int) -> Duration = { _ in .seconds(60) }
@@ -121,6 +142,17 @@ struct SharedReadingSignalingClientTests {
             group.cancelAll()
             return first
         }
+    }
+
+    private func waitForTaskCount(
+        _ expectedCount: Int,
+        recorder: RecordingWebSocketTaskFactory
+    ) async -> Bool {
+        for _ in 0..<100 {
+            if recorder.count == expectedCount { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return recorder.count == expectedCount
     }
 }
 
