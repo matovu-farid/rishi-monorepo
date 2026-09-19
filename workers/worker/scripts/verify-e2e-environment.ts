@@ -197,7 +197,7 @@ function normalizeApprovedResources(value: unknown, errors: string[]): ApprovedR
     errors.push("approved E2E KV namespace ID is malformed");
   }
   if (d1DatabaseId === PRODUCTION_D1_ID) errors.push("approved E2E D1 database ID must not be production");
-  const productionKvIds = new Set([
+  const productionKvIds = new Set<string>([
     ...Object.values(PRODUCTION_KV_IDS),
     ...Object.values(PRODUCTION_KV_PREVIEW_IDS),
   ]);
