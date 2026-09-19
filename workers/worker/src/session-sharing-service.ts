@@ -362,7 +362,7 @@ export class SessionSharingService {
     // object has no room state. Do not treat malformed payloads or HTTP errors
     // as absence: cleanup callers need this to be an authoritative proof.
     if (response === null) return null;
-    if (isRoomStatus(response)) return response;
+    if (isRoomStatus(response) && response.sessionId === input.sessionId) return response;
     throw new SessionSharingServiceError(
       "INVALID_RESPONSE",
       "Session sharing service returned an invalid room status",

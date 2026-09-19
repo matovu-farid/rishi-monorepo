@@ -211,6 +211,28 @@ describe("session-sharing-service", () => {
     await expect(service.getRoomStatus({ sessionId: "session-123" })).resolves.toEqual(status);
   });
 
+  it("rejects a structurally valid room-status payload for a different session", async () => {
+    const service = new SessionSharingService(
+      {
+        fetch: vi.fn(async () => Response.json({
+          sessionId: "other-session",
+          status: "active",
+          roomEpoch: 4,
+          controllerGeneration: 7,
+          controllerUserId: "generated-controller",
+          participants: [],
+          maxParticipants: 2,
+          removedUserIds: [],
+        })),
+      },
+      { internalTokenSecret: "shared-secret", internalPathPrefix: "/v2/internal", now: () => 1_000 },
+    );
+
+    await expect(service.getRoomStatus({ sessionId: "session-123" })).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
   it("rejects malformed and invalid room-status payloads", async () => {
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(new Response("not json", { status: 200 }))
