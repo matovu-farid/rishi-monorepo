@@ -64,6 +64,8 @@ flowchart LR
 
 The owner and participant authenticate through `POST /test/sign-in` only on `api-e2e.fidexa.org`, upload/read their fixture through the E2E book bucket, and create/redeem the real session through the E2E API. The API signs its internal request with `SHARING_INTERNAL_SECRET`; the service binding delivers it to `rishi-sharing-worker-e2e`, which verifies the corresponding `WORKER_HMAC_SECRET`. The API response supplies a `wsUrl`; each app verifies that it belongs to `wss://sharing-e2e.fidexa.org` before connecting. The session's WebSocket and Durable Object traffic therefore never crosses into a production Worker namespace.
 
+After both peer processes stop, the host calls an E2E-only, test-authenticated shared-reading cleanup operation with the two generated account addresses. The operation resolves only those generated E2E users and enumerates every owned reading-session row. For each existing room it fetches current status, ends a non-ended room as the recorded owner using the room's current controller generation, verifies ended state, purges the E2E `AppleSessionRoom`, and independently verifies that the room is absent before account deletion begins. The same operation is run from crash recovery using the journaled addresses. It is idempotent when the users or rooms are already absent or a room is already ended.
+
 ## Cloudflare resources and explicit `env.e2e` contracts
 
 ### API Worker: `rishi-worker-e2e`
@@ -138,7 +140,7 @@ Secrets are set directly on the E2E script/environment through the deployment op
 | `ACCESS_TOKEN_SECRET` | Independently generated for `rishi-worker-e2e`; required by the exercised auth flow. |
 | `REFRESH_TOKEN_SECRET` | Independently generated for `rishi-worker-e2e`; required by the exercised auth flow. |
 | `VOICE_SESSION_NONCE_SECRET` | Independently generated for `rishi-worker-e2e`; required by the exercised Worker/ledger flow. |
-| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | A separately provisioned E2E credential pair restricted to Object Read and Object Write on `rishi-books-e2e`, installed only on `rishi-worker-e2e`. |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | A separately provisioned E2E credential pair with Cloudflare's bucket-scoped Object Read and Write permission on `rishi-books-e2e`, installed only on `rishi-worker-e2e`. It has no access to another bucket or account-level administration. |
 
 `CLOUDFLARE_ACCOUNT_ID` may be supplied as the non-secret account identifier needed to construct the R2 hostname. It does not grant access by itself. The E2E environment must not copy Apple Sign in, APNs, Resend, Stripe, Google, OpenAI, Deepgram, ElevenLabs, Upstash, or other external email, payment, or AI secrets merely to satisfy the production `secrets.required` declaration. The E2E config's required-secret validation lists only the secret set above. Routes requiring omitted capabilities fail closed or remain unexercised.
 
@@ -155,13 +157,17 @@ RISHI_E2E_SHARING_WS_URL=wss://sharing-e2e.fidexa.org
 
 For both owner and participant generated `.xctestrun` files, inject these exact values into all of `EnvironmentVariables`, `TestingEnvironmentVariables`, and `UITargetAppEnvironmentVariables`. The host must inject them into both XCTest runners and both launched application processes; it must not rely on parent-process inheritance. The existing E2E credentials, rendezvous configuration, registration nonces, and per-run artifact protections retain their current handling.
 
-`RishiAPIEnvironment` gains an E2E mode only when all of these are true: the binary is a Debug build, `RISHI_UITEST=1`, `RISHI_E2E_REAL_AUTH=1`, and both endpoint variables equal the exact HTTPS/WSS E2E origins above with no query, fragment, user info, alternate port, or path. Any missing, malformed, or mixed origin falls back to the production bundle configuration; it never selects an arbitrary host. Release builds and normal debug app launches ignore the two E2E variables and retain their production `RishiAPIBaseURL` and `RishiSharingWebSocketURL` values.
+`RishiAPIEnvironment` gains an E2E mode only when all of these are true: the binary is a Debug build, `RISHI_UITEST=1`, `RISHI_E2E_REAL_AUTH=1`, and both endpoint variables equal the exact HTTPS/WSS E2E origins above with no query, fragment, user info, alternate port, or path. Once both E2E gates are present, any missing, malformed, or mixed origin fails closed and the test app does not boot into a production fallback. Release builds and normal debug app launches ignore the two E2E variables and retain their production `RishiAPIBaseURL` and `RishiSharingWebSocketURL` values.
 
 When a session create or redeem response returns `wsUrl`, `SharedReadingSignalingClient` must parse it before opening `URLSessionWebSocketTask`. It accepts the URL only when its scheme is `wss`, its normalized origin exactly equals the active environment's `sharingWebSocketURL` origin, and it contains no user info, query, or fragment. A session-specific path remains permitted. On rejection, it emits the existing typed signaling/API failure and opens no socket. This closes the server-response redirection path even if an API response is malformed or compromised.
 
 ## Recovery, failure handling, and rollback
 
 `SharedReadingCLI`, `SharedReadingLiveRun`, preflight, and recovery currently require the production API origin. They must instead accept only the canonical `https://api-e2e.fidexa.org` E2E API origin for a live E2E run or `--cleanup-manifest` recovery. Recovery requires the existing network acknowledgement, E2E `TEST_AUTH_SECRET`, test domain, and recovery artifact; it makes account-deletion and absence-verification requests only to `api-e2e.fidexa.org`. It does not need `wss://sharing-e2e.fidexa.org` because it recovers API-owned accounts and local resources, not a new room connection.
+
+The E2E API adds one gated remote-cleanup contract under the existing `ENABLE_TEST_AUTH=true` plus constant-time `X-Test-Auth-Secret` guard. Its request contains only the two generated `rishi-e2e-*` addresses already present in the recovery journal. It rejects any address outside the configured generated-account namespace and enumerates each owned session ID plus its recorded owner from D1. For every room that still exists, it obtains the current status and controller generation, invokes the HMAC-protected `endRoom` action as that owner when status is not already ended, confirms ended state, invokes `purgeAppleRoom`, and verifies a subsequent status lookup reports authoritative absence. Any conflict or unverified room retains the recovery artifact and blocks account deletion; an already absent room is a successful idempotent result.
+
+The existing gated `DELETE /test/users/:email` recovery route must delegate to the canonical fail-closed `deleteAccount` workflow rather than its current best-effort raw-table cleanup. It may first invoke the same room cleanup for that generated address. R2 deletion or absence-verification failure must therefore keep the account/deletion marker recoverable instead of deleting the D1 rows that identify stranded keys. The normal authenticated `/api/user` path remains the primary deletion path; the gated route is the bearer-independent recovery path.
 
 Failures are handled as follows:
 
@@ -171,6 +177,8 @@ Failures are handled as follows:
 | E2E API cannot call E2E sharing | Deployment smoke fails; no live accounts are created. |
 | Test auth is unavailable on E2E | Preflight fails closed; recovery artifacts remain available. |
 | Returned `wsUrl` is cross-origin or malformed | Client fails before socket creation; test records the typed failure and cleanup runs. |
+| A remote room cannot be purged and verified absent | Account deletion does not begin; the journal is retained for recovery. |
+| R2 deletion or absence verification fails | Canonical deletion fails closed and retains the account/deletion marker and recovery journal. |
 | E2E account or process cleanup cannot be proven | The run fails, retains redacted recovery state, and blocks the next run until recovery succeeds. |
 | Deployment rollback is needed | Disable/remove only E2E custom-domain routes and roll back only E2E scripts. Keep E2E D1, buckets, KV, DO state, and secrets until all retained journals recover their owned resources; then revoke E2E credentials and remove E2E resources. Production scripts, domains, state, and secrets are never rollback targets. |
 
@@ -194,10 +202,10 @@ Completion requires all of the following fresh evidence, with secrets redacted:
 
 1. Deterministic Swift and Worker tests pass. They cover gated E2E endpoint selection, normal-launch production preservation, injection into all three xctestrun environment dictionaries for both roles, recovery acceptance of only `https://api-e2e.fidexa.org`, returned-`wsUrl` origin rejection before socket creation, E2E presigned bucket paths, and production bucket preservation.
 2. A config-isolation verifier parses both resolved E2E configs and proves the exact script names, custom domains, API/sharing origins, `ENABLE_TEST_AUTH=true`, `TEST_AUTH_ALLOWED=1`, service target, D1 name/ID inequality, four R2 names, two KV IDs distinct from production and from each other, E2E DO ownership, empty E2E cron set, and absence of production resource identifiers. It also proves production has no `ENABLE_TEST_AUTH` or `TEST_AUTH_ALLOWED` variable.
-3. Deployment smoke proves `GET https://api-e2e.fidexa.org/health` and `GET https://sharing-e2e.fidexa.org/health` return their expected healthy responses; an E2E test-auth sign-in followed by deletion proves the E2E API-to-D1 path without using production. The deployed E2E sharing origin and the exact E2E service-binding target are independently established by the sharing health check and the config-isolation verifier. The smoke account is deleted and independently verified absent.
+3. Deployment smoke proves `GET https://api-e2e.fidexa.org/health` and `GET https://sharing-e2e.fidexa.org/health` return their expected healthy responses; an E2E test-auth sign-in followed by the gated remote-cleanup operation and canonical deletion proves the E2E API-to-D1/service-binding path without using production. The deployed E2E sharing origin and the exact E2E service-binding target are independently established by the sharing health check, a created-and-purged smoke room, and the config-isolation verifier. The smoke account and room are independently verified absent.
 4. The production negative gate proves `https://api.fidexa.org/test/sign-in` returns `404` without presenting an E2E secret, and proves the production sharing Worker rejects a synthetic `userId--DisplayName` test bearer. This evidence confirms that production test-auth and sharing test-bearer shortcuts remain disabled.
 5. Two consecutive focused Apple live runs use the exact E2E API and WSS origins. Each result identifies its unique run ID, has participant-observed sequence `>= 2`, records exactly two generated disposable accounts, and records two independently verified deleted accounts.
-6. Each completed run proves no residue: no retained recovery journal/manifest/secret `.xctestrun` clone/staged fixture/local owned process, no account rows for either recorded address, no E2E R2 object under either run-owned prefix, and no active or unpurged E2E shared-reading room for the recorded session. The session is ended and purged before account deletion; cleanup failure is a failed run, not a note.
+6. Each completed run proves no residue: no retained recovery journal/manifest/secret `.xctestrun` clone/staged fixture/local owned process, no account rows for either recorded address, no E2E R2 object under either generated account prefix, and no active or unpurged E2E shared-reading room owned by either account. The E2E remote-cleanup operation verifies every enumerated room absent before account deletion, and canonical account deletion verifies R2/account absence; cleanup failure is a failed run, not a note.
 
 ## Scope boundary
 
@@ -227,4 +235,16 @@ Each round reviewed the amendment against the existing live-host implementation,
 | 2 | Medium | Cleanup evidence could have proved only local artifact removal while remote session state remained. | Completion now requires ended-and-purged E2E rooms, absent recorded accounts, empty run prefixes, and two verified deletions per run. |
 | 3 | Low | `PUBLIC_WEB_URL` could accidentally preserve a production redirect in an unexercised route. | It is explicitly set to the E2E API origin, preventing an E2E Worker from emitting a production web origin. |
 
-**Round 2 result:** **PASS** — 0 open Critical, High, or Medium issues.
+### Round 3 — Re-review
+
+| # | Sev | Finding | Resolution |
+| --- | --- | --- | --- |
+| 1 | Medium | The completion gate required immediate room/R2 absence, but the existing public end route only schedules room deletion and the gated fallback account route swallowed R2 failures before deleting identifying rows. | Added an idempotent E2E-only cleanup-and-verification operation used by normal teardown and recovery before account deletion, and required the gated bearer-independent deletion route to delegate to canonical fail-closed account deletion. |
+
+### Round 4 — Re-review
+
+| # | Sev | Finding | Resolution |
+| --- | --- | --- | --- |
+| 1 | High | `purgeAppleRoom` rejects an active room, while normal live teardown can begin before the room is ended. | Required cleanup to fetch current status/controller generation, end as the recorded owner, verify ended state, then purge and verify authoritative absence; already-ended and already-absent rooms remain idempotent successes. |
+
+**Round 4 result:** **PASS** — 0 open Critical, High, or Medium issues.
