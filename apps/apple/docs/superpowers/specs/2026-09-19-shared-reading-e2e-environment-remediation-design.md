@@ -80,8 +80,8 @@ After both peer processes stop, the host calls an E2E-only, test-authenticated s
 | `BOOK_STORAGE` R2 binding | `bucket_name: "rishi-books-e2e"`. |
 | `TTS_CACHE` R2 binding | `bucket_name: "rishi-tts-cache-e2e"`. |
 | `apple_dev` R2 binding | `bucket_name: "apple-dev-e2e"`. |
-| `RISHI_DESKTOP_STATE` KV binding | First newly provisioned E2E KV namespace, with its E2E namespace ID and preview ID. |
-| `RATE_LIMIT_KV` KV binding | Second newly provisioned E2E KV namespace, with a different E2E namespace ID and preview ID. |
+| `RISHI_DESKTOP_STATE` KV binding | First newly provisioned E2E KV namespace, with its E2E namespace ID. The remote-only E2E environment declares no preview ID. |
+| `RATE_LIMIT_KV` KV binding | Second newly provisioned E2E KV namespace, with a different E2E namespace ID. The remote-only E2E environment declares no preview ID. |
 | `USER_USAGE_LEDGER` DO binding and migrations | Explicitly bind `UserUsageLedger` and explicitly redeclare its SQLite migration. Because it belongs to `rishi-worker-e2e`, its Durable Object namespace is owned by that script and cannot be a production namespace. |
 | `CF_VERSION_METADATA` and SQL text rule | Preserve the current version metadata binding and SQL text bundling rule so the deployed E2E script has the same executable/migration shape. |
 | Compatibility settings | Explicitly retain the current compatibility date and `nodejs_als`/`nodejs_compat` flags. |
