@@ -147,10 +147,11 @@ Cover these exact behaviors:
 
 1. Gate failure returns indistinguishable `404`.
 2. Any email outside the `rishi-e2e-` generated namespace is rejected before D1/service access.
-3. For an active room, cleanup reads current status/controller generation, calls `endRoom` as the recorded owner, verifies ended state, calls `purgeAppleRoom`, and verifies a later status lookup reports absence.
+3. For an active room, cleanup reads current controller ID/generation, requires that controller to be one of the two generated users, calls `endRoom` as that controller, verifies ended state, calls `purgeAppleRoom`, and verifies a later status lookup reports absence.
 4. Ended and absent rooms are idempotent successes.
-5. A conflict, failed end verification, failed purge, or non-authoritative absence retains failure and does not delete either account.
-6. Multiple rooms are attempted independently and all failures are reported without suppressing later cleanup attempts.
+5. One stale-generation response triggers one status refresh and retry; a transferred controller among the generated users succeeds, while an unknown controller or second stale response fails closed.
+6. A conflict, failed end verification, failed purge, or non-authoritative absence retains failure and does not delete either account.
+7. Multiple rooms are attempted independently and all failures are reported without suppressing later cleanup attempts.
 
 - [ ] **Step 2: Add failing gated deletion tests**
 
@@ -166,7 +167,7 @@ Expected: FAIL because remote cleanup does not exist and the fallback route stil
 
 - [ ] **Step 4: Implement the cleanup service contract**
 
-Add a typed service operation that treats only the sharing Worker’s exact not-found response as absence. The route request contains the two generated emails; it resolves the corresponding users and owned session rows, then executes the status/end/verify/purge/verify sequence from the design. It never accepts arbitrary user IDs or session IDs from the caller.
+Add a typed service operation that treats only the sharing Worker’s exact not-found response as absence. The route request contains the two generated emails; it resolves the corresponding users and owned session rows, then executes the status/current-controller/end/verify/purge/verify sequence from the design. The current controller must resolve to one of those generated users. Permit one status-refresh retry for `STALE_CONTROLLER_GENERATION`; fail closed after that. It never accepts arbitrary user IDs or session IDs from the caller.
 
 - [ ] **Step 5: Delegate gated account recovery to canonical deletion**
 
@@ -208,7 +209,7 @@ Expected: `package.json` and `bun.lockb` record the direct development dependenc
 
 - [ ] **Step 2: Write failing verifier tests**
 
-Use temporary JSONC fixtures to prove the verifier rejects each production leak independently: production D1 ID/name, any production R2 bucket, either production KV ID, production service target, production custom domain, missing E2E DO bindings/migrations, E2E cron, missing gates, a gate present in production, duplicate KV IDs, a missing/wrong `CLOUDFLARE_ACCOUNT_ID`, a production/malformed E2E `PUBLIC_WEB_URL`, `BOOK_STORAGE_BUCKET_NAME` missing or unequal to the same environment's `BOOK_STORAGE.bucket_name`, any E2E sharing service binding, and missing required secret names. Include one complete isolated fixture that passes and prove the production bucket variable equals production `BOOK_STORAGE.bucket_name` while the E2E variable equals `rishi-books-e2e`.
+Use temporary JSONC fixtures with one mutation per invariant. Prove rejection of production D1 ID/name, any production R2 bucket, either production KV ID, production service target, production custom domain, missing E2E DO bindings/migrations, E2E cron, missing gates, a gate present in production, duplicate KV IDs, a missing/wrong `CLOUDFLARE_ACCOUNT_ID`, a missing/production/malformed `PUBLIC_API_URL`, `PUBLIC_WEB_URL`, `SHARING_WORKER_WS_URL`, or sharing `AUTH_BASE_URL`, `BOOK_STORAGE_BUCKET_NAME` missing or unequal to the same environment's `BOOK_STORAGE.bucket_name`, any E2E sharing service binding, missing API `CF_VERSION_METADATA`, missing SQL text rule, missing or changed compatibility date/flags in either Worker, missing sharing observability, and missing required secret names. Include one complete isolated fixture that passes and prove the production bucket variable equals production `BOOK_STORAGE.bucket_name` while the E2E variable equals `rishi-books-e2e`.
 
 - [ ] **Step 3: Run the red verifier test**
 
@@ -220,7 +221,7 @@ Expected: FAIL because the verifier module does not exist.
 
 - [ ] **Step 4: Implement parsing and assertions**
 
-The script accepts optional config paths for tests and defaults to the repository API/sharing Wrangler files. It parses JSONC structurally, compares default production against `env.e2e`, prints only names/IDs (never secrets), and exits non-zero with one precise message per violated invariant.
+The script accepts optional config paths for tests and defaults to the repository API/sharing Wrangler files. It parses JSONC structurally, compares default production against the complete explicit `env.e2e` blocks, validates every required non-inherited setting listed in Step 2, prints only names/IDs (never secrets), and exits non-zero with one precise message per violated invariant. Task 4 dry-run artifacts independently confirm Wrangler resolves those explicit settings to E2E-only deployment targets.
 
 - [ ] **Step 5: Add package command and run tests**
 
@@ -370,9 +371,11 @@ Expected: deployment reports `rishi-worker-e2e`, `api-e2e.fidexa.org`, the E2E s
 
 - [ ] **Step 6: Run non-secret smoke and production-negative gates**
 
-Verify both health endpoints return the expected versioned health body. Probe E2E test auth with the secret and an incomplete body: exact `400`. Probe E2E without a secret: `404`. Probe production without any E2E secret: `404`. Send a synthetic test bearer to the production sharing endpoint and require rejection without creating a room. Then create one E2E smoke account, obtain an E2E presigned PUT, upload a small non-sensitive fixture, obtain a presigned GET and verify the bytes came from `rishi-books-e2e`, create a real shared-reading session through the E2E API, verify its share-link origin is exactly `https://api-e2e.fidexa.org`, prove the resulting room exists through the API-to-service-binding path, exercise the E2E remote cleanup, verify authoritative room absence, delete the account, and independently require exact account/object/room absence.
+Require exact health contracts. API: status `200`, JSON content type, `status="healthy"`, `service="openai-tts-proxy"`, parseable ISO timestamp, `X-Rishi-API-Version: v1`, `X-Rishi-Worker-Name: rishi-worker`, and a non-empty deployed `X-Rishi-Worker-Version`. Sharing: status `200`, `text/plain` content type, and exact body `ok`. Probe E2E test auth with the secret and an incomplete body: exact `400`. Probe E2E without a secret: `404`. Probe production without any E2E secret: `404`. Send a synthetic test bearer to the production sharing endpoint and require rejection without creating a room.
 
-Expected: all E2E checks pass; production rejects both test paths; the smoke account/room are absent.
+Create two generated E2E smoke accounts. As owner, obtain a presigned PUT, upload a small non-sensitive fixture, then perform the authenticated metadata sync/push used by `FixtureBookProvisioner` and verify the resulting book row through the normal API before session creation. Obtain a presigned GET and verify the bytes came from `rishi-books-e2e`. Create a real shared-reading session, require share-link origin `https://api-e2e.fidexa.org`, redeem it as the participant, and prove the room exists through the API-to-service-binding path. Call remote cleanup with both generated addresses, verify authoritative room absence, delete both accounts independently, and require exact absence of both accounts and both generated-account object prefixes.
+
+Expected: all E2E checks pass; production rejects both test paths; both smoke accounts, their objects, and the room are absent.
 
 - [ ] **Step 7: Record deployment evidence**
 
@@ -629,5 +632,8 @@ Use the finishing-development-branch workflow. Do not merge until the two live r
 - Mapped recovery to `SharedReadingRecoveryJournal`'s real per-account deletion path and added ordering/failure-retention tests.
 - Added signaling-client validation immediately before task creation, including reconnect/refresh paths, with a recording factory that proves no task is created on rejection.
 - Replaced source-level launch coverage with executable owner/participant/restart tests, added a Release-build gate, and corrected the canonical account-deletion test filename.
+- Required smoke to register book metadata before session creation and to exercise both generated accounts through redemption, cleanup, and independent deletion.
+- Corrected remote cleanup to use the room's current generated controller with one bounded stale-generation refresh/retry.
+- Expanded verifier fixtures across every required non-inherited setting and replaced ambiguous health language with exact status/content/header/body assertions.
 
-**Round 1 result:** fixes applied; pending independent re-review.
+**Round 1 result:** fixes applied through two bounded re-review passes; pending final plan confirmation.
