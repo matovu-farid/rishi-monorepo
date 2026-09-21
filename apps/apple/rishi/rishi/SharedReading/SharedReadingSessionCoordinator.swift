@@ -371,7 +371,6 @@ actor SharedReadingSessionCoordinator {
 
         sessionId = incomingSessionId ?? sessionId
         controllerGeneration = max(controllerGeneration, incomingControllerGeneration)
-        connectionGeneration = max(connectionGeneration, incomingConnectionGeneration)
         if let incomingRosterGeneration {
             rosterGeneration = max(rosterGeneration, incomingRosterGeneration)
         }

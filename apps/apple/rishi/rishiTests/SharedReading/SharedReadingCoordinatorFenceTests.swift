@@ -97,6 +97,23 @@ struct SharedReadingCoordinatorFenceTests {
         #expect(snapshot.connectionGeneration == 5)
     }
 
+    @Test("remote connection generations never alter a local action fence")
+    func remoteConnectionGenerationDoesNotReplaceLocalFence() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 1), bearerToken: "bearer")
+
+        transport.yield(.syncFrame(.init(sessionId: "session", roomEpoch: 1, controllerGeneration: 1, connectionGeneration: 2, sequence: 1, bookId: "book", contentHash: "hash", format: .epub, position: "position", isPlaying: false, ttsRate: 1)))
+        await Task.yield()
+        try await coordinator.requestSpeaker()
+
+        guard case .speakerRequest(let fence, _) = transport.sentMessages.last else {
+            Issue.record("expected a speaker request")
+            return
+        }
+        #expect(fence.connectionGeneration == 1)
+    }
+
     private func admission(roomEpoch: SharedReadingRoomEpoch, connectionGeneration: SharedReadingConnectionGeneration) -> SharedReadingAdmission {
         SharedReadingAdmission(admissionTicket: "ticket", websocketURL: URL(string: "wss://sharing.rishi.test")!, roomEpoch: roomEpoch, connectionGeneration: connectionGeneration, status: .waiting)
     }
@@ -123,6 +140,7 @@ private final class SharedReadingTestTransport: SharedReadingSignalingTransport,
     private let stream: AsyncStream<SharedReadingSignalingEvent>
     private let continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation
     private(set) var authoritativeStateConfirmations = 0
+    private(set) var sentMessages: [SharedReadingSignalingOutgoingMessage] = []
 
     init() {
         var continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation!
@@ -134,7 +152,7 @@ private final class SharedReadingTestTransport: SharedReadingSignalingTransport,
 
     func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?, refreshBearerToken: (@Sendable () async throws -> String)?) async throws {}
     func disconnect() async {}
-    func send(_ message: SharedReadingSignalingOutgoingMessage) async throws {}
+    func send(_ message: SharedReadingSignalingOutgoingMessage) async throws { sentMessages.append(message) }
     func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async { authoritativeStateConfirmations += 1 }
     func yield(_ event: SharedReadingSignalingEvent) { continuation.yield(event) }
 }
