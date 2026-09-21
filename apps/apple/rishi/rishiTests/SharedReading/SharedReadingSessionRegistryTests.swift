@@ -6,7 +6,8 @@ import Testing
 @MainActor
 @Suite("Shared reading session registry", .serialized)
 struct SharedReadingSessionRegistryTests {
-    private class Handle: SharedReadingSessionRegistryHandle, @unchecked Sendable {
+    @MainActor
+    private class Handle: SharedReadingSessionRegistryHandle {
         let id = UUID()
         private(set) var cancelled = 0
         private(set) var left = 0
@@ -15,7 +16,7 @@ struct SharedReadingSessionRegistryTests {
         func leaveRemotely() async { left += 1 }
     }
 
-    private final class NeverLeavingHandle: Handle, @unchecked Sendable {
+    private final class NeverLeavingHandle: Handle {
         override func leaveRemotely() async {
             await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
         }

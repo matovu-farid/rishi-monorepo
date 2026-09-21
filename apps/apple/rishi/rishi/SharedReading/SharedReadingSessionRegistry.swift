@@ -1,6 +1,7 @@
 import Foundation
 
-protocol SharedReadingSessionRegistryHandle: AnyObject, Sendable {
+@MainActor
+protocol SharedReadingSessionRegistryHandle: AnyObject {
     func cancelLocally() async
     func leaveRemotely() async
 }
@@ -73,7 +74,7 @@ final class SharedReadingSessionRegistry {
         await clearAccountState(accountID)
         let tracker = SharedReadingRemoteLeaveTracker(count: draining.count)
         let leaves = draining.values.map { entry in
-            Task { [handle = entry.handle] in
+            Task { @MainActor [handle = entry.handle] in
                 await handle.leaveRemotely()
                 await tracker.finished()
             }

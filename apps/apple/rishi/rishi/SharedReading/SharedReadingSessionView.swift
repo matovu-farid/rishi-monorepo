@@ -210,6 +210,10 @@ struct SharedReadingSessionView: View {
             try await coordinator.connect(admission: join.admission, bearerToken: bearer)
             let status = try? await api.status(sessionId: join.response.sessionId)
             let mesh = SharedReadingPeerMesh(localParticipantUserId: localParticipantUserId, signaling: transport)
+            await MainActor.run {
+                peerMesh = mesh
+                lifetimeHandle?.peerMesh = mesh
+            }
             let initialMicrophoneEnabled = SharedReadingMicrophonePolicyState()
                 .microphoneEnabled(isTTSPlaying: false)
             await mesh.setMicrophoneEnabled(initialMicrophoneEnabled)
@@ -219,24 +223,20 @@ struct SharedReadingSessionView: View {
                     try await mesh.start(participants: status.participants, turnCredentials: turn)
                 await MainActor.run {
                     roomStatus = status
-                    peerMesh = mesh
-                    lifetimeHandle?.peerMesh = mesh
                 }
                 } catch let error as SharedReadingError {
                     await MainActor.run {
                         roomStatus = status
-                        peerMesh = mesh
                         message = "Connected, but voice is unavailable: \(error.message)"
                     }
                 } catch {
                     await MainActor.run {
                         roomStatus = status
-                        peerMesh = mesh
                         message = "Connected, but voice is unavailable right now."
                     }
                 }
             } else {
-                await MainActor.run { peerMesh = mesh; lifetimeHandle?.peerMesh = mesh }
+                await MainActor.run { peerMesh = mesh }
             }
             await MainActor.run { isConnected = true; message = message.hasPrefix("Connected, but") ? message : "Connected" }
             for await snapshot in coordinator.stateUpdates {
@@ -387,16 +387,17 @@ struct SharedReadingSessionView: View {
 
 }
 
-private final class SharedReadingSessionLifetime: SharedReadingSessionRegistryHandle, @unchecked Sendable {
+@MainActor
+private final class SharedReadingSessionLifetime: SharedReadingSessionRegistryHandle {
     let coordinator: SharedReadingSessionCoordinator
     let transport: SharedReadingSignalingClient
-    let leave: @Sendable () async -> Void
+    let leave: @MainActor @Sendable () async -> Void
     var peerMesh: SharedReadingPeerMesh?
 
     init(
         coordinator: SharedReadingSessionCoordinator,
         transport: SharedReadingSignalingClient,
-        leave: @escaping @Sendable () async -> Void
+        leave: @escaping @MainActor @Sendable () async -> Void
     ) {
         self.coordinator = coordinator
         self.transport = transport
