@@ -223,6 +223,11 @@ struct rishiApp: App {
                 Task { @MainActor in
                     await deps.services?.voice.presenter.requestEnd()
                 }
+                #if DEBUG
+                Task.detached {
+                    await Log.flushSharedReadingDiagnostics(timeout: 1)
+                }
+                #endif
             case .active:
                 Task { @MainActor in
                     #if os(iOS) && canImport(WatchConnectivity)

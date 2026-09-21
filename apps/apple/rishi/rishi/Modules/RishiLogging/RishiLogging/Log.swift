@@ -241,7 +241,24 @@ public enum Log {
         level: LogLevel = .info,
         context: SharedReadingDiagnosticContext = .init()
     ) {
-        Self.event(event.rawValue, level: level, data: context.fields)
+        var fields = context.fields
+        #if DEBUG
+        fields.merge(SharedReadingRelayDelivery.shared.enqueue(
+            event: event,
+            level: level,
+            fields: fields
+        )) { _, relayValue in relayValue }
+        #endif
+        Self.event(event.rawValue, level: level, data: fields)
+    }
+
+    /// Best-effort delivery for the DEBUG relay. This deliberately has a
+    /// bounded wait because app lifecycle transitions must never wait on local
+    /// diagnostic infrastructure.
+    public static func flushSharedReadingDiagnostics(timeout: TimeInterval = 1) async {
+        #if DEBUG
+        await SharedReadingRelayDelivery.shared.flush(timeout: timeout)
+        #endif
     }
 
     /// Log an error message. If `error` is non-nil and Sentry is initialized,
@@ -271,3 +288,196 @@ public enum Log {
         }
     }
 }
+
+#if DEBUG
+private final class SharedReadingRelayDelivery: @unchecked Sendable {
+    static let shared = SharedReadingRelayDelivery()
+
+    private struct Configuration {
+        let url: URL
+        let key: String
+        let actor: String
+        let runID: String
+
+        init?(environment: [String: String]) {
+            guard let rawURL = environment["RISHI_SHARED_READING_RELAY_URL"],
+                  let url = URL(string: rawURL),
+                  url.scheme == "http",
+                  url.host == "127.0.0.1",
+                  let key = environment["RISHI_SHARED_READING_RELAY_KEY"],
+                  key.count == 43,
+                  key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
+                  let actor = environment["RISHI_SHARED_READING_RELAY_ACTOR"],
+                  ["owner-catalyst", "participant-iphone"].contains(actor),
+                  let runID = environment["RISHI_SHARED_READING_RELAY_RUN_ID"],
+                  Self.isOpaque(runID) else { return nil }
+            self.url = url
+            self.key = key
+            self.actor = actor
+            self.runID = runID
+        }
+
+        private static func isOpaque(_ value: String) -> Bool {
+            !value.isEmpty && value.count <= 128 && value.allSatisfy {
+                $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_"
+            }
+        }
+    }
+
+    private struct Record: Encodable {
+        let eventTimestamp: String
+        let event: String
+        let level: String
+        let fields: [String: String]
+        let actor: String
+        let runID: String
+        let actorSequence: UInt64
+
+        enum CodingKeys: String, CodingKey {
+            case eventTimestamp = "event_timestamp"
+            case event
+            case level
+            case fields
+            case actor
+            case runID = "run_id"
+            case actorSequence = "actor_sequence"
+        }
+    }
+
+    private let configuration = Configuration(environment: ProcessInfo.processInfo.environment)
+    private let lock = NSLock()
+    private let encoder: JSONEncoder = {
+        JSONEncoder()
+    }()
+    private let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
+    private var outbox: [Record] = []
+    private var nextSequence: UInt64 = 0
+    private var isDelivering = false
+    private var retryCount = 0
+    private let outboxLimit = 512
+
+    private init() {}
+
+    /// Returns safe run metadata so the local typed outbox can be imported once
+    /// on the host without guessing which records belong to this relay run.
+    func enqueue(
+        event: SharedReadingDiagnosticEvent,
+        level: LogLevel,
+        fields: [String: String]
+    ) -> [String: String] {
+        guard let configuration else { return [:] }
+
+        let record: Record
+        lock.lock()
+        nextSequence &+= 1
+        let eventTimestamp = timestampFormatter.string(from: Date())
+        var relayFields = fields
+        relayFields["event_timestamp"] = eventTimestamp
+        relayFields["relay_run_id"] = configuration.runID
+        relayFields["actor"] = configuration.actor
+        relayFields["actor_sequence"] = String(nextSequence)
+        record = Record(
+            eventTimestamp: eventTimestamp,
+            event: event.rawValue,
+            level: level.rawValue,
+            fields: relayFields,
+            actor: configuration.actor,
+            runID: configuration.runID,
+            actorSequence: nextSequence
+        )
+        if outbox.count == outboxLimit {
+            outbox.removeFirst()
+        }
+        outbox.append(record)
+        let shouldStart = !isDelivering
+        if shouldStart { isDelivering = true }
+        lock.unlock()
+
+        if shouldStart { deliverNext() }
+        return [
+            "event_timestamp": eventTimestamp,
+            "relay_run_id": configuration.runID,
+            "actor": configuration.actor,
+            "actor_sequence": String(record.actorSequence),
+        ]
+    }
+
+    func flush(timeout: TimeInterval) async {
+        guard configuration != nil else { return }
+        let deadline = Date().addingTimeInterval(max(0, timeout))
+        while Date() < deadline {
+            lock.lock()
+            let empty = outbox.isEmpty
+            let shouldStart = !empty && !isDelivering
+            if shouldStart { isDelivering = true }
+            lock.unlock()
+            if empty { return }
+            if shouldStart { deliverNext() }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+    }
+
+    private func deliverNext() {
+        guard let configuration else { return }
+        let record: Record?
+        lock.lock()
+        record = outbox.first
+        if record == nil { isDelivering = false }
+        lock.unlock()
+        guard let record else { return }
+
+        guard let body = try? encoder.encode(record) else {
+            finishDelivery(success: false)
+            return
+        }
+        var request = URLRequest(url: configuration.url.appendingPathComponent("events"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 1
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(configuration.key, forHTTPHeaderField: "X-Rishi-Shared-Reading-Key")
+        request.httpBody = body
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            let success = (response as? HTTPURLResponse)?.statusCode == 202
+            self?.finishDelivery(success: success)
+        }.resume()
+    }
+
+    private func finishDelivery(success: Bool) {
+        lock.lock()
+        if success {
+            if !outbox.isEmpty { outbox.removeFirst() }
+            retryCount = 0
+        } else {
+            retryCount += 1
+        }
+        isDelivering = false
+        let shouldContinue = success && !outbox.isEmpty
+        let shouldRetry = !success && retryCount <= 3 && !outbox.isEmpty
+        lock.unlock()
+
+        if shouldContinue {
+            lock.lock()
+            isDelivering = true
+            lock.unlock()
+            deliverNext()
+        } else if shouldRetry {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                guard !self.isDelivering, !self.outbox.isEmpty else {
+                    self.lock.unlock()
+                    return
+                }
+                self.isDelivering = true
+                self.lock.unlock()
+                self.deliverNext()
+            }
+        }
+    }
+}
+#endif
