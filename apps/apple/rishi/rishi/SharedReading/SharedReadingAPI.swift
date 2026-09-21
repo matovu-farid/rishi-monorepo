@@ -30,15 +30,15 @@ struct SharedReadingEmailResponse: Codable, Sendable, Equatable {
 struct SharedReadingSessionControlResponse: Codable, Sendable, Equatable {
     let sessionId: String
     let status: SharedReadingSessionStatus
-    let roomEpoch: Int
-    let controllerGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
     let controllerUserId: String
 }
 
 struct SharedReadingRestoreResponse: Codable, Sendable, Equatable {
     let admissionTicket: String
     let status: SharedReadingSessionStatus
-    let roomEpoch: Int
+    let roomEpoch: SharedReadingRoomEpoch
 }
 
 actor SharedReadingAPI: SharedReadingAPIClient {

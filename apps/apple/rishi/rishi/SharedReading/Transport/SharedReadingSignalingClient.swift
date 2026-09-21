@@ -11,6 +11,11 @@ protocol SharedReadingSignalingTransport: Sendable {
     ) async throws
     func disconnect() async
     func send(_ message: SharedReadingSignalingOutgoingMessage) async throws
+    func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async
+}
+
+extension SharedReadingSignalingTransport {
+    func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async {}
 }
 
 enum SharedReadingSignalingEvent: Sendable, Equatable {
@@ -666,10 +671,6 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         do {
             let event = try decodeEvent(from: data)
             eventHub.yield(event)
-            if case .sessionState(let state) = event, state.status != .ended {
-                reconnectAttempt = 0
-                pendingReconnectDecision = .retry(after: .zero)
-            }
             if case .error(let error) = event {
                 pendingReconnectDecision = SharedReadingReconnectDecision.forError(error.code)
             }
@@ -738,14 +739,14 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     }
 
     private func shouldTerminate(after event: SharedReadingSignalingEvent) -> Bool {
+        Self.shouldTerminateImmediately(after: event)
+    }
+
+    static func shouldTerminateImmediately(after event: SharedReadingSignalingEvent) -> Bool {
         switch event {
-        case .sessionEnded:
-            return true
-        case .sessionState(let state):
-            return state.status == .ended
         case .error(let error):
             return error.code == .sessionEnded || error.code == .removedFromSession
-        case .syncFrame, .controllerTransfer, .participantRemove, .participantRoster, .speakerGranted, .speakerReleased, .sdpOffer, .sdpAnswer, .ice:
+        case .sessionState, .sessionEnded, .syncFrame, .controllerTransfer, .participantRemove, .participantRoster, .speakerGranted, .speakerReleased, .sdpOffer, .sdpAnswer, .ice:
             return false
         }
     }
@@ -838,6 +839,12 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
             return
         }
         await open()
+    }
+
+    func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async {
+        guard !isTerminal, state.status != .ended else { return }
+        reconnectAttempt = 0
+        pendingReconnectDecision = .retry(after: .zero)
     }
 
 }

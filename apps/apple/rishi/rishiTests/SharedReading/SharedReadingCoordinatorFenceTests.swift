@@ -40,6 +40,46 @@ struct SharedReadingCoordinatorFenceTests {
         #expect(snapshot.rosterGeneration == 2)
     }
 
+    @Test("an invalid newer epoch leaves every authoritative field unchanged")
+    func invalidNewerEpochDoesNotMutateState() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 1), bearerToken: "bearer")
+        transport.yield(.participantRoster(roster(roomEpoch: 1, rosterGeneration: 2, controllerGeneration: 3, connectionGeneration: 4, controller: "current")))
+        await Task.yield()
+        let before = await coordinator.snapshot()
+
+        transport.yield(.participantRoster(roster(roomEpoch: 2, rosterGeneration: 1, controllerGeneration: .init(rawValue: -1), connectionGeneration: 1, controller: "invalid")))
+        await Task.yield()
+
+        #expect(await coordinator.snapshot() == before)
+    }
+
+    @Test("a stale terminal state cannot finish a current session")
+    func staleTerminalStateIsIgnored() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 2, connectionGeneration: 2), bearerToken: "bearer")
+
+        transport.yield(.sessionState(.init(sessionId: "session", roomEpoch: 1, controllerGeneration: 1, connectionGeneration: 1, status: .ended, controllerUserId: "old")))
+        await Task.yield()
+
+        #expect((await coordinator.snapshot()).status == .waiting)
+        #expect(transport.authoritativeStateConfirmations == 0)
+    }
+
+    @Test("only an accepted session state confirms reconnect authority")
+    func acceptedSessionStateConfirmsReconnectAuthority() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 2, connectionGeneration: 2), bearerToken: "bearer")
+
+        transport.yield(.sessionState(.init(sessionId: "session", roomEpoch: 2, controllerGeneration: 1, connectionGeneration: 2, status: .waiting, controllerUserId: "local")))
+        await Task.yield()
+
+        #expect(transport.authoritativeStateConfirmations == 1)
+    }
+
     private func admission(roomEpoch: SharedReadingRoomEpoch, connectionGeneration: SharedReadingConnectionGeneration) -> SharedReadingAdmission {
         SharedReadingAdmission(admissionTicket: "ticket", websocketURL: URL(string: "wss://sharing.rishi.test")!, roomEpoch: roomEpoch, connectionGeneration: connectionGeneration, status: .waiting)
     }
@@ -65,6 +105,7 @@ struct SharedReadingCoordinatorFenceTests {
 private final class SharedReadingTestTransport: SharedReadingSignalingTransport, @unchecked Sendable {
     private let stream: AsyncStream<SharedReadingSignalingEvent>
     private let continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation
+    private(set) var authoritativeStateConfirmations = 0
 
     init() {
         var continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation!
@@ -77,5 +118,6 @@ private final class SharedReadingTestTransport: SharedReadingSignalingTransport,
     func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?, refreshBearerToken: (@Sendable () async throws -> String)?) async throws {}
     func disconnect() async {}
     func send(_ message: SharedReadingSignalingOutgoingMessage) async throws {}
+    func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async { authoritativeStateConfirmations += 1 }
     func yield(_ event: SharedReadingSignalingEvent) { continuation.yield(event) }
 }

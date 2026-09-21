@@ -15,4 +15,13 @@ struct SharedReadingReconnectTests {
         #expect(SharedReadingReconnectDecision.forError(.sessionEnded) == .stop(.sessionEnded))
         #expect(SharedReadingReconnectDecision.forError(.removedFromSession) == .stop(.removedFromSession))
     }
+
+    @Test("terminal signaling events await coordinator authority validation")
+    func terminalRoomEventsDoNotTerminateImmediately() {
+        let state = SharedReadingSessionStateEvent(sessionId: "stale", roomEpoch: 1, controllerGeneration: 1, connectionGeneration: 1, status: .ended, controllerUserId: "old")
+        let ended = SharedReadingSessionEndedEvent(sessionId: "stale", roomEpoch: 1, controllerGeneration: 1, connectionGeneration: 1, reason: .controllerEnded)
+
+        #expect(!SharedReadingSignalingClient.shouldTerminateImmediately(after: .sessionState(state)))
+        #expect(!SharedReadingSignalingClient.shouldTerminateImmediately(after: .sessionEnded(ended)))
+    }
 }

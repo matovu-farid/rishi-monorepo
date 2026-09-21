@@ -305,7 +305,7 @@ actor SharedReadingSessionCoordinator {
                 controllerGeneration: ended.controllerGeneration,
                 connectionGeneration: ended.connectionGeneration
             ) else { return }
-            await finishLocally(disconnectTransport: false)
+            await finishLocally(disconnectTransport: true)
         case .sdpOffer, .sdpAnswer, .ice:
             // Peer media transport consumes these events; the room coordinator
             // only owns lifecycle/control and authoritative reader state.
@@ -333,7 +333,9 @@ actor SharedReadingSessionCoordinator {
         publishSnapshot()
 
         if state.status == .ended {
-            await finishLocally(disconnectTransport: false)
+            await finishLocally(disconnectTransport: true)
+        } else {
+            await transport.confirmAuthoritativeSessionState(state)
         }
     }
 
@@ -344,7 +346,11 @@ actor SharedReadingSessionCoordinator {
         controllerGeneration incomingControllerGeneration: SharedReadingControllerGeneration,
         connectionGeneration incomingConnectionGeneration: SharedReadingConnectionGeneration
     ) -> Bool {
-        guard incomingSessionId == nil || sessionId == nil || incomingSessionId == sessionId,
+        guard incomingRoomEpoch.rawValue >= 0,
+              incomingControllerGeneration.rawValue >= 0,
+              incomingConnectionGeneration.rawValue >= 0,
+              incomingRosterGeneration.map({ $0.rawValue >= 0 }) ?? true,
+              incomingSessionId == nil || sessionId == nil || incomingSessionId == sessionId,
               incomingRoomEpoch >= roomEpoch else { return false }
 
         if incomingRoomEpoch > roomEpoch {
