@@ -2,8 +2,8 @@ import Foundation
 import os
 
 /// DEBUG-only `LogSink` that mirrors structured log events into reset-on-launch
-/// dump files. iPhone Simulator writes inside its app sandbox; Catalyst writes
-/// to Application Support and is collected separately by the host script.
+/// dump files. iPhone Simulator retains the general dump streams; Catalyst
+/// writes only the typed shared-reading stream to Application Support.
 ///
 /// ## Why
 /// When the user runs the app in the iOS Simulator and reports a bug, the
@@ -56,7 +56,7 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
         #if DEBUG && targetEnvironment(simulator)
         let url = NSTemporaryDirectory()
         let dir = URL(fileURLWithPath: url).appendingPathComponent("rishi-dump", isDirectory: true)
-        return try? SimulatorDumpSink(directory: dir)
+        return try? SimulatorDumpSink(directory: dir, sharedReadingOnly: false)
         #elseif DEBUG && targetEnvironment(macCatalyst)
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
@@ -65,7 +65,7 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
             .appendingPathComponent("Rishi", isDirectory: true)
             .appendingPathComponent("Diagnostics", isDirectory: true)
             .appendingPathComponent("rishi-dump", isDirectory: true)
-        return try? SimulatorDumpSink(directory: dir)
+        return try? SimulatorDumpSink(directory: dir, sharedReadingOnly: true)
         #else
         return nil
         #endif
@@ -75,13 +75,14 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
     /// at a caller-supplied directory. The directory is wiped + recreated on
     /// init exactly like the production factory.
     public static func makeForTesting(at directory: URL) throws -> SimulatorDumpSink {
-        try SimulatorDumpSink(directory: directory)
+        try SimulatorDumpSink(directory: directory, sharedReadingOnly: false)
     }
 
     // MARK: - Private state
 
     /// Resolved on-disk root of the dump directory.
     public let directory: URL
+    private let sharedReadingOnly: Bool
 
     private let queue = DispatchQueue(label: "org.fidexa.rishi.dump.sink", qos: .utility)
     private let encoder: JSONEncoder
@@ -100,8 +101,9 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
 
     // MARK: - Init
 
-    private init(directory: URL) throws {
+    private init(directory: URL, sharedReadingOnly: Bool) throws {
         self.directory = directory
+        self.sharedReadingOnly = sharedReadingOnly
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
@@ -117,11 +119,13 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
 
         // Touch each stream and open a writable handle in append mode.
-        self.allHandle      = try Self.openStream(directory.appendingPathComponent("all.log"))
-        self.errorsHandle   = try Self.openStream(directory.appendingPathComponent("errors.log"))
-        self.warningsHandle = try Self.openStream(directory.appendingPathComponent("warnings.log"))
-        self.eventsHandle   = try Self.openStream(directory.appendingPathComponent("events.log"))
-        self.networkHandle  = try Self.openStream(directory.appendingPathComponent("network.log"))
+        if !sharedReadingOnly {
+            self.allHandle      = try Self.openStream(directory.appendingPathComponent("all.log"))
+            self.errorsHandle   = try Self.openStream(directory.appendingPathComponent("errors.log"))
+            self.warningsHandle = try Self.openStream(directory.appendingPathComponent("warnings.log"))
+            self.eventsHandle   = try Self.openStream(directory.appendingPathComponent("events.log"))
+            self.networkHandle  = try Self.openStream(directory.appendingPathComponent("network.log"))
+        }
         self.sharedReadingHandle = try Self.openStream(directory.appendingPathComponent("shared-reading.ndjson"))
 
         // Write the resolved path so the host script can `cat path.txt`.
@@ -166,6 +170,9 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
     // MARK: - LogSink
 
     public func record(name: String, level: LogLevel, data: [String: String]?) {
+        if sharedReadingOnly && !Self.isSharedReadingEvent(name) {
+            return
+        }
         let payload = WirePayload(
             ts: Date(),
             level: level.rawValue,
@@ -185,6 +192,10 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
 
         queue.async { [weak self] in
             guard let self else { return }
+            if self.sharedReadingOnly {
+                self.write(line, to: self.sharedReadingHandle)
+                return
+            }
             self.write(line, to: self.allHandle)
             switch level {
             case .error, .fatal:
