@@ -114,6 +114,25 @@ struct SharedReadingCoordinatorFenceTests {
         #expect(fence.connectionGeneration == 1)
     }
 
+    @Test("a newer room epoch preserves the local admission connection fence")
+    func newerRoomEpochPreservesLocalConnectionFence() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 1), bearerToken: "bearer")
+
+        transport.yield(.controllerTransfer(.init(sessionId: "session", roomEpoch: 2, controllerGeneration: 1, connectionGeneration: 0, fromUserId: "old", toUserId: "local")))
+        await Task.yield()
+        transport.yield(.participantRoster(roster(roomEpoch: 2, rosterGeneration: 1, controllerGeneration: 1, connectionGeneration: 0, controller: "local")))
+        await Task.yield()
+        try await coordinator.requestSpeaker()
+
+        guard case .speakerRequest(let fence, _) = transport.sentMessages.last else {
+            Issue.record("expected a speaker request")
+            return
+        }
+        #expect(fence.connectionGeneration == 1)
+    }
+
     private func admission(roomEpoch: SharedReadingRoomEpoch, connectionGeneration: SharedReadingConnectionGeneration) -> SharedReadingAdmission {
         SharedReadingAdmission(admissionTicket: "ticket", websocketURL: URL(string: "wss://sharing.rishi.test")!, roomEpoch: roomEpoch, connectionGeneration: connectionGeneration, status: .waiting)
     }

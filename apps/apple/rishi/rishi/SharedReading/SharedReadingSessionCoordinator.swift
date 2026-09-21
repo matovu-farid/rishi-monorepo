@@ -357,7 +357,6 @@ actor SharedReadingSessionCoordinator {
             roomEpoch = incomingRoomEpoch
             rosterGeneration = 0
             controllerGeneration = 0
-            connectionGeneration = 0
             currentParticipantUserId = nil
             participants = []
             speakerUserId = nil
