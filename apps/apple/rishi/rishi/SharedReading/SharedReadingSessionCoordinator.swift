@@ -78,6 +78,13 @@ actor SharedReadingSessionCoordinator {
         publishSnapshot()
 
         let transport = self.transport
+        let refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)? = self.refreshAdmission.map { refresh in
+            { @Sendable [weak self] in
+                let admission = try await refresh()
+                await self?.applyLocalAdmission(admission)
+                return admission
+            }
+        }
         eventTask?.cancel()
         eventTask = Task { [weak self, transport] in
             for await event in transport.events {
@@ -211,6 +218,23 @@ actor SharedReadingSessionCoordinator {
             controllerGeneration: controllerGeneration,
             connectionGeneration: connectionGeneration
         )
+    }
+
+    private func applyLocalAdmission(_ admission: SharedReadingAdmission) {
+        guard !didFinish, admission.status != .ended else { return }
+        if admission.roomEpoch > roomEpoch {
+            roomEpoch = admission.roomEpoch
+            rosterGeneration = 0
+            controllerGeneration = 0
+            currentParticipantUserId = nil
+            participants = []
+            speakerUserId = nil
+            lastAcceptedSyncSequence = -1
+            lastSentSyncSequence = -1
+            latestProgress = nil
+        }
+        connectionGeneration = admission.connectionGeneration
+        publishSnapshot()
     }
 
     private func handle(_ event: SharedReadingSignalingEvent) async {

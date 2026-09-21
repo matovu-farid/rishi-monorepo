@@ -133,6 +133,27 @@ struct SharedReadingCoordinatorFenceTests {
         #expect(fence.connectionGeneration == 1)
     }
 
+    @Test("a refreshed local admission updates the next outgoing fence")
+    func refreshedAdmissionUpdatesLocalFence() async throws {
+        let transport = SharedReadingTestTransport()
+        let refreshedAdmission = admission(roomEpoch: 1, connectionGeneration: 2)
+        let coordinator = SharedReadingSessionCoordinator(
+            transport: transport,
+            localParticipantUserId: "local",
+            refreshAdmission: { refreshedAdmission }
+        )
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 1), bearerToken: "bearer")
+
+        _ = try await transport.refreshAdmissionForTest()
+        try await coordinator.requestSpeaker()
+
+        guard case .speakerRequest(let fence, _) = transport.sentMessages.last else {
+            Issue.record("expected a speaker request")
+            return
+        }
+        #expect(fence.connectionGeneration == 2)
+    }
+
     private func admission(roomEpoch: SharedReadingRoomEpoch, connectionGeneration: SharedReadingConnectionGeneration) -> SharedReadingAdmission {
         SharedReadingAdmission(admissionTicket: "ticket", websocketURL: URL(string: "wss://sharing.rishi.test")!, roomEpoch: roomEpoch, connectionGeneration: connectionGeneration, status: .waiting)
     }
@@ -160,6 +181,7 @@ private final class SharedReadingTestTransport: SharedReadingSignalingTransport,
     private let continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation
     private(set) var authoritativeStateConfirmations = 0
     private(set) var sentMessages: [SharedReadingSignalingOutgoingMessage] = []
+    private var admissionRefresh: (@Sendable () async throws -> SharedReadingAdmission)?
 
     init() {
         var continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation!
@@ -169,9 +191,12 @@ private final class SharedReadingTestTransport: SharedReadingSignalingTransport,
 
     var events: AsyncStream<SharedReadingSignalingEvent> { stream }
 
-    func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?, refreshBearerToken: (@Sendable () async throws -> String)?) async throws {}
+    func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?, refreshBearerToken: (@Sendable () async throws -> String)?) async throws {
+        admissionRefresh = refreshAdmission
+    }
     func disconnect() async {}
     func send(_ message: SharedReadingSignalingOutgoingMessage) async throws { sentMessages.append(message) }
     func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async { authoritativeStateConfirmations += 1 }
     func yield(_ event: SharedReadingSignalingEvent) { continuation.yield(event) }
+    func refreshAdmissionForTest() async throws -> SharedReadingAdmission { try await admissionRefresh!() }
 }
