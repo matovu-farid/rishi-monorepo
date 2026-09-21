@@ -13,6 +13,7 @@ struct SharedReadingSessionCoordinatorSnapshot: Sendable, Equatable {
     let lastAcceptedSyncSequence: Int64
     let lastSentSyncSequence: Int64
     let latestProgress: SharedReadingProgress?
+    let authoritativeProgressIsAbsent: Bool
 }
 
 actor SharedReadingSessionCoordinator {
@@ -38,6 +39,7 @@ actor SharedReadingSessionCoordinator {
     private(set) var lastAcceptedSyncSequence: Int64 = -1
     private(set) var lastSentSyncSequence: Int64 = -1
     private(set) var latestProgress: SharedReadingProgress?
+    private(set) var authoritativeProgressIsAbsent = false
 
     init(
         transport: any SharedReadingSignalingTransport,
@@ -75,6 +77,7 @@ actor SharedReadingSessionCoordinator {
         lastAcceptedSyncSequence = -1
         lastSentSyncSequence = -1
         latestProgress = nil
+        authoritativeProgressIsAbsent = false
         publishSnapshot()
 
         let transport = self.transport
@@ -269,6 +272,17 @@ actor SharedReadingSessionCoordinator {
                 ttsRate: frame.ttsRate,
                 updatedAt: Date()
             )
+            authoritativeProgressIsAbsent = false
+            publishSnapshot()
+        case .syncAbsent(let absent):
+            guard acceptsAuthority(
+                sessionId: absent.sessionId,
+                roomEpoch: absent.roomEpoch,
+                controllerGeneration: absent.controllerGeneration,
+                connectionGeneration: absent.connectionGeneration
+            ) else { return }
+            latestProgress = nil
+            authoritativeProgressIsAbsent = true
             publishSnapshot()
         case .controllerTransfer(let transfer):
             guard acceptsAuthority(
@@ -280,6 +294,7 @@ actor SharedReadingSessionCoordinator {
             currentParticipantUserId = transfer.toUserId
             lastAcceptedSyncSequence = -1
             latestProgress = nil
+            authoritativeProgressIsAbsent = false
             publishSnapshot()
         case .participantRemove(let removal):
             guard acceptsAuthority(
@@ -360,6 +375,7 @@ actor SharedReadingSessionCoordinator {
         lastAcceptedSyncSequence = -1
         lastSentSyncSequence = -1
         latestProgress = nil
+        authoritativeProgressIsAbsent = false
         participants = []
         publishSnapshot()
 
@@ -394,6 +410,7 @@ actor SharedReadingSessionCoordinator {
             lastAcceptedSyncSequence = -1
             lastSentSyncSequence = -1
             latestProgress = nil
+            authoritativeProgressIsAbsent = false
         }
 
         guard incomingControllerGeneration >= controllerGeneration,
@@ -442,7 +459,8 @@ actor SharedReadingSessionCoordinator {
                 speakerUserId: speakerUserId,
                 lastAcceptedSyncSequence: lastAcceptedSyncSequence,
                 lastSentSyncSequence: lastSentSyncSequence,
-                latestProgress: latestProgress
+                latestProgress: latestProgress,
+                authoritativeProgressIsAbsent: authoritativeProgressIsAbsent
             )
         )
     }

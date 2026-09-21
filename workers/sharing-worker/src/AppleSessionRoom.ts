@@ -1030,6 +1030,8 @@ export class AppleSessionRoom extends DurableObject<Env> {
       && state.participants[snapshot.controllerUserId]?.connectionState === "connected"
       && state.participants[snapshot.controllerUserId]?.connectionGeneration === snapshot.connectionGeneration) {
       this.sendTo(server, { t: "sync.frame", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: snapshot.connectionGeneration, from: snapshot.controllerUserId, frame: snapshot.frame });
+    } else {
+      this.sendTo(server, { t: "sync.absent", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: ticket.connectionGeneration });
     }
     this.broadcastAppleRoster(state);
     await this.scheduleAppleAlarm(state);

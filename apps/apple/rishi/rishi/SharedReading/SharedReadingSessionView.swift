@@ -221,7 +221,6 @@ struct SharedReadingSessionView: View {
                     roomStatus = status
                     peerMesh = mesh
                     lifetimeHandle?.peerMesh = mesh
-                    if requiresAuthoritativeRecovery { recoveryReadiness.accept(.progressAbsent) }
                 }
                 } catch let error as SharedReadingError {
                     await MainActor.run {
@@ -251,6 +250,8 @@ struct SharedReadingSessionView: View {
                         if snapshot.rosterGeneration > 0 { recoveryReadiness.accept(.roster) }
                         if let progress = snapshot.latestProgress {
                             recoveryReadiness.accept(.progressPresent(sequence: progress.sequence))
+                        } else if snapshot.authoritativeProgressIsAbsent {
+                            recoveryReadiness.accept(.progressAbsent)
                         }
                     }
                     switch snapshot.status {

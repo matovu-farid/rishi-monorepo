@@ -28,4 +28,15 @@ struct SharedReadingActiveRecoveryTests {
         readiness.begin(roomEpoch: 2)
         #expect(readiness.isReady == false)
     }
+
+    @Test("a late replay requires an authoritative no-progress marker before controls unlock")
+    func lateReplayDoesNotImplyNoProgress() {
+        var readiness = SharedReadingRecoveredSessionReadiness()
+        readiness.accept(.state)
+        readiness.accept(.roster)
+
+        #expect(readiness.isReady == false)
+        readiness.accept(.progressPresent(sequence: 8))
+        #expect(readiness.isReady == true)
+    }
 }

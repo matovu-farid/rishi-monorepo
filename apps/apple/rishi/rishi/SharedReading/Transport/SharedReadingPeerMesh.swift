@@ -290,7 +290,7 @@ actor SharedReadingPeerMesh {
             await close()
         case .error(let error) where error.code == .sessionEnded || error.code == .removedFromSession:
             await close()
-        case .sessionState, .syncFrame, .controllerTransfer, .speakerGranted, .speakerReleased, .error:
+        case .sessionState, .syncFrame, .syncAbsent, .controllerTransfer, .speakerGranted, .speakerReleased, .error:
             break
         }
     }

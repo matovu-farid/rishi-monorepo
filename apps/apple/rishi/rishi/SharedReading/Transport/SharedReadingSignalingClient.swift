@@ -21,6 +21,7 @@ extension SharedReadingSignalingTransport {
 enum SharedReadingSignalingEvent: Sendable, Equatable {
     case sessionState(SharedReadingSessionStateEvent)
     case syncFrame(SharedReadingSyncFrame)
+    case syncAbsent(SharedReadingSyncAbsentEvent)
     case controllerTransfer(SharedReadingControllerTransferEvent)
     case participantRemove(SharedReadingParticipantRemoveEvent)
     case participantRoster(SharedReadingParticipantRosterEvent)
@@ -31,6 +32,13 @@ enum SharedReadingSignalingEvent: Sendable, Equatable {
     case sdpAnswer(SharedReadingSDPEvent)
     case ice(SharedReadingICEEvent)
     case error(SharedReadingError)
+}
+
+struct SharedReadingSyncAbsentEvent: Codable, Sendable, Equatable {
+    let sessionId: String?
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
 }
 
 struct SharedReadingSignalFence: Codable, Sendable, Equatable {
@@ -709,6 +717,8 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                 isPlaying: frame.isPlaying,
                 ttsRate: frame.ttsRate
             ))
+        case "sync.absent":
+            return .syncAbsent(try JSONDecoder().decode(SharedReadingSyncAbsentEvent.self, from: data))
         case "controller.transfer":
             return .controllerTransfer(try JSONDecoder().decode(SharedReadingControllerTransferEvent.self, from: data))
         case "participant.remove":
@@ -746,7 +756,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         switch event {
         case .error(let error):
             return error.code == .sessionEnded || error.code == .removedFromSession
-        case .sessionState, .sessionEnded, .syncFrame, .controllerTransfer, .participantRemove, .participantRoster, .speakerGranted, .speakerReleased, .sdpOffer, .sdpAnswer, .ice:
+        case .sessionState, .sessionEnded, .syncFrame, .syncAbsent, .controllerTransfer, .participantRemove, .participantRoster, .speakerGranted, .speakerReleased, .sdpOffer, .sdpAnswer, .ice:
             return false
         }
     }

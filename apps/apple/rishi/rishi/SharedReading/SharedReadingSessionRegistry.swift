@@ -5,6 +5,15 @@ protocol SharedReadingSessionRegistryHandle: AnyObject, Sendable {
     func leaveRemotely() async
 }
 
+private actor SharedReadingRemoteLeaveTracker {
+    private var remaining: Int
+
+    init(count: Int) { remaining = count }
+
+    func finished() { remaining -= 1 }
+    func isFinished() -> Bool { remaining == 0 }
+}
+
 @MainActor
 final class SharedReadingSessionRegistry {
     struct Registration: Hashable, Sendable {
@@ -62,7 +71,18 @@ final class SharedReadingSessionRegistry {
 
         for entry in draining.values { await entry.handle.cancelLocally() }
         await clearAccountState(accountID)
-        for entry in draining.values { await entry.handle.leaveRemotely() }
-        _ = deadline
+        let tracker = SharedReadingRemoteLeaveTracker(count: draining.count)
+        let leaves = draining.values.map { entry in
+            Task { [handle = entry.handle] in
+                await handle.leaveRemotely()
+                await tracker.finished()
+            }
+        }
+        let clock = ContinuousClock()
+        let expiresAt = clock.now.advanced(by: deadline)
+        while !(await tracker.isFinished()) && clock.now < expiresAt {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        leaves.forEach { $0.cancel() }
     }
 }
