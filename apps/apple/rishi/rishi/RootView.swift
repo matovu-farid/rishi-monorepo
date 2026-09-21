@@ -322,19 +322,15 @@ struct RootView: View {
 
     private func redeemPendingSharesIfEligible(deps: AppDependencies) async {
         guard currentUserBox.isSigned else {
-            Log.event("sharing.pending_redeem.skipped", data: ["reason": "signed_out"])
+            Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .skipped))
             return
         }
         // Sharing is an explicit bearer-link action. It must not wait for the
         // optional onboarding flow; a newly signed-in recipient should receive
         // the book immediately and can finish onboarding afterward.
-        Log.event("sharing.pending_redeem.started")
+        Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .started))
         let result = await deps.services!.library.sharePackageService.redeemPendingIfEligible()
-        Log.event("sharing.pending_redeem.completed", data: [
-            "imported": String(result.importedCount),
-            "discarded": String(result.discardedCount),
-            "already_used": String(result.alreadyUsedCount),
-        ])
+        Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .completed))
         guard result.discardedCount > 0 else { return }
         await MainActor.run {
             if result.alreadyUsedCount > 0 {
@@ -354,9 +350,9 @@ struct RootView: View {
         guard let sessionAPI = deps.services?.sharedReadingAPI else { return }
         var stage = "redeem"
         do {
-            Log.event("sharing.session.redeem.started")
+            Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .started))
             let response = try await sessionAPI.redeem(token: token)
-            Log.event("sharing.session.redeem.completed", data: ["session_id": response.sessionId])
+            Log.sharedReading(.sessionLifecycle, context: .init(operation: .redeem, outcome: .completed, sessionID: response.sessionId))
             guard let userID = signedInUserID else { return }
             let transport = SharedReadingSignalingClient()
             let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
@@ -369,21 +365,21 @@ struct RootView: View {
                 refreshBearerToken: { try await sessionAPI.refreshBearerToken() }
             )
             stage = "prepare"
-            Log.event("sharing.session.prepare.started", data: ["session_id": response.sessionId])
+            Log.sharedReading(.localBookValidation, context: .init(operation: .bookReady, outcome: .started, sessionID: response.sessionId))
             let preparedBook = try await deps.services!.library.sessionBookService.prepare(book: response.book, ownerId: userID)
             let importedHash = preparedBook.contentHash
-            Log.event("sharing.session.prepare.completed", data: ["session_id": response.sessionId])
+            Log.sharedReading(.localBookValidation, context: .init(operation: .bookReady, outcome: .completed, sessionID: response.sessionId))
             guard importedHash.caseInsensitiveCompare(response.book.contentHash) == .orderedSame else {
                 throw SharedReadingError.from(code: .bookHashMismatch)
             }
             stage = "admission"
-            Log.event("sharing.session.admission.started", data: ["session_id": response.sessionId])
+            Log.sharedReading(.sessionLifecycle, context: .init(operation: .bookReady, outcome: .started, sessionID: response.sessionId))
             let admission = try await sessionAPI.markBookReady(
                 sessionId: response.sessionId,
                 token: token,
                 contentHash: importedHash
             )
-            Log.event("sharing.session.admission.completed", data: ["session_id": response.sessionId])
+            Log.sharedReading(.sessionLifecycle, context: .init(operation: .bookReady, outcome: .completed, sessionID: response.sessionId))
             await MainActor.run {
                 pendingSessionToken = nil
                 Task { await PendingSessionInviteStore.anonymous.clear() }
@@ -398,7 +394,11 @@ struct RootView: View {
                 )
             }
         } catch let error as SharedReadingError {
-            Log.error("sharing.session.\(stage).failed", error: error)
+            Log.sharedReading(.errorMapping, level: .error, context: .init(
+                outcome: .failed,
+                correlationID: error.correlationId,
+                errorCode: error.code.rawValue
+            ))
             await MainActor.run {
                 if !error.retryable {
                     pendingSessionToken = nil
@@ -411,7 +411,7 @@ struct RootView: View {
                 #endif
             }
         } catch {
-            Log.error("sharing.session.\(stage).failed", error: error)
+            Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, errorCode: "UNKNOWN"))
             await MainActor.run { pendingShareMessage = "Rishi could not open this reading session. Please try again." }
             #if DEBUG
             await MainActor.run { pendingShareMessage = "Reading session failed during \(stage): \(String(describing: error))" }

@@ -114,8 +114,11 @@ struct ActiveReadingSessionsView: View {
         isLoading = true
         defer { isLoading = false }
         do {
+            Log.sharedReading(.recovery, context: .init(operation: .active, outcome: .started))
             sessions = try await api.activeSessions().sessions
+            Log.sharedReading(.recovery, context: .init(operation: .active, outcome: .completed))
         } catch let sharedError as SharedReadingError {
+            Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .active, outcome: .failed, correlationID: sharedError.correlationId, errorCode: sharedError.code.rawValue))
             error = sharedError
         } catch {
             self.error = SharedReadingError.from(code: .serviceUnavailable)
@@ -128,6 +131,7 @@ struct ActiveReadingSessionsView: View {
         Task { @MainActor in
             defer { busySessionId = nil }
             do {
+                Log.sharedReading(.recovery, context: .init(operation: .rejoin, outcome: .started, sessionID: session.sessionId))
                 let preparedBook = try await bookService.prepare(book: session.book, ownerId: userId)
                 let importedHash = preparedBook.contentHash
                 guard importedHash.caseInsensitiveCompare(session.book.contentHash) == .orderedSame else {
@@ -153,12 +157,14 @@ struct ActiveReadingSessionsView: View {
                     localBookId: preparedBook.book.id,
                     localContentHash: importedHash
                 )
+                Log.sharedReading(.recovery, context: .init(operation: .rejoin, outcome: .ready, sessionID: session.sessionId))
                 await MainActor.run {
                     activeTransport = transport
                     activeCoordinator = coordinator
                     recoveredSession = recovered
                 }
             } catch let sharedError as SharedReadingError {
+                Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .rejoin, outcome: .failed, sessionID: session.sessionId, correlationID: sharedError.correlationId, errorCode: sharedError.code.rawValue))
                 error = sharedError
             } catch let serviceError as SessionBookService.ServiceError {
                 let code: SharedReadingErrorCode = serviceError == .hashMismatch ? .bookHashMismatch : .serviceUnavailable

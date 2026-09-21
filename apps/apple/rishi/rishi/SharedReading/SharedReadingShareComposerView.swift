@@ -161,10 +161,10 @@ struct SharedReadingShareComposerView: View {
                     }
                 }
             } catch let error as SharedReadingError {
-                Log.error("sharing.ui.create_link.failed", error: error)
+                Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .create, outcome: .failed, correlationID: error.correlationId, errorCode: error.code.rawValue))
                 await MainActor.run { message = error.message; isError = true }
             } catch {
-                Log.error("sharing.ui.create_link.failed", error: error)
+                Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .create, outcome: .failed, errorCode: "UNKNOWN"))
                 await MainActor.run { message = "Rishi could not create the reading link."; isError = true }
             }
         }

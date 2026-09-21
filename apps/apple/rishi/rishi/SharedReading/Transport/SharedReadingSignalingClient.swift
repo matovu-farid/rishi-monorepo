@@ -593,6 +593,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         currentTask?.cancel(with: .goingAway, reason: nil)
         currentTask = nil
 
+        Log.sharedReading(.socket, context: .init(outcome: .started, roomEpoch: admission.roomEpoch.rawValue, connectionGeneration: admission.connectionGeneration.rawValue))
         await open()
     }
 
@@ -606,6 +607,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         receiveTask = nil
         currentTask?.cancel(with: .goingAway, reason: nil)
         currentTask = nil
+        Log.sharedReading(.socket, context: .init(outcome: .disconnected))
         eventHub.finish()
     }
 
@@ -640,6 +642,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         let task = urlSession.webSocketTask(with: admission.websocketURL, protocols: protocols)
         currentTask = task
         task.resume()
+        Log.sharedReading(.socket, context: .init(outcome: .connected, roomEpoch: admission.roomEpoch.rawValue, connectionGeneration: admission.connectionGeneration.rawValue))
         receiveTask?.cancel()
         receiveTask = Task { [weak self, task] in
             await self?.receiveLoop(task, generation: currentGeneration)
@@ -678,6 +681,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
 
         do {
             let event = try decodeEvent(from: data)
+            Log.sharedReading(.signalingEvent, context: .init(outcome: .accepted))
             eventHub.yield(event)
             if case .error(let error) = event {
                 pendingReconnectDecision = SharedReadingReconnectDecision.forError(error.code)
@@ -686,8 +690,10 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                 terminateAfterTerminalEvent()
             }
         } catch let error as SharedReadingError {
+            Log.sharedReading(.signalingEvent, level: .error, context: .init(outcome: .rejected, errorCode: error.code.rawValue))
             eventHub.yield(.error(error))
         } catch {
+            Log.sharedReading(.signalingEvent, level: .error, context: .init(outcome: .rejected, errorCode: "INVALID_PAYLOAD"))
             eventHub.yield(.error(SharedReadingError.from(code: .serviceUnavailable, message: "Shared reading signaling payload could not be decoded.")))
         }
     }
@@ -791,6 +797,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         }
         reconnectAttempt += 1
         let attempt = reconnectAttempt
+        Log.sharedReading(.reconnect, level: .warning, context: .init(outcome: .retrying, attempt: attempt))
         let delay: Duration
         if case .retry(let requestedDelay) = decision, requestedDelay > .zero {
             delay = requestedDelay
@@ -831,15 +838,15 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                 return
             }
             do {
-                Log.event("sharing.signaling.auth.refresh_started", data: ["attempt": String(attempt)])
+                Log.sharedReading(.authenticationRefresh, context: .init(outcome: .started, attempt: attempt))
                 bearerToken = try await refreshBearerToken()
-                Log.event("sharing.signaling.auth.refresh_completed", data: ["attempt": String(attempt)])
+                Log.sharedReading(.authenticationRefresh, context: .init(outcome: .completed, attempt: attempt))
             } catch let error as SharedReadingError {
-                Log.error("sharing.signaling.auth.refresh_failed", error: error)
+                Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, attempt: attempt, correlationID: error.correlationId, errorCode: error.code.rawValue))
                 eventHub.yield(.error(error))
                 return
             } catch {
-                Log.error("sharing.signaling.auth.refresh_failed", error: error)
+                Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, attempt: attempt, errorCode: "UNKNOWN"))
                 eventHub.yield(.error(.from(code: .authRequired)))
                 return
             }

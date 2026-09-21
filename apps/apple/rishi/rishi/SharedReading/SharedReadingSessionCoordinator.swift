@@ -78,6 +78,11 @@ actor SharedReadingSessionCoordinator {
         lastSentSyncSequence = -1
         latestProgress = nil
         authoritativeProgressIsAbsent = false
+        Log.sharedReading(.sessionLifecycle, context: .init(
+            outcome: .started,
+            roomEpoch: admission.roomEpoch.rawValue,
+            connectionGeneration: admission.connectionGeneration.rawValue
+        ))
         publishSnapshot()
 
         let transport = self.transport
@@ -394,6 +399,23 @@ actor SharedReadingSessionCoordinator {
         controllerGeneration incomingControllerGeneration: SharedReadingControllerGeneration,
         connectionGeneration incomingConnectionGeneration: SharedReadingConnectionGeneration
     ) -> Bool {
+        let isValid = incomingRoomEpoch.rawValue >= 0
+            && incomingControllerGeneration.rawValue >= 0
+            && incomingConnectionGeneration.rawValue >= 0
+            && (incomingRosterGeneration.map({ $0.rawValue >= 0 }) ?? true)
+            && (incomingSessionId == nil || sessionId == nil || incomingSessionId == sessionId)
+            && incomingRoomEpoch >= roomEpoch
+        guard isValid else {
+            Log.sharedReading(.signalingEvent, level: .warning, context: .init(
+                outcome: .rejected,
+                sessionID: incomingSessionId,
+                roomEpoch: incomingRoomEpoch.rawValue,
+                rosterGeneration: incomingRosterGeneration?.rawValue,
+                controllerGeneration: incomingControllerGeneration.rawValue,
+                connectionGeneration: incomingConnectionGeneration.rawValue
+            ))
+            return false
+        }
         guard incomingRoomEpoch.rawValue >= 0,
               incomingControllerGeneration.rawValue >= 0,
               incomingConnectionGeneration.rawValue >= 0,
@@ -415,19 +437,38 @@ actor SharedReadingSessionCoordinator {
         }
 
         guard incomingControllerGeneration >= controllerGeneration,
-              incomingRosterGeneration.map({ $0 >= rosterGeneration }) ?? true else { return false }
+              incomingRosterGeneration.map({ $0 >= rosterGeneration }) ?? true else {
+            Log.sharedReading(.signalingEvent, level: .warning, context: .init(
+                outcome: .rejected,
+                sessionID: incomingSessionId,
+                roomEpoch: incomingRoomEpoch.rawValue,
+                rosterGeneration: incomingRosterGeneration?.rawValue,
+                controllerGeneration: incomingControllerGeneration.rawValue,
+                connectionGeneration: incomingConnectionGeneration.rawValue
+            ))
+            return false
+        }
 
         sessionId = incomingSessionId ?? sessionId
         controllerGeneration = max(controllerGeneration, incomingControllerGeneration)
         if let incomingRosterGeneration {
             rosterGeneration = max(rosterGeneration, incomingRosterGeneration)
         }
+        Log.sharedReading(.signalingEvent, context: .init(
+            outcome: .accepted,
+            sessionID: incomingSessionId,
+            roomEpoch: incomingRoomEpoch.rawValue,
+            rosterGeneration: incomingRosterGeneration?.rawValue,
+            controllerGeneration: incomingControllerGeneration.rawValue,
+            connectionGeneration: incomingConnectionGeneration.rawValue
+        ))
         return true
     }
 
     private func finishLocally(disconnectTransport: Bool) async {
         guard !didFinish else { return }
         didFinish = true
+        Log.sharedReading(.sessionLifecycle, context: .init(outcome: .disconnected, sessionID: sessionId))
         status = .ended
         currentParticipantUserId = nil
         participants = []

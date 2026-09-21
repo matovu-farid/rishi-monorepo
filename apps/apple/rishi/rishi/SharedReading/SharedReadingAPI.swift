@@ -149,13 +149,13 @@ actor SharedReadingAPI: SharedReadingAPIClient {
             throw SharedReadingError.from(code: .authRequired)
         }
         do {
-            Log.event("sharing.api.auth.refresh_started")
+            Log.sharedReading(.authenticationRefresh, context: .init(outcome: .started))
             try await refreshAuthentication()
             let token = try await bearerToken()
-            Log.event("sharing.api.auth.refresh_completed")
+            Log.sharedReading(.authenticationRefresh, context: .init(outcome: .completed))
             return token
         } catch {
-            Log.error("sharing.api.auth.refresh_failed", error: error)
+            Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, errorCode: Self.diagnosticErrorCode(error)))
             throw SharedReadingError.from(code: .authRequired)
         }
     }
@@ -178,19 +178,15 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         didRefreshAuthentication: Bool
     ) async throws -> Response {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw SharedReadingError.from(code: .serviceUnavailable) }
-        let requestID = UUID().uuidString
+        let requestID = UUID()
+        let operation = Self.operation(for: path)
         let started = Date()
-        Log.event("sharing.api.request.started", data: [
-            "method": method,
-            "path": path,
-            "requestId": requestID,
-            "apiVersion": "v1",
-        ])
+        Log.sharedReading(.apiRequest, context: .init(operation: operation, outcome: .started, operationID: requestID))
         var request = URLRequest(url: url)
         request.timeoutInterval = requestTimeout
         request.httpMethod = method
         request.setValue("v1", forHTTPHeaderField: "X-Rishi-API-Version")
-        request.setValue(requestID, forHTTPHeaderField: "X-Rishi-Request-ID")
+        request.setValue(requestID.uuidString, forHTTPHeaderField: "X-Rishi-Request-ID")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = await tokenProvider.token() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -205,7 +201,7 @@ actor SharedReadingAPI: SharedReadingAPIClient {
                         didRefreshAuthentication: true
                     )
                 } catch {
-                    Log.error("sharing.api.auth.refresh_failed path=\(path)", error: error)
+                    Log.sharedReading(.authenticationRefresh, level: .error, context: .init(operation: operation, outcome: .failed, operationID: requestID, errorCode: Self.diagnosticErrorCode(error)))
                 }
             }
             throw SharedReadingError.from(code: .authRequired)
@@ -214,12 +210,15 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw SharedReadingError.from(code: .serviceUnavailable) }
-            Log.event("sharing.api.response.received", data: [
-                "path": path,
-                "status": String(http.statusCode),
-                "requestId": requestID,
-                "durationMs": String(Int(Date().timeIntervalSince(started) * 1_000)),
-            ])
+            let correlationID = http.value(forHTTPHeaderField: "X-Rishi-Correlation-ID")
+            Log.sharedReading(.apiResponse, context: .init(
+                operation: operation,
+                outcome: .completed,
+                correlationID: correlationID,
+                operationID: requestID,
+                statusCode: http.statusCode,
+                durationMilliseconds: Int(Date().timeIntervalSince(started) * 1_000)
+            ))
             if http.statusCode == 401, !didRefreshAuthentication, let refreshAuthentication {
                 do {
                     try await refreshAuthentication()
@@ -230,27 +229,34 @@ actor SharedReadingAPI: SharedReadingAPIClient {
                         didRefreshAuthentication: true
                     )
                 } catch {
-                    Log.error("sharing.api.auth.refresh_failed path=\(path)", error: error)
+                    Log.sharedReading(.authenticationRefresh, level: .error, context: .init(operation: operation, outcome: .failed, operationID: requestID, errorCode: Self.diagnosticErrorCode(error)))
                     throw SharedReadingError.from(code: .authRequired)
                 }
             }
             guard (200..<300).contains(http.statusCode) else {
                 let error = decodeError(data, status: http.statusCode, path: path)
-                Log.event("sharing.api.response.failed", level: .error, data: [
-                    "path": path,
-                    "status": String(http.statusCode),
-                    "requestId": requestID,
-                    "error": String(describing: error),
-                ])
+                Log.sharedReading(.apiFailure, level: .error, context: .init(
+                    operation: operation,
+                    outcome: .failed,
+                    correlationID: error.correlationId ?? correlationID,
+                    operationID: requestID,
+                    statusCode: http.statusCode,
+                    durationMilliseconds: Int(Date().timeIntervalSince(started) * 1_000),
+                    errorCode: error.code.rawValue
+                ))
                 throw error
             }
             do { return try decoder.decode(Response.self, from: data) }
             catch {
-                Log.event("sharing.api.response.decode_failed", level: .error, data: [
-                    "path": path,
-                    "requestId": requestID,
-                    "error": String(describing: error),
-                ])
+                Log.sharedReading(.apiFailure, level: .error, context: .init(
+                    operation: operation,
+                    outcome: .failed,
+                    correlationID: correlationID,
+                    operationID: requestID,
+                    statusCode: http.statusCode,
+                    durationMilliseconds: Int(Date().timeIntervalSince(started) * 1_000),
+                    errorCode: "INVALID_RESPONSE"
+                ))
                 throw SharedReadingError.from(code: .serviceUnavailable, message: "Rishi returned an invalid reading-session response.")
             }
         } catch let error as SharedReadingError {
@@ -260,18 +266,22 @@ actor SharedReadingAPI: SharedReadingAPIClient {
                 code: .serviceUnavailable,
                 message: "The reading-session service did not respond in time. Try again."
             )
-            Log.event("sharing.api.request.timed_out", level: .error, data: [
-                "path": path,
-                "requestId": requestID,
-                "durationMs": String(Int(Date().timeIntervalSince(started) * 1_000)),
-            ])
+            Log.sharedReading(.apiFailure, level: .error, context: .init(
+                operation: operation,
+                outcome: .failed,
+                operationID: requestID,
+                durationMilliseconds: Int(Date().timeIntervalSince(started) * 1_000),
+                errorCode: timeoutError.code.rawValue
+            ))
             throw timeoutError
         } catch {
-            Log.event("sharing.api.request.failed", level: .error, data: [
-                "path": path,
-                "requestId": requestID,
-                "error": String(describing: error),
-            ])
+            Log.sharedReading(.apiFailure, level: .error, context: .init(
+                operation: operation,
+                outcome: .failed,
+                operationID: requestID,
+                durationMilliseconds: Int(Date().timeIntervalSince(started) * 1_000),
+                errorCode: Self.diagnosticErrorCode(error)
+            ))
             throw SharedReadingError.from(code: .serviceUnavailable)
         }
     }
@@ -309,5 +319,28 @@ actor SharedReadingAPI: SharedReadingAPIClient {
         if status == 410 { return .from(code: .sessionEnded) }
         if status == 422 { return .from(code: .bookHashMismatch) }
         return .from(code: .serviceUnavailable)
+    }
+
+    private static func diagnosticErrorCode(_ error: Error) -> String {
+        if let error = error as? SharedReadingError { return error.code.rawValue }
+        if error is URLError { return "URL_ERROR" }
+        return "UNKNOWN"
+    }
+
+    private static func operation(for path: String) -> SharedReadingDiagnosticContext.Operation {
+        if path == routePrefix { return .create }
+        if path.hasSuffix("/email") { return .email }
+        if path.hasSuffix("/redeem") { return .redeem }
+        if path.hasSuffix("/book-ready") { return .bookReady }
+        if path.hasSuffix("/rejoin") { return .rejoin }
+        if path.hasSuffix("/active") { return .active }
+        if path.hasSuffix("/start") { return .start }
+        if path.hasSuffix("/end") { return .end }
+        if path.hasSuffix("/leave") { return .leave }
+        if path.hasSuffix("/turn") { return .turn }
+        if path.hasSuffix("/controller/transfer") { return .controllerTransfer }
+        if path.hasSuffix("/participants/remove") { return .participantRemove }
+        if path.hasSuffix("/participants/restore") { return .participantRestore }
+        return .status
     }
 }

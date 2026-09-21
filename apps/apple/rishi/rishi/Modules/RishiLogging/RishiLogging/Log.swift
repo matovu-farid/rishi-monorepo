@@ -1,5 +1,121 @@
+import CryptoKit
 import Foundation
 import os
+
+/// The only events that may enter the local shared-reading DEBUG dump. Keeping
+/// this list closed prevents a future call site from accidentally serializing a
+/// bearer token, invite, reader position, or peer-media payload.
+public enum SharedReadingDiagnosticEvent: String, Sendable {
+    case apiRequest = "sharing.api.request"
+    case apiResponse = "sharing.api.response"
+    case apiFailure = "sharing.api.failure"
+    case authenticationRefresh = "sharing.authentication.refresh"
+    case localBookValidation = "sharing.local_book.validation"
+    case socket = "sharing.socket"
+    case reconnect = "sharing.reconnect"
+    case signalingEvent = "sharing.signaling.event"
+    case recovery = "sharing.recovery"
+    case registry = "sharing.registry"
+    case sessionLifecycle = "sharing.session.lifecycle"
+    case errorMapping = "sharing.error.mapping"
+}
+
+/// An allowlisted payload for `Log.sharedReading`. It intentionally has no
+/// general dictionary initializer: session identifiers are hashed here and the
+/// remaining fields are bounded protocol metadata rather than user content.
+public struct SharedReadingDiagnosticContext: Sendable {
+    public enum Outcome: String, Sendable {
+        case started, completed, accepted, rejected, retrying, connected, disconnected, failed, skipped, ready
+    }
+
+    public enum Operation: String, Sendable {
+        case create, email, redeem, bookReady = "book_ready", rejoin, active, status, start, end, leave, turn
+        case controllerTransfer = "controller_transfer", participantRemove = "participant_remove", participantRestore = "participant_restore"
+    }
+
+    public let operation: Operation?
+    public let outcome: Outcome?
+    public let correlationID: String?
+    public let operationID: UUID?
+    private let sessionID: String?
+    public let statusCode: Int?
+    public let durationMilliseconds: Int?
+    public let attempt: Int?
+    public let roomEpoch: Int?
+    public let rosterGeneration: Int?
+    public let controllerGeneration: Int?
+    public let connectionGeneration: Int?
+    public let sequence: Int64?
+    public let errorCode: String?
+
+    public init(
+        operation: Operation? = nil,
+        outcome: Outcome? = nil,
+        correlationID: String? = nil,
+        operationID: UUID? = nil,
+        sessionID: String? = nil,
+        statusCode: Int? = nil,
+        durationMilliseconds: Int? = nil,
+        attempt: Int? = nil,
+        roomEpoch: Int? = nil,
+        rosterGeneration: Int? = nil,
+        controllerGeneration: Int? = nil,
+        connectionGeneration: Int? = nil,
+        sequence: Int64? = nil,
+        errorCode: String? = nil
+    ) {
+        self.operation = operation
+        self.outcome = outcome
+        self.correlationID = Self.safeOpaqueIdentifier(correlationID)
+        self.operationID = operationID
+        self.sessionID = sessionID
+        self.statusCode = statusCode
+        self.durationMilliseconds = durationMilliseconds
+        self.attempt = attempt
+        self.roomEpoch = roomEpoch
+        self.rosterGeneration = rosterGeneration
+        self.controllerGeneration = controllerGeneration
+        self.connectionGeneration = connectionGeneration
+        self.sequence = sequence
+        self.errorCode = Self.safeErrorCode(errorCode)
+    }
+
+    fileprivate var fields: [String: String] {
+        var fields: [String: String] = [:]
+        if let operation { fields["operation"] = operation.rawValue }
+        if let outcome { fields["outcome"] = outcome.rawValue }
+        if let correlationID { fields["correlation_id"] = correlationID }
+        if let operationID { fields["operation_id"] = operationID.uuidString.lowercased() }
+        if let sessionID {
+            let digest = SHA256.hash(data: Data(sessionID.utf8))
+            fields["session_debug_id"] = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        }
+        if let statusCode { fields["status_code"] = String(statusCode) }
+        if let durationMilliseconds { fields["duration_ms"] = String(max(0, durationMilliseconds)) }
+        if let attempt { fields["attempt"] = String(max(0, attempt)) }
+        if let roomEpoch { fields["room_epoch"] = String(max(0, roomEpoch)) }
+        if let rosterGeneration { fields["roster_generation"] = String(max(0, rosterGeneration)) }
+        if let controllerGeneration { fields["controller_generation"] = String(max(0, controllerGeneration)) }
+        if let connectionGeneration { fields["connection_generation"] = String(max(0, connectionGeneration)) }
+        if let sequence { fields["sequence"] = String(max(0, sequence)) }
+        if let errorCode { fields["error_code"] = errorCode }
+        return fields
+    }
+
+    private static func safeOpaqueIdentifier(_ value: String?) -> String? {
+        guard let value,
+              value.count <= 128,
+              value.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else { return nil }
+        return value
+    }
+
+    private static func safeErrorCode(_ value: String?) -> String? {
+        guard let value,
+              value.count <= 64,
+              value.allSatisfy({ $0.isUppercase || $0.isNumber || $0 == "_" }) else { return nil }
+        return value
+    }
+}
 
 /// Namespaced os.Logger surface. Subsystem is fixed to `org.fidexa.rishi`
 /// (matches PRODUCT_BUNDLE_IDENTIFIER); each property is one category.
@@ -115,6 +231,17 @@ public enum Log {
         for sink in _sinks.snapshot() {
             sink.record(name: name, level: level, data: data)
         }
+    }
+
+    /// Privacy-safe DEBUG diagnostic event for the shared-reading boundary.
+    /// Release builds preserve the normal application log but never create the
+    /// local dump sink; this helper has no upload or retry work of its own.
+    public static func sharedReading(
+        _ event: SharedReadingDiagnosticEvent,
+        level: LogLevel = .info,
+        context: SharedReadingDiagnosticContext = .init()
+    ) {
+        Self.event(event.rawValue, level: level, data: context.fields)
     }
 
     /// Log an error message. If `error` is non-nil and Sentry is initialized,

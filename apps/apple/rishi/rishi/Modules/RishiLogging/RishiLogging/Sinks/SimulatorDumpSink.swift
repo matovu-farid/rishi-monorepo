@@ -1,8 +1,9 @@
 import Foundation
 import os
 
-/// DEBUG-simulator-only `LogSink` that mirrors every structured log event into
-/// reset-on-launch dump files inside the simulator's app sandbox.
+/// DEBUG-only `LogSink` that mirrors structured log events into reset-on-launch
+/// dump files. iPhone Simulator writes inside its app sandbox; Catalyst writes
+/// to Application Support and is collected separately by the host script.
 ///
 /// ## Why
 /// When the user runs the app in the iOS Simulator and reports a bug, the
@@ -23,6 +24,7 @@ import os
 ///   common event stream during triage)
 /// - `network.log` — events whose name starts with `api.`, `worker.`, or
 ///   `sync.` (the worker-client traffic surface)
+/// - `shared-reading.ndjson` — the typed `sharing.*` diagnostic stream
 ///
 /// A sixth file `path.txt` is written once with the absolute resolved path of
 /// the dump directory, so the host script can echo it back when the simulator
@@ -35,8 +37,8 @@ import os
 /// write per stream per event happens off the calling thread/actor.
 ///
 /// ## Gate
-/// `SimulatorDumpSink.make()` returns `nil` outside of
-/// `DEBUG && targetEnvironment(simulator)`. The test-only factory
+/// `SimulatorDumpSink.make()` returns `nil` outside DEBUG Simulator/Catalyst
+/// targets. The test-only factory
 /// `makeForTesting(at:)` bypasses the gate so unit tests can exercise the
 /// sink on the macOS test host.
 public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
@@ -54,6 +56,15 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
         #if DEBUG && targetEnvironment(simulator)
         let url = NSTemporaryDirectory()
         let dir = URL(fileURLWithPath: url).appendingPathComponent("rishi-dump", isDirectory: true)
+        return try? SimulatorDumpSink(directory: dir)
+        #elseif DEBUG && targetEnvironment(macCatalyst)
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = appSupport
+            .appendingPathComponent("Rishi", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+            .appendingPathComponent("rishi-dump", isDirectory: true)
         return try? SimulatorDumpSink(directory: dir)
         #else
         return nil
@@ -83,6 +94,7 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
     private var warningsHandle: FileHandle?
     private var eventsHandle: FileHandle?
     private var networkHandle: FileHandle?
+    private var sharedReadingHandle: FileHandle?
 
     private let oslog = Logger(subsystem: "org.fidexa.rishi.dump", category: "sink")
 
@@ -110,6 +122,7 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
         self.warningsHandle = try Self.openStream(directory.appendingPathComponent("warnings.log"))
         self.eventsHandle   = try Self.openStream(directory.appendingPathComponent("events.log"))
         self.networkHandle  = try Self.openStream(directory.appendingPathComponent("network.log"))
+        self.sharedReadingHandle = try Self.openStream(directory.appendingPathComponent("shared-reading.ndjson"))
 
         // Write the resolved path so the host script can `cat path.txt`.
         let pathFile = directory.appendingPathComponent("path.txt")
@@ -128,6 +141,7 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
         try? warningsHandle?.close()
         try? eventsHandle?.close()
         try? networkHandle?.close()
+        try? sharedReadingHandle?.close()
     }
 
     /// Explicitly close the sink. Idempotent. Used by tests so the directory
@@ -139,11 +153,13 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
             try? self.warningsHandle?.close()
             try? self.eventsHandle?.close()
             try? self.networkHandle?.close()
+            try? self.sharedReadingHandle?.close()
             self.allHandle = nil
             self.errorsHandle = nil
             self.warningsHandle = nil
             self.eventsHandle = nil
             self.networkHandle = nil
+            self.sharedReadingHandle = nil
         }
     }
 
@@ -181,6 +197,9 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
             self.write(line, to: self.eventsHandle)
             if isNetwork {
                 self.write(line, to: self.networkHandle)
+            }
+            if Self.isSharedReadingEvent(name) {
+                self.write(line, to: self.sharedReadingHandle)
             }
         }
     }
@@ -227,6 +246,10 @@ public final class SimulatorDumpSink: LogSink, @unchecked Sendable {
             return true
         }
         return false
+    }
+
+    private static func isSharedReadingEvent(_ name: String) -> Bool {
+        SharedReadingDiagnosticEvent(rawValue: name) != nil
     }
 }
 

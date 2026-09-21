@@ -46,6 +46,7 @@ final class SharedReadingSessionRegistry {
         let id = UUID()
         let generation = generations[accountID, default: 0]
         entries[id] = Entry(accountID: accountID, generation: generation, handle: handle)
+        Log.sharedReading(.registry, context: .init(outcome: .accepted, operationID: id))
         return Registration(id: id, accountID: accountID, generation: generation)
     }
 
@@ -54,6 +55,7 @@ final class SharedReadingSessionRegistry {
               entry.accountID == registration.accountID,
               entry.generation == registration.generation else { return }
         entries.removeValue(forKey: registration.id)
+        Log.sharedReading(.registry, context: .init(outcome: .completed, operationID: registration.id))
     }
 
     func isCurrent(_ registration: Registration) -> Bool {
@@ -68,6 +70,7 @@ final class SharedReadingSessionRegistry {
         let generation = generations[accountID, default: 0]
         generations[accountID] = generation &+ 1
         let draining = entries.filter { $0.value.accountID == accountID }
+        Log.sharedReading(.registry, context: .init(outcome: .started))
         for (id, _) in draining { entries.removeValue(forKey: id) }
 
         for entry in draining.values { await entry.handle.cancelLocally() }
@@ -85,5 +88,6 @@ final class SharedReadingSessionRegistry {
             try? await Task.sleep(for: .milliseconds(5))
         }
         leaves.forEach { $0.cancel() }
+        Log.sharedReading(.registry, context: .init(outcome: .completed))
     }
 }

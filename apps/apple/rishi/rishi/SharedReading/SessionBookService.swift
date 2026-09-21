@@ -29,15 +29,15 @@ actor SessionBookService {
     }
 
     func prepare(book: SharedReadingBook, ownerId: UserID) async throws -> PreparedBook {
-        Log.event("sharing.session.book.prepare.started", data: ["book_id": book.bookId])
+        Log.sharedReading(.localBookValidation, context: .init(operation: .bookReady, outcome: .started))
         guard await userIdProvider() == ownerId else {
             let error = ServiceError.accountChanged
-            Log.error("sharing.session.book.prepare.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "ACCOUNT_CHANGED"))
             throw error
         }
         guard let downloadURL = book.downloadURL else {
             let error = ServiceError.downloadFailed
-            Log.error("sharing.session.book.prepare.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "DOWNLOAD_FAILED"))
             throw error
         }
         let temporaryURL: URL
@@ -45,14 +45,13 @@ actor SessionBookService {
         do {
             (temporaryURL, response) = try await session.download(from: downloadURL)
         } catch {
-            Log.error("sharing.session.book.download.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "DOWNLOAD_FAILED"))
             throw ServiceError.downloadFailed
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
             let error = ServiceError.downloadFailed
-            Log.event("sharing.session.book.download.response", level: .error, data: ["status": String(status)])
-            Log.error("sharing.session.book.download.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, statusCode: status, errorCode: "DOWNLOAD_FAILED"))
             throw error
         }
         let importURL = temporaryURL
@@ -61,7 +60,7 @@ actor SessionBookService {
         do {
             try FileManager.default.moveItem(at: temporaryURL, to: importURL)
         } catch {
-            Log.error("sharing.session.book.rename.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "FILE_RENAME_FAILED"))
             throw error
         }
         defer {
@@ -72,26 +71,18 @@ actor SessionBookService {
         let actualSize = (attributes[.size] as? NSNumber)?.int64Value ?? -1
         guard actualSize == book.fileSize else {
             let error = ServiceError.invalidSize
-            Log.event("sharing.session.book.size_mismatch", level: .error, data: [
-                "expected_size": String(book.fileSize),
-                "actual_size": String(actualSize),
-            ])
-            Log.error("sharing.session.book.prepare.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "SIZE_MISMATCH"))
             throw error
         }
         let digest = try Self.sha256(fileURL: importURL)
         guard digest.caseInsensitiveCompare(book.contentHash) == .orderedSame else {
             let error = ServiceError.hashMismatch
-            Log.event("sharing.session.book.hash_mismatch", level: .error, data: [
-                "downloaded_hash": digest,
-                "expected_hash": book.contentHash,
-            ])
-            Log.error("sharing.session.book.prepare.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "HASH_MISMATCH"))
             throw error
         }
         guard await userIdProvider() == ownerId else {
             let error = ServiceError.accountChanged
-            Log.error("sharing.session.book.prepare.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "ACCOUNT_CHANGED"))
             throw error
         }
         let importedBook: Book
@@ -102,10 +93,10 @@ actor SessionBookService {
                 expectedContentHash: digest
             )
         } catch {
-            Log.error("sharing.session.book.import.failed", error: error)
+            Log.sharedReading(.localBookValidation, level: .error, context: .init(operation: .bookReady, outcome: .failed, errorCode: "IMPORT_FAILED"))
             throw error
         }
-        Log.event("sharing.session.book.prepare.completed", data: ["book_id": book.bookId])
+        Log.sharedReading(.localBookValidation, context: .init(operation: .bookReady, outcome: .completed))
         return PreparedBook(book: importedBook, contentHash: digest)
     }
 

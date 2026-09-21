@@ -206,6 +206,7 @@ struct SharedReadingSessionView: View {
 
     private func connect() async {
         do {
+            Log.sharedReading(.sessionLifecycle, context: .init(outcome: .started, sessionID: join.response.sessionId))
             let bearer = try await api.bearerToken()
             try await coordinator.connect(admission: join.admission, bearerToken: bearer)
             let status = try? await api.status(sessionId: join.response.sessionId)
@@ -253,6 +254,9 @@ struct SharedReadingSessionView: View {
                         } else if snapshot.authoritativeProgressIsAbsent {
                             recoveryReadiness.accept(.progressAbsent)
                         }
+                        if recoveryReadiness.isReady {
+                            Log.sharedReading(.recovery, context: .init(operation: .rejoin, outcome: .ready, sessionID: join.response.sessionId))
+                        }
                     }
                     switch snapshot.status {
                     case .active: message = "Reading session is active"
@@ -263,8 +267,10 @@ struct SharedReadingSessionView: View {
                 }
             }
         } catch let error as SharedReadingError {
+            Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, sessionID: join.response.sessionId, correlationID: error.correlationId, errorCode: error.code.rawValue))
             await MainActor.run { message = error.message }
         } catch {
+            Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, sessionID: join.response.sessionId, errorCode: "UNKNOWN"))
             await MainActor.run { message = "Rishi could not connect to this reading session." }
         }
     }
