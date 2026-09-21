@@ -164,7 +164,8 @@ actor SharedReadingSessionCoordinator {
             speakerUserId: speakerUserId,
             lastAcceptedSyncSequence: lastAcceptedSyncSequence,
             lastSentSyncSequence: lastSentSyncSequence,
-            latestProgress: latestProgress
+            latestProgress: latestProgress,
+            authoritativeProgressIsAbsent: authoritativeProgressIsAbsent
         )
     }
 
