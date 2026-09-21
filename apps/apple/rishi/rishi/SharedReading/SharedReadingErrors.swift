@@ -62,7 +62,7 @@ struct SharedReadingError: Error, Codable, Sendable, Equatable, LocalizedError {
     let retryable: Bool
     let action: SharedReadingRecoveryAction
     /// Opaque backend diagnostic handle. It is safe to include in DEBUG logs.
-    let correlationId: String? = nil
+    let correlationId: String?
 
     init(
         code: SharedReadingErrorCode,

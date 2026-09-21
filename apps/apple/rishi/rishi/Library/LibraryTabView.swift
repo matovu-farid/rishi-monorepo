@@ -22,6 +22,7 @@ struct LibraryTabDependencies {
     let syncEngine: SyncEngine
     let sharePackageService: SharePackageService
     let sharedReadingAPI: SharedReadingAPI
+    let sharedReadingSessionRegistry: SharedReadingSessionRegistry
     let sessionBookService: SessionBookService
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
@@ -112,6 +113,38 @@ struct LibraryTabView: View {
     }
 
     @MainActor
+    private func performInitialLibraryLoad() async {
+        hasSeenFirstBookPrompt = UserDefaults.standard.bool(forKey: firstBookPromptSeenKey)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+            _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+            _ = await dependencies.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+            await vm.refresh()
+            markFirstBookPromptSeen()
+        }
+        #endif
+        await model.performInitialLibrarySyncIfConsented(
+            consentGranted: dataUseConsentGranted,
+            refresh: { await vm.refresh() },
+            sync: {
+                if dependencies.readerDefaults.autoSync {
+                    _ = await dependencies.syncEngine.runOnce()
+                }
+            }
+        )
+
+        if !hasSeenFirstBookPrompt && vm.books.isEmpty {
+            showFirstBookPrompt = true
+            return
+        }
+        if !hasSeenFirstBookPrompt {
+            markFirstBookPromptSeen()
+        }
+
+        onLibraryReadyForTrial()
+    }
+
+    @MainActor
     private func openBook(_ book: Book) {
         model.hint(book)
         // The reader exit callback and the library boundary both initiate
@@ -157,6 +190,7 @@ struct LibraryTabView: View {
 
     var body: some View {
         let bindableRouter = Bindable(router)
+        let libraryLoadTaskID = user.id.uuidString + "-" + String(dataUseConsentGranted)
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
           
@@ -241,39 +275,8 @@ struct LibraryTabView: View {
                 }
             }
             
-            .task(id: "\(user.id.uuidString)-\(dataUseConsentGranted)") {
-                hasSeenFirstBookPrompt = UserDefaults.standard.bool(forKey: firstBookPromptSeenKey)
-                #if DEBUG
-                if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
-                    _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-                    _ = await dependencies.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
-                    await vm.refresh()
-                    markFirstBookPromptSeen()
-                }
-                #endif
-                await model.performInitialLibrarySyncIfConsented(
-                    consentGranted: dataUseConsentGranted,
-                    refresh: { await vm.refresh() },
-                    sync: {
-                        if dependencies.readerDefaults.autoSync {
-                            _ = await dependencies.syncEngine.runOnce()
-                        }
-                    }
-                )
-
-                if !hasSeenFirstBookPrompt && vm.books.isEmpty {
-                    showFirstBookPrompt = true
-                    return
-                }
-                if !hasSeenFirstBookPrompt {
-                    // A restored/synced library already has content, so this
-                    // device no longer needs the first-book invitation.
-                    markFirstBookPromptSeen()
-                }
-
-                // No first-book sheet is competing with the trial notice.
-                onLibraryReadyForTrial()
-
+            .task(id: libraryLoadTaskID) {
+                await performInitialLibraryLoad()
             }
             .onChange(of: dependencies.settings.syncStatus.isRunning) { wasRunning, isRunning in
                 guard wasRunning, !isRunning else { return }

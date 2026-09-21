@@ -267,7 +267,7 @@ struct SharedReadingSessionView: View {
                 }
             }
         } catch let error as SharedReadingError {
-            Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, sessionID: join.response.sessionId, correlationID: error.correlationId, errorCode: error.code.rawValue))
+            Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, correlationID: error.correlationId, sessionID: join.response.sessionId, errorCode: error.code.rawValue))
             await MainActor.run { message = error.message }
         } catch {
             Log.sharedReading(.errorMapping, level: .error, context: .init(outcome: .failed, sessionID: join.response.sessionId, errorCode: "UNKNOWN"))

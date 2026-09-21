@@ -164,7 +164,7 @@ struct ActiveReadingSessionsView: View {
                     recoveredSession = recovered
                 }
             } catch let sharedError as SharedReadingError {
-                Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .rejoin, outcome: .failed, sessionID: session.sessionId, correlationID: sharedError.correlationId, errorCode: sharedError.code.rawValue))
+                Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .rejoin, outcome: .failed, correlationID: sharedError.correlationId, sessionID: session.sessionId, errorCode: sharedError.code.rawValue))
                 error = sharedError
             } catch let serviceError as SessionBookService.ServiceError {
                 let code: SharedReadingErrorCode = serviceError == .hashMismatch ? .bookHashMismatch : .serviceUnavailable

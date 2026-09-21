@@ -842,7 +842,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                 bearerToken = try await refreshBearerToken()
                 Log.sharedReading(.authenticationRefresh, context: .init(outcome: .completed, attempt: attempt))
             } catch let error as SharedReadingError {
-                Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, attempt: attempt, correlationID: error.correlationId, errorCode: error.code.rawValue))
+                Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, correlationID: error.correlationId, attempt: attempt, errorCode: error.code.rawValue))
                 eventHub.yield(.error(error))
                 return
             } catch {
