@@ -151,3 +151,23 @@
 | 6 | Medium | A valid active session may have no progress frame. | Define readiness as fresh state+roster plus explicit progress-present or progress-absent state. |
 
 **Round 2 result:** **PASS** — independent re-review found 0 open Critical/High findings.
+
+## Relay replacement amendment
+
+The manual collector in Task 5 is replaced by a local chronological relay. The
+relay owns the output path and one manual-run lifecycle; the apps do not write
+to arbitrary host paths.
+
+### Task 5R: Stream typed diagnostics to one chronological local file
+
+**Files:**
+- Modify: `apps/apple/rishi/rishi/Modules/RishiLogging/RishiLogging/Log.swift`
+- Modify: `apps/apple/rishi/rishi/rishiApp.swift` and the shared-reading launch configuration boundary
+- Create: `apps/apple/rishi/scripts/shared-reading-diagnostics-relay.ts`
+- Replace: `apps/apple/rishi/scripts/collect-shared-reading-diagnostics.sh`
+
+- [ ] **Step 1: Define the run contract.** A launch command creates a fresh output directory, random loopback port and opaque 256-bit run key; it passes only relay URL, key, actor, and run ID into each DEBUG app target. The relay, not either app, chooses `shared-reading.ndjson` and rejects reused output roots.
+- [ ] **Step 2: Add typed nonblocking relay delivery.** `Log.sharedReading` retains its allowlisted local outbox. When relay configuration is present, enqueue a bounded HTTP POST containing only the typed event, actor, run ID, and monotonic actor sequence. Delivery failure never blocks app work; records remain in the privacy-safe local outbox for later flush/import.
+- [ ] **Step 3: Finalize deterministic chronology.** The relay authenticates the opaque key using constant-time comparison and validates schema/actor/run ID. It retains event time plus arrival timestamp/sequence, then atomically emits `shared-reading.ndjson` at orderly shutdown sorted by `(eventTimestamp, actor, actorSequence)`. The manifest records relay clock metadata and any late/unflushed count; it never rewrites event time.
+- [ ] **Step 4: Start, drain, and stop with the manual run.** The launch command starts the relay before either target, waits for explicit readiness, launches only the configured owner/participant targets, requests bounded app outbox flush at shutdown, then automatically performs a one-shot import of remaining typed fallback records before finalizing the relay output. It emits a single output location and any unflushed count. No filesystem watch loop or generic app-log ingestion is allowed.
+- [ ] **Step 5: Privacy/source review.** Confirm only typed events cross loopback; the key, tokens, invite links, book/user values, raw errors, and generic logs cannot be written to the relay file.
