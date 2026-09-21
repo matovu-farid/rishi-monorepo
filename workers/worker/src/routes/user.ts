@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { createDb } from "../db/drizzle";
 import { eq } from "drizzle-orm";
 import { user, usernames } from "../db/schema";
-import { deleteAccount } from "../account-deletion";
+import { accountDeletionErrorEnvelope, deleteAccount } from "../account-deletion";
 import { requireAuth, requireAuthForDeletion } from "../middleware";
 import {
   ensureUsername,
@@ -15,6 +15,11 @@ export const userRoutes = new Hono<{
   Bindings: Env;
   Variables: { userId: string };
 }>();
+
+function deletionCorrelationId(c: any): string {
+  const supplied = c.req.header("x-rishi-correlation-id");
+  return supplied && /^[a-zA-Z0-9_-]{16,128}$/.test(supplied) ? supplied : crypto.randomUUID();
+}
 
 async function getProfile(db: ReturnType<typeof createDb>, userId: string) {
   const retrievedUser = await db.query.user.findFirst({ where: { id: userId } });
@@ -86,10 +91,11 @@ userRoutes.patch("/", requireAuth, async (c) => {
 });
 
 userRoutes.delete("/", requireAuthForDeletion, async (c) => {
+  const correlationId = deletionCorrelationId(c);
   try {
     const userId = c.get("userId");
     const db = createDb(c.env.DB);
-    const result = await deleteAccount(db, c.env, userId);
+    const result = await deleteAccount(db, c.env, userId, correlationId);
 
     return c.json({
       ok: true,
@@ -97,11 +103,13 @@ userRoutes.delete("/", requireAuthForDeletion, async (c) => {
       revocationStatus: result.revocationStatus,
     });
   } catch (e) {
+    const envelope = accountDeletionErrorEnvelope(e, correlationId);
     console.error("account deletion failed", {
-      error: e instanceof Error ? e.message : "unknown",
+      event: "account_deletion.request_failed",
+      correlationId,
+      category: e instanceof Error ? e.name : "unknown",
     });
-    return c.json({
-      error: "Failed to delete user",
-    }, 500);
+    const status = envelope.code === "ACCOUNT_DELETION_CONFLICT" ? 409 : 503;
+    return c.json(envelope, status);
   }
 });

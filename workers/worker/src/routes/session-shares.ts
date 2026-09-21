@@ -156,7 +156,12 @@ routes.post("/redeem", async (c) => {
   const db = createDb(c.env.DB);
   const invite = await db.select().from(sessionInvites).where(eq(sessionInvites.tokenHash, await hashShareToken(body.token))).get();
   if (!invite || invite.status !== "open") return c.json({ code: "SESSION_LINK_INVALID", error: "This session link is not valid" }, 404);
-  const room = await service(c).getRoomStatus({ sessionId: invite.sessionId }).catch((error) => { throw error; });
+  let room;
+  try {
+    room = await service(c).getRoomStatus({ sessionId: invite.sessionId });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
   if (!room || room.status === "ended") { await db.update(sessionInvites).set({ status: "ended", endedAt: new Date() }).where(eq(sessionInvites.id, invite.id)).run(); return c.json({ code: "SESSION_ENDED", error: "This reading session has ended" }, 410); }
   const item = await db.select().from(sessionInviteItems).where(eq(sessionInviteItems.inviteId, invite.id)).get();
   if (!item) return c.json({ code: "SERVICE_UNAVAILABLE", error: "Book package is unavailable" }, 503);
@@ -196,10 +201,20 @@ routes.get("/:id/turn", async (c) => {
   if (!authorization) return c.json({ code: "AUTH_REQUIRED", error: "Sign in to use session audio" }, 401);
   const target = new URL(`https://sharing-worker.internal/v2/sessions/${encodeURIComponent(sessionId)}/turn`);
   try {
-    const response = await c.env.SHARING_WORKER.fetch(new Request(target, { method: "GET", headers: { authorization } }));
+    const response = await c.env.SHARING_WORKER.fetch(new Request(target, {
+      method: "GET",
+      headers: { authorization, "x-rishi-correlation-id": correlationId(c) },
+    }));
+    if (!response.ok) {
+      const code = response.status === 401 ? "AUTH_REQUIRED"
+        : response.status === 403 ? "FORBIDDEN"
+        : response.status === 404 ? "SESSION_ENDED"
+        : "TURN_UNAVAILABLE";
+      return sharingError(c, code, response.status);
+    }
     return new Response(response.body, { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } });
   } catch {
-    return c.json({ code: "TURN_UNAVAILABLE", error: "Voice relay credentials are temporarily unavailable." }, 503);
+    return sharingError(c, "TURN_UNAVAILABLE", 503);
   }
 });
 

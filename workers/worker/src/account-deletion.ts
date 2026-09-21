@@ -71,6 +71,27 @@ export function accountDeletionErrorBody(error: unknown): AccountDeletionErrorBo
   }
 }
 
+export function accountDeletionErrorEnvelope(error: unknown, correlationId: string) {
+  const known = accountDeletionErrorBody(error);
+  if (known) {
+    return {
+      code: known.code,
+      error: "Account deletion is still being completed. Try again shortly.",
+      retryable: true,
+      action: "retry",
+      correlationId,
+      ...(known.code === "ACCOUNT_DELETION_PENDING" ? { retryAt: known.retryAt } : {}),
+    };
+  }
+  return {
+    code: "ACCOUNT_DELETION_UNAVAILABLE",
+    error: "Rishi could not complete account deletion. Try again shortly.",
+    retryable: true,
+    action: "retry",
+    correlationId,
+  };
+}
+
 function pendingError(retryAt: Date = new Date(Date.now() + RETRY_DELAY_MS)) {
   return Object.assign(new Error("Account deletion is pending"), {
     code: "ACCOUNT_DELETION_PENDING" as const, status: 503 as const, retryable: true as const, retryAt: retryAt.getTime(),
@@ -133,6 +154,7 @@ async function purgeAccountReadingRooms(
   db: WorkerDb,
   env: AccountDeletionEnvironment,
   marker: DeletionMarker,
+  correlationId: string,
 ): Promise<void> {
   const { userId, deletionId } = marker;
   const rooms = await unresolvedRooms(db, userId).all();
@@ -144,7 +166,7 @@ async function purgeAccountReadingRooms(
   const service = new SessionSharingService(env.SHARING_WORKER, {
     internalTokenSecret: env.SHARING_INTERNAL_SECRET,
     internalPathPrefix: "/v2/internal",
-    correlationId: `delete_${createHash("sha256").update(deletionId).digest("hex").slice(0, 32)}`,
+    correlationId,
   });
 
   for (const room of rooms) {
@@ -469,9 +491,10 @@ export async function deleteAccount(
   db: WorkerDb,
   env: AccountDeletionEnvironment,
   userId: string,
+  correlationId = `delete_${crypto.randomUUID().replaceAll("-", "")}`,
 ): Promise<AccountDeletionResult> {
   try {
-    return await executeDeletion(db, env, userId);
+    return await executeDeletion(db, env, userId, undefined, correlationId);
   } catch (error) {
     if (accountDeletionErrorBody(error)) throw error;
     // Setup failures and already-deleted cleanup failures use the same public
@@ -485,6 +508,7 @@ async function executeDeletion(
   env: AccountDeletionEnvironment,
   userId: string,
   scheduledMarker?: DeletionMarker,
+  correlationId = `delete_${createHash("sha256").update(userId).digest("hex").slice(0, 32)}`,
 ): Promise<AccountDeletionResult> {
   const ledger = env.USER_USAGE_LEDGER?.getByName(userId);
   if (!ledger) throw pendingError();
@@ -534,7 +558,7 @@ async function executeDeletion(
 
   try {
     if (marker.status === "pending") {
-      await purgeAccountReadingRooms(db, env, marker);
+      await purgeAccountReadingRooms(db, env, marker, correlationId);
       if ((await unresolvedRooms(db, userId).all()).length > 0) throw pendingError(marker.retryAt);
       const transitioned = await db.update(deletionState).set({ status: "purging", updatedAt: new Date() })
         .where(and(markerCondition(marker), gt(deletionState.retryAt, new Date())));
@@ -610,9 +634,10 @@ async function finalizeAccountDeletion(
     );
   } catch (error) {
     console.error("account deletion Apple revocation unavailable", {
+      event: "account_deletion.apple_revocation_failed",
       deletionId,
       userHash: userLogId(userId),
-      error: error instanceof Error ? error.message : "unknown",
+      category: error instanceof Error ? error.name : "unknown",
     });
     revocationStatus = "revocation_unavailable";
   }
