@@ -7,13 +7,14 @@ struct ActiveReadingSessionsView: View {
     let api: SharedReadingAPI
     let bookService: SessionBookService
     let userId: UserID
+    let sessionRegistry: SharedReadingSessionRegistry
 
     @Environment(\.dismiss) private var dismiss
     @State private var sessions: [SharedReadingSessionSummary] = []
     @State private var isLoading = false
     @State private var busySessionId: String?
     @State private var error: SharedReadingError?
-    @State private var activeJoin: SharedReadingJoin?
+    @State private var recoveredSession: SharedReadingRecoveredSession?
     @State private var activeCoordinator: SharedReadingSessionCoordinator?
     @State private var activeTransport: SharedReadingSignalingClient?
 
@@ -75,14 +76,17 @@ struct ActiveReadingSessionsView: View {
             }
         }
         .task { await refresh() }
-        .sheet(item: $activeJoin) { join in
+        .sheet(item: $recoveredSession) { recovered in
             if let activeCoordinator, let activeTransport {
                 SharedReadingSessionView(
                     api: api,
                     coordinator: activeCoordinator,
                     transport: activeTransport,
-                    join: join,
-                    localParticipantUserId: wireUserID
+                    join: recovered.join,
+                    localParticipantUserId: wireUserID,
+                    sessionRegistry: sessionRegistry,
+                    accountID: userId,
+                    requiresAuthoritativeRecovery: true
                 )
             } else {
                 ProgressView("Preparing reading session…")
@@ -130,6 +134,9 @@ struct ActiveReadingSessionsView: View {
                     throw SharedReadingError.from(code: .bookHashMismatch)
                 }
                 let admission = try await api.rejoin(sessionId: session.sessionId, contentHash: importedHash)
+                guard admission.status != .ended else {
+                    throw SharedReadingError.from(code: .sessionEnded)
+                }
                 let transport = SharedReadingSignalingClient()
                 let refreshAdmission: @Sendable () async throws -> SharedReadingAdmission = {
                     try await api.rejoin(sessionId: session.sessionId, contentHash: session.book.contentHash)
@@ -140,21 +147,16 @@ struct ActiveReadingSessionsView: View {
                     refreshAdmission: refreshAdmission,
                     refreshBearerToken: { try await api.refreshBearerToken() }
                 )
-                let response = SharedReadingRedeemResponse(
-                    inviteId: "active-session",
-                    sessionId: session.sessionId,
-                    book: session.book,
-                    status: session.status,
-                    redemptionId: "active-session"
+                let recovered = SharedReadingRecoveredSession(
+                    summary: session,
+                    admission: admission,
+                    localBookId: preparedBook.book.id,
+                    localContentHash: importedHash
                 )
                 await MainActor.run {
                     activeTransport = transport
                     activeCoordinator = coordinator
-                    activeJoin = SharedReadingJoin(
-                        response: response,
-                        admission: admission,
-                        localBookId: preparedBook.book.id
-                    )
+                    recoveredSession = recovered
                 }
             } catch let sharedError as SharedReadingError {
                 error = sharedError

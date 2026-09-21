@@ -480,6 +480,13 @@ enum ServiceGraphFactory {
                 }
             )
         }
+        let sharedReadingSessionRegistry = await MainActor.run {
+            SharedReadingSessionRegistry { accountID in
+                await PendingSessionInviteStore(accountId: accountID.uuidString).clear()
+                await SharedSessionProgressStore(accountId: accountID.uuidString).clear()
+                await ActiveReadingSessionStore(accountId: accountID.uuidString).clear()
+            }
+        }
 
         let voicePresenter = await MainActor.run {
 
@@ -576,6 +583,7 @@ enum ServiceGraphFactory {
                 tokenProvider: tokenProvider,
                 refreshAuthentication: { try await workerClient.refreshAuthentication() }
             ),
+            sharedReadingSessionRegistry: sharedReadingSessionRegistry,
             dataUseConsentStore: dataUseConsentStore,
             library: LibraryRuntime(
                 dbStore: dbStore,

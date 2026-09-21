@@ -262,6 +262,67 @@ struct SharedReadingJoin: Sendable, Equatable, Identifiable {
     var id: String { response.sessionId }
 }
 
+/// A recovered room is deliberately distinct from an invite redemption: its
+/// admission was minted after the active-session lookup and its local book has
+/// been verified against that lookup.
+struct SharedReadingRecoveredSession: Sendable, Equatable, Identifiable {
+    let summary: SharedReadingSessionSummary
+    let admission: SharedReadingAdmission
+    let localBookId: BookID
+    let localContentHash: String
+
+    var id: String { summary.sessionId }
+
+    var join: SharedReadingJoin {
+        SharedReadingJoin(
+            response: SharedReadingRedeemResponse(
+                inviteId: "active-session",
+                sessionId: summary.sessionId,
+                book: summary.book,
+                status: summary.status,
+                redemptionId: "active-session"
+            ),
+            admission: admission,
+            localBookId: localBookId
+        )
+    }
+}
+
+enum SharedReadingRecoveryFrame: Sendable, Equatable {
+    case state
+    case roster
+    case progressPresent(sequence: Int64)
+    case progressAbsent
+}
+
+struct SharedReadingRecoveredSessionReadiness: Sendable, Equatable {
+    private(set) var roomEpoch: SharedReadingRoomEpoch
+    private var hasState = false
+    private var hasRoster = false
+    private var hasExplicitProgressResult = false
+
+    init(roomEpoch: SharedReadingRoomEpoch = 0) {
+        self.roomEpoch = roomEpoch
+    }
+
+    var isReady: Bool { hasState && hasRoster && hasExplicitProgressResult }
+
+    mutating func begin(roomEpoch: SharedReadingRoomEpoch) {
+        self.roomEpoch = roomEpoch
+        hasState = false
+        hasRoster = false
+        hasExplicitProgressResult = false
+    }
+
+    mutating func accept(_ frame: SharedReadingRecoveryFrame) {
+        switch frame {
+        case .state: hasState = true
+        case .roster: hasRoster = true
+        case .progressPresent, .progressAbsent: hasExplicitProgressResult = true
+        }
+    }
+}
+
 struct SharedReadingActiveResponse: Codable, Sendable, Equatable {
     let sessions: [SharedReadingSessionSummary]
 }

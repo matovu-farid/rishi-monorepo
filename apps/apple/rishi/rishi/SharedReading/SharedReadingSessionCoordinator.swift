@@ -131,6 +131,13 @@ actor SharedReadingSessionCoordinator {
         await finishLocally(disconnectTransport: true)
     }
 
+    /// Used by the app-lifetime registry while an account is transitioning.
+    /// The registry sends the best-effort HTTP leave separately after this has
+    /// stopped every local signaling task.
+    func cancelLocally() async {
+        await finishLocally(disconnectTransport: true)
+    }
+
     func end() async throws {
         try ensureNotEnded()
         guard isLocalController else {

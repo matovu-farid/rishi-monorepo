@@ -121,6 +121,9 @@ final class AppDependencies {
         let services = services
         let drain = Task { @MainActor in
             guard let services else { return }
+            if let outgoingAccount = self.userIdBox.value {
+                await services.sharedReadingSessionRegistry.drain(accountID: outgoingAccount)
+            }
             await services.audio.playbackOwner.stopForAccountChange()
         }
         let transaction = AccountChangeTransaction(
@@ -229,6 +232,7 @@ struct BootstrappedServices: @unchecked Sendable {
 
     let workerClient: WorkerClient
     let sharedReadingAPI: SharedReadingAPI
+    let sharedReadingSessionRegistry: SharedReadingSessionRegistry
     let dataUseConsentStore: any DataUseConsentStore
 
     let library: LibraryRuntime
@@ -262,6 +266,7 @@ extension BootstrappedServices {
                 await systemIntegration.spotlight.clearForAccountDeletion()
                 await audio.playbackOwner.stopForAccountChange()
                 await voice.presenter.requestEnd()
+                await sharedReadingSessionRegistry.drain(accountID: userId)
                 await sync.engine.resetForAccountSwitch()
                 do { try library.bookFileStorage.purgeAll() }
                 catch { cleanupError = error }

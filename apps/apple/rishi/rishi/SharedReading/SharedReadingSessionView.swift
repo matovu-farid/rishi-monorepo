@@ -6,6 +6,9 @@ struct SharedReadingSessionView: View {
     let transport: SharedReadingSignalingClient
     let join: SharedReadingJoin
     let localParticipantUserId: String
+    let sessionRegistry: SharedReadingSessionRegistry?
+    let accountID: UUID?
+    let requiresAuthoritativeRecovery: Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var message = "Connecting to the reading room…"
@@ -17,6 +20,29 @@ struct SharedReadingSessionView: View {
     @State private var audioMixer = SharedReadingAudioMixer()
     @State private var remoteAudioUserIds = Set<String>()
     @State private var showControllerLeaveDialog = false
+    @State private var recoveryReadiness = SharedReadingRecoveredSessionReadiness()
+    @State private var registryRegistration: SharedReadingSessionRegistry.Registration?
+    @State private var lifetimeHandle: SharedReadingSessionLifetime?
+
+    init(
+        api: SharedReadingAPI,
+        coordinator: SharedReadingSessionCoordinator,
+        transport: SharedReadingSignalingClient,
+        join: SharedReadingJoin,
+        localParticipantUserId: String,
+        sessionRegistry: SharedReadingSessionRegistry? = nil,
+        accountID: UUID? = nil,
+        requiresAuthoritativeRecovery: Bool = false
+    ) {
+        self.api = api
+        self.coordinator = coordinator
+        self.transport = transport
+        self.join = join
+        self.localParticipantUserId = localParticipantUserId
+        self.sessionRegistry = sessionRegistry
+        self.accountID = accountID
+        self.requiresAuthoritativeRecovery = requiresAuthoritativeRecovery
+    }
 
     var body: some View {
         NavigationStack {
@@ -77,7 +103,7 @@ struct SharedReadingSessionView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if let bookId = join.localBookId ?? UUID(uuidString: join.response.book.bookId) {
+                if canUseSessionControls, let bookId = join.localBookId ?? UUID(uuidString: join.response.book.bookId) {
                     NavigationLink {
                         ReaderDestinationView(
                             route: join.response.book.format == .pdf ? .pdf(bookId) : .epub(bookId),
@@ -97,7 +123,7 @@ struct SharedReadingSessionView: View {
                 if currentStatus == .waiting && isLocalController {
                         Button("Start reading") { start() }
                             .buttonStyle(.borderedProminent)
-                            .disabled(isBusy)
+                            .disabled(isBusy || !canUseSessionControls)
                             .accessibilityIdentifier("shared-reading-start")
                 } else if currentStatus == .waiting {
                     Label("Waiting for the initial sharer to start", systemImage: "hourglass")
@@ -123,11 +149,12 @@ struct SharedReadingSessionView: View {
             .navigationTitle("Shared reading")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .task { await connect() }
+        .task { await registerLifetimeIfNeeded(); await connect() }
         .task(id: peerMesh != nil) { await consumePeerStates() }
         .task(id: peerMesh != nil) { await consumeRemoteAudio() }
         .onDisappear {
             Task {
+                if let registryRegistration { sessionRegistry?.unregister(registryRegistration) }
                 await peerMesh?.close()
                 await transport.disconnect()
             }
@@ -143,6 +170,23 @@ struct SharedReadingSessionView: View {
 
     private var currentStatus: SharedReadingSessionStatus {
         snapshot?.status ?? join.admission.status
+    }
+
+    private var canUseSessionControls: Bool {
+        !requiresAuthoritativeRecovery || recoveryReadiness.isReady
+    }
+
+    private func registerLifetimeIfNeeded() async {
+        guard let sessionRegistry, let accountID, registryRegistration == nil else { return }
+        let handle = SharedReadingSessionLifetime(
+            coordinator: coordinator,
+            transport: transport,
+            leave: { [api, join] in
+                _ = try? await api.leave(sessionId: join.response.sessionId, deliberate: true)
+            }
+        )
+        lifetimeHandle = handle
+        registryRegistration = sessionRegistry.register(handle, accountID: accountID)
     }
 
     private var isLocalController: Bool {
@@ -173,7 +217,12 @@ struct SharedReadingSessionView: View {
                 do {
                     let turn = try await api.turnCredentials(sessionId: join.response.sessionId)
                     try await mesh.start(participants: status.participants, turnCredentials: turn)
-                    await MainActor.run { roomStatus = status; peerMesh = mesh }
+                await MainActor.run {
+                    roomStatus = status
+                    peerMesh = mesh
+                    lifetimeHandle?.peerMesh = mesh
+                    if requiresAuthoritativeRecovery { recoveryReadiness.accept(.progressAbsent) }
+                }
                 } catch let error as SharedReadingError {
                     await MainActor.run {
                         roomStatus = status
@@ -188,12 +237,22 @@ struct SharedReadingSessionView: View {
                     }
                 }
             } else {
-                await MainActor.run { peerMesh = mesh }
+                await MainActor.run { peerMesh = mesh; lifetimeHandle?.peerMesh = mesh }
             }
             await MainActor.run { isConnected = true; message = message.hasPrefix("Connected, but") ? message : "Connected" }
             for await snapshot in coordinator.stateUpdates {
                 await MainActor.run {
                     self.snapshot = snapshot
+                    if requiresAuthoritativeRecovery {
+                        if snapshot.roomEpoch != recoveryReadiness.roomEpoch {
+                            recoveryReadiness.begin(roomEpoch: snapshot.roomEpoch)
+                        }
+                        if snapshot.sessionId == join.response.sessionId { recoveryReadiness.accept(.state) }
+                        if snapshot.rosterGeneration > 0 { recoveryReadiness.accept(.roster) }
+                        if let progress = snapshot.latestProgress {
+                            recoveryReadiness.accept(.progressPresent(sequence: progress.sequence))
+                        }
+                    }
                     switch snapshot.status {
                     case .active: message = "Reading session is active"
                     case .waiting: message = "Waiting for the initial sharer"
@@ -325,4 +384,29 @@ struct SharedReadingSessionView: View {
         }
     }
 
+}
+
+private final class SharedReadingSessionLifetime: SharedReadingSessionRegistryHandle, @unchecked Sendable {
+    let coordinator: SharedReadingSessionCoordinator
+    let transport: SharedReadingSignalingClient
+    let leave: @Sendable () async -> Void
+    var peerMesh: SharedReadingPeerMesh?
+
+    init(
+        coordinator: SharedReadingSessionCoordinator,
+        transport: SharedReadingSignalingClient,
+        leave: @escaping @Sendable () async -> Void
+    ) {
+        self.coordinator = coordinator
+        self.transport = transport
+        self.leave = leave
+    }
+
+    func cancelLocally() async {
+        await peerMesh?.close()
+        await coordinator.cancelLocally()
+        await transport.disconnect()
+    }
+
+    func leaveRemotely() async { await leave() }
 }

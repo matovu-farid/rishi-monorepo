@@ -285,7 +285,8 @@ struct LibraryTabView: View {
             ActiveReadingSessionsView(
                 api: dependencies.sharedReadingAPI,
                 bookService: dependencies.sessionBookService,
-                userId: user.id
+                userId: user.id,
+                sessionRegistry: dependencies.sharedReadingSessionRegistry
             )
         }
 

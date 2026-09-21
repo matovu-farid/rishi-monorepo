@@ -247,7 +247,9 @@ struct RootView: View {
                 coordinator: presentation.coordinator,
                 transport: presentation.transport,
                 join: presentation.join,
-                localParticipantUserId: signedInWireUserID ?? ""
+                localParticipantUserId: signedInWireUserID ?? "",
+                sessionRegistry: deps.services!.sharedReadingSessionRegistry,
+                accountID: signedInUserID
             )
         }
         .alert(
