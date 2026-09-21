@@ -53,6 +53,8 @@ export interface SessionSharingServiceOptions {
   internalPathPrefix?: string;
   tokenTtlMs?: number;
   now?: () => number;
+  /** Opaque request identifier propagated to the isolated sharing Worker. */
+  correlationId?: string;
 }
 
 export interface SessionSharingBookContext {
@@ -186,6 +188,17 @@ export interface SessionSharingPurgeRoomRequest {
   sessionId: string;
 }
 
+export interface SessionSharingRevokeAccountReferencesRequest {
+  sessionId: string;
+  accountUserId: string;
+  deletionOperationId: string;
+}
+
+export type SessionSharingRevokeAccountReferencesResponse = {
+  ok: true;
+  status: "ended" | "removed" | "not_found";
+};
+
 export interface SessionSharingCreateRoomResponse {
   sessionId: string;
   roomEpoch: number;
@@ -228,6 +241,7 @@ export class SessionSharingServiceError extends Error {
     public readonly status?: number,
     public readonly responseCode?: string,
     cause?: unknown,
+    public readonly correlationId?: string,
   ) {
     super(message);
     if (cause !== undefined) this.cause = cause;
@@ -251,6 +265,7 @@ const STATUS_CODE_MAP: Record<number, SessionSharingErrorCode> = {
 };
 
 const RESPONSE_CODE_SET = new Set<SessionSharingErrorCode>([
+  "CONFLICT",
   "ALREADY_INITIALIZED",
   "BOOK_HASH_MISMATCH",
   "FORBIDDEN",
@@ -289,14 +304,15 @@ function mapStatus(status: number): SessionSharingErrorCode {
 function mapResponseError(
   status: number,
   body: unknown,
+  correlationId?: string,
   cause?: unknown,
 ): SessionSharingServiceError {
   const bodyCode = responseCodeFromBody(body);
   const message = responseErrorFromBody(body) ?? `Session sharing request failed with HTTP ${status}`;
-  const code = bodyCode && RESPONSE_CODE_SET.has(bodyCode as SessionSharingErrorCode)
+  const code = status < 500 && bodyCode && RESPONSE_CODE_SET.has(bodyCode as SessionSharingErrorCode)
     ? (bodyCode as SessionSharingErrorCode)
     : mapStatus(status);
-  return new SessionSharingServiceError(code, message, status, bodyCode, cause);
+  return new SessionSharingServiceError(code, message, status, bodyCode, cause, correlationId);
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
@@ -311,6 +327,7 @@ async function readJsonResponse(response: Response): Promise<unknown> {
       response.status,
       undefined,
       cause,
+      undefined,
     );
   }
 }
@@ -411,14 +428,30 @@ export class SessionSharingService {
     });
   }
 
-  async purgeAppleRoom(input: SessionSharingPurgeRoomRequest): Promise<void> {
-    await this.request<void>(input.sessionId, "purgeAppleRoom", {});
+  async revokeAccountReferences(input: SessionSharingRevokeAccountReferencesRequest): Promise<SessionSharingRevokeAccountReferencesResponse> {
+    const result = await this.request<unknown>(input.sessionId, "revokeAccountReferences", {
+      accountUserId: input.accountUserId,
+      deletionOperationId: input.deletionOperationId,
+    });
+    if (!isRecord(result) || result.ok !== true || !["ended", "removed", "not_found"].includes(String(result.status))) {
+      throw new SessionSharingServiceError("INVALID_RESPONSE", "Invalid account revocation acknowledgement");
+    }
+    return result as SessionSharingRevokeAccountReferencesResponse;
+  }
+
+  async purgeAppleRoom(input: SessionSharingPurgeRoomRequest): Promise<{ ok: true }> {
+    const result = await this.request<unknown>(input.sessionId, "purgeAppleRoom", {}, true);
+    if (!isOkSentinel(result)) {
+      throw new SessionSharingServiceError("INVALID_RESPONSE", "Invalid room purge acknowledgement");
+    }
+    return { ok: true };
   }
 
   private async request<TResponse>(
     sessionId: string,
     action: string,
     payload: Record<string, unknown>,
+    preserveOk = false,
   ): Promise<TResponse> {
     const path = `${this.internalPathPrefix}/rooms/${encodeURIComponent(sessionId)}`;
     const body = { action, payload };
@@ -436,6 +469,7 @@ export class SessionSharingService {
         headers: {
           "content-type": "application/json",
           "x-rishi-internal-token": token,
+          ...(this.options.correlationId ? { "x-rishi-correlation-id": this.options.correlationId } : {}),
         },
         body: JSON.stringify(body),
       });
@@ -446,15 +480,16 @@ export class SessionSharingService {
         undefined,
         undefined,
         cause,
+        this.options.correlationId,
       );
     }
 
     const parsed = await readJsonResponse(response);
     if (!response.ok) {
-      throw mapResponseError(response.status, parsed, response);
+      throw mapResponseError(response.status, parsed, this.options.correlationId, response);
     }
 
-    if (isOkSentinel(parsed)) {
+    if (isOkSentinel(parsed) && !preserveOk) {
       return null as TResponse;
     }
     return parsed as TResponse;

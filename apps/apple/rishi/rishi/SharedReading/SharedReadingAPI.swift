@@ -277,11 +277,24 @@ actor SharedReadingAPI: SharedReadingAPIClient {
     }
 
     private func decodeError(_ data: Data, status: Int, path: String) -> SharedReadingError {
-        struct Payload: Decodable { let code: String?; let error: String? }
+        struct Payload: Decodable {
+            let code: String?
+            let error: String?
+            let retryable: Bool?
+            let action: SharedReadingRecoveryAction?
+            let correlationId: String?
+        }
         if let payload = try? decoder.decode(Payload.self, from: data),
            let rawCode = payload.code,
            let code = SharedReadingErrorCode(rawValue: rawCode) {
-            return .from(code: code, message: payload.error)
+            let fallback = SharedReadingError.from(code: code, message: payload.error)
+            return SharedReadingError(
+                code: code,
+                message: payload.error ?? fallback.message,
+                retryable: payload.retryable ?? fallback.retryable,
+                action: payload.action ?? fallback.action,
+                correlationId: payload.correlationId
+            )
         }
         if status == 404, path == Self.routePrefix {
             return .from(

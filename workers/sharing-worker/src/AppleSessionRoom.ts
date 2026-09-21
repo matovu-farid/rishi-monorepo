@@ -215,7 +215,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
    * which can corrupt the isolated-storage test frame even when the gateway
    * later converts it to an HTTP response.
    */
-  async executeInternal(input: { action: string; payload: unknown }): Promise<unknown> {
+  async executeInternal(input: { action: string; payload: unknown; correlationId?: string }): Promise<unknown> {
     try {
       switch (input.action) {
         case "createRoom": return await this.createRoom(input.payload as Parameters<AppleSessionRoom["createRoom"]>[0]);
@@ -237,7 +237,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
       if (error instanceof AppleRoomError) {
         return { ok: false, code: error.code, error: error.message };
       }
-      this.log("apple.internal.command_failed", { action: input.action });
+      this.log("apple.internal.command_failed", { action: input.action, correlationId: input.correlationId });
       return { ok: false, code: "SERVICE_UNAVAILABLE", error: "internal command failed" };
     }
   }

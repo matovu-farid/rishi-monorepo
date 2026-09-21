@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, gt, inArray, lte, or } from "drizzle-orm";
+import { and, asc, eq, exists, gt, inArray, lte, ne, notInArray, or } from "drizzle-orm";
 import type { WorkerDb } from "./db/drizzle";
 import {
   appleNotificationsLog,
@@ -10,6 +10,9 @@ import {
   retainedAppleEntitlement,
   retainedAppleTransaction,
   sharePackages,
+  sharePackageItems,
+  sessionInviteRedemptions,
+  sessionInvites,
   subscription,
   user,
   verification,
@@ -20,12 +23,15 @@ import { createStripeClient } from "./billing/stripe";
 import { hashAppleIdentity, hashAppleOriginalTransaction, mergeRetentionSnapshot, retentionExpiresAt } from "./entitlement-retention";
 import type { AccountEntitlementSnapshot } from "./durable-objects/user-usage-ledger/types";
 import { deleteUnreferencedR2Objects, referencedR2Keys } from "./shares/shareReferences";
+import { isSessionSharingServiceError, SessionSharingService } from "./session-sharing-service";
 
 type DeletionStatus = "revoked" | "legacy_no_token" | "revocation_unavailable";
 
 export interface AccountDeletionEnvironment {
   DB: D1Database;
   BOOK_STORAGE: R2Bucket;
+  SHARING_WORKER?: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
+  SHARING_INTERNAL_SECRET?: string;
   SIWA_TOKEN_ENCRYPTION_SECRET?: string;
   APPLE_SIWA_PRIVATE_KEY?: string;
   APPLE_SIWA_KEY_ID?: string;
@@ -40,6 +46,143 @@ export interface AccountDeletionEnvironment {
       purgeAccountData(): Promise<{ purged: true }>;
     };
   };
+}
+
+type DeletionMarker = typeof deletionState.$inferSelect;
+const ROOM_SCAN_LIMIT = 25;
+const RETRY_DELAY_MS = 60_000;
+// Keep the deletion fence open for the 300-second PUT URLs issued by
+// routes/upload.ts, plus a small propagation/drain margin at the boundary.
+const PRE_MARKER_UPLOAD_DRAIN_MS = 300_000 + 1_000;
+
+export type AccountDeletionErrorBody =
+  | { code: "ACCOUNT_DELETION_PENDING"; status: 503; retryable: true; retryAt: number }
+  | { code: "ACCOUNT_DELETION_CONFLICT"; status: 409; retryable: true };
+
+export function accountDeletionErrorBody(error: unknown): AccountDeletionErrorBody | undefined {
+  if (!error || typeof error !== "object") return;
+  const value = error as Partial<AccountDeletionErrorBody> & { retryAt?: number };
+  if (value.retryable !== true) return;
+  if (value.code === "ACCOUNT_DELETION_PENDING" && value.status === 503 && typeof value.retryAt === "number") {
+    return { code: value.code, status: 503, retryable: true, retryAt: value.retryAt };
+  }
+  if (value.code === "ACCOUNT_DELETION_CONFLICT" && value.status === 409) {
+    return { code: value.code, status: 409, retryable: true };
+  }
+}
+
+function pendingError(retryAt: Date = new Date(Date.now() + RETRY_DELAY_MS)) {
+  return Object.assign(new Error("Account deletion is pending"), {
+    code: "ACCOUNT_DELETION_PENDING" as const, status: 503 as const, retryable: true as const, retryAt: retryAt.getTime(),
+  });
+}
+
+function markerCondition(marker: DeletionMarker) {
+  return and(
+    eq(deletionState.userId, marker.userId),
+    eq(deletionState.deletionId, marker.deletionId),
+    eq(deletionState.status, marker.status),
+    eq(deletionState.retryAt, marker.retryAt),
+  );
+}
+
+function leaseGuard(db: WorkerDb, marker: DeletionMarker) {
+  return exists(db.select({ userId: deletionState.userId }).from(deletionState)
+    .where(and(markerCondition(marker), gt(deletionState.retryAt, new Date()))));
+}
+
+async function reloadPending(db: WorkerDb, userId: string): Promise<never> {
+  const current = await db.select().from(deletionState).where(eq(deletionState.userId, userId)).get();
+  throw pendingError(current?.retryAt);
+}
+
+async function waitForPreMarkerUploads(
+  db: WorkerDb,
+  marker: DeletionMarker,
+): Promise<void> {
+  const deadline = new Date(marker.createdAt.getTime() + PRE_MARKER_UPLOAD_DRAIN_MS);
+  if (Date.now() >= deadline.getTime()) return;
+  const scheduled = await db.update(deletionState).set({
+    status: "purging",
+    retryAt: deadline,
+    updatedAt: new Date(),
+  }).where(markerCondition(marker));
+  if (scheduled.meta.changes === 0) return reloadPending(db, marker.userId);
+  throw pendingError(deadline);
+}
+
+function unresolvedRooms(db: WorkerDb, userId: string) {
+  return db.selectDistinct({ sessionId: sessionInvites.sessionId })
+    .from(sessionInvites)
+    .leftJoin(sessionInviteRedemptions, eq(sessionInviteRedemptions.inviteId, sessionInvites.id))
+    .where(or(
+      and(eq(sessionInvites.ownerUserId, userId), inArray(sessionInvites.status, ["open", "ended"])),
+      and(eq(sessionInviteRedemptions.userId, userId), inArray(sessionInviteRedemptions.membershipStatus, ["pending", "admitted", "left"])),
+    ))
+    .orderBy(asc(sessionInvites.sessionId))
+    .limit(ROOM_SCAN_LIMIT);
+}
+
+/**
+ * Remove account references from the versioned Apple sharing transport before
+ * deleting the D1 rows that identify those rooms. The room state lives in a
+ * separate Durable Object, so deleting only session_invites would otherwise
+ * leave an ended or active room containing the account id and book context.
+ */
+async function purgeAccountReadingRooms(
+  db: WorkerDb,
+  env: AccountDeletionEnvironment,
+  marker: DeletionMarker,
+): Promise<void> {
+  const { userId, deletionId } = marker;
+  const rooms = await unresolvedRooms(db, userId).all();
+  if (rooms.length === 0) return;
+  if (!env.SHARING_WORKER || !env.SHARING_INTERNAL_SECRET) {
+    throw new Error("sharing Worker binding is required to delete account reading rooms");
+  }
+
+  const service = new SessionSharingService(env.SHARING_WORKER, {
+    internalTokenSecret: env.SHARING_INTERNAL_SECRET,
+    internalPathPrefix: "/v2/internal",
+    correlationId: `delete_${createHash("sha256").update(deletionId).digest("hex").slice(0, 32)}`,
+  });
+
+  for (const room of rooms) {
+    const invite = await db.select().from(sessionInvites).where(eq(sessionInvites.sessionId, room.sessionId)).get();
+    if (!invite) continue;
+    try {
+      await service.revokeAccountReferences({
+        sessionId: room.sessionId,
+        accountUserId: userId,
+        deletionOperationId: createHash("sha256").update(JSON.stringify([deletionId, room.sessionId])).digest("hex"),
+      });
+    } catch (error) {
+      if (!isSessionSharingServiceError(error) || error.code !== "SESSION_NOT_FOUND") throw error;
+    }
+    if (invite.ownerUserId === userId) {
+      try {
+        await service.purgeAppleRoom({ sessionId: room.sessionId });
+      } catch (error) {
+        if (!isSessionSharingServiceError(error) || error.code !== "SESSION_NOT_FOUND") throw error;
+      }
+      const deleted = await db.delete(sessionInvites).where(and(
+        eq(sessionInvites.id, invite.id), eq(sessionInvites.ownerUserId, userId),
+        inArray(sessionInvites.status, ["open", "ended"]), leaseGuard(db, marker),
+      ));
+      if (deleted.meta.changes === 0 && await db.select().from(sessionInvites).where(eq(sessionInvites.id, invite.id)).get()) {
+        await reloadPending(db, userId);
+      }
+    } else {
+      const removed = await db.update(sessionInviteRedemptions).set({ membershipStatus: "removed", updatedAt: new Date() }).where(and(
+        eq(sessionInviteRedemptions.inviteId, invite.id), eq(sessionInviteRedemptions.userId, userId),
+        inArray(sessionInviteRedemptions.membershipStatus, ["pending", "admitted", "left"]), leaseGuard(db, marker),
+      ));
+      if (removed.meta.changes === 0 && await db.select().from(sessionInviteRedemptions).where(and(
+        eq(sessionInviteRedemptions.inviteId, invite.id), eq(sessionInviteRedemptions.userId, userId),
+        inArray(sessionInviteRedemptions.membershipStatus, ["pending", "admitted", "left"]),
+      )).get()) await reloadPending(db, userId);
+    }
+  }
 }
 
 function userLogId(userId: string): string {
@@ -134,10 +277,39 @@ async function revokeAppleAuthorization(
   return "revocation_unavailable";
 }
 
+type AccountR2Scope = { userId: string; packageIds: string[] };
+
+/** Release only this account's references while retaining D1 rows until the
+ * guarded batch. A failed R2 delete leaves the package IDs available on retry. */
+async function deleteAccountR2Objects(
+  db: WorkerDb,
+  bucket: R2Bucket,
+  candidates: Array<string | null>,
+  scope: AccountR2Scope,
+): Promise<number> {
+  const keys = [...new Set(candidates.filter((key): key is string => Boolean(key)))];
+  if (keys.length === 0) return 0;
+  const [libraryRows, shareRows] = await Promise.all([
+    db.select({ fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key }).from(books).where(and(
+      ne(books.userId, scope.userId), eq(books.isDeleted, false),
+      or(inArray(books.fileR2Key, keys), inArray(books.coverR2Key, keys)),
+    )).all(),
+    db.select({ fileR2Key: sharePackageItems.fileR2Key, coverR2Key: sharePackageItems.coverR2Key }).from(sharePackageItems).where(and(
+      scope.packageIds.length ? notInArray(sharePackageItems.packageId, scope.packageIds) : undefined,
+      or(inArray(sharePackageItems.fileR2Key, keys), inArray(sharePackageItems.coverR2Key, keys)),
+    )).all(),
+  ]);
+  const referenced = new Set([...libraryRows, ...shareRows].flatMap((row) => [row.fileR2Key, row.coverR2Key]));
+  const removable = keys.filter((key) => !referenced.has(key));
+  await Promise.all(removable.map((key) => bucket.delete(key)));
+  return removable.length;
+}
+
 async function deleteR2PrefixObjects(
   db: WorkerDb,
   bucket: R2Bucket,
   prefixes: string[],
+  scope?: AccountR2Scope,
 ): Promise<number> {
   const candidates: string[] = [];
   let removed = 0;
@@ -150,21 +322,41 @@ async function deleteR2PrefixObjects(
       cursor = page.cursor;
     }
   }
-  removed += (await deleteUnreferencedR2Objects(db, bucket, candidates)).length;
+  removed += scope
+    ? await deleteAccountR2Objects(db, bucket, candidates, scope)
+    : (await deleteUnreferencedR2Objects(db, bucket, candidates)).length;
   return removed;
 }
 
-async function verifyDeletion(
+async function verifyPreDeleteCleanup(
   db: WorkerDb,
   bucket: R2Bucket,
-  userId: string,
+  marker: DeletionMarker,
   r2Keys: string[],
+  packageIds: string[],
 ): Promise<void> {
-  if (await db.select({ id: user.id }).from(user).where(eq(user.id, userId)).get()) {
-    throw new Error("account deletion verification found the user row");
+  if (!await db.select({ id: user.id }).from(user).where(eq(user.id, marker.userId)).get()) {
+    throw new Error("account deletion verification lost the user row");
+  }
+  if (!await db.select({ deletionId: deletionState.deletionId }).from(deletionState)
+    .where(markerCondition(marker)).get()) {
+    throw new Error("account deletion verification lost the deletion marker");
   }
 
-  const referenced = await referencedR2Keys(db, r2Keys);
+  const [referencedByLibrary, survivingShareRows] = await Promise.all([
+    referencedR2Keys(db, r2Keys, { ignoreBookUserId: marker.userId }),
+    db.select({ fileR2Key: sharePackageItems.fileR2Key, coverR2Key: sharePackageItems.coverR2Key })
+      .from(sharePackageItems)
+      .where(and(
+        packageIds.length ? notInArray(sharePackageItems.packageId, packageIds) : undefined,
+        or(inArray(sharePackageItems.fileR2Key, r2Keys), inArray(sharePackageItems.coverR2Key, r2Keys)),
+      ))
+      .all(),
+  ]);
+  const referenced = new Set([
+    ...referencedByLibrary,
+    ...survivingShareRows.flatMap((row) => [row.fileR2Key, row.coverR2Key]),
+  ]);
   for (const key of r2Keys) {
     if (await bucket.head(key) && !referenced.has(key)) {
       throw new Error("account deletion verification found an R2 object");
@@ -174,27 +366,33 @@ async function verifyDeletion(
 
 async function deleteRows(
   db: WorkerDb,
-  userId: string,
+  marker: DeletionMarker,
   transactionIds: string[],
   verificationIdentifiers: string[],
-): Promise<void> {
+): Promise<boolean> {
+  const userId = marker.userId;
+  const guard = leaseGuard(db, marker);
   // These rows are not fully owned by a user FK. Notification records can
   // arrive before a user is resolved, verification tokens use a polymorphic
   // identifier, and Better Auth's Stripe table stores a referenceId rather
   // than a foreign key. Everything else is removed by the user-row cascades.
-  await db.delete(appleNotificationsLog).where(
+  const results = await db.batch([
+    db.delete(appleNotificationsLog).where(and(guard,
     transactionIds.length > 0
       ? or(
           eq(appleNotificationsLog.userId, userId),
           inArray(appleNotificationsLog.appleTransactionId, transactionIds),
         )
       : eq(appleNotificationsLog.userId, userId),
-  );
-  if (verificationIdentifiers.length > 0) {
-    await db.delete(verification).where(inArray(verification.identifier, verificationIdentifiers));
-  }
-  await db.delete(subscription).where(eq(subscription.referenceId, userId));
-  await db.delete(user).where(eq(user.id, userId));
+    )),
+    db.delete(verification).where(and(guard, inArray(verification.identifier, verificationIdentifiers))),
+    db.delete(subscription).where(and(guard, eq(subscription.referenceId, userId))),
+    db.delete(sharePackages).where(and(guard, or(
+      eq(sharePackages.senderUserId, userId), eq(sharePackages.recipientUserId, userId), eq(sharePackages.claimedBy, userId),
+    ))),
+    db.delete(user).where(and(guard, eq(user.id, userId))),
+  ]);
+  return results[results.length - 1]!.meta.changes > 0;
 }
 
 async function retainAppleEntitlements(
@@ -272,22 +470,35 @@ export async function deleteAccount(
   env: AccountDeletionEnvironment,
   userId: string,
 ): Promise<AccountDeletionResult> {
+  try {
+    return await executeDeletion(db, env, userId);
+  } catch (error) {
+    if (accountDeletionErrorBody(error)) throw error;
+    // Setup failures and already-deleted cleanup failures use the same public
+    // retry contract as a failure after acquiring the durable lease.
+    throw pendingError();
+  }
+}
+
+async function executeDeletion(
+  db: WorkerDb,
+  env: AccountDeletionEnvironment,
+  userId: string,
+  scheduledMarker?: DeletionMarker,
+): Promise<AccountDeletionResult> {
   const ledger = env.USER_USAGE_LEDGER?.getByName(userId);
-  if (!ledger) throw new Error("USER_USAGE_LEDGER binding is required for account deletion");
+  if (!ledger) throw pendingError();
   const userRow = await db.select().from(user).where(eq(user.id, userId)).get();
 
   // Hard deletion is intentionally idempotent. Once the parent row is gone,
   // the database has already removed all FK-backed account data, so a repeat
   // request is a successful no-op rather than a reason to retain a tombstone.
   if (!userRow) {
+    if (scheduledMarker) return reloadPending(db, userId);
     await ledger.purgeAccountData();
     const r2ObjectsRemoved = await deleteR2PrefixObjects(db, env.BOOK_STORAGE, [
       `books/${userId}/`,
       `covers/${userId}/`,
-      // Remove orphaned objects written by the pre-reference-count share
-      // implementation, while preserving any legacy item still referenced in
-      // D1.
-      "shares/",
     ]);
     return {
       deletionId: randomUUID(),
@@ -297,41 +508,96 @@ export async function deleteAccount(
     };
   }
 
-  const deletionId = randomUUID();
   const markerNow = new Date();
   // Fence new share creation before taking the ownership snapshot. Share
   // creation checks this durable marker before copying any R2 objects.
-  await db.insert(deletionState).values({
+  if (!scheduledMarker) await db.insert(deletionState).values({
     userId,
-    deletionId,
+    deletionId: randomUUID(),
     ledgerName: userId,
     status: "pending",
-    retryAt: new Date(markerNow.getTime() + 60_000),
+    retryAt: markerNow,
     createdAt: markerNow,
     updatedAt: markerNow,
-  }).onConflictDoUpdate({
-    target: deletionState.userId,
-    set: { deletionId, ledgerName: userId, status: "pending", retryAt: new Date(markerNow.getTime() + 60_000), updatedAt: markerNow },
-  });
+  }).onConflictDoNothing();
 
-  const [appleRow, userBooks, userAppleSubscriptions, userSharePackages] = await Promise.all([
+  const stored = scheduledMarker ?? await db.select().from(deletionState).where(eq(deletionState.userId, userId)).get();
+  if (!stored || !["pending", "purging"].includes(stored.status)) return reloadPending(db, userId);
+  // Successful claims are strictly newer than the prior lease. The exact old
+  // timestamp participates in the CAS, so simultaneous claimants cannot win.
+  const retryAt = new Date(Math.max(Date.now() + RETRY_DELAY_MS, stored.retryAt.getTime() + 1));
+  const claimed = await db.update(deletionState).set({ retryAt, updatedAt: new Date() }).where(and(
+    markerCondition(stored), lte(deletionState.retryAt, new Date()),
+  ));
+  if (claimed.meta.changes === 0) return reloadPending(db, userId);
+  const marker = { ...stored, retryAt };
+
+  try {
+    if (marker.status === "pending") {
+      await purgeAccountReadingRooms(db, env, marker);
+      if ((await unresolvedRooms(db, userId).all()).length > 0) throw pendingError(marker.retryAt);
+      const transitioned = await db.update(deletionState).set({ status: "purging", updatedAt: new Date() })
+        .where(and(markerCondition(marker), gt(deletionState.retryAt, new Date())));
+      if (transitioned.meta.changes === 0) return await reloadPending(db, userId);
+      marker.status = "purging";
+    }
+    return await finalizeAccountDeletion(db, env, userRow, marker);
+  } catch (error) {
+    const pending = accountDeletionErrorBody(error);
+    const retryAt = pending?.code === "ACCOUNT_DELETION_PENDING"
+      ? new Date(pending.retryAt)
+      : new Date(Date.now() + RETRY_DELAY_MS);
+    const scheduled = await db.update(deletionState).set({ retryAt, updatedAt: new Date() })
+      .where(markerCondition(marker));
+    if (scheduled.meta.changes === 0) return reloadPending(db, userId);
+    if (isSessionSharingServiceError(error) && (error.code === "CONFLICT" || error.status === 409)) {
+      throw Object.assign(new Error("Account deletion conflicts with room state"), {
+        code: "ACCOUNT_DELETION_CONFLICT", status: 409, retryable: true,
+      });
+    }
+    throw pendingError(retryAt);
+  }
+}
+
+async function finalizeAccountDeletion(
+  db: WorkerDb,
+  env: AccountDeletionEnvironment,
+  userRow: typeof user.$inferSelect,
+  marker: DeletionMarker,
+): Promise<AccountDeletionResult> {
+  const { userId, deletionId } = marker;
+  const ledger = env.USER_USAGE_LEDGER!.getByName(marker.ledgerName);
+
+  const [appleRow, userBooks, userAppleSubscriptions] = await Promise.all([
     db.select().from(appleUsers).where(eq(appleUsers.userId, userId)).get(),
     db.select({ id: books.id, fileR2Key: books.fileR2Key, coverR2Key: books.coverR2Key })
       .from(books).where(eq(books.userId, userId)).all(),
     db.select().from(appleSubscriptions).where(eq(appleSubscriptions.userId, userId)).all(),
-    db.select({ id: sharePackages.id })
+  ]);
+  const entitlementSnapshot = await ledger.snapshotAccountEntitlements();
+  await retainAppleEntitlements(db, env, appleRow, userAppleSubscriptions, entitlementSnapshot, marker.createdAt.getTime());
+  await ledger.purgeAccountData();
+  // Snapshot package IDs only after external ledger work so requests that
+  // crossed the deletion fence before it was written are included as well.
+  const userSharePackages = await db.select({ id: sharePackages.id })
       .from(sharePackages)
       .where(or(
         eq(sharePackages.senderUserId, userId),
         eq(sharePackages.recipientUserId, userId),
         eq(sharePackages.claimedBy, userId),
       ))
-      .all(),
-  ]);
+      .all();
+  const userSharePackageIDs = userSharePackages.map(({ id }) => id);
+  const userShareItems = userSharePackageIDs.length > 0
+    ? await db.select({ fileR2Key: sharePackageItems.fileR2Key, coverR2Key: sharePackageItems.coverR2Key })
+      .from(sharePackageItems)
+      .where(inArray(sharePackageItems.packageId, userSharePackageIDs))
+      .all()
+    : [];
+  const userShareItemR2Keys = userShareItems.flatMap((item) => [item.fileR2Key, item.coverR2Key]);
+  const userSharePackagePrefixes = userSharePackageIDs.map((id) => `shares/${id}/`);
   const verificationEmail = userRow?.email ?? appleRow?.email;
   const verificationIdentifiers = [userId, ...(verificationEmail ? [verificationEmail] : [])];
-  const entitlementSnapshot = await ledger.snapshotAccountEntitlements();
-  await retainAppleEntitlements(db, env, appleRow, userAppleSubscriptions, entitlementSnapshot, markerNow.getTime());
 
   logDeletionStage("revoke", userId, deletionId, { tokenPresent: Boolean(appleRow?.siwaRefreshTokenCiphertext) });
 
@@ -369,71 +635,68 @@ export async function deleteAccount(
   );
 
   logDeletionStage("d1", userId, deletionId);
-  await db.update(deletionState)
-    .set({ status: "purging", retryAt: new Date(Date.now() + 60_000), updatedAt: new Date() })
-    .where(eq(deletionState.userId, userId));
-  await ledger.purgeAccountData();
-  // Share items are references to source objects. Remove their rows before
-  // deleting the user's books so the final reference-counted sweep can
-  // release both sender-owned and recipient-owned packages safely. The
-  // recipient's imported book is stored under that account's normal prefix
-  // and is intentionally not touched here.
-  if (userSharePackages.length > 0) {
-    await db.delete(sharePackages).where(inArray(
-      sharePackages.id,
-      userSharePackages.map(({ id }) => id),
-    ));
-  }
-  // Re-enumerate after the first package snapshot. A share request that passed
-  // the deletion fence immediately before it was written can otherwise be
-  // absent from the initial snapshot.
-  const lateSharePackages = await db.select({ id: sharePackages.id })
-    .from(sharePackages)
-    .where(or(
-      eq(sharePackages.senderUserId, userId),
-      eq(sharePackages.recipientUserId, userId),
-      eq(sharePackages.claimedBy, userId),
-    )).all();
-  if (lateSharePackages.length > 0) {
-    await db.delete(sharePackages).where(inArray(
-      sharePackages.id,
-      lateSharePackages.map(({ id }) => id),
-    ));
-  }
   // The book rows may have pointed at objects that are not discoverable by a
   // prefix listing in a mocked or eventually-consistent bucket. Release the
   // owner's references explicitly before deleting the rows. If R2 fails, the
   // user row and deletion marker remain so the operation can be retried.
-  const snapshottedObjectsRemoved = (await deleteUnreferencedR2Objects(
+  const snapshottedObjectsRemoved = await deleteAccountR2Objects(
     db,
     env.BOOK_STORAGE,
-    r2Keys,
-    { ignoreBookUserId: userId },
-  )).length;
+    [...r2Keys, ...userShareItemR2Keys],
+    { userId, packageIds: userSharePackageIDs },
+  );
+  // Remove legacy materialized package copies while the package IDs are still
+  // available. If the Worker crashes after the D1 rows cascade, a retry cannot
+  // reconstruct those IDs from the deleted account, so the final sweep below
+  // is intentionally a second pass for late-arriving objects.
+  const sharePackageObjectsRemovedBeforeDelete = await deleteR2PrefixObjects(
+    db,
+    env.BOOK_STORAGE,
+    userSharePackagePrefixes,
+    { userId, packageIds: userSharePackageIDs },
+  );
 
-  await deleteRows(db, userId, userAppleSubscriptions.map((row) => row.appleTransactionId), verificationIdentifiers);
+  await waitForPreMarkerUploads(db, marker);
 
+  // Legacy share implementations may have materialized package copies under
+  // a package-specific prefix. Sweep only prefixes captured from this account;
+  // a global `shares/` sweep could delete another user's package. Keep this
+  // second pass before the final D1 batch so a failure can still reschedule
+  // the marker with its package IDs available.
+  const sharePackageObjectsRemovedFinal = await deleteR2PrefixObjects(
+    db,
+    env.BOOK_STORAGE,
+    userSharePackagePrefixes,
+    { userId, packageIds: userSharePackageIDs },
+  );
   // A presigned upload issued before deletion can still arrive after the
-  // initial key snapshot. Sweep again after the parent row is gone; retries
-  // of an already-deleted account repeat this safe user-scoped sweep.
-  const sweptAfterDelete = await deleteR2PrefixObjects(
+  // initial key snapshot. This final user-scoped sweep runs while the user and
+  // marker still exist, so a failure remains retryable.
+  const sweptFinal = await deleteR2PrefixObjects(
     db,
     env.BOOK_STORAGE,
-    [...userR2Prefixes, "shares/"],
+    userR2Prefixes,
   );
 
   logDeletionStage("verify", userId, deletionId);
-  await verifyDeletion(
+  await verifyPreDeleteCleanup(
     db,
     env.BOOK_STORAGE,
-    userId,
+    marker,
     r2Keys,
+    userSharePackageIDs,
   );
+
+  // This guarded batch is the final irreversible operation. No fallible
+  // external cleanup or verification may run after the user cascade.
+  if (!await deleteRows(db, marker, userAppleSubscriptions.map((row) => row.appleTransactionId), verificationIdentifiers)) {
+    return reloadPending(db, userId);
+  }
   return {
     deletionId,
     alreadyDeleted: false,
     revocationStatus,
-    r2ObjectsRemoved: snapshottedObjectsRemoved + sweptBeforeDelete + sweptAfterDelete,
+    r2ObjectsRemoved: snapshottedObjectsRemoved + sweptBeforeDelete + sweptFinal + sharePackageObjectsRemovedBeforeDelete + sharePackageObjectsRemovedFinal,
   };
 }
 
@@ -443,7 +706,7 @@ export async function retryPendingDeletions(
   env: AccountDeletionEnvironment,
   limit = 25,
 ): Promise<number> {
-  const pending = await db.select({ userId: deletionState.userId })
+  const pending = await db.select()
     .from(deletionState)
     .where(and(
       inArray(deletionState.status, ["pending", "purging"]),
@@ -456,10 +719,14 @@ export async function retryPendingDeletions(
   let completed = 0;
   for (const row of pending) {
     try {
-      await deleteAccount(db, env, row.userId);
+      await executeDeletion(db, env, row.userId, row);
       completed += 1;
     } catch (error) {
-      console.error("account deletion retry failed", { userHash: userLogId(row.userId), error });
+      console.error("account deletion retry failed", {
+        event: "account_deletion.retry_failed",
+        userHash: userLogId(row.userId),
+        category: error instanceof Error ? error.name : "unknown",
+      });
     }
   }
   return completed;

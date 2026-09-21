@@ -15,12 +15,62 @@ type SessionEnv = Env & {
 };
 type SessionContext = { Bindings: SessionEnv; Variables: { userId: string } };
 const routes = new Hono<SessionContext>();
+
+type SharingErrorAction = "signIn" | "retry" | "manualRetry" | "dismiss" | "removeAndRetry";
+
+function correlationId(c: any): string {
+  const existing = c.get("sharingCorrelationId") as string | undefined;
+  if (existing) return existing;
+  const supplied = c.req.header("x-rishi-correlation-id");
+  const value = supplied && /^[a-zA-Z0-9_-]{16,128}$/.test(supplied) ? supplied : crypto.randomUUID();
+  c.set("sharingCorrelationId", value);
+  return value;
+}
+
+function errorDetails(code: string): { retryable: boolean; action: SharingErrorAction; message: string } {
+  switch (code) {
+    case "AUTH_REQUIRED": return { retryable: false, action: "signIn", message: "Sign in to use this reading session." };
+    case "SESSION_ENDED":
+    case "SESSION_LINK_INVALID":
+    case "REMOVED_FROM_SESSION":
+    case "FORBIDDEN": return { retryable: false, action: "dismiss", message: "This reading session is no longer available." };
+    case "BOOK_HASH_MISMATCH": return { retryable: true, action: "removeAndRetry", message: "The downloaded book could not be verified." };
+    case "ROOM_FULL": return { retryable: true, action: "manualRetry", message: "This reading room is full." };
+    default: return { retryable: true, action: "retry", message: "Rishi could not complete this reading-session action." };
+  }
+}
+
+function sharingError(c: any, code: string, status: number) {
+  const details = errorDetails(code);
+  const correlationId = correlationId(c);
+  console.warn(JSON.stringify({ event: "sharing.request.error", correlationId, code, status, retryable: details.retryable, action: details.action }));
+  const json = c.get("sharingOriginalJson") as ((body: unknown, status?: number) => Response) | undefined;
+  return (json ?? c.json.bind(c))({ code, error: details.message, retryable: details.retryable, action: details.action, correlationId }, status);
+}
+
+// Every session-sharing failure uses the same client-safe envelope. The route
+// bodies below remain terse while this boundary prevents internal messages,
+// identifiers, and provider responses from escaping to the client.
+routes.use("*", async (c, next) => {
+  correlationId(c);
+  const json = c.json.bind(c);
+  c.set("sharingOriginalJson", json);
+  (c as any).json = (body: unknown, status?: number, headers?: Record<string, string>) => {
+    if (body && typeof body === "object" && "code" in body && "error" in body) {
+      const value = body as { code?: unknown };
+      if (typeof value.code === "string") return sharingError(c, value.code, status ?? 500);
+    }
+    return json(body, status, headers);
+  };
+  await next();
+});
 routes.use("*", requireAuth as never);
 
 function service(c: any) {
   return new SessionSharingService(c.env.SHARING_WORKER, {
     internalTokenSecret: c.env.SHARING_INTERNAL_SECRET,
     internalPathPrefix: "/v2/internal",
+    correlationId: correlationId(c),
   });
 }
 
@@ -48,9 +98,9 @@ function errorResponse(c: any, error: unknown) {
       : error.status === 403 ? 403
       : error.status === 404 ? 404
       : 503;
-    return c.json({ code: error.code, error: error.message }, status);
+    return sharingError(c, error.code, status);
   }
-  return c.json({ code: "SERVICE_UNAVAILABLE", error: "Rishi could not complete this action." }, 503);
+  return sharingError(c, "SERVICE_UNAVAILABLE", 503);
 }
 
 async function bookPayload(c: any, book: typeof books.$inferSelect) {

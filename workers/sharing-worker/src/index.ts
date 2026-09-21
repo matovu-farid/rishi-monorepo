@@ -22,6 +22,22 @@ type Env = {
 
 const app = new Hono<{ Bindings: Env }>();
 
+function correlationId(request: Request): string {
+  const value = request.headers.get("x-rishi-correlation-id");
+  // Correlation identifiers are opaque diagnostics handles, never identities.
+  return value && /^[a-zA-Z0-9_-]{16,128}$/.test(value) ? value : crypto.randomUUID();
+}
+
+function logInternalOutcome(correlationId: string, action: string, outcome: "ok" | "error", startedAt: number): void {
+  console.log(JSON.stringify({
+    event: "sharing.internal.command",
+    correlationId,
+    action,
+    outcome,
+    durationMs: Date.now() - startedAt,
+  }));
+}
+
 app.get("/health", (c) => c.text("ok"));
 
 const INTERNAL_ACTIONS = {
@@ -54,6 +70,8 @@ function internalStatus(code: string): 400 | 401 | 403 | 404 | 409 | 410 {
  * action to the exact path and JSON body so a bearer cannot be replayed for a
  * different room or mutation. */
 app.post("/v2/internal/rooms/:id", async (c) => {
+  const requestCorrelationId = correlationId(c.req.raw);
+  const startedAt = Date.now();
   const token = c.req.header("x-rishi-internal-token");
   if (!token) return c.json({ code: "SERVICE_UNAVAILABLE", error: "missing internal authorization" }, 401);
   const body = await c.req.json().catch(() => null) as { action?: string; payload?: unknown } | null;
@@ -74,6 +92,7 @@ app.post("/v2/internal/rooms/:id", async (c) => {
     const result: unknown = await stub.executeInternal({
       action: INTERNAL_ACTIONS[body.action as keyof typeof INTERNAL_ACTIONS],
       payload: body.payload ?? {},
+      correlationId: requestCorrelationId,
     });
     if (
       result &&
@@ -84,12 +103,15 @@ app.post("/v2/internal/rooms/:id", async (c) => {
       "error" in result
     ) {
       const failure = result as { ok: false; code: string; error: string };
+      logInternalOutcome(requestCorrelationId, body.action, "error", startedAt);
       return c.json(failure, internalStatus(failure.code));
     }
+    logInternalOutcome(requestCorrelationId, body.action, "ok", startedAt);
     return c.json(result ?? { ok: true });
   } catch (e) {
     const error = e as { code?: string; message?: string };
     const code = error.code ?? "SERVICE_UNAVAILABLE";
+    logInternalOutcome(requestCorrelationId, body.action, "error", startedAt);
     return c.json({ code, error: error.message ?? code }, internalStatus(code));
   }
 });
