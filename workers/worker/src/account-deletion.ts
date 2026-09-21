@@ -215,11 +215,13 @@ function logDeletionStage(
   stage: "revoke" | "stripe" | "r2" | "d1" | "verify",
   userId: string,
   deletionId: string,
+  correlationId: string,
   details: Record<string, unknown> = {},
 ): void {
   console.info("account_deletion", {
     stage,
     deletionId,
+    correlationId,
     userHash: userLogId(userId),
     ...details,
   });
@@ -565,7 +567,7 @@ async function executeDeletion(
       if (transitioned.meta.changes === 0) return await reloadPending(db, userId);
       marker.status = "purging";
     }
-    return await finalizeAccountDeletion(db, env, userRow, marker);
+    return await finalizeAccountDeletion(db, env, userRow, marker, correlationId);
   } catch (error) {
     const pending = accountDeletionErrorBody(error);
     const retryAt = pending?.code === "ACCOUNT_DELETION_PENDING"
@@ -588,6 +590,7 @@ async function finalizeAccountDeletion(
   env: AccountDeletionEnvironment,
   userRow: typeof user.$inferSelect,
   marker: DeletionMarker,
+  correlationId: string,
 ): Promise<AccountDeletionResult> {
   const { userId, deletionId } = marker;
   const ledger = env.USER_USAGE_LEDGER!.getByName(marker.ledgerName);
@@ -623,7 +626,7 @@ async function finalizeAccountDeletion(
   const verificationEmail = userRow?.email ?? appleRow?.email;
   const verificationIdentifiers = [userId, ...(verificationEmail ? [verificationEmail] : [])];
 
-  logDeletionStage("revoke", userId, deletionId, { tokenPresent: Boolean(appleRow?.siwaRefreshTokenCiphertext) });
+  logDeletionStage("revoke", userId, deletionId, correlationId, { tokenPresent: Boolean(appleRow?.siwaRefreshTokenCiphertext) });
 
   let revocationStatus: DeletionStatus = "legacy_no_token";
   try {
@@ -636,16 +639,17 @@ async function finalizeAccountDeletion(
     console.error("account deletion Apple revocation unavailable", {
       event: "account_deletion.apple_revocation_failed",
       deletionId,
+      correlationId,
       userHash: userLogId(userId),
       category: error instanceof Error ? error.name : "unknown",
     });
     revocationStatus = "revocation_unavailable";
   }
 
-  logDeletionStage("stripe", userId, deletionId, { customerPresent: Boolean(userRow?.stripeCustomerId) });
+  logDeletionStage("stripe", userId, deletionId, correlationId, { customerPresent: Boolean(userRow?.stripeCustomerId) });
   await anonymizeStripeCustomer(env, userRow?.stripeCustomerId ?? null);
 
-  logDeletionStage("r2", userId, deletionId, {
+  logDeletionStage("r2", userId, deletionId, correlationId, {
     objectCount: userBooks.length * 2,
     sharePackageCount: userSharePackages.length,
   });
@@ -659,7 +663,7 @@ async function finalizeAccountDeletion(
     userR2Prefixes,
   );
 
-  logDeletionStage("d1", userId, deletionId);
+  logDeletionStage("d1", userId, deletionId, correlationId);
   // The book rows may have pointed at objects that are not discoverable by a
   // prefix listing in a mocked or eventually-consistent bucket. Release the
   // owner's references explicitly before deleting the rows. If R2 fails, the
@@ -703,7 +707,7 @@ async function finalizeAccountDeletion(
     userR2Prefixes,
   );
 
-  logDeletionStage("verify", userId, deletionId);
+  logDeletionStage("verify", userId, deletionId, correlationId);
   await verifyPreDeleteCleanup(
     db,
     env.BOOK_STORAGE,
