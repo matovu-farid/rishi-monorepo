@@ -64,6 +64,20 @@ struct SharedReadingError: Error, Codable, Sendable, Equatable, LocalizedError {
     /// Opaque backend diagnostic handle. It is safe to include in DEBUG logs.
     let correlationId: String? = nil
 
+    init(
+        code: SharedReadingErrorCode,
+        message: String,
+        retryable: Bool,
+        action: SharedReadingRecoveryAction,
+        correlationId: String? = nil
+    ) {
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.action = action
+        self.correlationId = correlationId
+    }
+
     var errorDescription: String? { message }
 
     static func from(code: SharedReadingErrorCode, message: String? = nil) -> SharedReadingError {
