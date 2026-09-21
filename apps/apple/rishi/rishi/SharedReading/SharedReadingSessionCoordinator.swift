@@ -3,9 +3,10 @@ import Foundation
 struct SharedReadingSessionCoordinatorSnapshot: Sendable, Equatable {
     let sessionId: String?
     let status: SharedReadingSessionStatus
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let rosterGeneration: SharedReadingRosterGeneration
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let currentParticipantUserId: String?
     let participants: [SharedReadingParticipant]
     let speakerUserId: String?
@@ -27,9 +28,10 @@ actor SharedReadingSessionCoordinator {
     private var didFinish = false
     private var sessionId: String?
     private(set) var status: SharedReadingSessionStatus = .waiting
-    private(set) var roomEpoch: Int = 0
-    private(set) var controllerGeneration: Int = 0
-    private(set) var connectionGeneration: Int = 0
+    private(set) var roomEpoch: SharedReadingRoomEpoch = 0
+    private(set) var rosterGeneration: SharedReadingRosterGeneration = 0
+    private(set) var controllerGeneration: SharedReadingControllerGeneration = 0
+    private(set) var connectionGeneration: SharedReadingConnectionGeneration = 0
     private(set) var currentParticipantUserId: String?
     private(set) var participants: [SharedReadingParticipant] = []
     private(set) var speakerUserId: String?
@@ -63,6 +65,7 @@ actor SharedReadingSessionCoordinator {
 
         sessionId = nil
         roomEpoch = admission.roomEpoch
+        rosterGeneration = 0
         connectionGeneration = admission.connectionGeneration
         controllerGeneration = 0
         status = admission.status
@@ -136,6 +139,7 @@ actor SharedReadingSessionCoordinator {
             sessionId: sessionId,
             status: status,
             roomEpoch: roomEpoch,
+            rosterGeneration: rosterGeneration,
             controllerGeneration: controllerGeneration,
             connectionGeneration: connectionGeneration,
             currentParticipantUserId: currentParticipantUserId,
@@ -216,11 +220,12 @@ actor SharedReadingSessionCoordinator {
         case .sessionState(let state):
             await applySessionState(state)
         case .syncFrame(let frame):
-            guard acceptsSyncFrame(frame) else { return }
-            sessionId = frame.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, frame.roomEpoch)
-            controllerGeneration = max(controllerGeneration, frame.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, frame.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: frame.sessionId,
+                roomEpoch: frame.roomEpoch,
+                controllerGeneration: frame.controllerGeneration,
+                connectionGeneration: frame.connectionGeneration
+            ), frame.sequence > lastAcceptedSyncSequence else { return }
             lastAcceptedSyncSequence = frame.sequence
             latestProgress = SharedReadingProgress(
                 sessionId: frame.sessionId ?? sessionId ?? "",
@@ -235,21 +240,23 @@ actor SharedReadingSessionCoordinator {
             )
             publishSnapshot()
         case .controllerTransfer(let transfer):
-            guard transfer.roomEpoch >= roomEpoch else { return }
-            sessionId = transfer.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, transfer.roomEpoch)
-            controllerGeneration = max(controllerGeneration, transfer.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, transfer.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: transfer.sessionId,
+                roomEpoch: transfer.roomEpoch,
+                controllerGeneration: transfer.controllerGeneration,
+                connectionGeneration: transfer.connectionGeneration
+            ) else { return }
             currentParticipantUserId = transfer.toUserId
             lastAcceptedSyncSequence = -1
             latestProgress = nil
             publishSnapshot()
         case .participantRemove(let removal):
-            guard removal.roomEpoch >= roomEpoch else { return }
-            sessionId = removal.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, removal.roomEpoch)
-            controllerGeneration = max(controllerGeneration, removal.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, removal.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: removal.sessionId,
+                roomEpoch: removal.roomEpoch,
+                controllerGeneration: removal.controllerGeneration,
+                connectionGeneration: removal.connectionGeneration
+            ) else { return }
             if currentParticipantUserId == removal.userId {
                 currentParticipantUserId = nil
             }
@@ -261,35 +268,43 @@ actor SharedReadingSessionCoordinator {
                 await finishLocally(disconnectTransport: true)
             }
         case .participantRoster(let roster):
-            guard roster.roomEpoch >= roomEpoch, roster.rosterGeneration >= roomEpoch else { return }
-            sessionId = roster.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, roster.roomEpoch)
-            controllerGeneration = max(controllerGeneration, roster.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, roster.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: roster.sessionId,
+                roomEpoch: roster.roomEpoch,
+                rosterGeneration: roster.rosterGeneration,
+                controllerGeneration: roster.controllerGeneration,
+                connectionGeneration: roster.connectionGeneration
+            ) else { return }
             participants = roster.participants
             currentParticipantUserId = roster.participants.first(where: { $0.isController })?.userId ?? currentParticipantUserId
             publishSnapshot()
         case .speakerGranted(let granted):
-            sessionId = granted.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, granted.roomEpoch)
-            controllerGeneration = max(controllerGeneration, granted.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, granted.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: granted.sessionId,
+                roomEpoch: granted.roomEpoch,
+                controllerGeneration: granted.controllerGeneration,
+                connectionGeneration: granted.connectionGeneration
+            ) else { return }
             speakerUserId = granted.speakerUserId
             publishSnapshot()
         case .speakerReleased(let released):
-            sessionId = released.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, released.roomEpoch)
-            controllerGeneration = max(controllerGeneration, released.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, released.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: released.sessionId,
+                roomEpoch: released.roomEpoch,
+                controllerGeneration: released.controllerGeneration,
+                connectionGeneration: released.connectionGeneration
+            ) else { return }
             if speakerUserId == released.speakerUserId {
                 speakerUserId = nil
             }
             publishSnapshot()
         case .sessionEnded(let ended):
-            sessionId = ended.sessionId ?? sessionId
-            roomEpoch = max(roomEpoch, ended.roomEpoch)
-            controllerGeneration = max(controllerGeneration, ended.controllerGeneration)
-            connectionGeneration = max(connectionGeneration, ended.connectionGeneration)
+            guard acceptsAuthority(
+                sessionId: ended.sessionId,
+                roomEpoch: ended.roomEpoch,
+                controllerGeneration: ended.controllerGeneration,
+                connectionGeneration: ended.connectionGeneration
+            ) else { return }
             await finishLocally(disconnectTransport: false)
         case .sdpOffer, .sdpAnswer, .ice:
             // Peer media transport consumes these events; the room coordinator
@@ -303,10 +318,12 @@ actor SharedReadingSessionCoordinator {
     }
 
     private func applySessionState(_ state: SharedReadingSessionStateEvent) async {
-        sessionId = state.sessionId ?? sessionId
-        roomEpoch = state.roomEpoch
-        controllerGeneration = state.controllerGeneration
-        connectionGeneration = state.connectionGeneration
+        guard acceptsAuthority(
+            sessionId: state.sessionId,
+            roomEpoch: state.roomEpoch,
+            controllerGeneration: state.controllerGeneration,
+            connectionGeneration: state.connectionGeneration
+        ) else { return }
         status = state.status
         currentParticipantUserId = state.controllerUserId
         lastAcceptedSyncSequence = -1
@@ -320,23 +337,40 @@ actor SharedReadingSessionCoordinator {
         }
     }
 
-    private func acceptsSyncFrame(_ frame: SharedReadingSyncFrame) -> Bool {
-        if let sessionId, let frameSessionId = frame.sessionId, sessionId != frameSessionId {
-            return false
+    private func acceptsAuthority(
+        sessionId incomingSessionId: String?,
+        roomEpoch incomingRoomEpoch: SharedReadingRoomEpoch,
+        rosterGeneration incomingRosterGeneration: SharedReadingRosterGeneration? = nil,
+        controllerGeneration incomingControllerGeneration: SharedReadingControllerGeneration,
+        connectionGeneration incomingConnectionGeneration: SharedReadingConnectionGeneration
+    ) -> Bool {
+        guard incomingSessionId == nil || sessionId == nil || incomingSessionId == sessionId,
+              incomingRoomEpoch >= roomEpoch else { return false }
+
+        if incomingRoomEpoch > roomEpoch {
+            roomEpoch = incomingRoomEpoch
+            rosterGeneration = 0
+            controllerGeneration = 0
+            connectionGeneration = 0
+            currentParticipantUserId = nil
+            participants = []
+            speakerUserId = nil
+            lastAcceptedSyncSequence = -1
+            lastSentSyncSequence = -1
+            latestProgress = nil
         }
-        if frame.roomEpoch < roomEpoch {
-            return false
+
+        guard incomingControllerGeneration >= controllerGeneration,
+              incomingConnectionGeneration >= connectionGeneration,
+              incomingRosterGeneration.map({ $0 >= rosterGeneration }) ?? true else { return false }
+
+        sessionId = incomingSessionId ?? sessionId
+        controllerGeneration = max(controllerGeneration, incomingControllerGeneration)
+        connectionGeneration = max(connectionGeneration, incomingConnectionGeneration)
+        if let incomingRosterGeneration {
+            rosterGeneration = max(rosterGeneration, incomingRosterGeneration)
         }
-        if frame.roomEpoch > roomEpoch {
-            return true
-        }
-        if frame.controllerGeneration < controllerGeneration {
-            return false
-        }
-        if frame.controllerGeneration > controllerGeneration {
-            return true
-        }
-        return frame.sequence > lastAcceptedSyncSequence
+        return true
     }
 
     private func finishLocally(disconnectTransport: Bool) async {
@@ -366,7 +400,8 @@ actor SharedReadingSessionCoordinator {
                 sessionId: sessionId,
                 status: status,
                 roomEpoch: roomEpoch,
-            controllerGeneration: controllerGeneration,
+                rosterGeneration: rosterGeneration,
+                controllerGeneration: controllerGeneration,
                 connectionGeneration: connectionGeneration,
                 currentParticipantUserId: currentParticipantUserId,
                 participants: participants,

@@ -29,25 +29,25 @@ enum SharedReadingSignalingEvent: Sendable, Equatable {
 }
 
 struct SharedReadingSignalFence: Codable, Sendable, Equatable {
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
 }
 
 struct SharedReadingSessionStateEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let status: SharedReadingSessionStatus
     let controllerUserId: String
 }
 
 struct SharedReadingSyncFrame: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let sequence: Int64
     let bookId: String
     let contentHash: String
@@ -63,9 +63,9 @@ struct SharedReadingSyncFrame: Codable, Sendable, Equatable {
 
     init(
         sessionId: String?,
-        roomEpoch: Int,
-        controllerGeneration: Int,
-        connectionGeneration: Int,
+        roomEpoch: SharedReadingRoomEpoch,
+        controllerGeneration: SharedReadingControllerGeneration,
+        connectionGeneration: SharedReadingConnectionGeneration,
         sequence: Int64,
         bookId: String,
         contentHash: String,
@@ -90,9 +90,9 @@ struct SharedReadingSyncFrame: Codable, Sendable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
-        roomEpoch = try c.decodeIfPresent(Int.self, forKey: .roomEpoch) ?? 0
-        controllerGeneration = try c.decodeIfPresent(Int.self, forKey: .controllerGeneration) ?? 0
-        connectionGeneration = try c.decodeIfPresent(Int.self, forKey: .connectionGeneration) ?? 0
+        roomEpoch = try c.decodeIfPresent(SharedReadingRoomEpoch.self, forKey: .roomEpoch) ?? 0
+        controllerGeneration = try c.decodeIfPresent(SharedReadingControllerGeneration.self, forKey: .controllerGeneration) ?? 0
+        connectionGeneration = try c.decodeIfPresent(SharedReadingConnectionGeneration.self, forKey: .connectionGeneration) ?? 0
         sequence = try c.decode(Int64.self, forKey: .sequence)
         bookId = try c.decode(String.self, forKey: .bookId)
         contentHash = try c.decode(String.self, forKey: .contentHash)
@@ -154,9 +154,9 @@ private struct SharedReadingWirePositionPayload: Codable {
 
 struct SharedReadingControllerTransferEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let fromUserId: String?
     let toUserId: String
 }
@@ -170,36 +170,36 @@ enum SharedReadingParticipantRemovalReason: String, Codable, Sendable, Equatable
 
 struct SharedReadingParticipantRemoveEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let userId: String
     let reason: SharedReadingParticipantRemovalReason
 }
 
 struct SharedReadingParticipantRosterEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
-    let rosterGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
+    let rosterGeneration: SharedReadingRosterGeneration
     let participants: [SharedReadingParticipant]
 }
 
 struct SharedReadingSpeakerGrantedEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let requestId: String?
     let speakerUserId: String
 }
 
 struct SharedReadingSpeakerReleasedEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let speakerUserId: String
 }
 
@@ -213,17 +213,17 @@ enum SharedReadingSessionEndedReason: String, Codable, Sendable, Equatable {
 
 struct SharedReadingSessionEndedEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let reason: SharedReadingSessionEndedReason
 }
 
 struct SharedReadingSDPEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let fromUserId: String
     let sdp: String
 
@@ -242,9 +242,9 @@ struct SharedReadingICECandidate: Codable, Sendable, Equatable {
 
 struct SharedReadingICEEvent: Codable, Sendable, Equatable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let fromUserId: String
     let candidate: SharedReadingICECandidate
 
@@ -316,9 +316,9 @@ private struct SharedReadingWireError: Decodable {
 
 private struct SharedReadingWireSyncEnvelope: Decodable {
     let sessionId: String?
-    let roomEpoch: Int
-    let controllerGeneration: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
+    let connectionGeneration: SharedReadingConnectionGeneration
     let frame: SharedReadingSyncFrame
 }
 
@@ -377,8 +377,8 @@ private struct OutgoingEnvelope: Encodable {
 private struct SharedReadingWireSnapshot: Encodable {
     let v = 1
     let t = "snapshot"
-    let roomEpoch: Int
-    let controllerGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
     let sequence: Int64
     let bookId: String
     let contentHash: String
@@ -537,6 +537,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     private var reconnectTask: Task<Void, Never>?
     private var generation = 0
     private var reconnectAttempt = 0
+    private var pendingReconnectDecision: SharedReadingReconnectDecision = .retry(after: .zero)
     private var isDisconnecting = false
     private var isTerminal = false
     private var refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?
@@ -570,6 +571,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         self.refreshBearerToken = refreshBearerToken
         isDisconnecting = false
         reconnectAttempt = 0
+        pendingReconnectDecision = .retry(after: .zero)
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -625,8 +627,6 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         let task = urlSession.webSocketTask(with: admission.websocketURL, protocols: protocols)
         currentTask = task
         task.resume()
-        reconnectAttempt = 0
-
         receiveTask?.cancel()
         receiveTask = Task { [weak self, task] in
             await self?.receiveLoop(task, generation: currentGeneration)
@@ -666,7 +666,13 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         do {
             let event = try decodeEvent(from: data)
             eventHub.yield(event)
-            reconnectAttempt = 0
+            if case .sessionState(let state) = event, state.status != .ended {
+                reconnectAttempt = 0
+                pendingReconnectDecision = .retry(after: .zero)
+            }
+            if case .error(let error) = event {
+                pendingReconnectDecision = SharedReadingReconnectDecision.forError(error.code)
+            }
             if shouldTerminate(after: event) {
                 terminateAfterTerminalEvent()
             }
@@ -762,42 +768,76 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         currentTask = nil
         receiveTask = nil
         guard !isDisconnecting, !isTerminal else { return }
-        scheduleReconnect()
+        scheduleReconnect(pendingReconnectDecision)
     }
 
-    private func scheduleReconnect() {
-        reconnectTask?.cancel()
+    private func scheduleReconnect(_ decision: SharedReadingReconnectDecision) {
+        guard reconnectTask == nil else { return }
+        if case .stop(let code) = decision {
+            eventHub.yield(.error(.from(code: code)))
+            terminateAfterTerminalEvent()
+            return
+        }
         reconnectAttempt += 1
         let attempt = reconnectAttempt
-        let delay = backoff(attempt)
+        let delay: Duration
+        if case .retry(let requestedDelay) = decision, requestedDelay > .zero {
+            delay = requestedDelay
+        } else {
+            delay = backoff(attempt)
+        }
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            if let self, let refresh = await self.refreshAdmission {
-                do { await self.setAdmission(try await refresh()) }
-                catch let error as SharedReadingError { self.eventHub.yield(.error(error)); return }
-                catch { self.eventHub.yield(.error(.from(code: .serviceUnavailable))); return }
-            }
-            if let self, let refresh = await self.refreshBearerToken {
-                do {
-                    Log.event("sharing.signaling.auth.refresh_started", data: ["attempt": String(attempt)])
-                    await self.setBearerToken(try await refresh())
-                    Log.event("sharing.signaling.auth.refresh_completed", data: ["attempt": String(attempt)])
-                } catch let error as SharedReadingError {
-                    Log.error("sharing.signaling.auth.refresh_failed", error: error)
-                    self.eventHub.yield(.error(error))
-                    return
-                } catch {
-                    Log.error("sharing.signaling.auth.refresh_failed", error: error)
-                    self.eventHub.yield(.error(.from(code: .authRequired)))
-                    return
-                }
-            }
-            await self?.open()
+            await self?.reconnect(decision: decision, attempt: attempt)
         }
     }
 
-    private func setAdmission(_ admission: SharedReadingAdmission) { currentAdmission = admission }
-    private func setBearerToken(_ token: String) { bearerToken = token }
+    private func reconnect(decision: SharedReadingReconnectDecision, attempt: Int) async {
+        reconnectTask = nil
+        guard !isDisconnecting, !isTerminal else { return }
+
+        switch decision {
+        case .retry:
+            break
+        case .refreshAdmission:
+            guard let refreshAdmission else {
+                eventHub.yield(.error(.from(code: .reconnectExpired)))
+                return
+            }
+            do {
+                currentAdmission = try await refreshAdmission()
+            } catch let error as SharedReadingError {
+                eventHub.yield(.error(error))
+                return
+            } catch {
+                eventHub.yield(.error(.from(code: .serviceUnavailable)))
+                return
+            }
+        case .refreshBearer:
+            guard let refreshBearerToken else {
+                eventHub.yield(.error(.from(code: .authRequired)))
+                return
+            }
+            do {
+                Log.event("sharing.signaling.auth.refresh_started", data: ["attempt": String(attempt)])
+                bearerToken = try await refreshBearerToken()
+                Log.event("sharing.signaling.auth.refresh_completed", data: ["attempt": String(attempt)])
+            } catch let error as SharedReadingError {
+                Log.error("sharing.signaling.auth.refresh_failed", error: error)
+                eventHub.yield(.error(error))
+                return
+            } catch {
+                Log.error("sharing.signaling.auth.refresh_failed", error: error)
+                eventHub.yield(.error(.from(code: .authRequired)))
+                return
+            }
+        case .stop(let code):
+            eventHub.yield(.error(.from(code: code)))
+            terminateAfterTerminalEvent()
+            return
+        }
+        await open()
+    }
 
 }

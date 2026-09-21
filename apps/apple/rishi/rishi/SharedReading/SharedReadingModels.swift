@@ -1,5 +1,45 @@
 import Foundation
 
+struct SharedReadingRoomEpoch: RawRepresentable, Codable, Comparable, Sendable, Equatable, ExpressibleByIntegerLiteral {
+    let rawValue: Int
+
+    init(rawValue: Int) { self.rawValue = rawValue }
+    init(integerLiteral value: Int) { rawValue = value }
+    init(from decoder: Decoder) throws { rawValue = try decoder.singleValueContainer().decode(Int.self) }
+    func encode(to encoder: Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+struct SharedReadingRosterGeneration: RawRepresentable, Codable, Comparable, Sendable, Equatable, ExpressibleByIntegerLiteral {
+    let rawValue: Int
+
+    init(rawValue: Int) { self.rawValue = rawValue }
+    init(integerLiteral value: Int) { rawValue = value }
+    init(from decoder: Decoder) throws { rawValue = try decoder.singleValueContainer().decode(Int.self) }
+    func encode(to encoder: Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+struct SharedReadingControllerGeneration: RawRepresentable, Codable, Comparable, Sendable, Equatable, ExpressibleByIntegerLiteral {
+    let rawValue: Int
+
+    init(rawValue: Int) { self.rawValue = rawValue }
+    init(integerLiteral value: Int) { rawValue = value }
+    init(from decoder: Decoder) throws { rawValue = try decoder.singleValueContainer().decode(Int.self) }
+    func encode(to encoder: Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+struct SharedReadingConnectionGeneration: RawRepresentable, Codable, Comparable, Sendable, Equatable, ExpressibleByIntegerLiteral {
+    let rawValue: Int
+
+    init(rawValue: Int) { self.rawValue = rawValue }
+    init(integerLiteral value: Int) { rawValue = value }
+    init(from decoder: Decoder) throws { rawValue = try decoder.singleValueContainer().decode(Int.self) }
+    func encode(to encoder: Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
 enum SharedReadingSessionStatus: String, Codable, Sendable, Equatable {
     case waiting
     case active
@@ -89,8 +129,8 @@ struct SharedReadingSession: Codable, Sendable, Equatable, Identifiable {
     let status: SharedReadingSessionStatus
     let book: SharedReadingBook
     let controllerUserId: String
-    let controllerGeneration: Int
-    let roomEpoch: Int
+    let controllerGeneration: SharedReadingControllerGeneration
+    let roomEpoch: SharedReadingRoomEpoch
     let participants: [SharedReadingParticipant]
 
     var id: String { sessionId }
@@ -138,8 +178,8 @@ struct SharedReadingSessionSummary: Codable, Sendable, Equatable, Identifiable {
 struct SharedReadingAdmission: Codable, Sendable, Equatable {
     let admissionTicket: String
     let websocketURL: URL
-    let roomEpoch: Int
-    let connectionGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let connectionGeneration: SharedReadingConnectionGeneration
     let status: SharedReadingSessionStatus
 
     private enum CodingKeys: String, CodingKey {
@@ -229,8 +269,8 @@ struct SharedReadingActiveResponse: Codable, Sendable, Equatable {
 struct SharedReadingRoomStatus: Codable, Sendable, Equatable {
     let sessionId: String
     let status: SharedReadingSessionStatus
-    let roomEpoch: Int
-    let controllerGeneration: Int
+    let roomEpoch: SharedReadingRoomEpoch
+    let controllerGeneration: SharedReadingControllerGeneration
     let controllerUserId: String
     let maxParticipants: Int
     let participants: [SharedReadingParticipant]
@@ -243,8 +283,8 @@ struct SharedReadingRoomStatus: Codable, Sendable, Equatable {
     init(
         sessionId: String,
         status: SharedReadingSessionStatus,
-        roomEpoch: Int,
-        controllerGeneration: Int,
+        roomEpoch: SharedReadingRoomEpoch,
+        controllerGeneration: SharedReadingControllerGeneration,
         controllerUserId: String,
         maxParticipants: Int,
         participants: [SharedReadingParticipant],
@@ -264,8 +304,8 @@ struct SharedReadingRoomStatus: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sessionId = try container.decode(String.self, forKey: .sessionId)
         status = try container.decode(SharedReadingSessionStatus.self, forKey: .status)
-        roomEpoch = try container.decode(Int.self, forKey: .roomEpoch)
-        controllerGeneration = try container.decode(Int.self, forKey: .controllerGeneration)
+        roomEpoch = try container.decode(SharedReadingRoomEpoch.self, forKey: .roomEpoch)
+        controllerGeneration = try container.decode(SharedReadingControllerGeneration.self, forKey: .controllerGeneration)
         controllerUserId = try container.decode(String.self, forKey: .controllerUserId)
         maxParticipants = try container.decode(Int.self, forKey: .maxParticipants)
         participants = try container.decode([SharedReadingParticipant].self, forKey: .participants)

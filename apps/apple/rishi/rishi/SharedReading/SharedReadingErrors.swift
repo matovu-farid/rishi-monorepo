@@ -32,6 +32,30 @@ enum SharedReadingRecoveryAction: String, Codable, Sendable, Equatable {
     case removeAndRetry
 }
 
+enum SharedReadingReconnectDecision: Sendable, Equatable {
+    case retry(after: Duration)
+    case refreshBearer
+    case refreshAdmission
+    case stop(SharedReadingErrorCode)
+
+    static func forError(_ code: SharedReadingErrorCode) -> Self {
+        switch code {
+        case .authRequired:
+            .refreshBearer
+        case .reconnectExpired:
+            .refreshAdmission
+        case .sessionEnded, .removedFromSession:
+            .stop(code)
+        case .onboardingRequired, .sessionLinkInvalid, .bookHashMismatch, .roomFull, .forbidden:
+            .stop(code)
+        case .bookNotReady, .noSuchParticipant, .staleControllerGeneration, .waitingForController,
+                .microphoneUnavailable, .rtcConnectionFailed, .turnUnavailable, .signalingDegraded,
+                .emailDeliveryFailed, .serviceUnavailable:
+            .retry(after: .zero)
+        }
+    }
+}
+
 struct SharedReadingError: Error, Codable, Sendable, Equatable, LocalizedError {
     let code: SharedReadingErrorCode
     let message: String

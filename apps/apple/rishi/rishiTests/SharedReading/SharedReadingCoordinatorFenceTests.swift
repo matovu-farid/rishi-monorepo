@@ -1,0 +1,81 @@
+import Foundation
+import Testing
+
+@testable import rishi
+
+@Suite("Shared reading coordinator authority fences")
+struct SharedReadingCoordinatorFenceTests {
+    @Test("a newer room epoch clears subordinate fences before accepting its roster")
+    func newerEpochResetsSubordinateFences() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 4), bearerToken: "bearer")
+
+        transport.yield(.participantRoster(roster(roomEpoch: 1, rosterGeneration: 9, controllerGeneration: 7, connectionGeneration: 4, controller: "old")))
+        await Task.yield()
+        transport.yield(.participantRoster(roster(roomEpoch: 2, rosterGeneration: 1, controllerGeneration: 1, connectionGeneration: 1, controller: "new")))
+        await Task.yield()
+
+        let snapshot = await coordinator.snapshot()
+        #expect(snapshot.roomEpoch == 2)
+        #expect(snapshot.rosterGeneration == 1)
+        #expect(snapshot.controllerGeneration == 1)
+        #expect(snapshot.connectionGeneration == 1)
+        #expect(snapshot.currentParticipantUserId == "new")
+    }
+
+    @Test("stale roster generation cannot overwrite an authoritative roster")
+    func staleRosterDoesNotOverwriteCurrentRoster() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 1), bearerToken: "bearer")
+
+        transport.yield(.participantRoster(roster(roomEpoch: 1, rosterGeneration: 2, controllerGeneration: 1, connectionGeneration: 1, controller: "current")))
+        await Task.yield()
+        transport.yield(.participantRoster(roster(roomEpoch: 1, rosterGeneration: 1, controllerGeneration: 1, connectionGeneration: 1, controller: "stale")))
+        await Task.yield()
+
+        let snapshot = await coordinator.snapshot()
+        #expect(snapshot.currentParticipantUserId == "current")
+        #expect(snapshot.rosterGeneration == 2)
+    }
+
+    private func admission(roomEpoch: SharedReadingRoomEpoch, connectionGeneration: SharedReadingConnectionGeneration) -> SharedReadingAdmission {
+        SharedReadingAdmission(admissionTicket: "ticket", websocketURL: URL(string: "wss://sharing.rishi.test")!, roomEpoch: roomEpoch, connectionGeneration: connectionGeneration, status: .waiting)
+    }
+
+    private func roster(
+        roomEpoch: SharedReadingRoomEpoch,
+        rosterGeneration: SharedReadingRosterGeneration,
+        controllerGeneration: SharedReadingControllerGeneration,
+        connectionGeneration: SharedReadingConnectionGeneration,
+        controller: String
+    ) -> SharedReadingParticipantRosterEvent {
+        SharedReadingParticipantRosterEvent(
+            sessionId: "session",
+            roomEpoch: roomEpoch,
+            controllerGeneration: controllerGeneration,
+            connectionGeneration: connectionGeneration,
+            rosterGeneration: rosterGeneration,
+            participants: [.init(userId: controller, displayName: controller, avatarURL: nil, joinedAt: .now, bookReady: true, connectionState: "connected", isController: true)]
+        )
+    }
+}
+
+private final class SharedReadingTestTransport: SharedReadingSignalingTransport, @unchecked Sendable {
+    private let stream: AsyncStream<SharedReadingSignalingEvent>
+    private let continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation
+
+    init() {
+        var continuation: AsyncStream<SharedReadingSignalingEvent>.Continuation!
+        stream = AsyncStream { continuation = $0 }
+        self.continuation = continuation
+    }
+
+    var events: AsyncStream<SharedReadingSignalingEvent> { stream }
+
+    func connect(admission: SharedReadingAdmission, bearerToken: String, refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?, refreshBearerToken: (@Sendable () async throws -> String)?) async throws {}
+    func disconnect() async {}
+    func send(_ message: SharedReadingSignalingOutgoingMessage) async throws {}
+    func yield(_ event: SharedReadingSignalingEvent) { continuation.yield(event) }
+}
