@@ -80,6 +80,23 @@ struct SharedReadingCoordinatorFenceTests {
         #expect(transport.authoritativeStateConfirmations == 1)
     }
 
+    @Test("roster and controller progress accept lower source connection generations")
+    func lowerSourceConnectionGenerationDoesNotRejectRoomAuthority() async throws {
+        let transport = SharedReadingTestTransport()
+        let coordinator = SharedReadingSessionCoordinator(transport: transport, localParticipantUserId: "local")
+        try await coordinator.connect(admission: admission(roomEpoch: 1, connectionGeneration: 5), bearerToken: "bearer")
+
+        transport.yield(.participantRoster(roster(roomEpoch: 1, rosterGeneration: 1, controllerGeneration: 1, connectionGeneration: 0, controller: "remote")))
+        await Task.yield()
+        transport.yield(.syncFrame(.init(sessionId: "session", roomEpoch: 1, controllerGeneration: 1, connectionGeneration: 0, sequence: 1, bookId: "book", contentHash: "hash", format: .epub, position: "position", isPlaying: false, ttsRate: 1)))
+        await Task.yield()
+
+        let snapshot = await coordinator.snapshot()
+        #expect(snapshot.currentParticipantUserId == "remote")
+        #expect(snapshot.latestProgress?.sequence == 1)
+        #expect(snapshot.connectionGeneration == 5)
+    }
+
     private func admission(roomEpoch: SharedReadingRoomEpoch, connectionGeneration: SharedReadingConnectionGeneration) -> SharedReadingAdmission {
         SharedReadingAdmission(admissionTicket: "ticket", websocketURL: URL(string: "wss://sharing.rishi.test")!, roomEpoch: roomEpoch, connectionGeneration: connectionGeneration, status: .waiting)
     }

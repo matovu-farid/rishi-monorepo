@@ -367,7 +367,6 @@ actor SharedReadingSessionCoordinator {
         }
 
         guard incomingControllerGeneration >= controllerGeneration,
-              incomingConnectionGeneration >= connectionGeneration,
               incomingRosterGeneration.map({ $0 >= rosterGeneration }) ?? true else { return false }
 
         sessionId = incomingSessionId ?? sessionId
