@@ -411,15 +411,21 @@ private final class SharedReadingRelayDelivery: @unchecked Sendable {
         guard configuration != nil else { return }
         let deadline = Date().addingTimeInterval(max(0, timeout))
         while Date() < deadline {
-            lock.lock()
-            let empty = outbox.isEmpty
-            let shouldStart = !empty && !isDelivering
-            if shouldStart { isDelivering = true }
-            lock.unlock()
+            let (empty, shouldStart) = beginDeliveryIfNeeded()
             if empty { return }
             if shouldStart { deliverNext() }
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
+    }
+
+    private func beginDeliveryIfNeeded() -> (empty: Bool, shouldStart: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let empty = outbox.isEmpty
+        let shouldStart = !empty && !isDelivering
+        if shouldStart { isDelivering = true }
+        return (empty, shouldStart)
     }
 
     private func deliverNext() {
