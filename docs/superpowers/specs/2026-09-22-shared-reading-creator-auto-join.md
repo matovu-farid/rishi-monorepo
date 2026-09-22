@@ -24,7 +24,11 @@ two minutes. A recipient who opens the invite after that receives
    connected participant before they invite others.
 4. The share composer closes before the session sheet opens, preserving the
    existing single-sheet presentation invariant.
-5. A failed automatic join remains visible as the existing typed error alert;
+5. After connection, the controller sees an **Invite readers** surface in the
+   active session. It carries the original share URL only in memory and offers
+   share-sheet, QR, and email invitations. Invitees never receive this
+   capability.
+6. A failed automatic join remains visible as the existing typed error alert;
    it must not silently leave a newly created room unoccupied.
 
 ## Non-goals
