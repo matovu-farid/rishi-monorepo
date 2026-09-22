@@ -239,6 +239,7 @@ struct RootView: View {
         }
         .onChange(of: signedInUserID) { _, _ in
             pendingSessionInvitations = [:]
+            pendingSessionPresentation = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
@@ -401,6 +402,7 @@ struct RootView: View {
             )
             Log.sharedReading(.sessionLifecycle, context: .init(operation: .bookReady, outcome: .completed, sessionID: response.sessionId))
             await MainActor.run {
+                guard signedInUserID == userID else { return }
                 pendingSessionToken = nil
                 Task { await PendingSessionInviteStore.anonymous.clear() }
                 let invitation = pendingSessionInvitations.removeValue(forKey: response.sessionId)
