@@ -8,6 +8,10 @@ import * as Sentry from "@sentry/nextjs";
 const SHARED_SESSION_PATH = "/sharing/session";
 const SHARED_SESSION_BEARER_PARAMS = ["token", "t"];
 
+function normalizeSharedSessionPath(pathname: string): string {
+  return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+}
+
 function scrubSharedSessionToken(url: string): string {
   let parsed: URL;
   try {
@@ -15,9 +19,11 @@ function scrubSharedSessionToken(url: string): string {
   } catch {
     return url;
   }
+  const pathname = normalizeSharedSessionPath(parsed.pathname);
   const hasBearer = SHARED_SESSION_BEARER_PARAMS.some((param) => parsed.searchParams.has(param));
-  if (parsed.pathname !== SHARED_SESSION_PATH || !hasBearer) return url;
+  if (pathname !== SHARED_SESSION_PATH || !hasBearer) return url;
 
+  parsed.pathname = pathname;
   for (const param of SHARED_SESSION_BEARER_PARAMS) parsed.searchParams.delete(param);
   return url.startsWith("/")
     ? `${parsed.pathname}${parsed.search}${parsed.hash}`

@@ -7,6 +7,10 @@ import * as Sentry from "@sentry/nextjs";
 const SHARED_SESSION_PATH = "/sharing/session";
 const SHARED_SESSION_BEARER_PARAMS = ["token", "t"];
 
+function normalizeSharedSessionPath(pathname: string): string {
+  return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+}
+
 function scrubSharedSessionToken(url: string): string {
   let parsed: URL;
   try {
@@ -14,11 +18,13 @@ function scrubSharedSessionToken(url: string): string {
   } catch {
     return url;
   }
+  const pathname = normalizeSharedSessionPath(parsed.pathname);
   const hasBearer = SHARED_SESSION_BEARER_PARAMS.some((param) => parsed.searchParams.has(param));
-  if (parsed.pathname !== SHARED_SESSION_PATH || !hasBearer) {
+  if (pathname !== SHARED_SESSION_PATH || !hasBearer) {
     return url;
   }
 
+  parsed.pathname = pathname;
   for (const param of SHARED_SESSION_BEARER_PARAMS) parsed.searchParams.delete(param);
   return url.startsWith("/")
     ? `${parsed.pathname}${parsed.search}${parsed.hash}`
@@ -46,11 +52,17 @@ function scrubURLValues<T extends Record<string, unknown>>(data: T): T {
   ) as T;
 }
 
+// Instrumentation initializes once for the first browser URL. A direct
+// invitation load must never create Replay, so the bearer cannot enter a
+// recording before a route transition or event scrubber can run.
+const isInitialSharedSessionPage =
+  normalizeSharedSessionPath(window.location.pathname) === SHARED_SESSION_PATH;
+
 Sentry.init({
   dsn: "https://79d31f9f084402224dc303f699941691@o4510586781958144.ingest.de.sentry.io/4510586797555792",
 
   // Add optional integrations for additional features
-  integrations: [Sentry.replayIntegration()],
+  integrations: isInitialSharedSessionPage ? [] : [Sentry.replayIntegration()],
 
   // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
   tracesSampleRate: 0.1,

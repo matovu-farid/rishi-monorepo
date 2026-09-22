@@ -11,10 +11,12 @@ export default function SharedReadingSessionFallback() {
     // Keep the bearer token out of page content. It is only carried into the
     // custom-scheme handoff that the recipient explicitly selects.
     const params = new URLSearchParams(window.location.search)
-    const tokenParam = ["token", "t"].find((param) => params.get(param)) ?? null
-    const token = tokenParam ? params.get(tokenParam) : null
-    const appURL = tokenParam && token
-      ? `rishi://sharing/session?${tokenParam}=${encodeURIComponent(token)}`
+    // Match Swift's URLComponents behavior: use the first token-bearing query
+    // item in URL order, including an intentionally empty value.
+    const tokenEntry = Array.from(params.entries())
+      .find(([name]) => name === "token" || name === "t")
+    const appURL = tokenEntry
+      ? `rishi://sharing/session?${tokenEntry[0]}=${encodeURIComponent(tokenEntry[1])}`
       : "rishi://sharing/session"
 
     window.location.assign(appURL)
