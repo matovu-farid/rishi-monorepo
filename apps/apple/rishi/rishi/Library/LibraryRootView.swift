@@ -51,7 +51,6 @@ public struct LibraryRootView: View {
     @State private var shareBookIDs: [BookID] = []
     @State private var showSharedReadingComposer = false
     @State private var sharedReadingBook: Book?
-    @State private var pendingSharedReadingToken: String?
     #if DEBUG
     @State private var e2eFixtureImportStarted = false
     #endif
@@ -333,14 +332,7 @@ public struct LibraryRootView: View {
         .sheet(isPresented: $showShareComposer) {
             shareComposerContent()
         }
-        .sheet(isPresented: $showSharedReadingComposer, onDismiss: {
-            guard let token = pendingSharedReadingToken else { return }
-            pendingSharedReadingToken = nil
-            // The share composer is itself a sheet. Queue the creator's join
-            // only after it has gone away so SwiftUI never presents two
-            // sheets at the same time.
-            AppRouter.enqueueSessionToken(token)
-        }) {
+        .sheet(isPresented: $showSharedReadingComposer) {
             if let sharedReadingAPI, let sharedReadingBook {
                 SharedReadingShareComposerView(
                     api: sharedReadingAPI,
@@ -350,7 +342,7 @@ public struct LibraryRootView: View {
                         { await repair(sharedReadingBook.id) }
                     },
                     onCreated: { token in
-                        pendingSharedReadingToken = token
+                        AppRouter.enqueueSessionToken(token)
                     }
                 )
             }

@@ -37,6 +37,7 @@ struct SharedReadingShareComposerView: View {
     @State private var isBusy = false
     @State private var message: String?
     @State private var isError = false
+    @State private var emailDelivery: SharedReadingEmailResponse?
 
     init(
         api: SharedReadingAPI,
@@ -93,6 +94,40 @@ struct SharedReadingShareComposerView: View {
                             .autocorrectionDisabled()
                         Button("Send invitations") { sendEmail(share: share) }
                             .disabled(isBusy || parsedRecipients.isEmpty)
+                    }
+
+                    if let emailDelivery {
+                        Section("Email delivery") {
+                            Text("Sent \(emailDelivery.sent) of \(emailDelivery.attempted) invitation\(emailDelivery.attempted == 1 ? "" : "s").")
+
+                            ForEach(emailDelivery.results) { delivery in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(delivery.email)
+                                    Text(deliveryMessage(for: delivery))
+                                        .font(.footnote)
+                                        .foregroundStyle(delivery.status == .failed ? .red : .secondary)
+                                }
+                            }
+
+                            if emailDelivery.retryable, emailDelivery.action == "retry" {
+                                Text("Some invitations could not be delivered. You can retry them or share the link another way.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                Button("Retry failed invitations") {
+                                    retryFailedEmails(share: share, delivery: emailDelivery)
+                                }
+                                .disabled(isBusy || failedRecipients(in: emailDelivery).isEmpty)
+                            } else {
+                                Text(deliveryActionMessage(for: emailDelivery))
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Text("Support ID: \(emailDelivery.correlationId)")
+                                .font(.footnote.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
                     }
                 } else {
                     Section {
@@ -154,9 +189,9 @@ struct SharedReadingShareComposerView: View {
                     share = result
                     if let token = URLComponents(url: result.shareURL, resolvingAgainstBaseURL: false)?
                         .queryItems?.first(where: { $0.name == "token" })?.value {
-                        // The presenting view owns when the creator should
-                        // join. It must wait until this sheet is dismissed
-                        // before presenting the session sheet.
+                        // Queue admission as soon as the link exists. The
+                        // controller still explicitly starts reading from the
+                        // room; creating or sharing never starts it.
                         onCreated?(token)
                     }
                 }
@@ -171,19 +206,51 @@ struct SharedReadingShareComposerView: View {
     }
 
     private func sendEmail(share: SharedReadingCreateResponse) {
+        sendEmail(share: share, recipients: parsedRecipients)
+    }
+
+    private func retryFailedEmails(share: SharedReadingCreateResponse, delivery: SharedReadingEmailResponse) {
+        sendEmail(share: share, recipients: failedRecipients(in: delivery))
+    }
+
+    private func failedRecipients(in delivery: SharedReadingEmailResponse) -> [String] {
+        delivery.results
+            .filter { $0.status == .failed }
+            .map(\.email)
+    }
+
+    private func deliveryMessage(for delivery: SharedReadingEmailResponse.Delivery) -> String {
+        switch delivery.status {
+        case .sent:
+            return "Sent"
+        case .alreadySent:
+            return "Already sent"
+        case .failed:
+            return "Could not be delivered"
+        }
+    }
+
+    private func deliveryActionMessage(for delivery: SharedReadingEmailResponse) -> String {
+        delivery.retryable
+            ? "Action: \(delivery.action)"
+            : "Action: no further delivery action is needed."
+    }
+
+    private func sendEmail(share: SharedReadingCreateResponse, recipients: [String]) {
         isBusy = true
         Task {
             defer { isBusy = false }
             do {
                 let result = try await api.sendEmail(
                     sessionId: share.sessionId,
-                    recipients: parsedRecipients,
+                    recipients: recipients,
                     idempotencyKey: UUID().uuidString
                 )
                 await MainActor.run {
+                    emailDelivery = result
                     message = result.failed == 0
                         ? "Invitations sent."
-                        : "The link was created, but \(result.failed) invitation(s) could not be delivered. You can still share the link manually."
+                        : "The link was created, but \(result.failed) invitation(s) could not be delivered. You can retry those invitations or share the link manually."
                     isError = result.failed > 0
                 }
             } catch let error as SharedReadingError {

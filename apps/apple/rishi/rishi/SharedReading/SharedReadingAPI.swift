@@ -21,10 +21,28 @@ protocol SharedReadingAPIClient: Sendable {
 }
 
 struct SharedReadingEmailResponse: Codable, Sendable, Equatable {
+    struct Delivery: Codable, Sendable, Equatable, Identifiable {
+        let email: String
+        let status: Status
+        let errorCode: String?
+
+        enum Status: String, Codable, Sendable, Equatable {
+            case sent
+            case failed
+            case alreadySent = "already_sent"
+        }
+
+        var id: String { email }
+    }
+
     let shareURL: URL
     let attempted: Int
     let sent: Int
     let failed: Int
+    let results: [Delivery]
+    let retryable: Bool
+    let action: String
+    let correlationId: String
 }
 
 struct SharedReadingSessionControlResponse: Codable, Sendable, Equatable {

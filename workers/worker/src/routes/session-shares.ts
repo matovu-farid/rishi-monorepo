@@ -15,15 +15,19 @@ type SessionEnv = Env & {
 };
 type SessionContext = { Bindings: SessionEnv; Variables: { userId: string } };
 const routes = new Hono<SessionContext>();
+// Session invitations deliberately use the dedicated join host. It has the
+// Universal Link association and a focused fallback page, unlike the general
+// product site.
+const SESSION_SHARE_PUBLIC_ORIGIN = "https://join.rishi.fidexa.org";
 
 type SharingErrorAction = "signIn" | "retry" | "manualRetry" | "dismiss" | "removeAndRetry";
 
 function correlationId(c: any): string {
-  const existing = c.get("sharingCorrelationId") as string | undefined;
+  const existing = (c as any).get("sharingCorrelationId") as string | undefined;
   if (existing) return existing;
   const supplied = c.req.header("x-rishi-correlation-id");
   const value = supplied && /^[a-zA-Z0-9_-]{16,128}$/.test(supplied) ? supplied : crypto.randomUUID();
-  c.set("sharingCorrelationId", value);
+  (c as any).set("sharingCorrelationId", value);
   return value;
 }
 
@@ -42,10 +46,10 @@ function errorDetails(code: string): { retryable: boolean; action: SharingErrorA
 
 function sharingError(c: any, code: string, status: number) {
   const details = errorDetails(code);
-  const correlationId = correlationId(c);
-  console.warn(JSON.stringify({ event: "sharing.request.error", correlationId, code, status, retryable: details.retryable, action: details.action }));
-  const json = c.get("sharingOriginalJson") as ((body: unknown, status?: number) => Response) | undefined;
-  return (json ?? c.json.bind(c))({ code, error: details.message, retryable: details.retryable, action: details.action, correlationId }, status);
+  const requestCorrelationId = correlationId(c);
+  console.warn(JSON.stringify({ event: "sharing.request.error", correlationId: requestCorrelationId, code, status, retryable: details.retryable, action: details.action }));
+  const json = (c as any).get("sharingOriginalJson") as ((body: unknown, status?: number) => Response) | undefined;
+  return (json ?? c.json.bind(c))({ code, error: details.message, retryable: details.retryable, action: details.action, correlationId: requestCorrelationId }, status);
 }
 
 // Every session-sharing failure uses the same client-safe envelope. The route
@@ -54,13 +58,13 @@ function sharingError(c: any, code: string, status: number) {
 routes.use("*", async (c, next) => {
   correlationId(c);
   const json = c.json.bind(c);
-  c.set("sharingOriginalJson", json);
+  (c as any).set("sharingOriginalJson", json);
   (c as any).json = (body: unknown, status?: number, headers?: Record<string, string>) => {
     if (body && typeof body === "object" && "code" in body && "error" in body) {
       const value = body as { code?: unknown };
       if (typeof value.code === "string") return sharingError(c, value.code, status ?? 500);
     }
-    return json(body, status, headers);
+    return json(body, status as any, headers as any);
   };
   await next();
 });
@@ -76,6 +80,23 @@ function service(c: any) {
 
 function sessionToken(c: any, ownerUserId: string, idempotencyKey: string): Promise<string> {
   return createShareTokenFromSecret(c.env.BETTER_AUTH_SECRET, ownerUserId, `reading-session:${idempotencyKey}`);
+}
+
+function sessionShareUrl(token: string): string {
+  return `${SESSION_SHARE_PUBLIC_ORIGIN}/sharing/session?token=${encodeURIComponent(token)}`;
+}
+
+async function ensureCreatorRedemption(db: ReturnType<typeof createDb>, inviteId: string, userId: string) {
+  const now = new Date();
+  await db.insert(sessionInviteRedemptions).values({
+    id: crypto.randomUUID(),
+    inviteId,
+    userId,
+    bookStatus: "pending",
+    membershipStatus: "pending",
+    createdAt: now,
+    updatedAt: now,
+  }).onConflictDoNothing().run();
 }
 
 async function participantProfile(c: any, userId: string) {
@@ -127,7 +148,10 @@ routes.post("/", async (c) => {
       return c.json({ code: "SESSION_ENDED", error: "This reading session has ended; create a new link to start again" }, 410);
     }
     const token = await sessionToken(c, userId, existing.idempotencyKey);
-    return c.json({ sessionId: existing.sessionId, book: payload, shareURL: `https://rishi.fidexa.org/sharing/session?token=${encodeURIComponent(token)}`, status: room.status });
+    // Creation now admits the owner through the same verified-book path as
+    // invitees. Backfill this record for sessions made before that invariant.
+    await ensureCreatorRedemption(db, existing.id, userId);
+    return c.json({ sessionId: existing.sessionId, book: payload, shareURL: sessionShareUrl(token), status: room.status });
   }
   const book = await db.select().from(books).where(and(eq(books.id, body.bookId), eq(books.userId, userId), eq(books.isDeleted, false))).get();
   if (!book) return c.json({ code: "SESSION_LINK_INVALID", error: "Book not found" }, 404);
@@ -141,12 +165,13 @@ routes.post("/", async (c) => {
     await service(c).createRoom({ sessionId, initialSharerUserId: userId, bookContext: { bookId: payload.bookId, contentHash: payload.contentHash, format: payload.format }, maxParticipants: 5 });
     await db.insert(sessionInvites).values({ id: inviteId, ownerUserId: userId, idempotencyKey: body.idempotencyKey, sessionId, sourceBookId: book.id, contentHash: payload.contentHash, format: payload.format, tokenHash, status: "open", createdAt: new Date() }).run();
     await db.insert(sessionInviteItems).values({ id: crypto.randomUUID(), inviteId, fileR2Key: book.fileR2Key!, coverR2Key: book.coverR2Key, fileHash: payload.contentHash, fileSize: payload.fileSize, createdAt: new Date() }).run();
+    await ensureCreatorRedemption(db, inviteId, userId);
   } catch (error) {
     await service(c).endRoom({ sessionId, actingUserId: userId, expectedControllerGeneration: 1 }).catch(() => undefined);
     if (error instanceof SessionSharingServiceError) return errorResponse(c, error);
     return c.json({ code: "SERVICE_UNAVAILABLE", error: "Could not create reading session" }, 503);
   }
-  return c.json({ sessionId, book: payload, shareURL: `https://rishi.fidexa.org/sharing/session?token=${encodeURIComponent(token)}`, status: "waiting" }, 201);
+  return c.json({ sessionId, book: payload, shareURL: sessionShareUrl(token), status: "waiting" }, 201);
 });
 
 routes.post("/redeem", async (c) => {
@@ -381,8 +406,16 @@ routes.post("/:id/email", async (c) => {
   const invite = await db.select().from(sessionInvites).where(and(eq(sessionInvites.sessionId, id), eq(sessionInvites.ownerUserId, userId), eq(sessionInvites.status, "open"))).get();
   if (!invite) return c.json({ code: "SESSION_LINK_INVALID", error: "Session not found" }, 404);
   const token = await sessionToken(c, userId, invite.idempotencyKey);
-  const result = await sendSessionInviteEmails({ db, sessionId: id, inviteId: invite.id, shareUrl: `https://rishi.fidexa.org/sharing/session?token=${token}`, recipients: body.recipients, resendApiKey: c.env.RESEND_API_KEY });
-  return c.json({ shareURL: `https://rishi.fidexa.org/sharing/session?token=${token}`, ...result });
+  const shareURL = sessionShareUrl(token);
+  const result = await sendSessionInviteEmails({ db, sessionId: id, inviteId: invite.id, shareUrl: shareURL, recipients: body.recipients, resendApiKey: c.env.RESEND_API_KEY });
+  const retryable = result.failed > 0;
+  return c.json({
+    shareURL,
+    ...result,
+    retryable,
+    action: retryable ? "retry" : "dismiss",
+    correlationId: correlationId(c),
+  });
 });
 
 export { routes as sessionSharesRoutes };
