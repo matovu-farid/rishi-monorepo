@@ -78,6 +78,19 @@ protocol RishiSearchIndexingClient: Sendable {
     func index(_ descriptors: [RishiSpotlightDescriptor]) async throws
 }
 
+#if targetEnvironment(macCatalyst)
+/// Core Spotlight can be present in the Catalyst SDK but unavailable at
+/// runtime for a Catalyst process (for example, `CSIndexErrorDomain -1000`).
+/// Search indexing is optional and must never block authentication or account
+/// transitions, so Catalyst uses a no-op client until the host can provide a
+/// working Spotlight index.
+struct RishiNoopSpotlightIndexingClient: RishiSearchIndexingClient {
+    func deleteAll() async throws {}
+    func delete(domainIdentifiers: [String]) async throws {}
+    func index(_ descriptors: [RishiSpotlightDescriptor]) async throws {}
+}
+#endif
+
 final class RishiCoreSpotlightIndexingClient: RishiSearchIndexingClient, @unchecked Sendable {
     static let indexName = "org.fidexa.rishi.spotlight"
 

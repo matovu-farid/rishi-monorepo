@@ -568,12 +568,19 @@ enum ServiceGraphFactory {
             await entitlementRefreshCoordinator.refreshIfSignedIn(reason: .launch)
         }
 
+        let spotlightIndexingClient: any RishiSearchIndexingClient = {
+            #if targetEnvironment(macCatalyst)
+            RishiNoopSpotlightIndexingClient()
+            #else
+            RishiCoreSpotlightIndexingClient()
+            #endif
+        }()
         let spotlightCoordinator = RishiSpotlightCoordinator(
             bookStore: bookStore,
             highlightStore: highlightStore,
             conversationStore: conversationStore,
             currentUserID: { await userIdBox.value },
-            indexingClient: RishiCoreSpotlightIndexingClient()
+            indexingClient: spotlightIndexingClient
         )
 
         return BootstrappedServices(
