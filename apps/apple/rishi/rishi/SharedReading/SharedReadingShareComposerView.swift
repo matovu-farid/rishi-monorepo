@@ -66,6 +66,16 @@ struct SharedReadingShareComposerView: View {
                 }
 
                 if let share {
+                    Section("Your reading session") {
+                        Button("Open group session") {
+                            openCreatorSession(share: share)
+                        }
+                        .disabled(isBusy)
+                        Text("You will enter the waiting room as controller. Starting reading remains your explicit choice.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Section("Share this exact link") {
                         ShareLink(item: share.shareURL) {
                             Label("Share link", systemImage: "square.and.arrow.up")
@@ -191,15 +201,6 @@ struct SharedReadingShareComposerView: View {
                 )
                 await MainActor.run {
                     share = result
-                    if let token = URLComponents(url: result.shareURL, resolvingAgainstBaseURL: false)?
-                        .queryItems?.first(where: { $0.name == "token" })?.value {
-                        // This sheet must finish dismissing before RootView
-                        // presents the session sheet. Keep the owner token
-                        // locally and hand it off from this composer's own
-                        // dismissal lifecycle, without a timing delay.
-                        creatorTokenToEnqueue = token
-                        dismiss()
-                    }
                 }
             } catch let error as SharedReadingError {
                 Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .create, outcome: .failed, correlationID: error.correlationId, errorCode: error.code.rawValue))
@@ -219,6 +220,24 @@ struct SharedReadingShareComposerView: View {
         guard let creatorTokenToEnqueue else { return }
         self.creatorTokenToEnqueue = nil
         onCreated?(creatorTokenToEnqueue)
+    }
+
+    private func openCreatorSession(share: SharedReadingCreateResponse) {
+        guard let token = URLComponents(url: share.shareURL, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "token" })?
+            .value,
+            !token.isEmpty
+        else {
+            message = "Rishi could not open this reading session."
+            isError = true
+            return
+        }
+
+        // RootView owns the session sheet. Retaining the token until this
+        // composer disappears prevents two sheet presentations from racing.
+        creatorTokenToEnqueue = token
+        dismiss()
     }
 
     private func retryFailedEmails(share: SharedReadingCreateResponse, delivery: SharedReadingEmailResponse) {
