@@ -7,6 +7,7 @@
 apps/main
 apps/mobile
 apps/dioxus
+apps/apple
 
 # Tauri-only packages (massive)
 packages/tauri-cypress
@@ -44,3 +45,6 @@ packages/tauri-plugin-oauth-pkce
 **/*.db
 **/*.sqlite
 **/sqlite:*
+
+# Local iPhone build artifact; never required by the web application.
+.device-build-rishi.app
