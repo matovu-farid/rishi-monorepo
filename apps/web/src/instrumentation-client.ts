@@ -4,6 +4,41 @@
 
 import * as Sentry from "@sentry/nextjs";
 
+const SHARED_SESSION_PATH = "/sharing/session";
+
+function scrubSharedSessionToken(url: string): string {
+  const parsed = new URL(url, window.location.origin);
+  if (parsed.pathname !== SHARED_SESSION_PATH || !parsed.searchParams.has("token")) {
+    return url;
+  }
+
+  parsed.searchParams.delete("token");
+  return url.startsWith("/")
+    ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+    : parsed.toString();
+}
+
+function scrubEventURL<T extends { request?: { url?: string }; transaction?: string }>(event: T): T {
+  return {
+    ...event,
+    request: event.request?.url
+      ? { ...event.request, url: scrubSharedSessionToken(event.request.url) }
+      : event.request,
+    transaction: event.transaction
+      ? scrubSharedSessionToken(event.transaction)
+      : event.transaction,
+  };
+}
+
+function scrubURLValues<T extends Record<string, unknown>>(data: T): T {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      typeof value === "string" ? scrubSharedSessionToken(value) : value,
+    ]),
+  ) as T;
+}
+
 Sentry.init({
   dsn: "https://79d31f9f084402224dc303f699941691@o4510586781958144.ingest.de.sentry.io/4510586797555792",
 
@@ -26,6 +61,25 @@ Sentry.init({
   // Enable sending user PII (Personally Identifiable Information)
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: false,
+
+  beforeSend(event) {
+    return scrubEventURL(event);
+  },
+  beforeSendTransaction(event) {
+    return scrubEventURL(event);
+  },
+  beforeSendSpan(span) {
+    if (span.data) span.data = scrubURLValues(span.data);
+    return span;
+  },
+  beforeBreadcrumb(breadcrumb) {
+    if (!breadcrumb.data) return breadcrumb;
+
+    return {
+      ...breadcrumb,
+      data: scrubURLValues(breadcrumb.data),
+    };
+  },
 });
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
