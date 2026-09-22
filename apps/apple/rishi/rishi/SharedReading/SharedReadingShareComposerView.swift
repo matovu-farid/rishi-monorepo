@@ -38,6 +38,7 @@ struct SharedReadingShareComposerView: View {
     @State private var message: String?
     @State private var isError = false
     @State private var emailDelivery: SharedReadingEmailResponse?
+    @State private var creatorTokenToEnqueue: String?
 
     init(
         api: SharedReadingAPI,
@@ -155,6 +156,9 @@ struct SharedReadingShareComposerView: View {
                 }
             }
         }
+        .onDisappear {
+            enqueueCreatorAfterDismiss()
+        }
         #if !DEBUG
         .alert(
             message ?? "",
@@ -189,10 +193,12 @@ struct SharedReadingShareComposerView: View {
                     share = result
                     if let token = URLComponents(url: result.shareURL, resolvingAgainstBaseURL: false)?
                         .queryItems?.first(where: { $0.name == "token" })?.value {
-                        // Queue admission as soon as the link exists. The
-                        // controller still explicitly starts reading from the
-                        // room; creating or sharing never starts it.
-                        onCreated?(token)
+                        // This sheet must finish dismissing before RootView
+                        // presents the session sheet. Keep the owner token
+                        // locally and hand it off from this composer's own
+                        // dismissal lifecycle, without a timing delay.
+                        creatorTokenToEnqueue = token
+                        dismiss()
                     }
                 }
             } catch let error as SharedReadingError {
@@ -207,6 +213,12 @@ struct SharedReadingShareComposerView: View {
 
     private func sendEmail(share: SharedReadingCreateResponse) {
         sendEmail(share: share, recipients: parsedRecipients)
+    }
+
+    private func enqueueCreatorAfterDismiss() {
+        guard let creatorTokenToEnqueue else { return }
+        self.creatorTokenToEnqueue = nil
+        onCreated?(creatorTokenToEnqueue)
     }
 
     private func retryFailedEmails(share: SharedReadingCreateResponse, delivery: SharedReadingEmailResponse) {
