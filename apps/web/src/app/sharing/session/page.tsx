@@ -10,9 +10,11 @@ export default function SharedReadingSessionFallback() {
 
     // Keep the bearer token out of page content. It is only carried into the
     // custom-scheme handoff that the recipient explicitly selects.
-    const token = new URLSearchParams(window.location.search).get("token")
-    const appURL = token
-      ? `rishi://sharing/session?token=${encodeURIComponent(token)}`
+    const params = new URLSearchParams(window.location.search)
+    const tokenParam = ["token", "t"].find((param) => params.get(param)) ?? null
+    const token = tokenParam ? params.get(tokenParam) : null
+    const appURL = tokenParam && token
+      ? `rishi://sharing/session?${tokenParam}=${encodeURIComponent(token)}`
       : "rishi://sharing/session"
 
     window.location.assign(appURL)

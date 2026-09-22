@@ -5,14 +5,21 @@
 import * as Sentry from "@sentry/nextjs";
 
 const SHARED_SESSION_PATH = "/sharing/session";
+const SHARED_SESSION_BEARER_PARAMS = ["token", "t"];
 
 function scrubSharedSessionToken(url: string): string {
-  const parsed = new URL(url, window.location.origin);
-  if (parsed.pathname !== SHARED_SESSION_PATH || !parsed.searchParams.has("token")) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, window.location.origin);
+  } catch {
+    return url;
+  }
+  const hasBearer = SHARED_SESSION_BEARER_PARAMS.some((param) => parsed.searchParams.has(param));
+  if (parsed.pathname !== SHARED_SESSION_PATH || !hasBearer) {
     return url;
   }
 
-  parsed.searchParams.delete("token");
+  for (const param of SHARED_SESSION_BEARER_PARAMS) parsed.searchParams.delete(param);
   return url.startsWith("/")
     ? `${parsed.pathname}${parsed.search}${parsed.hash}`
     : parsed.toString();
