@@ -6,7 +6,10 @@ import Foundation
 struct DeepLinkRouter: Sendable {
 
 
-    static let universalHost = "rishi.fidexa.org"
+    static let universalHosts: Set<String> = [
+        "join.rishi.fidexa.org",
+        "rishi.fidexa.org"
+    ]
 
     
     static let customScheme  = "rishi"
@@ -17,7 +20,7 @@ struct DeepLinkRouter: Sendable {
         case Self.customScheme:
             return routeCustomScheme(url)
         case "https":
-            guard url.host?.lowercased() == Self.universalHost else { return .unknown }
+            guard let host = url.host?.lowercased(), Self.universalHosts.contains(host) else { return .unknown }
             return routeUniversalLink(url)
         default:
             return .unknown

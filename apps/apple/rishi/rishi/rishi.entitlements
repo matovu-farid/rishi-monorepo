@@ -16,6 +16,7 @@
 	<true/>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
+		<string>applinks:join.rishi.fidexa.org</string>
 		<string>applinks:rishi.fidexa.org</string>
 	</array>
 	<key>com.apple.developer.carplay-audio</key>

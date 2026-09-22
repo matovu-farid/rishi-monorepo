@@ -2,19 +2,17 @@
 
 import { usePathname } from "next/navigation";
 
-const LEGAL_PREFIXES = ["/privacy", "/terms", "/legal"];
+const HEADERLESS_PREFIXES = ["/privacy", "/terms", "/legal", "/sharing/session"];
 
-function isLegalRoute(pathname: string): boolean {
-  return LEGAL_PREFIXES.some(
+function isHeaderlessRoute(pathname: string): boolean {
+  return HEADERLESS_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
 }
 
-/** Hides the site header on legal pages so they fill the full viewport
- *  (legal content is opened in the app's in-app browser, where the marketing
- *  nav is just noise). */
+/** Hides the site header on standalone app handoff and legal routes. */
 export function HeaderGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  if (isLegalRoute(pathname)) return null;
+  if (isHeaderlessRoute(pathname)) return null;
   return <>{children}</>;
 }
