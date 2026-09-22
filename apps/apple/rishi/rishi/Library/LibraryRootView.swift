@@ -341,8 +341,8 @@ public struct LibraryRootView: View {
                     repairBook: sharedReadingRepair.map { repair in
                         { await repair(sharedReadingBook.id) }
                     },
-                    onCreated: { token in
-                        AppRouter.enqueueSessionToken(token)
+                    onCreated: { invitation in
+                        AppRouter.enqueueCreatedSession(invitation)
                     }
                 )
             }

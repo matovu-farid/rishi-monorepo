@@ -24,20 +24,20 @@ struct SharedReadingShareComposerView: View {
     let bookId: String
     let bookTitle: String
     let repairBook: (@Sendable () async -> Bool)?
-    let onCreated: (@MainActor (String) -> Void)?
+    let onCreated: (@MainActor (SharedReadingInvitation) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var isBusy = false
     @State private var message: String?
     @State private var isError = false
-    @State private var creatorTokenToEnqueue: String?
+    @State private var creatorInvitationToEnqueue: SharedReadingInvitation?
 
     init(
         api: SharedReadingAPI,
         bookId: String,
         bookTitle: String,
         repairBook: (@Sendable () async -> Bool)? = nil,
-        onCreated: (@MainActor (String) -> Void)? = nil
+        onCreated: (@MainActor (SharedReadingInvitation) -> Void)? = nil
     ) {
         self.api = api
         self.bookId = bookId
@@ -123,9 +123,9 @@ struct SharedReadingShareComposerView: View {
     }
 
     private func enqueueCreatorAfterDismiss() {
-        guard let creatorTokenToEnqueue else { return }
-        self.creatorTokenToEnqueue = nil
-        onCreated?(creatorTokenToEnqueue)
+        guard let creatorInvitationToEnqueue else { return }
+        self.creatorInvitationToEnqueue = nil
+        onCreated?(creatorInvitationToEnqueue)
     }
 
     private func enqueueCreatorAndDismiss(for share: SharedReadingCreateResponse) {
@@ -139,7 +139,10 @@ struct SharedReadingShareComposerView: View {
 
         // RootView owns the session sheet. Retaining the token until this
         // composer disappears prevents two sheet presentations from racing.
-        creatorTokenToEnqueue = token
+        creatorInvitationToEnqueue = SharedReadingInvitation(
+            sessionID: share.sessionId,
+            shareURL: share.shareURL
+        )
         dismiss()
     }
 }

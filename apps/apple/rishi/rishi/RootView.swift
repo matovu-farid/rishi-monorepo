@@ -8,10 +8,16 @@ import SwiftUI
 
 struct RootView: View {
 
+    private struct PendingCreatorInvitation {
+        let accountID: UUID
+        let invitation: SharedReadingInvitation
+    }
+
     private struct PendingSessionPresentation: Identifiable {
         let join: SharedReadingJoin
         let coordinator: SharedReadingSessionCoordinator
         let transport: SharedReadingSignalingClient
+        let invitation: SharedReadingInvitation?
 
         var id: String { join.id }
     }
@@ -24,6 +30,7 @@ struct RootView: View {
     @State private var showOnboarding = false
     @State private var pendingShareMessage: String?
     @State private var pendingSessionToken: String?
+    @State private var pendingSessionInvitations: [String: PendingCreatorInvitation] = [:]
     @State private var pendingSessionPresentation: PendingSessionPresentation?
     @State private var showNoCardTrialIntro = false
     @State private var noCardTrialIntroCheckInFlight = false
@@ -230,6 +237,9 @@ struct RootView: View {
             Task { await redeemPendingSharesIfEligible(deps: deps) }
             Task { await redeemPendingSessionIfEligible(deps: deps) }
         }
+        .onChange(of: signedInUserID) { _, _ in
+            pendingSessionInvitations = [:]
+        }
         .onReceive(NotificationCenter.default.publisher(for: AppRouter.shareTokenQueued)) { _ in
             Task { await redeemPendingSharesIfEligible(deps: deps) }
         }
@@ -241,6 +251,15 @@ struct RootView: View {
             pendingSessionToken = token
             Task { await redeemPendingSessionIfEligible(deps: deps) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppRouter.creatorInvitationQueued)) { notification in
+            guard let invitation = notification.object as? SharedReadingInvitation,
+                  let accountID = signedInUserID
+            else { return }
+            pendingSessionInvitations[invitation.sessionID] = PendingCreatorInvitation(
+                accountID: accountID,
+                invitation: invitation
+            )
+        }
         .sheet(item: $pendingSessionPresentation) { presentation in
             SharedReadingSessionView(
                 api: deps.services!.sharedReadingAPI,
@@ -249,7 +268,8 @@ struct RootView: View {
                 join: presentation.join,
                 localParticipantUserId: signedInWireUserID ?? "",
                 sessionRegistry: deps.services!.sharedReadingSessionRegistry,
-                accountID: signedInUserID
+                accountID: signedInUserID,
+                invitation: presentation.invitation
             )
         }
         .alert(
@@ -383,6 +403,8 @@ struct RootView: View {
             await MainActor.run {
                 pendingSessionToken = nil
                 Task { await PendingSessionInviteStore.anonymous.clear() }
+                let invitation = pendingSessionInvitations.removeValue(forKey: response.sessionId)
+                    .flatMap { $0.accountID == userID ? $0.invitation : nil }
                 pendingSessionPresentation = PendingSessionPresentation(
                     join: SharedReadingJoin(
                         response: response,
@@ -390,7 +412,8 @@ struct RootView: View {
                         localBookId: preparedBook.book.id
                     ),
                     coordinator: coordinator,
-                    transport: transport
+                    transport: transport,
+                    invitation: invitation
                 )
             }
         } catch let error as SharedReadingError {
@@ -403,6 +426,7 @@ struct RootView: View {
                 if !error.retryable {
                     pendingSessionToken = nil
                     Task { await PendingSessionInviteStore.anonymous.clear() }
+                    pendingSessionInvitations = pendingSessionInvitations.filter { $0.value.accountID != signedInUserID }
                 }
                 #if DEBUG
                 pendingShareMessage = "Reading session failed during \(stage): \(error.code.rawValue) — \(error.message)"

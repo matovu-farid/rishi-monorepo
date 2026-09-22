@@ -11,6 +11,7 @@ final class AppRouter {
     nonisolated static let shareTokenQueued = Notification.Name("Rishi.shareTokenQueued")
     nonisolated static let shareRedemptionReady = Notification.Name("Rishi.shareRedemptionReady")
     nonisolated static let sessionTokenQueued = Notification.Name("Rishi.sessionTokenQueued")
+    nonisolated static let creatorInvitationQueued = Notification.Name("Rishi.creatorInvitationQueued")
 
     var path: NavigationPath = NavigationPath()
 
@@ -368,6 +369,16 @@ final class AppRouter {
     nonisolated static func enqueueSessionToken(from url: URL) -> Bool {
         guard case .sessionRedeem(let token) = DeepLinkRouter().route(url), !token.isEmpty else { return false }
         enqueueSessionToken(token)
+        return true
+    }
+
+    /// Associates an invitation with the creator's in-process redemption only.
+    /// The URL is never logged or persisted; the existing safe session-token
+    /// ingress extracts and persists only its token.
+    @discardableResult
+    nonisolated static func enqueueCreatedSession(_ invitation: SharedReadingInvitation) -> Bool {
+        guard enqueueSessionToken(from: invitation.shareURL) else { return false }
+        NotificationCenter.default.post(name: Self.creatorInvitationQueued, object: invitation)
         return true
     }
 

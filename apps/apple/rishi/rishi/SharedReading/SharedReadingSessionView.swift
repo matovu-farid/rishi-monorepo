@@ -9,6 +9,7 @@ struct SharedReadingSessionView: View {
     let sessionRegistry: SharedReadingSessionRegistry?
     let accountID: UUID?
     let requiresAuthoritativeRecovery: Bool
+    let invitation: SharedReadingInvitation?
 
     @Environment(\.dismiss) private var dismiss
     @State private var message = "Connecting to the reading room…"
@@ -32,7 +33,8 @@ struct SharedReadingSessionView: View {
         localParticipantUserId: String,
         sessionRegistry: SharedReadingSessionRegistry? = nil,
         accountID: UUID? = nil,
-        requiresAuthoritativeRecovery: Bool = false
+        requiresAuthoritativeRecovery: Bool = false,
+        invitation: SharedReadingInvitation? = nil
     ) {
         self.api = api
         self.coordinator = coordinator
@@ -42,6 +44,7 @@ struct SharedReadingSessionView: View {
         self.sessionRegistry = sessionRegistry
         self.accountID = accountID
         self.requiresAuthoritativeRecovery = requiresAuthoritativeRecovery
+        self.invitation = invitation
     }
 
     var body: some View {
@@ -134,6 +137,9 @@ struct SharedReadingSessionView: View {
                         Label("Audio connected", systemImage: "waveform")
                             .foregroundStyle(.secondary)
                     }
+                }
+                if isConnected, let invitation {
+                    SharedReadingInvitationSurface(api: api, invitation: invitation)
                 }
                 if isLocalController {
                     Button("Leave session", role: .destructive) { showControllerLeaveDialog = true }

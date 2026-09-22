@@ -236,6 +236,14 @@ struct SharedReadingCreateResponse: Codable, Sendable, Equatable {
     let status: SharedReadingSessionStatus
 }
 
+/// An in-memory invitation granted only to the creator's first room join.
+/// It is deliberately not persisted so recovered sessions and invitees cannot
+/// expose the creator's invite controls.
+struct SharedReadingInvitation: Sendable, Equatable {
+    let sessionID: String
+    let shareURL: URL
+}
+
 struct SharedReadingRedeemResponse: Codable, Sendable, Equatable {
     let inviteId: String
     let sessionId: String
