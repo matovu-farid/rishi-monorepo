@@ -75,16 +75,15 @@ enum RishiAppIntentRuntime {
         userID: UserID
     ) async throws -> User {
         do {
-            guard let profile = try await workerClient.send(GetSessionEndpoint()) else {
+            let user = try await workerClient.send(UserGetEndpoint())
+            guard user.id == userID else {
                 throw RishiAppIntentRuntimeError.signedOut
             }
-            let identity = DerivedUserID.from(profile.user.id)
-            guard identity == userID else {
-                throw RishiAppIntentRuntimeError.signedOut
-            }
-            return User(id: userID, email: profile.user.email, name: profile.user.displayName)
+            return user
         } catch let error as RishiAppIntentRuntimeError {
             throw error
+        } catch RishiError.unauthenticated {
+            throw RishiAppIntentRuntimeError.signedOut
         } catch {
             throw RishiAppIntentRuntimeError.unavailable
         }
