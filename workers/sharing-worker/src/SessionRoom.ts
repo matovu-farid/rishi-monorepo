@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { ClientMsg } from "./schemas";
+import { ClientMsg, MAX_LEGACY_RAW_FRAME_BYTES } from "./legacySchemas";
 import type { SessionState, BookContextT } from "./types";
 import { parseSubprotocols } from "./wsCreds";
 import { issueReconnectToken, verifyReconnectToken } from "./tokens";
@@ -202,6 +202,8 @@ export class SessionRoom extends DurableObject<Env> {
 
   // ---------- Hibernation handlers ----------
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    const rawBytes = typeof raw === "string" ? new TextEncoder().encode(raw).byteLength : raw.byteLength;
+    if (rawBytes > MAX_LEGACY_RAW_FRAME_BYTES) { ws.close(1009, "frame too large"); return; }
     const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
     let parsed;
     try { parsed = ClientMsg.safeParse(JSON.parse(text)); }

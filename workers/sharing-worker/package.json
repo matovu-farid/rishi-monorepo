@@ -2,7 +2,7 @@
   "name": "rishi-sharing-worker",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --var ENVIRONMENT:development",
     "deploy": "wrangler deploy --minify",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -10,8 +10,9 @@
   },
   "dependencies": {
     "@rishi/shared": "file:../../packages/shared",
-    "@rishi/sharing-protocol": "workspace:*",
+    "@rishi/sharing-protocol": "file:../../packages/sharing-protocol",
     "better-auth": "^1.6.10",
+    "effect": "^3.22.2",
     "hono": "^4.10.6",
     "zod": "^4.1.13"
   },

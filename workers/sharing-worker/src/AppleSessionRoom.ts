@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { ClientMsg } from "./schemas";
+import { ClientMsg, MAX_LEGACY_RAW_FRAME_BYTES } from "./legacySchemas";
 import { ControllerSnapshot, isSnapshotForBook } from "@rishi/sharing-protocol/sync";
 import type { ControllerSnapshot as ControllerSnapshotT } from "@rishi/sharing-protocol/sync";
 import type { SessionState, BookContextT } from "./types";
@@ -12,9 +12,19 @@ import {
 } from "./tokens";
 import { CONFIG } from "./config";
 import { RateBucket } from "./rateLimit";
-import { resolveTestGlobalAuth } from "./auth";
-import { generateTurnIceServers } from "./turn";
+import { AuthVerificationError, resolveTestGlobalAuth, verifyAuthAuthorizationEffect } from "./auth";
+import { generateTurnIceServersEffect } from "./turn";
 import { appleFenceMatches, appleRoomFenceMatches, buildAppleRosterMessage } from "./appleTopology";
+import { Cause, Chunk, Effect, Exit, Layer, Option } from "effect";
+import {
+  AppleRoomDiagnostics,
+  AppleRoomRuntime,
+  AppleRoomStorage,
+  AuthIdentityLookup,
+  makeAppleRoomLayer,
+  makeSharingWorkerLayer,
+} from "./session-sharing-effect";
+import { failureTag, SharingDependencyFailure, TurnUnavailableFailure } from "./session-sharing-errors";
 
 // Re-exported so call-site tests can assert both modules share the same gate
 // implementation (see test/globalTestAuthGate.test.ts, finding 253-003).
@@ -32,6 +42,7 @@ interface Env {
   TEST_AUTH_ALLOWED?: string;
   TURN_KEY_ID?: string;
   TURN_API_TOKEN?: string;
+  ENVIRONMENT?: string;
 }
 
 const KEY = "state";
@@ -117,6 +128,7 @@ type ApplePurgeResult =
   | { ok: false; code: "CONFLICT"; error: string };
 
 class AppleRoomError extends Error {
+  readonly _tag = "AppleRoomError";
   constructor(public readonly code: string, message = code) {
     super(message);
   }
@@ -129,6 +141,21 @@ interface AttachedMeta {
   displayName: string;
   avatarUrl?: string;
 }
+
+type WssFailureCode =
+  | "ACCOUNT_DELETED"
+  | "ADMISSION_TICKET_EXPIRED"
+  | "ADMISSION_TICKET_MISMATCH"
+  | "ADMISSION_TICKET_STALE"
+  | "ADMISSION_REQUIRED"
+  | "AUTH_REQUIRED"
+  | "INTERNAL_ERROR"
+  | "INVALID_ADMISSION"
+  | "MALFORMED_WEBSOCKET_REQUEST"
+  | "SERVICE_UNAVAILABLE"
+  | "SESSION_ENDED"
+  | "SESSION_NOT_FOUND"
+  | "WEBSOCKET_UPGRADE_REQUIRED";
 
 /**
  * Resolve a WebSocket bearer to an `AttachedMeta` using the test-shortcut
@@ -183,6 +210,280 @@ export class AppleSessionRoom extends DurableObject<Env> {
     console.log(JSON.stringify({ event, ts: Date.now(), ...fields }));
   }
 
+  private async runAppleEffect<A>(
+    operation: string,
+    program: Effect.Effect<A, unknown, AppleRoomStorage | AppleRoomRuntime | AppleRoomDiagnostics | AuthIdentityLookup | import("./session-sharing-effect").TurnCredentialProvider | import("./session-sharing-effect").SharingHttpClient | import("./session-sharing-effect").SharingDiagnostics>,
+    correlationId?: string,
+    stage: "internal.room-command" | "websocket.room" = "internal.room-command",
+  ): Promise<A> {
+    const startedAt = Date.now();
+    const observed = program.pipe(Effect.tapErrorCause((cause) => Effect.gen(function* () {
+      const diagnostics = yield* AppleRoomDiagnostics;
+      const failure = Option.getOrUndefined(Cause.failureOption(cause));
+      const tagged = failureTag(failure ?? Cause.squash(cause));
+      const causeCodes = Chunk.toReadonlyArray(Cause.failures(cause)).map((causeFailure) =>
+        causeFailure instanceof AppleRoomError
+          ? causeFailure.code
+          : causeFailure instanceof SharingDependencyFailure
+            ? `DEPENDENCY_${causeFailure.dependency.toUpperCase()}`
+            : failureTag(causeFailure),
+      );
+      yield* diagnostics.emit({
+        event: "apple.room.command_failed",
+        operation,
+        stage: failure instanceof SharingDependencyFailure && failure.stage === "internal.room-storage" ? "internal.room-storage" : stage,
+        outcome: "error",
+        code: failure instanceof AppleRoomError ? failure.code : tagged,
+        ...(causeCodes.length > 0 ? { causeCodes } : {}),
+        ...(correlationId ? { correlationId } : {}),
+        durationMs: Math.max(0, Date.now() - startedAt),
+        causeKind: failure ? "typed_failure" : "defect_or_interruption",
+      });
+    })));
+    const layer = Layer.mergeAll(
+      makeAppleRoomLayer(this.ctx.storage, (diagnostic) => this.log(diagnostic.event, diagnostic)),
+      makeSharingWorkerLayer({ AUTH_BASE_URL: this.env.AUTH_BASE_URL, TURN_KEY_ID: this.env.TURN_KEY_ID, TURN_API_TOKEN: this.env.TURN_API_TOKEN }),
+    );
+    const exit = await Effect.runPromiseExit(Effect.provide(observed, layer));
+    if (Exit.isSuccess(exit)) return exit.value;
+    const failure = Option.getOrUndefined(Cause.failureOption(exit.cause));
+    if (failure instanceof AppleRoomError) throw failure;
+    throw new Error("internal command failed");
+  }
+
+  private reportAppleHandledFailure(
+    failure: unknown,
+    operation: string,
+    correlationId: string | undefined,
+    fallbackStage: "auth.provider" | "internal.room-command" | "internal.room-storage" | "websocket.room",
+  ): Effect.Effect<void, never, AppleRoomDiagnostics> {
+    if (failure instanceof AppleRoomError) return Effect.void;
+
+    const nestedFailure = failure instanceof AuthVerificationError ? failure.cause : failure;
+    const dependencyFailure = nestedFailure instanceof SharingDependencyFailure
+      ? nestedFailure
+      : failure instanceof SharingDependencyFailure ? failure : undefined;
+    const code = dependencyFailure
+      ? `DEPENDENCY_${dependencyFailure.dependency.toUpperCase()}`
+      : failure instanceof AuthVerificationError ? failure.code : failureTag(failure);
+    const safeCode = /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "UNEXPECTED_FAILURE";
+    const causeCode = failureTag(dependencyFailure?.cause ?? nestedFailure);
+    const safeCauseCode = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(causeCode) ? causeCode : "UnexpectedFailure";
+    const stage = dependencyFailure?.stage === "internal.room-storage"
+      ? "internal.room-storage"
+      : dependencyFailure?.stage === "auth.provider" || failure instanceof AuthVerificationError
+        ? "auth.provider"
+        : dependencyFailure?.stage === "internal.room-command"
+          ? "internal.room-command"
+        : fallbackStage;
+
+    return Effect.flatMap(AppleRoomDiagnostics, (diagnostics) => diagnostics.emit({
+      event: "apple.room.command_failed",
+      operation,
+      stage,
+      outcome: "error",
+      code: safeCode,
+      causeCodes: dependencyFailure ? [safeCode, safeCauseCode] : [safeCauseCode],
+      ...(correlationId ? { correlationId } : {}),
+      durationMs: 0,
+      causeKind: "typed_failure",
+    })).pipe(Effect.catchAll(() => Effect.void));
+  }
+
+  private appleStateEffect(): Effect.Effect<AppleStoredState | undefined, SharingDependencyFailure, AppleRoomStorage> {
+    return Effect.gen(function* () {
+      const storage = yield* AppleRoomStorage;
+      const state = yield* storage.get<AppleStoredState>(APPLE_KEY);
+      if (state) {
+        if (!Number.isSafeInteger(state.rosterGeneration)) state.rosterGeneration = 0;
+        state.pendingAdmissionLeases ??= {};
+        state.observations ??= [];
+        state.deletedAccountTombstones ??= {};
+        state.accountRevocations ??= {};
+        state.startupExpiresAt ??= state.createdAt + CONFIG.APPLE_INITIAL_CONNECT_MS;
+        state.seatReservations ??= {};
+        state.hasEverBeenOccupied ??= Object.values(state.participants).some((participant) =>
+          participant.connectionState === "connected" || participant.reservedUntil !== undefined)
+          || Object.keys(state.seatReservations).length > 0
+          || Object.keys(state.consumedAdmissionTicketIds).length > 0
+          || Boolean(state.latestSyncSnapshot);
+      }
+      return state;
+    });
+  }
+
+  private requireAppleStateEffect(sessionId?: string): Effect.Effect<AppleStoredState, AppleRoomError | SharingDependencyFailure, AppleRoomStorage> {
+    return this.appleStateEffect().pipe(Effect.flatMap((state) =>
+      !state || (sessionId && state.sessionId !== sessionId)
+        ? Effect.fail(new AppleRoomError("SESSION_NOT_FOUND"))
+        : Effect.succeed(state),
+    ));
+  }
+
+  private saveAppleStateEffect(state: AppleStoredState): Effect.Effect<void, SharingDependencyFailure, AppleRoomStorage> {
+    return Effect.flatMap(AppleRoomStorage, (storage) => storage.put(APPLE_KEY, state));
+  }
+
+  private scheduleAppleAlarmEffect(state: AppleStoredState): Effect.Effect<void, SharingDependencyFailure, AppleRoomStorage | AppleRoomRuntime> {
+    const self = this;
+    return Effect.gen(function* () {
+      const storage = yield* AppleRoomStorage;
+      const runtime = yield* AppleRoomRuntime;
+      yield* storage.setAlarm(self.nextAppleAlarm(state, runtime.now()));
+    });
+  }
+
+  private nextAppleAlarm(state: AppleStoredState, now: number) {
+    const deadlines = Object.values(state.seatReservations).map((reservation) => reservation.reservedUntil);
+    deadlines.push(...Object.values(state.pendingAdmissionLeases).map((lease) => lease.expiresAt));
+    if (!state.hasEverBeenOccupied) deadlines.push(state.startupExpiresAt);
+    else if (state.lastEmptyAt) deadlines.push(state.lastEmptyAt + CONFIG.APPLE_EMPTY_ROOM_MS);
+    if (state.status === "ended") deadlines.push(now + CONFIG.STORAGE_PURGE_AFTER_END_MS);
+    return deadlines.length > 0 ? Math.min(...deadlines) : now + CONFIG.APPLE_EMPTY_ROOM_MS;
+  }
+
+  private endAppleRoomEffect(state: AppleStoredState, reason: "controller_ended" | "room_expired"): Effect.Effect<ReturnType<AppleSessionRoom["appleStatus"]>, SharingDependencyFailure, AppleRoomStorage | AppleRoomRuntime> {
+    const self = this;
+    return Effect.gen(function* () {
+      if (state.status === "ended") return self.appleStatus(state);
+      const runtime = yield* AppleRoomRuntime;
+      state.status = "ended";
+      state.roomEpoch += 1;
+      state.pendingAdmissionLeases = {};
+      self.clearAppleSnapshot(state);
+      state.rosterGeneration += 1;
+      self.recordObservation(state, "terminal", 0, {}, runtime.now(), runtime.randomUUID);
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        self.broadcastApple({ t: "session.ended", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, reason });
+        for (const ws of self.sockets()) ws.close(1000, "ended");
+      });
+      yield* Effect.flatMap(AppleRoomStorage, (storage) => storage.setAlarm(runtime.now() + CONFIG.STORAGE_PURGE_AFTER_END_MS));
+      return self.appleStatus(state);
+    });
+  }
+
+  private resolveExpiredAppleControllerEffect(state: AppleStoredState, now: number) {
+    const self = this;
+    return Effect.gen(function* () {
+      const replacement = self.oldestConnectedAppleParticipant(state);
+      if (!replacement) {
+        if (!state.hasEverBeenOccupied) return false;
+        state.controllerGeneration += 1;
+        state.lastEmptyAt = now;
+        yield* self.endAppleRoomEffect(state, "room_expired");
+        return true;
+      }
+      const runtime = yield* AppleRoomRuntime;
+      state.controllerUserId = replacement.userId;
+      state.controllerGeneration += 1;
+      state.roomEpoch += 1;
+      self.clearAppleSnapshot(state);
+      self.recordObservation(state, "authority", replacement.connectionGeneration, {}, runtime.now(), runtime.randomUUID);
+      yield* Effect.sync(() => self.broadcastControllerChange(state));
+      return false;
+    });
+  }
+
+  private expireAppleReservationsEffect(state: AppleStoredState, now: number) {
+    const self = this;
+    return Effect.gen(function* () {
+      let removedMember = false;
+      let controllerRemoved = false;
+      for (const [userId, reservation] of Object.entries(state.seatReservations)) {
+        if (reservation.reservedUntil > now) continue;
+        delete state.seatReservations[userId];
+        const participant = state.participants[userId];
+        if (participant?.connectionState === "reconnecting" && participant.connectionGeneration === reservation.connectionGeneration) {
+          delete state.participants[userId];
+          self.removeAppleAdmissionLeases(state, userId);
+          state.rosterGeneration += 1;
+          removedMember = true;
+          controllerRemoved ||= state.controllerUserId === userId;
+          if (state.speakerFloor?.userId === userId) {
+            const floor = state.speakerFloor;
+            state.speakerFloor = null;
+            yield* Effect.sync(() => self.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId }));
+          }
+        }
+      }
+      if (state.controllerReturnUntil && state.controllerReturnUntil <= now) {
+        state.controllerReturnUntil = undefined;
+        state.controllerReturnUserId = undefined;
+      }
+      if (controllerRemoved && (yield* self.resolveExpiredAppleControllerEffect(state, now))) return true;
+      if (removedMember) yield* Effect.sync(() => self.broadcastAppleRoster(state));
+      return false;
+    });
+  }
+
+  private expireAdmissionLeasesEffect(state: AppleStoredState, now: number) {
+    const self = this;
+    return Effect.gen(function* () {
+      let removedMember = false;
+      let controllerRemoved = false;
+      for (const [ticketId, lease] of Object.entries(state.pendingAdmissionLeases)) {
+        if (lease.expiresAt > now) continue;
+        const current = state.pendingAdmissionLeases[ticketId];
+        const participant = state.participants[lease.userId];
+        if (current?.ticketId === ticketId && current.connectionGeneration === lease.connectionGeneration) {
+          delete state.pendingAdmissionLeases[ticketId];
+          if (participant?.connectionState === "reconnecting" && participant.connectionGeneration === lease.connectionGeneration) {
+            delete state.participants[lease.userId];
+            self.removeAppleAdmissionLeases(state, lease.userId);
+            removedMember = true;
+            controllerRemoved ||= state.controllerUserId === lease.userId;
+          }
+        }
+      }
+      if (controllerRemoved && (yield* self.resolveExpiredAppleControllerEffect(state, now))) return true;
+      if (removedMember && self.connectedCount(state) === 0) state.lastEmptyAt = now;
+      if (removedMember) yield* Effect.sync(() => self.broadcastAppleRoster(state));
+      return false;
+    });
+  }
+
+  private async runAppleRoomEffect<A>(operation: string, program: Effect.Effect<A, unknown, AppleRoomStorage | AppleRoomRuntime | AppleRoomDiagnostics | AuthIdentityLookup | import("./session-sharing-effect").TurnCredentialProvider | import("./session-sharing-effect").SharingHttpClient | import("./session-sharing-effect").SharingDiagnostics>, correlationId?: string, stage: "internal.room-command" | "websocket.room" = "internal.room-command") {
+    return this.runAppleEffect(operation, program, correlationId, stage);
+  }
+
+  private rejectWss(request: Request, status: number, code: WssFailureCode, stage: string, correlationId = this.correlationFor(request)): Response {
+    const requestCorrelationId = correlationId;
+    this.log("sharing.wss.rejected", {
+      correlationId: requestCorrelationId,
+      operation: "websocket.connect",
+      stage,
+      code,
+      status,
+    });
+    return Response.json({
+      code,
+      error: code === "AUTH_REQUIRED" ? "Sign in to use this reading session." : "Could not connect to the reading session.",
+      correlationId: requestCorrelationId,
+      ...(this.env.ENVIRONMENT === "development" || this.env.ENVIRONMENT === "staging" ? { diagnostic: `${stage}:${code}` } : {}),
+    }, {
+      status,
+      headers: {
+        "x-rishi-correlation-id": requestCorrelationId,
+        "x-rishi-error-code": code,
+        "x-rishi-error-stage": stage,
+      },
+    });
+  }
+
+  private correlationFor(request: Request): string {
+    const suppliedCorrelationId = request.headers.get("x-rishi-correlation-id");
+    return suppliedCorrelationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suppliedCorrelationId)
+      ? suppliedCorrelationId
+      : crypto.randomUUID();
+  }
+
+  private rejectAuth(request: Request, error: unknown, correlationId?: string): Response {
+    const code = error instanceof AuthVerificationError ? error.code : "INTERNAL_ERROR";
+    const status = error instanceof AuthVerificationError ? error.status : 502;
+    return this.rejectWss(request, status, code, "auth.provider", correlationId);
+  }
+
   private bucketFor(userId: string): RateBucket {
     let b = this.frameBuckets.get(userId);
     if (!b) {
@@ -218,26 +519,32 @@ export class AppleSessionRoom extends DurableObject<Env> {
   async executeInternal(input: { action: string; payload: unknown; correlationId?: string }): Promise<unknown> {
     try {
       switch (input.action) {
-        case "createRoom": return await this.createRoom(input.payload as Parameters<AppleSessionRoom["createRoom"]>[0]);
-        case "getRoomStatus": return await this.getRoomStatus();
-        case "getAppleRedeemInfo": return await this.getAppleRedeemInfo();
-        case "markBookReadyAndIssueAdmissionTicket": return await this.markBookReadyAndIssueAdmissionTicket(input.payload as Parameters<AppleSessionRoom["markBookReadyAndIssueAdmissionTicket"]>[0]);
-        case "startRoom": return await this.startRoom(input.payload as Parameters<AppleSessionRoom["startRoom"]>[0]);
-        case "leaveRoom": return await this.leaveRoom(input.payload as Parameters<AppleSessionRoom["leaveRoom"]>[0]);
-        case "transferController": return await this.transferController(input.payload as Parameters<AppleSessionRoom["transferController"]>[0]);
-        case "removeAppleParticipant": return await this.removeAppleParticipant(input.payload as Parameters<AppleSessionRoom["removeAppleParticipant"]>[0]);
-        case "restoreAppleParticipant": return await this.restoreAppleParticipant(input.payload as Parameters<AppleSessionRoom["restoreAppleParticipant"]>[0]);
-        case "endRoom": return await this.endRoom(input.payload as Parameters<AppleSessionRoom["endRoom"]>[0]);
-        case "revokeAccountReferences": return await this.revokeAccountReferences(input.payload as Parameters<AppleSessionRoom["revokeAccountReferences"]>[0]);
-        case "getMemberObservations": return await this.getMemberObservations(input.payload as Parameters<AppleSessionRoom["getMemberObservations"]>[0]);
-        case "purgeAppleRoom": return await this.purgeAppleRoom();
+        case "createRoom": return await this.createRoom(input.payload as Parameters<AppleSessionRoom["createRoom"]>[0], input.correlationId);
+        case "getRoomStatus": return await this.getRoomStatus(input.correlationId);
+        case "getAppleRedeemInfo": return await this.getAppleRedeemInfo(input.correlationId);
+        case "markBookReadyAndIssueAdmissionTicket": return await this.markBookReadyAndIssueAdmissionTicket(input.payload as Parameters<AppleSessionRoom["markBookReadyAndIssueAdmissionTicket"]>[0], input.correlationId);
+        case "startRoom": return await this.startRoom(input.payload as Parameters<AppleSessionRoom["startRoom"]>[0], input.correlationId);
+        case "leaveRoom": return await this.leaveRoom(input.payload as Parameters<AppleSessionRoom["leaveRoom"]>[0], input.correlationId);
+        case "transferController": return await this.transferController(input.payload as Parameters<AppleSessionRoom["transferController"]>[0], input.correlationId);
+        case "removeAppleParticipant": return await this.removeAppleParticipant(input.payload as Parameters<AppleSessionRoom["removeAppleParticipant"]>[0], input.correlationId);
+        case "restoreAppleParticipant": return await this.restoreAppleParticipant(input.payload as Parameters<AppleSessionRoom["restoreAppleParticipant"]>[0], input.correlationId);
+        case "endRoom": return await this.endRoom(input.payload as Parameters<AppleSessionRoom["endRoom"]>[0], input.correlationId);
+        case "revokeAccountReferences": return await this.revokeAccountReferences(input.payload as Parameters<AppleSessionRoom["revokeAccountReferences"]>[0], input.correlationId);
+        case "getMemberObservations": return await this.getMemberObservations(input.payload as Parameters<AppleSessionRoom["getMemberObservations"]>[0], input.correlationId);
+        case "purgeAppleRoom": return await this.purgeAppleRoom(input.correlationId);
         default: return { ok: false, code: "INVALID_COMMAND", error: "unsupported internal command" };
       }
     } catch (error) {
       if (error instanceof AppleRoomError) {
         return { ok: false, code: error.code, error: error.message };
       }
-      this.log("apple.internal.command_failed", { action: input.action, correlationId: input.correlationId });
+      this.log("apple.internal.command_failed", {
+        operation: input.action,
+        stage: "internal.room-command",
+        code: "SERVICE_UNAVAILABLE",
+        status: 500,
+        correlationId: input.correlationId,
+      });
       return { ok: false, code: "SERVICE_UNAVAILABLE", error: "internal command failed" };
     }
   }
@@ -247,77 +554,88 @@ export class AppleSessionRoom extends DurableObject<Env> {
     initialSharerUserId: string;
     bookContext: BookContextT;
     maxParticipants?: number;
-  }): Promise<{ sessionId: string; roomEpoch: number; controllerGeneration: number }> {
-    if (await this.ctx.storage.get(KEY) || await this.ctx.storage.get(APPLE_KEY)) {
-      throw new AppleRoomError("ALREADY_INITIALIZED");
-    }
-    const state: AppleStoredState = {
-      sessionId: input.sessionId,
-      sessionKind: "apple",
-      admissionPolicy: "invite-ticket",
-      bookContext: input.bookContext,
-      initialSharerUserId: input.initialSharerUserId,
-      controllerUserId: input.initialSharerUserId,
-      controllerGeneration: 1,
-      roomEpoch: 1,
-      rosterGeneration: 0,
-      status: "waiting",
-      maxParticipants: Math.max(1, Math.min(input.maxParticipants ?? CONFIG.MAX_PARTICIPANTS, CONFIG.MAX_PARTICIPANTS)),
-      createdAt: Date.now(),
-      lastEmptyAt: Date.now(),
-      startupExpiresAt: Date.now() + CONFIG.APPLE_EMPTY_ROOM_MS,
-      hasEverBeenOccupied: false,
-      participants: {},
-      seatReservations: {},
-      removedUserIds: [],
-      speakerFloor: null,
-      consumedAdmissionTicketIds: {},
-      pendingAdmissionLeases: {},
-      observations: [],
-      deletedAccountTombstones: {},
-      accountRevocations: {},
-      sdpRelayCount: 0,
-    };
-    await this.ctx.storage.put(APPLE_KEY, state);
-    await this.ctx.storage.setAlarm(state.startupExpiresAt);
-    this.log("apple.session.created", { sessionId: state.sessionId });
-    return { sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration };
+  }, correlationId?: string): Promise<{ sessionId: string; roomEpoch: number; controllerGeneration: number }> {
+    const self = this;
+    return this.runAppleRoomEffect("createRoom", Effect.gen(function* () {
+      const storage = yield* AppleRoomStorage;
+      const runtime = yield* AppleRoomRuntime;
+      if ((yield* storage.get(KEY)) || (yield* storage.get(APPLE_KEY))) yield* Effect.fail(new AppleRoomError("ALREADY_INITIALIZED"));
+      const now = runtime.now();
+      const state: AppleStoredState = {
+        sessionId: input.sessionId,
+        sessionKind: "apple",
+        admissionPolicy: "invite-ticket",
+        bookContext: input.bookContext,
+        initialSharerUserId: input.initialSharerUserId,
+        controllerUserId: input.initialSharerUserId,
+        controllerGeneration: 1,
+        roomEpoch: 1,
+        rosterGeneration: 0,
+        status: "active",
+        maxParticipants: Math.max(1, Math.min(input.maxParticipants ?? CONFIG.MAX_PARTICIPANTS, CONFIG.MAX_PARTICIPANTS)),
+        createdAt: now,
+        lastEmptyAt: now,
+        startupExpiresAt: now + CONFIG.APPLE_INITIAL_CONNECT_MS,
+        hasEverBeenOccupied: false,
+        participants: {},
+        seatReservations: {},
+        removedUserIds: [],
+        speakerFloor: null,
+        consumedAdmissionTicketIds: {},
+        pendingAdmissionLeases: {},
+        observations: [],
+        deletedAccountTombstones: {},
+        accountRevocations: {},
+        sdpRelayCount: 0,
+      };
+      yield* storage.put(APPLE_KEY, state);
+      yield* storage.setAlarm(state.startupExpiresAt);
+      yield* Effect.sync(() => self.log("apple.session.created", { sessionId: state.sessionId }));
+      return { sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration };
+    }), correlationId);
   }
 
-  async getRoomStatus() {
-    const state = await this.appleState();
-    if (!state) return null;
-    return {
-      sessionId: state.sessionId,
-      status: state.status,
-      roomEpoch: state.roomEpoch,
-      controllerGeneration: state.controllerGeneration,
-      controllerUserId: state.controllerUserId,
-      participants: Object.values(state.participants).map(({ userId, profile, joinedAt, bookReady, connectionState }) => ({
-        userId, profile, joinedAt, bookReady, connectionState,
-      })),
-      maxParticipants: state.maxParticipants,
-      removedUserIds: [...state.removedUserIds],
-    };
+  async getRoomStatus(correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("getRoomStatus", Effect.gen(function* () {
+      const state = yield* self.appleStateEffect();
+      if (!state) return null;
+      return {
+        sessionId: state.sessionId,
+        status: state.status,
+        roomEpoch: state.roomEpoch,
+        controllerGeneration: state.controllerGeneration,
+        controllerUserId: state.controllerUserId,
+        participants: Object.values(state.participants).map(({ userId, profile, joinedAt, bookReady, connectionState }) => ({ userId, profile, joinedAt, bookReady, connectionState })),
+        maxParticipants: state.maxParticipants,
+        removedUserIds: [...state.removedUserIds],
+      };
+    }), correlationId);
   }
 
-  async getAppleRedeemInfo() {
-    const state = await this.appleState();
-    if (!state) return null;
-    return { sessionId: state.sessionId, bookContext: state.bookContext, status: state.status, roomEpoch: state.roomEpoch };
+  async getAppleRedeemInfo(correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("getAppleRedeemInfo", Effect.gen(function* () {
+      const state = yield* self.appleStateEffect();
+      if (!state) return null;
+      return { sessionId: state.sessionId, bookContext: state.bookContext, status: state.status, roomEpoch: state.roomEpoch };
+    }), correlationId);
   }
 
-  async getTurnCredentials(input: { userId: string; ttlSeconds?: number }) {
-    const state = await this.appleState();
-    if (!state) return { ok: false as const, code: "SESSION_NOT_FOUND", error: "session not found" };
-    if (state.status === "ended" || state.participants[input.userId]?.connectionState !== "connected") {
-      return { ok: false as const, code: "FORBIDDEN", error: "not a current session member" };
-    }
-    try {
-      return { iceServers: await generateTurnIceServers(this.env, input.ttlSeconds) };
-    } catch {
-      return { ok: false as const, code: "TURN_UNAVAILABLE", error: "TURN credentials unavailable" };
-    }
+  async getTurnCredentials(input: { userId: string; ttlSeconds?: number; correlationId?: string }) {
+    const self = this;
+    const result = await this.runAppleRoomEffect("getTurnCredentials", Effect.gen(function* () {
+      const state = yield* self.appleStateEffect();
+      if (!state) return { ok: false as const, code: "SESSION_NOT_FOUND", error: "session not found" };
+      if (state.status === "ended" || state.participants[input.userId]?.connectionState !== "connected") return { ok: false as const, code: "FORBIDDEN", error: "not a current session member" };
+      return yield* generateTurnIceServersEffect(self.env, input.ttlSeconds, input.correlationId).pipe(
+        Effect.map((iceServers) => ({ iceServers })),
+        Effect.catchTag("TurnUnavailableFailure", (_error: TurnUnavailableFailure) =>
+          Effect.succeed({ ok: false as const, code: "TURN_UNAVAILABLE", error: "TURN credentials unavailable" }),
+        ),
+      );
+    }), input.correlationId);
+    return result;
   }
 
   async markBookReadyAndIssueAdmissionTicket(input: {
@@ -326,134 +644,156 @@ export class AppleSessionRoom extends DurableObject<Env> {
     userId: string;
     contentHash: string;
     profile?: { displayName: string; avatarUrl?: string };
-  }) {
-    const state = await this.requireAppleState(input.sessionId);
-    if (state.status === "ended") throw new AppleRoomError("SESSION_ENDED");
-    if (state.bookContext.contentHash !== input.contentHash) throw new AppleRoomError("BOOK_HASH_MISMATCH");
-    if (state.deletedAccountTombstones[input.userId]) throw new AppleRoomError("ACCOUNT_DELETED");
-    if (state.removedUserIds.includes(input.userId)) throw new AppleRoomError("REMOVED_FROM_SESSION");
-    const existing = state.participants[input.userId];
-    const now = Date.now();
-    if (await this.expireAppleReservations(state, now) || await this.expireAdmissionLeases(state, now)) {
-      throw new AppleRoomError("SESSION_ENDED");
-    }
-    const occupied = this.appleOccupiedSeats(state);
-    const alreadyConnected = existing?.connectionState === "connected";
-    const alreadyReserved = (state.seatReservations[input.userId]?.reservedUntil ?? 0) > now;
-    const alreadyLeased = Object.values(state.pendingAdmissionLeases)
-      .some((lease) => lease.userId === input.userId);
-    if (!alreadyConnected && !alreadyReserved && !alreadyLeased && occupied >= state.maxParticipants) {
-      throw new AppleRoomError("ROOM_FULL");
-    }
-    const generation = (existing?.connectionGeneration ?? state.seatReservations[input.userId]?.connectionGeneration ?? 0) + 1;
-    const participant: AppleParticipant = existing ?? {
-      userId: input.userId,
-      profile: input.profile ?? { displayName: input.userId },
-      joinedAt: now,
-      inviteId: input.inviteId,
-      contentHash: input.contentHash,
-      bookReady: true,
-      connectionGeneration: generation,
-      connectionState: "connected",
-    };
-    participant.inviteId = input.inviteId;
-    participant.contentHash = input.contentHash;
-    participant.bookReady = true;
-    participant.connectionGeneration = generation;
-    participant.connectionState = "reconnecting";
-    delete participant.reservedUntil;
-    state.participants[input.userId] = participant;
-    delete state.seatReservations[input.userId];
-    // A reissued controller ticket fences the old socket generation. Its
-    // snapshot must never be replayed to the replacement connection.
-    if (state.controllerUserId === input.userId) this.clearAppleSnapshot(state);
-    const ticketId = crypto.randomUUID();
-    const ticket = await issueAdmissionTicket({
-      sessionId: state.sessionId,
-      inviteId: input.inviteId,
-      userId: input.userId,
-      ticketId,
-      roomEpoch: state.roomEpoch,
-      connectionGeneration: generation,
-      ttlMs: CONFIG.ADMISSION_TICKET_TTL_MS,
-    }, this.env.WORKER_HMAC_SECRET);
-    // A reissue supersedes every prior unconsumed lease for this user. Keeping
-    // a provisional participant record is useful for invite/book binding, but
-    // it never owns capacity: only this lease does until successful admission.
-    for (const [id, lease] of Object.entries(state.pendingAdmissionLeases)) {
-      if (lease.userId === input.userId) delete state.pendingAdmissionLeases[id];
-    }
-    state.pendingAdmissionLeases[ticketId] = {
-      ticketId,
-      userId: input.userId,
-      inviteId: input.inviteId,
-      connectionGeneration: generation,
-      expiresAt: ticket.claims.exp,
-    };
-    await this.saveAppleState(state);
-    this.closeStaleAppleSockets(input.userId, generation, "reissued");
-    await this.scheduleAppleAlarm(state);
-    return { admissionTicket: ticket.token, claims: ticket.claims, roomEpoch: state.roomEpoch, status: state.status };
+  }, correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("markBookReadyAndIssueAdmissionTicket", Effect.gen(function* () {
+      const runtime = yield* AppleRoomRuntime;
+      const state = yield* self.requireAppleStateEffect(input.sessionId);
+      if (state.status === "ended") return yield* Effect.fail(new AppleRoomError("SESSION_ENDED"));
+      if (state.bookContext.contentHash !== input.contentHash) return yield* Effect.fail(new AppleRoomError("BOOK_HASH_MISMATCH"));
+      if (state.deletedAccountTombstones[input.userId]) return yield* Effect.fail(new AppleRoomError("ACCOUNT_DELETED"));
+      if (state.removedUserIds.includes(input.userId)) return yield* Effect.fail(new AppleRoomError("REMOVED_FROM_SESSION"));
+      const existing = state.participants[input.userId];
+      const now = runtime.now();
+      const expired = (yield* self.expireAppleReservationsEffect(state, now)) || (yield* self.expireAdmissionLeasesEffect(state, now));
+      if (expired) return yield* Effect.fail(new AppleRoomError("SESSION_ENDED"));
+      const occupied = self.appleOccupiedSeats(state);
+      const alreadyConnected = existing?.connectionState === "connected";
+      const alreadyReserved = (state.seatReservations[input.userId]?.reservedUntil ?? 0) > now;
+      const alreadyLeased = Object.values(state.pendingAdmissionLeases).some((lease) => lease.userId === input.userId);
+      if (!alreadyConnected && !alreadyReserved && !alreadyLeased && occupied >= state.maxParticipants) return yield* Effect.fail(new AppleRoomError("ROOM_FULL"));
+      const generation = (existing?.connectionGeneration ?? state.seatReservations[input.userId]?.connectionGeneration ?? 0) + 1;
+      const participant: AppleParticipant = existing ?? {
+        userId: input.userId,
+        profile: input.profile ?? { displayName: input.userId },
+        joinedAt: now,
+        inviteId: input.inviteId,
+        contentHash: input.contentHash,
+        bookReady: true,
+        connectionGeneration: generation,
+        connectionState: "connected",
+      };
+      participant.inviteId = input.inviteId;
+      participant.contentHash = input.contentHash;
+      participant.bookReady = true;
+      participant.connectionGeneration = generation;
+      participant.connectionState = "reconnecting";
+      delete participant.reservedUntil;
+      state.participants[input.userId] = participant;
+      delete state.seatReservations[input.userId];
+      if (state.controllerUserId === input.userId) self.clearAppleSnapshot(state);
+      const ticketId = runtime.randomUUID();
+      const ticket = yield* runtime.issueAdmissionTicket({
+        sessionId: state.sessionId,
+        inviteId: input.inviteId,
+        userId: input.userId,
+        ticketId,
+        roomEpoch: state.roomEpoch,
+        connectionGeneration: generation,
+        ttlMs: CONFIG.ADMISSION_TICKET_TTL_MS,
+      }, self.env.WORKER_HMAC_SECRET);
+      for (const [id, lease] of Object.entries(state.pendingAdmissionLeases)) {
+        if (lease.userId === input.userId) delete state.pendingAdmissionLeases[id];
+      }
+      state.pendingAdmissionLeases[ticketId] = {
+        ticketId,
+        userId: input.userId,
+        inviteId: input.inviteId,
+        connectionGeneration: generation,
+        expiresAt: ticket.claims.exp,
+      };
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => self.closeStaleAppleSockets(input.userId, generation, "reissued"));
+      yield* self.scheduleAppleAlarmEffect(state);
+      return { admissionTicket: ticket.token, claims: ticket.claims, roomEpoch: state.roomEpoch, status: state.status };
+    }), correlationId);
   }
 
-  async startRoom(input: { actingUserId: string; expectedControllerGeneration: number }) {
-    const state = await this.requireAppleState();
-    this.assertController(state, input.actingUserId, input.expectedControllerGeneration);
-    if (state.status === "ended") throw new AppleRoomError("SESSION_ENDED");
-    if (state.status === "active") return this.appleStatus(state);
-    state.status = "active";
-    state.roomEpoch += 1;
-    this.clearAppleSnapshot(state);
-    state.rosterGeneration += 1;
-    await this.saveAppleState(state);
-    this.broadcastApple({ t: "session.state", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, status: state.status, controllerUserId: state.controllerUserId });
-    this.broadcastAppleRoster(state);
-    return this.appleStatus(state);
+  async startRoom(input: { actingUserId: string; expectedControllerGeneration: number }, correlationId?: string) {
+    return this.runAppleRoomEffect("startRoom", this.startRoomEffect(input), correlationId);
   }
 
-  async leaveRoom(input: { actingUserId: string; deliberate?: boolean }) {
-    const state = await this.requireAppleState();
-    const p = state.participants[input.actingUserId];
-    if (!p) return this.appleStatus(state);
-    delete state.participants[input.actingUserId];
-    delete state.seatReservations[input.actingUserId];
-    this.removeAppleAdmissionLeases(state, input.actingUserId);
-    const controllerChanged = state.controllerUserId === input.actingUserId;
-    if (state.speakerFloor?.userId === input.actingUserId) {
-      const floor = state.speakerFloor;
-      state.speakerFloor = null;
-      this.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId });
-    }
-    if (controllerChanged) this.chooseAppleController(state, false);
-    state.rosterGeneration += 1;
-    await this.saveAppleState(state);
-    this.closeAppleSockets(input.actingUserId, "left");
-    if (controllerChanged) this.broadcastControllerChange(state);
-    this.broadcastAppleRoster(state);
-    await this.scheduleAppleAlarm(state);
-    return this.appleStatus(state);
+  private startRoomEffect(input: { actingUserId: string; expectedControllerGeneration: number }) {
+    const self = this;
+    return Effect.gen(function* () {
+      const state = yield* self.requireAppleStateEffect();
+      self.assertController(state, input.actingUserId, input.expectedControllerGeneration);
+      if (state.status === "ended") return yield* Effect.fail(new AppleRoomError("SESSION_ENDED"));
+      if (state.status === "active") return self.appleStatus(state);
+      state.status = "active";
+      state.roomEpoch += 1;
+      self.clearAppleSnapshot(state);
+      state.rosterGeneration += 1;
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        self.broadcastApple({ t: "session.state", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, status: state.status, controllerUserId: state.controllerUserId });
+        self.broadcastAppleRoster(state);
+      });
+      return self.appleStatus(state);
+    });
   }
 
-  async transferController(input: { actingUserId: string; targetUserId: string; expectedControllerGeneration: number }) {
-    const state = await this.requireAppleState();
-    this.assertController(state, input.actingUserId, input.expectedControllerGeneration);
-    const target = state.participants[input.targetUserId];
-    if (!target || target.connectionState !== "connected") throw new AppleRoomError("NO_SUCH_PARTICIPANT");
-    state.controllerUserId = input.targetUserId;
-    state.controllerGeneration += 1;
-    state.roomEpoch += 1;
-    this.clearAppleSnapshot(state);
-    state.rosterGeneration += 1;
-    await this.saveAppleState(state);
-    this.broadcastApple({ t: "controller.transfer", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, toUserId: input.targetUserId });
-    this.broadcastAppleRoster(state);
-    return this.appleStatus(state);
+  async leaveRoom(input: { actingUserId: string; deliberate?: boolean }, correlationId?: string) {
+    return this.runAppleRoomEffect("leaveRoom", this.leaveRoomEffect(input), correlationId);
   }
 
-  async endRoom(input: { actingUserId: string; expectedControllerGeneration: number }) {
-    const state = await this.requireAppleState();
-    this.assertController(state, input.actingUserId, input.expectedControllerGeneration);
-    return this.endAppleRoom(state, "controller_ended");
+  private leaveRoomEffect(input: { actingUserId: string; deliberate?: boolean }) {
+    const self = this;
+    return Effect.gen(function* () {
+      const state = yield* self.requireAppleStateEffect();
+      if (!state.participants[input.actingUserId]) return self.appleStatus(state);
+      delete state.participants[input.actingUserId];
+      delete state.seatReservations[input.actingUserId];
+      self.removeAppleAdmissionLeases(state, input.actingUserId);
+      const controllerChanged = state.controllerUserId === input.actingUserId;
+      const floor = state.speakerFloor?.userId === input.actingUserId ? state.speakerFloor : null;
+      if (floor) state.speakerFloor = null;
+      if (controllerChanged) self.chooseAppleController(state, false);
+      state.rosterGeneration += 1;
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        if (floor) self.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId });
+        self.closeAppleSockets(input.actingUserId, "left");
+        if (controllerChanged) self.broadcastControllerChange(state);
+        self.broadcastAppleRoster(state);
+      });
+      yield* self.scheduleAppleAlarmEffect(state);
+      return self.appleStatus(state);
+    });
+  }
+
+  async transferController(input: { actingUserId: string; targetUserId: string; expectedControllerGeneration: number }, correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("transferController", Effect.gen(function* () {
+      const state = yield* self.requireAppleStateEffect();
+      self.assertController(state, input.actingUserId, input.expectedControllerGeneration);
+      const target = state.participants[input.targetUserId];
+      if (!target || target.connectionState !== "connected") return yield* Effect.fail(new AppleRoomError("NO_SUCH_PARTICIPANT"));
+      state.controllerUserId = input.targetUserId;
+      state.controllerGeneration += 1;
+      state.roomEpoch += 1;
+      self.clearAppleSnapshot(state);
+      state.rosterGeneration += 1;
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        self.broadcastApple({ t: "controller.transfer", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, toUserId: input.targetUserId });
+        self.broadcastAppleRoster(state);
+      });
+      return self.appleStatus(state);
+    }), correlationId);
+  }
+
+  async endRoom(input: { actingUserId: string; expectedControllerGeneration: number }, correlationId?: string) {
+    return this.runAppleRoomEffect("endRoom", this.endRoomEffect(input), correlationId);
+  }
+
+  private endRoomEffect(input: { actingUserId: string; expectedControllerGeneration: number }) {
+    const self = this;
+    return Effect.gen(function* () {
+      const state = yield* self.requireAppleStateEffect();
+      self.assertController(state, input.actingUserId, input.expectedControllerGeneration);
+      return yield* self.endAppleRoomEffect(state, "controller_ended");
+    });
   }
 
   /**
@@ -461,174 +801,197 @@ export class AppleSessionRoom extends DurableObject<Env> {
    * the HMAC-authenticated v2 internal command surface; account deletion ends
    * the room first so an active room can never be purged accidentally.
    */
-  async purgeAppleRoom(): Promise<ApplePurgeResult> {
-    const state = await this.appleState();
-    if (!state) return { ok: true };
-    if (state.status !== "ended") {
-      return { ok: false, code: "CONFLICT", error: "room must be ended before purge" };
-    }
-    for (const socket of this.sockets()) socket.close(1000, "purged");
-    await this.ctx.storage.delete(APPLE_KEY);
-    await this.ctx.storage.deleteAlarm();
-    this.log("apple.session.purged", { sessionId: state.sessionId });
-    return { ok: true };
+  async purgeAppleRoom(correlationId?: string): Promise<ApplePurgeResult> {
+    const self = this;
+    return this.runAppleRoomEffect("purgeAppleRoom", Effect.gen(function* () {
+      const state = yield* self.appleStateEffect();
+      if (!state) return { ok: true } as const;
+      if (state.status !== "ended") return { ok: false, code: "CONFLICT", error: "room must be ended before purge" } as const;
+      const storage = yield* AppleRoomStorage;
+      yield* Effect.sync(() => { for (const socket of self.sockets()) socket.close(1000, "purged"); });
+      yield* storage.delete(APPLE_KEY);
+      yield* storage.deleteAlarm();
+      yield* Effect.sync(() => self.log("apple.session.purged", { sessionId: state.sessionId }));
+      return { ok: true } as const;
+    }), correlationId);
   }
 
-  async revokeAccountReferences(input: { accountUserId: string; deletionOperationId: string }) {
-    const state = await this.requireAppleState();
-    const previous = state.accountRevocations[input.deletionOperationId];
-    if (previous) return previous.result;
-    state.deletedAccountTombstones[input.accountUserId] = {
-      deletionOperationId: input.deletionOperationId,
-      deletedAt: Date.now(),
-    };
+  async revokeAccountReferences(input: { accountUserId: string; deletionOperationId: string }, correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("revokeAccountReferences", Effect.gen(function* () {
+      const runtime = yield* AppleRoomRuntime;
+      const state = yield* self.requireAppleStateEffect();
+      const previous = state.accountRevocations[input.deletionOperationId];
+      if (previous) return previous.result;
+      state.deletedAccountTombstones[input.accountUserId] = { deletionOperationId: input.deletionOperationId, deletedAt: runtime.now() };
+      const participant = state.participants[input.accountUserId];
+      const wasController = state.controllerUserId === input.accountUserId;
+      delete state.participants[input.accountUserId];
+      delete state.seatReservations[input.accountUserId];
+      self.removeAppleAdmissionLeases(state, input.accountUserId);
+      state.removedUserIds = state.removedUserIds.filter((userId) => userId !== input.accountUserId);
+      if (state.speakerFloor?.userId === input.accountUserId) state.speakerFloor = null;
+      if (state.controllerReturnUserId === input.accountUserId) {
+        state.controllerReturnUserId = undefined;
+        state.controllerReturnUntil = undefined;
+      }
+      if (state.latestSyncSnapshot?.controllerUserId === input.accountUserId) self.clearAppleSnapshot(state);
 
-    const participant = state.participants[input.accountUserId];
-    const wasController = state.controllerUserId === input.accountUserId;
-    delete state.participants[input.accountUserId];
-    delete state.seatReservations[input.accountUserId];
-    this.removeAppleAdmissionLeases(state, input.accountUserId);
-    state.removedUserIds = state.removedUserIds.filter((userId) => userId !== input.accountUserId);
-    if (state.speakerFloor?.userId === input.accountUserId) state.speakerFloor = null;
-    if (state.controllerReturnUserId === input.accountUserId) {
-      state.controllerReturnUserId = undefined;
-      state.controllerReturnUntil = undefined;
-    }
-    if (state.latestSyncSnapshot?.controllerUserId === input.accountUserId) this.clearAppleSnapshot(state);
-
-    let result: { ok: true; status: "ended" | "removed" | "not_found" };
-    let controllerChanged = false;
-    if (state.initialSharerUserId === input.accountUserId) {
-      state.initialSharerUserId = "";
-      state.controllerUserId = "";
-      state.controllerReturnUserId = undefined;
-      state.controllerReturnUntil = undefined;
-      this.clearAppleSnapshot(state);
-      state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result: { ok: true, status: "ended" } };
-      await this.saveAppleState(state);
-      await this.endAppleRoom(state, "controller_ended");
-      result = { ok: true, status: "ended" };
-    } else if (!participant) {
+      let result: { ok: true; status: "ended" | "removed" | "not_found" };
+      let controllerChanged = false;
+      if (state.initialSharerUserId === input.accountUserId) {
+        state.initialSharerUserId = "";
+        state.controllerUserId = "";
+        state.controllerReturnUserId = undefined;
+        state.controllerReturnUntil = undefined;
+        self.clearAppleSnapshot(state);
+        result = { ok: true, status: "ended" };
+        state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
+        yield* self.saveAppleStateEffect(state);
+        yield* self.endAppleRoomEffect(state, "controller_ended");
+        return result;
+      }
       if (wasController) {
-        const replacement = this.oldestConnectedAppleParticipant(state);
+        const replacement = self.oldestConnectedAppleParticipant(state);
         if (!replacement) {
           result = { ok: true, status: "ended" };
           state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
-          await this.endAppleRoom(state, "controller_ended");
+          yield* self.endAppleRoomEffect(state, "controller_ended");
           return result;
         }
         state.controllerUserId = replacement.userId;
         state.controllerGeneration += 1;
         state.roomEpoch += 1;
-        this.clearAppleSnapshot(state);
+        self.clearAppleSnapshot(state);
         controllerChanged = true;
       }
-      result = { ok: true, status: "not_found" };
-    } else {
-      state.rosterGeneration += 1;
-      this.recordObservation(state, "membership", 0);
-      if (wasController) {
-        const replacement = this.oldestConnectedAppleParticipant(state);
-        if (!replacement) {
-          result = { ok: true, status: "ended" };
-          state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
-          await this.endAppleRoom(state, "controller_ended");
-          return result;
-        }
-        state.controllerUserId = replacement.userId;
-        state.controllerGeneration += 1;
-        state.roomEpoch += 1;
-        this.clearAppleSnapshot(state);
-        controllerChanged = true;
+      if (participant) {
+        state.rosterGeneration += 1;
+        self.recordObservation(state, "membership", 0, {}, runtime.now(), runtime.randomUUID);
+        result = { ok: true, status: "removed" };
+      } else {
+        result = { ok: true, status: "not_found" };
       }
-      result = { ok: true, status: "removed" };
       state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
-      await this.saveAppleState(state);
-      this.closeAppleSockets(input.accountUserId, "account deleted");
-      if (controllerChanged) this.broadcastControllerChange(state);
-      this.broadcastAppleRoster(state);
-      await this.scheduleAppleAlarm(state);
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        self.closeAppleSockets(input.accountUserId, "account deleted");
+        if (controllerChanged) self.broadcastControllerChange(state);
+        if (participant || controllerChanged) self.broadcastAppleRoster(state);
+      });
+      if (participant || controllerChanged) yield* self.scheduleAppleAlarmEffect(state);
       return result;
-    }
-    state.accountRevocations[input.deletionOperationId] = { accountUserId: input.accountUserId, result };
-    await this.saveAppleState(state);
-    this.closeAppleSockets(input.accountUserId, "account deleted");
-    if (controllerChanged) {
-      this.broadcastControllerChange(state);
-      this.broadcastAppleRoster(state);
-      await this.scheduleAppleAlarm(state);
-    }
-    return result;
+    }), correlationId);
   }
 
-  async getMemberObservations(input: { sessionId: string; requestingUserId: string; afterObservationId?: string }) {
-    const state = await this.appleState();
-    if (!state || state.sessionId !== input.sessionId) {
-      return { ok: false as const, code: "SESSION_NOT_FOUND", error: "session not found" };
-    }
-    const membership = input.requestingUserId === state.initialSharerUserId
-      ? "owner"
-      : state.participants[input.requestingUserId]?.connectionState === "connected" ? "participant" : null;
-    if (!membership) return { ok: false as const, code: "FORBIDDEN", error: "not a current session member" };
-    const after = input.afterObservationId;
-    const start = after ? state.observations.findIndex((value) => value.observationId === after) + 1 : 0;
-    if (after && start === 0) {
-      return { ok: false as const, code: "OBSERVATION_CURSOR_EXPIRED", error: "observation cursor expired" };
-    }
-    return {
-      sessionId: state.sessionId,
-      membership,
-      status: state.status,
-      roomEpoch: state.roomEpoch,
-      controllerGeneration: state.controllerGeneration,
-      observations: state.observations.slice(start, start + 100),
-    };
+  async getMemberObservations(input: { sessionId: string; requestingUserId: string; afterObservationId?: string }, correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("getMemberObservations", Effect.gen(function* () {
+      const state = yield* self.appleStateEffect();
+      if (!state || state.sessionId !== input.sessionId) return { ok: false as const, code: "SESSION_NOT_FOUND", error: "session not found" };
+      const membership = input.requestingUserId === state.initialSharerUserId
+        ? "owner"
+        : state.participants[input.requestingUserId]?.connectionState === "connected" ? "participant" : null;
+      if (!membership) return { ok: false as const, code: "FORBIDDEN", error: "not a current session member" };
+      const after = input.afterObservationId;
+      const start = after ? state.observations.findIndex((value) => value.observationId === after) + 1 : 0;
+      if (after && start === 0) return { ok: false as const, code: "OBSERVATION_CURSOR_EXPIRED", error: "observation cursor expired" };
+      return {
+        sessionId: state.sessionId,
+        membership,
+        status: state.status,
+        roomEpoch: state.roomEpoch,
+        controllerGeneration: state.controllerGeneration,
+        observations: state.observations.slice(start, start + 100),
+      };
+    }), correlationId);
   }
 
-  async removeAppleParticipant(input: { actingUserId: string; userId: string; expectedControllerGeneration: number }) {
-    const state = await this.requireAppleState();
-    this.assertController(state, input.actingUserId, input.expectedControllerGeneration);
-    if (input.userId === input.actingUserId) throw new AppleRoomError("FORBIDDEN");
-    if (!state.participants[input.userId]) throw new AppleRoomError("NO_SUCH_PARTICIPANT");
-    delete state.participants[input.userId];
-    delete state.seatReservations[input.userId];
-    this.removeAppleAdmissionLeases(state, input.userId);
-    if (state.speakerFloor?.userId === input.userId) {
-      const floor = state.speakerFloor;
-      state.speakerFloor = null;
-      this.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId });
-    }
-    if (!state.removedUserIds.includes(input.userId)) state.removedUserIds.push(input.userId);
-    state.rosterGeneration += 1;
-    await this.saveAppleState(state);
-    this.closeAppleSockets(input.userId, "removed");
-    this.broadcastApple({ t: "participant.remove", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, userId: input.userId, reason: "removed" });
-    this.broadcastAppleRoster(state);
-    await this.scheduleAppleAlarm(state);
-    return this.appleStatus(state);
+  async removeAppleParticipant(input: { actingUserId: string; userId: string; expectedControllerGeneration: number }, correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("removeAppleParticipant", Effect.gen(function* () {
+      const state = yield* self.requireAppleStateEffect();
+      self.assertController(state, input.actingUserId, input.expectedControllerGeneration);
+      if (input.userId === input.actingUserId) return yield* Effect.fail(new AppleRoomError("FORBIDDEN"));
+      if (!state.participants[input.userId]) return yield* Effect.fail(new AppleRoomError("NO_SUCH_PARTICIPANT"));
+      delete state.participants[input.userId];
+      delete state.seatReservations[input.userId];
+      self.removeAppleAdmissionLeases(state, input.userId);
+      const floor = state.speakerFloor?.userId === input.userId ? state.speakerFloor : null;
+      if (floor) state.speakerFloor = null;
+      if (!state.removedUserIds.includes(input.userId)) state.removedUserIds.push(input.userId);
+      state.rosterGeneration += 1;
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        if (floor) self.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId });
+        self.closeAppleSockets(input.userId, "removed");
+        self.broadcastApple({ t: "participant.remove", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, userId: input.userId, reason: "removed" });
+        self.broadcastAppleRoster(state);
+      });
+      yield* self.scheduleAppleAlarmEffect(state);
+      return self.appleStatus(state);
+    }), correlationId);
   }
 
-  async restoreAppleParticipant(input: { actingUserId: string; userId: string; inviteId: string; contentHash: string; expectedControllerGeneration: number; profile?: { displayName: string; avatarUrl?: string } }) {
-    const state = await this.requireAppleState();
-    this.assertController(state, input.actingUserId, input.expectedControllerGeneration);
-    if (state.deletedAccountTombstones[input.userId]) throw new AppleRoomError("ACCOUNT_DELETED");
-    if (!state.removedUserIds.includes(input.userId)) throw new AppleRoomError("NO_SUCH_PARTICIPANT");
-    if (state.bookContext.contentHash !== input.contentHash) throw new AppleRoomError("BOOK_HASH_MISMATCH");
-    if (await this.expireAppleReservations(state, Date.now())) throw new AppleRoomError("SESSION_ENDED");
-    if (this.appleOccupiedSeats(state) >= state.maxParticipants) throw new AppleRoomError("ROOM_FULL");
-    state.removedUserIds = state.removedUserIds.filter((id) => id !== input.userId);
-    try {
-      const result = await this.markBookReadyAndIssueAdmissionTicket({ sessionId: state.sessionId, ...input, userId: input.userId, inviteId: input.inviteId, contentHash: input.contentHash, profile: input.profile });
-      const latest = await this.requireAppleState();
-      latest.rosterGeneration += 1;
-      await this.saveAppleState(latest);
-      this.broadcastAppleRoster(latest);
-      return result;
-    } catch (error) {
-      state.removedUserIds.push(input.userId);
-      await this.saveAppleState(state);
-      throw error;
-    }
+  async restoreAppleParticipant(input: { actingUserId: string; userId: string; inviteId: string; contentHash: string; expectedControllerGeneration: number; profile?: { displayName: string; avatarUrl?: string } }, correlationId?: string) {
+    const self = this;
+    return this.runAppleRoomEffect("restoreAppleParticipant", Effect.gen(function* () {
+      const runtime = yield* AppleRoomRuntime;
+      const state = yield* self.requireAppleStateEffect();
+      self.assertController(state, input.actingUserId, input.expectedControllerGeneration);
+      if (state.deletedAccountTombstones[input.userId]) return yield* Effect.fail(new AppleRoomError("ACCOUNT_DELETED"));
+      if (!state.removedUserIds.includes(input.userId)) return yield* Effect.fail(new AppleRoomError("NO_SUCH_PARTICIPANT"));
+      if (state.bookContext.contentHash !== input.contentHash) return yield* Effect.fail(new AppleRoomError("BOOK_HASH_MISMATCH"));
+      const expired = yield* self.expireAppleReservationsEffect(state, runtime.now());
+      if (expired) return yield* Effect.fail(new AppleRoomError("SESSION_ENDED"));
+      if (self.appleOccupiedSeats(state) >= state.maxParticipants) return yield* Effect.fail(new AppleRoomError("ROOM_FULL"));
+      const beforeRestore = structuredClone(state);
+      const attempt = Effect.gen(function* () {
+        state.removedUserIds = state.removedUserIds.filter((id) => id !== input.userId);
+        const generation = (state.participants[input.userId]?.connectionGeneration ?? state.seatReservations[input.userId]?.connectionGeneration ?? 0) + 1;
+        const participant: AppleParticipant = state.participants[input.userId] ?? {
+          userId: input.userId,
+          profile: input.profile ?? { displayName: input.userId },
+          joinedAt: runtime.now(),
+          inviteId: input.inviteId,
+          contentHash: input.contentHash,
+          bookReady: true,
+          connectionGeneration: generation,
+          connectionState: "reconnecting",
+        };
+        participant.inviteId = input.inviteId;
+        participant.contentHash = input.contentHash;
+        participant.bookReady = true;
+        participant.connectionGeneration = generation;
+        participant.connectionState = "reconnecting";
+        delete participant.reservedUntil;
+        state.participants[input.userId] = participant;
+        delete state.seatReservations[input.userId];
+        if (state.controllerUserId === input.userId) self.clearAppleSnapshot(state);
+        const ticketId = runtime.randomUUID();
+        const ticket = yield* runtime.issueAdmissionTicket({
+          sessionId: state.sessionId,
+          inviteId: input.inviteId,
+          userId: input.userId,
+          ticketId,
+          roomEpoch: state.roomEpoch,
+          connectionGeneration: generation,
+          ttlMs: CONFIG.ADMISSION_TICKET_TTL_MS,
+        }, self.env.WORKER_HMAC_SECRET);
+        for (const [id, lease] of Object.entries(state.pendingAdmissionLeases)) {
+          if (lease.userId === input.userId) delete state.pendingAdmissionLeases[id];
+        }
+        state.pendingAdmissionLeases[ticketId] = { ticketId, userId: input.userId, inviteId: input.inviteId, connectionGeneration: generation, expiresAt: ticket.claims.exp };
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.closeStaleAppleSockets(input.userId, generation, "reissued"));
+        yield* self.scheduleAppleAlarmEffect(state);
+        state.rosterGeneration += 1;
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.broadcastAppleRoster(state));
+        return { admissionTicket: ticket.token, claims: ticket.claims, roomEpoch: state.roomEpoch, status: state.status };
+      });
+      return yield* attempt.pipe(Effect.tapErrorCause(() => self.saveAppleStateEffect(beforeRestore)));
+    }), correlationId);
   }
 
   private async appleState() {
@@ -639,9 +1002,13 @@ export class AppleSessionRoom extends DurableObject<Env> {
       state.observations ??= [];
       state.deletedAccountTombstones ??= {};
       state.accountRevocations ??= {};
-      state.startupExpiresAt ??= state.createdAt + CONFIG.APPLE_EMPTY_ROOM_MS;
+      state.startupExpiresAt ??= state.createdAt + CONFIG.APPLE_INITIAL_CONNECT_MS;
       state.seatReservations ??= {};
-      state.hasEverBeenOccupied ??= Object.keys(state.participants).length > 0
+      // A provisional admission ticket creates a reconnecting participant
+      // before any WebSocket is admitted. Only evidence of an actual socket
+      // may put a legacy room on the post-occupancy empty-room timer.
+      state.hasEverBeenOccupied ??= Object.values(state.participants).some((participant) =>
+        participant.connectionState === "connected" || participant.reservedUntil !== undefined)
         || Object.keys(state.seatReservations).length > 0
         || Object.keys(state.consumedAdmissionTicketIds).length > 0
         || Boolean(state.latestSyncSnapshot);
@@ -729,6 +1096,10 @@ export class AppleSessionRoom extends DurableObject<Env> {
   private async resolveExpiredAppleController(state: AppleStoredState, now: number): Promise<boolean> {
     const replacement = this.oldestConnectedAppleParticipant(state);
     if (!replacement) {
+      // The creator may still be preparing the local book after creation.
+      // Expiring a provisional ticket must not end a never-occupied room
+      // before its separate initial-connection deadline.
+      if (!state.hasEverBeenOccupied) return false;
       // Fence a stale controller socket before the terminal room epoch is
       // persisted and broadcast by endAppleRoom.
       state.controllerGeneration += 1;
@@ -811,16 +1182,18 @@ export class AppleSessionRoom extends DurableObject<Env> {
     eventType: AppleObservation["eventType"],
     connectionGeneration: number,
     fields: Pick<AppleObservation, "readerSequence" | "frameDigest"> = {},
+    occurredAt = Date.now(),
+    randomUUID: () => string = () => crypto.randomUUID(),
   ) {
     state.observations.push({
-      observationId: crypto.randomUUID(),
-      eventId: crypto.randomUUID(),
+      observationId: randomUUID(),
+      eventId: randomUUID(),
       eventType,
       roomEpoch: state.roomEpoch,
       controllerGeneration: state.controllerGeneration,
       connectionGeneration,
       ...fields,
-      occurredAt: Date.now(),
+      occurredAt,
     });
     if (state.observations.length > 100) state.observations.splice(0, state.observations.length - 100);
   }
@@ -869,16 +1242,21 @@ export class AppleSessionRoom extends DurableObject<Env> {
 
   // ---------- WS upgrade ----------
   async fetch(request: Request): Promise<Response> {
-    if (request.headers.get("upgrade") !== "websocket") return new Response("Expected websocket", { status: 426 });
+    if (request.headers.get("upgrade") !== "websocket") return this.rejectWss(request, 426, "WEBSOCKET_UPGRADE_REQUIRED", "websocket.upgrade");
     const creds = parseSubprotocols(request.headers.get("sec-websocket-protocol"));
-    if (!creds.valid) return new Response(creds.reason, { status: 400 });
+    if (!creds.valid) {
+      return creds.reason === "missing jwt"
+        ? this.rejectWss(request, 401, "AUTH_REQUIRED", "websocket.authentication")
+        : this.rejectWss(request, 400, "MALFORMED_WEBSOCKET_REQUEST", "websocket.protocol");
+    }
 
     const appleRequest = request.headers.get("x-rishi-session-kind") === "apple";
+    const correlationId = this.correlationFor(request);
     if (appleRequest) {
-      if (!await this.appleState()) return new Response("Apple session not found", { status: 401 });
-      return this.fetchApple(request, creds);
+      return this.runAppleRoomEffect("websocket.admission", this.fetchAppleEffect(request, creds, correlationId), correlationId, "websocket.room");
     }
-    if (await this.appleState()) return this.fetchApple(request, creds);
+    const appleState = await this.runAppleRoomEffect("websocket.room_lookup", this.appleStateEffect(), correlationId, "websocket.room");
+    if (appleState) return this.runAppleRoomEffect("websocket.admission", this.fetchAppleEffect(request, creds, correlationId), correlationId, "websocket.room");
 
     let meta: AttachedMeta;
     // Test shortcut: jwt of the form "userId--DisplayName" (with "_" for spaces
@@ -904,8 +1282,8 @@ export class AppleSessionRoom extends DurableObject<Env> {
           const { verifyAuthToken } = await import("./auth");
           const u = await verifyAuthToken(creds.jwt, this.env);
           meta = { userId: u.userId, displayName: u.displayName, avatarUrl: u.avatarUrl };
-        } catch (e) {
-          return new Response((e as Error).message, { status: 401 });
+        } catch (error) {
+          return this.rejectAuth(request, error);
         }
       }
     }
@@ -936,32 +1314,41 @@ export class AppleSessionRoom extends DurableObject<Env> {
     });
   }
 
-  private async fetchApple(request: Request, creds: Extract<ReturnType<typeof parseSubprotocols>, { valid: true }>): Promise<Response> {
-    if (!creds.admissionTicket) return new Response("admission ticket required", { status: 401 });
-    let meta: AttachedMeta;
-    const testMeta = resolveTestBearer(creds.jwt, this.env.TEST_AUTH_ALLOWED);
-    if (testMeta) meta = testMeta;
-    else {
-      const testAuth = resolveTestGlobalAuth(this.env.TEST_AUTH_ALLOWED);
-      if (testAuth) meta = { userId: testAuth.userId, displayName: testAuth.displayName, avatarUrl: testAuth.avatarUrl };
+  private fetchAppleEffect(request: Request, creds: Extract<ReturnType<typeof parseSubprotocols>, { valid: true }>, correlationId: string) {
+    const self = this;
+    return Effect.gen(function* () {
+      if (!(yield* self.appleStateEffect())) return self.rejectWss(request, 404, "SESSION_NOT_FOUND", "websocket.room", correlationId);
+      if (!creds.admissionTicket) return self.rejectWss(request, 401, "ADMISSION_REQUIRED", "websocket.admission", correlationId);
+      let meta: AttachedMeta;
+      const testMeta = resolveTestBearer(creds.jwt, self.env.TEST_AUTH_ALLOWED);
+      if (testMeta) meta = testMeta;
       else {
-        try {
-          const { verifyAuthToken } = await import("./auth");
-          const u = await verifyAuthToken(creds.jwt, this.env);
-          meta = { userId: u.userId, displayName: u.displayName, avatarUrl: u.avatarUrl };
-        } catch (e) { return new Response((e as Error).message, { status: 401 }); }
+        const testAuth = resolveTestGlobalAuth(self.env.TEST_AUTH_ALLOWED);
+        if (testAuth) meta = { userId: testAuth.userId, displayName: testAuth.displayName, avatarUrl: testAuth.avatarUrl };
+        else {
+          const authorization = `Bearer ${creds.jwt}`;
+          const authResult = yield* verifyAuthAuthorizationEffect(authorization, correlationId).pipe(Effect.either);
+          if (authResult._tag === "Left") {
+            if (authResult.left.code !== "AUTH_REQUIRED") {
+              yield* self.reportAppleHandledFailure(authResult.left, "websocket.admission.auth", correlationId, "auth.provider");
+            }
+            return self.rejectAuth(request, authResult.left, correlationId);
+          }
+          meta = { userId: authResult.right.userId, displayName: authResult.right.displayName, avatarUrl: authResult.right.avatarUrl };
+        }
       }
-    }
-    let ticket;
-    try { ticket = await verifyAdmissionTicket(creds.admissionTicket, this.env.WORKER_HMAC_SECRET); }
-    catch { return new Response("invalid admission ticket", { status: 401 }); }
-    let state: AppleStoredState;
-    try {
-      // The ticket is consumed together with the matching connection generation.
-      // This is the only state transition that turns a ticket reservation into
-      // an admitted participant, so concurrent websocket upgrades cannot reuse
-      // one ticket or admit a superseded generation.
-      state = await this.ctx.storage.transaction(async (txn) => {
+
+      const runtime = yield* AppleRoomRuntime;
+      const ticketResult = yield* runtime.verifyAdmissionTicket(creds.admissionTicket, self.env.WORKER_HMAC_SECRET).pipe(Effect.either);
+      if (ticketResult._tag === "Left") {
+        const expired = ticketResult.left.message === "admission ticket expired";
+        return self.rejectWss(request, 401, expired ? "ADMISSION_TICKET_EXPIRED" : "INVALID_ADMISSION", "websocket.admission.signature", correlationId);
+      }
+      const ticket = ticketResult.right;
+      const socketTag = JSON.stringify({ meta, apple: true, connectionGeneration: ticket.connectionGeneration, correlationId });
+      if (new TextEncoder().encode(socketTag).byteLength > 256) return self.rejectWss(request, 400, "MALFORMED_WEBSOCKET_REQUEST", "websocket.protocol", correlationId);
+      const storage = yield* AppleRoomStorage;
+      const consumed = yield* storage.transaction(async (txn) => {
         const stored = await txn.get<AppleStoredState>(APPLE_KEY);
         if (!stored) throw new AppleRoomError("SESSION_NOT_FOUND");
         stored.pendingAdmissionLeases ??= {};
@@ -969,20 +1356,14 @@ export class AppleSessionRoom extends DurableObject<Env> {
         stored.deletedAccountTombstones ??= {};
         if (stored.status === "ended") throw new AppleRoomError("SESSION_ENDED");
         if (stored.deletedAccountTombstones[meta.userId]) throw new AppleRoomError("ACCOUNT_DELETED");
-        if (ticket.sessionId !== stored.sessionId || ticket.userId !== meta.userId || ticket.roomEpoch !== stored.roomEpoch) {
-          throw new AppleRoomError("ADMISSION_TICKET_MISMATCH");
-        }
+        if (ticket.sessionId !== stored.sessionId || ticket.userId !== meta.userId || ticket.roomEpoch !== stored.roomEpoch) throw new AppleRoomError("ADMISSION_TICKET_MISMATCH");
         const participant = stored.participants[meta.userId];
         const lease = stored.pendingAdmissionLeases[ticket.ticketId];
         if (!participant || !participant.bookReady || participant.inviteId !== ticket.inviteId
-          || participant.connectionGeneration !== ticket.connectionGeneration) {
-          throw new AppleRoomError("ADMISSION_TICKET_STALE");
-        }
+          || participant.connectionGeneration !== ticket.connectionGeneration) throw new AppleRoomError("ADMISSION_TICKET_STALE");
         if (!lease || lease.ticketId !== ticket.ticketId || lease.userId !== meta.userId
           || lease.inviteId !== ticket.inviteId || lease.connectionGeneration !== ticket.connectionGeneration
-          || lease.expiresAt <= Date.now() || stored.consumedAdmissionTicketIds[ticket.ticketId]) {
-          throw new AppleRoomError("ADMISSION_TICKET_STALE");
-        }
+          || lease.expiresAt <= runtime.now() || stored.consumedAdmissionTicketIds[ticket.ticketId]) throw new AppleRoomError("ADMISSION_TICKET_STALE");
         stored.consumedAdmissionTicketIds[ticket.ticketId] = ticket.exp;
         delete stored.pendingAdmissionLeases[ticket.ticketId];
         participant.connectionState = "connected";
@@ -990,65 +1371,73 @@ export class AppleSessionRoom extends DurableObject<Env> {
         stored.lastEmptyAt = undefined;
         delete participant.reservedUntil;
         delete stored.seatReservations[meta.userId];
-        if (meta.userId === stored.controllerReturnUserId && stored.controllerReturnUntil && stored.controllerReturnUntil > Date.now()) {
+        if (meta.userId === stored.controllerReturnUserId && stored.controllerReturnUntil && stored.controllerReturnUntil > runtime.now()) {
           stored.controllerUserId = meta.userId;
           stored.controllerGeneration += 1;
           stored.roomEpoch += 1;
-          this.clearAppleSnapshot(stored);
+          self.clearAppleSnapshot(stored);
           stored.controllerReturnUntil = undefined;
           stored.controllerReturnUserId = undefined;
         }
         stored.rosterGeneration += 1;
-        this.recordObservation(stored, "membership", ticket.connectionGeneration);
+        self.recordObservation(stored, "membership", ticket.connectionGeneration, {}, runtime.now(), runtime.randomUUID);
         await txn.put(APPLE_KEY, stored);
         return stored;
-      });
-    } catch (error) {
-      const code = error instanceof AppleRoomError ? error.code : "ADMISSION_TICKET_STALE";
-      return new Response(code === "SESSION_ENDED" ? "session ended" : "admission ticket is stale", {
-        status: code === "SESSION_ENDED" ? 410 : 401,
-      });
-    }
-    // A second device replaces the first connection for this user. The old
-    // socket's close callback is harmless because its generation is stale.
-    for (const oldSocket of this.sockets()) {
-      if (this.metaFor(oldSocket)?.userId === meta.userId) {
-        this.supersededAppleSockets.add(oldSocket);
-        oldSocket.close(4000, "replaced");
+      }).pipe(Effect.either);
+      if (consumed._tag === "Left") {
+        const error = consumed.left;
+        if (!(error instanceof AppleRoomError)) {
+          yield* self.reportAppleHandledFailure(error, "websocket.admission.consume", correlationId, "internal.room-storage");
+          return self.rejectWss(request, 500, "INTERNAL_ERROR", "websocket.admission.consume", correlationId);
+        }
+        if (error.code === "SESSION_NOT_FOUND") return self.rejectWss(request, 404, "SESSION_NOT_FOUND", "websocket.room", correlationId);
+        if (error.code === "SESSION_ENDED") return self.rejectWss(request, 410, "SESSION_ENDED", "websocket.room", correlationId);
+        if (error.code === "ACCOUNT_DELETED") return self.rejectWss(request, 403, "ACCOUNT_DELETED", "websocket.admission.policy", correlationId);
+        if (error.code === "ADMISSION_TICKET_MISMATCH") return self.rejectWss(request, 401, "ADMISSION_TICKET_MISMATCH", "websocket.admission.consume", correlationId);
+        return self.rejectWss(request, 401, "ADMISSION_TICKET_STALE", "websocket.admission.consume", correlationId);
       }
-    }
-    const { 0: client, 1: server } = new WebSocketPair();
-    this.ctx.acceptWebSocket(server, [JSON.stringify({ meta, apple: true, connectionGeneration: ticket.connectionGeneration })]);
-    this.sendTo(server, { t: "session.state", status: state.status, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: ticket.connectionGeneration, controllerUserId: state.controllerUserId });
-    this.sendTo(server, buildAppleRosterMessage(state));
-    const snapshot = state.latestSyncSnapshot;
-    if (snapshot
-      && snapshot.sessionId === state.sessionId
-      && snapshot.roomEpoch === state.roomEpoch
-      && snapshot.controllerGeneration === state.controllerGeneration
-      && snapshot.controllerUserId === state.controllerUserId
-      && state.participants[snapshot.controllerUserId]?.connectionState === "connected"
-      && state.participants[snapshot.controllerUserId]?.connectionGeneration === snapshot.connectionGeneration) {
-      this.sendTo(server, { t: "sync.frame", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: snapshot.connectionGeneration, from: snapshot.controllerUserId, frame: snapshot.frame });
-    } else {
-      this.sendTo(server, { t: "sync.absent", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: ticket.connectionGeneration });
-    }
-    this.broadcastAppleRoster(state);
-    await this.scheduleAppleAlarm(state);
-    return new Response(null, { status: 101, webSocket: client, headers: { "sec-websocket-protocol": "rishi.sharing.v1" } });
+      const state = consumed.right;
+      for (const oldSocket of self.sockets()) {
+        if (self.metaFor(oldSocket)?.userId === meta.userId) {
+          self.supersededAppleSockets.add(oldSocket);
+          oldSocket.close(4000, "replaced");
+        }
+      }
+      const { 0: client, 1: server } = new WebSocketPair();
+      self.ctx.acceptWebSocket(server, [socketTag]);
+      self.sendTo(server, { t: "session.state", status: state.status, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: ticket.connectionGeneration, controllerUserId: state.controllerUserId });
+      self.sendTo(server, buildAppleRosterMessage(state));
+      const snapshot = state.latestSyncSnapshot;
+      if (snapshot
+        && snapshot.sessionId === state.sessionId
+        && snapshot.roomEpoch === state.roomEpoch
+        && snapshot.controllerGeneration === state.controllerGeneration
+        && snapshot.controllerUserId === state.controllerUserId
+        && state.participants[snapshot.controllerUserId]?.connectionState === "connected"
+        && state.participants[snapshot.controllerUserId]?.connectionGeneration === snapshot.connectionGeneration) {
+        self.sendTo(server, { t: "sync.frame", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: snapshot.connectionGeneration, from: snapshot.controllerUserId, frame: snapshot.frame });
+      } else {
+        self.sendTo(server, { t: "sync.absent", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: ticket.connectionGeneration });
+      }
+      self.broadcastAppleRoster(state);
+      yield* self.scheduleAppleAlarmEffect(state);
+      return new Response(null, { status: 101, webSocket: client, headers: { "sec-websocket-protocol": "rishi.sharing.v1", "x-rishi-correlation-id": correlationId } });
+    });
   }
 
   // ---------- Hibernation handlers ----------
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    const appleState = await this.appleState();
+    const appleState = await this.runAppleRoomEffect("websocket.route", this.appleStateEffect(), this.appleCorrelationFor(ws), "websocket.room");
     if (appleState || this.isAppleSocket(ws)) {
       if (!appleState) {
         this.sendError(ws, "session_not_found", "session is over");
         return;
       }
-      await this.handleAppleMessage(ws, raw);
+      await this.runAppleRoomEffect("websocket.message", this.handleAppleMessageEffect(ws, raw), this.appleCorrelationFor(ws), "websocket.room");
       return;
     }
+    const rawBytes = typeof raw === "string" ? new TextEncoder().encode(raw).byteLength : raw.byteLength;
+    if (rawBytes > MAX_LEGACY_RAW_FRAME_BYTES) { ws.close(1009, "frame too large"); return; }
     const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
     let parsed;
     try { parsed = ClientMsg.safeParse(JSON.parse(text)); }
@@ -1249,10 +1638,10 @@ export class AppleSessionRoom extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
-    const apple = await this.appleState();
+    const apple = await this.runAppleRoomEffect("websocket.close.route", this.appleStateEffect(), this.appleCorrelationFor(ws), "websocket.room");
     if (apple || this.isAppleSocket(ws)) {
       if (!apple) return;
-      await this.handleAppleClose(ws, code);
+      await this.runAppleRoomEffect("websocket.close", this.handleAppleCloseEffect(ws, code), this.appleCorrelationFor(ws), "websocket.room");
       return;
     }
     const meta = this.metaFor(ws);
@@ -1283,27 +1672,9 @@ export class AppleSessionRoom extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    const apple = await this.appleState();
+    const apple = await this.runAppleRoomEffect("apple.room.alarm.lookup", this.appleStateEffect(), undefined, "websocket.room");
     if (apple) {
-      const now = Date.now();
-      if (await this.expireAppleReservations(apple, now) || await this.expireAdmissionLeases(apple, now)) return;
-      for (const [ticketId, exp] of Object.entries(apple.consumedAdmissionTicketIds)) if (exp <= now) delete apple.consumedAdmissionTicketIds[ticketId];
-      if (apple.status !== "ended" && !apple.hasEverBeenOccupied && now >= apple.startupExpiresAt) {
-        await this.endAppleRoom(apple, "room_expired");
-        return;
-      }
-      if (apple.status !== "ended" && apple.hasEverBeenOccupied && this.connectedCount(apple) === 0 && apple.lastEmptyAt && now - apple.lastEmptyAt >= CONFIG.APPLE_EMPTY_ROOM_MS) {
-        await this.endAppleRoom(apple, "room_expired");
-        return;
-      }
-      if (apple.status === "ended") {
-        await this.ctx.storage.delete(APPLE_KEY);
-        await this.ctx.storage.deleteAlarm();
-        return;
-      }
-      this.broadcastAppleRoster(apple);
-      await this.saveAppleState(apple);
-      await this.scheduleAppleAlarm(apple);
+      await this.runAppleRoomEffect("apple.room.alarm", this.appleAlarmEffect(apple), undefined, "websocket.room");
       return;
     }
     const state = await this.loadState();
@@ -1367,177 +1738,137 @@ export class AppleSessionRoom extends DurableObject<Env> {
     await this.scheduleNextAlarm();
   }
 
-  private async handleAppleMessage(ws: WebSocket, raw: string | ArrayBuffer) {
-    const bytes = typeof raw === "string" ? new TextEncoder().encode(raw) : new Uint8Array(raw);
-    if (bytes.byteLength > 64 * 1024) { ws.close(1009, "frame too large"); return; }
-    let msg: any;
-    try { msg = JSON.parse(new TextDecoder().decode(bytes)); } catch { this.sendError(ws, "bad_json", "could not parse"); return; }
-    if (!msg || msg.v !== 1 || typeof msg.t !== "string") {
-      this.sendError(ws, "bad_msg", "unsupported Apple signaling version");
-      return;
-    }
-    const meta = this.metaFor(ws);
-    const state = await this.appleState();
-    if (!meta || !state) return;
-    if (state.status === "ended") { this.sendError(ws, "session_ended", "session is over"); return; }
-    const participant = state.participants[meta.userId];
-    if (!participant || participant.connectionState !== "connected") { this.sendError(ws, "not_admitted", "not admitted"); return; }
-    const socketGeneration = this.appleSocketGeneration(ws);
-    if (socketGeneration !== participant.connectionGeneration) {
-      this.sendError(ws, "stale_connection_generation", "connection is no longer current");
-      return;
-    }
-    if (!this.appleByteBucketFor(meta.userId).tryConsume(bytes.byteLength)) { this.sendError(ws, "rate_limited", "signaling bandwidth exceeded"); return; }
-    const bucket = this.bucketFor(meta.userId);
-    if (!bucket.tryConsume()) { this.sendError(ws, "rate_limited", "too many messages"); return; }
-    if (msg.t === "session.start" || msg.t === "session.end") {
-      const expectedGeneration = Number(msg.controllerGeneration);
-      if (!appleFenceMatches(state, participant.connectionGeneration, msg)
-        || state.controllerUserId !== meta.userId) {
-        this.sendError(ws, "stale_controller_generation", "controller state is stale");
+  private appleAlarmEffect(apple: AppleStoredState) {
+    const self = this;
+    return Effect.gen(function* () {
+      const runtime = yield* AppleRoomRuntime;
+      const now = runtime.now();
+      if ((yield* self.expireAppleReservationsEffect(apple, now)) || (yield* self.expireAdmissionLeasesEffect(apple, now))) return;
+      for (const [ticketId, exp] of Object.entries(apple.consumedAdmissionTicketIds)) if (exp <= now) delete apple.consumedAdmissionTicketIds[ticketId];
+      if (apple.status !== "ended" && !apple.hasEverBeenOccupied && now >= apple.startupExpiresAt) {
+        yield* self.endAppleRoomEffect(apple, "room_expired");
         return;
       }
-      try {
-        if (msg.t === "session.start") {
-          await this.startRoom({ actingUserId: meta.userId, expectedControllerGeneration: expectedGeneration });
-        } else {
-          await this.endRoom({ actingUserId: meta.userId, expectedControllerGeneration: expectedGeneration });
+      if (apple.status !== "ended" && apple.hasEverBeenOccupied && self.connectedCount(apple) === 0 && apple.lastEmptyAt && now - apple.lastEmptyAt >= CONFIG.APPLE_EMPTY_ROOM_MS) {
+        yield* self.endAppleRoomEffect(apple, "room_expired");
+        return;
+      }
+      if (apple.status === "ended") {
+        const storage = yield* AppleRoomStorage;
+        yield* storage.delete(APPLE_KEY);
+        yield* storage.deleteAlarm();
+        return;
+      }
+      yield* Effect.sync(() => self.broadcastAppleRoster(apple));
+      yield* self.saveAppleStateEffect(apple);
+      yield* self.scheduleAppleAlarmEffect(apple);
+    });
+  }
+
+  private handleAppleMessageEffect(ws: WebSocket, raw: string | ArrayBuffer) {
+    const self = this;
+    return Effect.gen(function* () {
+      const bytes = typeof raw === "string" ? new TextEncoder().encode(raw) : new Uint8Array(raw);
+      if (bytes.byteLength > 64 * 1024) { yield* Effect.sync(() => ws.close(1009, "frame too large")); return; }
+      let msg: any;
+      try { msg = JSON.parse(new TextDecoder().decode(bytes)); } catch { yield* Effect.sync(() => self.sendError(ws, "bad_json", "could not parse")); return; }
+      if (!msg || msg.v !== 1 || typeof msg.t !== "string") { yield* Effect.sync(() => self.sendError(ws, "bad_msg", "unsupported Apple signaling version")); return; }
+      const meta = self.metaFor(ws);
+      const socketGeneration = self.appleSocketGeneration(ws);
+      if (!meta) return;
+      if (!self.appleByteBucketFor(meta.userId).tryConsume(bytes.byteLength)) { yield* Effect.sync(() => self.sendError(ws, "rate_limited", "signaling bandwidth exceeded")); return; }
+      if (!self.bucketFor(meta.userId).tryConsume()) { yield* Effect.sync(() => self.sendError(ws, "rate_limited", "too many messages")); return; }
+      const state = yield* self.appleStateEffect();
+      if (!state) return;
+      if (state.status === "ended") { yield* Effect.sync(() => self.sendError(ws, "session_ended", "session is over")); return; }
+      const participant = state.participants[meta.userId];
+      if (!participant || participant.connectionState !== "connected") { yield* Effect.sync(() => self.sendError(ws, "not_admitted", "not admitted")); return; }
+      if (socketGeneration !== participant.connectionGeneration) { yield* Effect.sync(() => self.sendError(ws, "stale_connection_generation", "connection is no longer current")); return; }
+      const runtime = yield* AppleRoomRuntime;
+      const failMessage = (code: string, message: string) => Effect.sync(() => self.sendError(ws, code, message));
+
+      if (msg.t === "session.start" || msg.t === "session.end") {
+        const expectedGeneration = Number(msg.controllerGeneration);
+        if (!appleFenceMatches(state, participant.connectionGeneration, msg) || state.controllerUserId !== meta.userId) return yield* failMessage("stale_controller_generation", "controller state is stale");
+        const control = msg.t === "session.start"
+          ? self.startRoomEffect({ actingUserId: meta.userId, expectedControllerGeneration: expectedGeneration })
+          : self.endRoomEffect({ actingUserId: meta.userId, expectedControllerGeneration: expectedGeneration });
+        const result = yield* control.pipe(Effect.either);
+        if (result._tag === "Left") {
+          if (!(result.left instanceof AppleRoomError)) yield* self.reportAppleHandledFailure(result.left, `websocket.${msg.t}`, self.appleCorrelationFor(ws), "websocket.room");
+          yield* failMessage(result.left instanceof AppleRoomError ? result.left.code.toLowerCase() : "service_unavailable", result.left instanceof Error ? result.left.message : "session control failed");
         }
-      } catch (error) {
-        const code = error instanceof AppleRoomError ? error.code.toLowerCase() : "service_unavailable";
-        this.sendError(ws, code, error instanceof Error ? error.message : "session control failed");
-      }
-      return;
-    }
-    if (msg.t === "leave") {
-      if (!appleFenceMatches(state, participant.connectionGeneration, msg)) { this.sendError(ws, "stale_controller_generation", "controller state is stale"); return; }
-      await this.leaveRoom({ actingUserId: meta.userId, deliberate: true });
-      return;
-    }
-    if (msg.t === "speaker.request") {
-      if (!appleFenceMatches(state, participant.connectionGeneration, msg)) { this.sendError(ws, "stale_controller_generation", "controller state is stale"); return; }
-      if (state.status !== "active") { this.sendError(ws, "not_active", "speaker floor is available when reading"); return; }
-      if (state.speakerFloor?.userId === meta.userId && Date.now() - state.speakerFloor.grantedAt < CONFIG.RATE_LIMITS.speakerRequestCooldownMs) return;
-      if (state.speakerFloor && state.speakerFloor.userId !== meta.userId) { this.sendError(ws, "speaker_busy", "another participant has the floor"); return; }
-      const requestId = typeof msg.requestId === "string" && msg.requestId.length <= 128 ? msg.requestId : null;
-      if (!requestId) { this.sendError(ws, "bad_msg", "requestId required"); return; }
-      state.speakerFloor = { userId: meta.userId, requestId, grantedAt: Date.now() };
-      await this.saveAppleState(state);
-      this.broadcastApple({ t: "speaker.granted", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, requestId, speakerUserId: meta.userId });
-      return;
-    }
-    if (msg.t === "speaker.release") {
-      if (!appleFenceMatches(state, participant.connectionGeneration, msg)) { this.sendError(ws, "stale_controller_generation", "controller state is stale"); return; }
-      if (state.speakerFloor?.userId !== meta.userId) return;
-      state.speakerFloor = null;
-      await this.saveAppleState(state);
-      this.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, speakerUserId: meta.userId });
-      return;
-    }
-    if (msg.t === "sync.frame") {
-      if (meta.userId !== state.controllerUserId) { this.sendError(ws, "forbidden", "only the controller can publish shared progress"); return; }
-      if (!appleRoomFenceMatches(state, msg.frame)) { this.sendError(ws, "stale_controller_generation", "controller state is stale"); return; }
-      const parsedSnapshot = ControllerSnapshot.safeParse(msg.frame);
-      if (!parsedSnapshot.success) {
-        this.sendError(ws, "bad_msg", "invalid controller snapshot");
         return;
       }
-      const frame = parsedSnapshot.data;
-      if (!isSnapshotForBook(frame, state.bookContext.bookId, state.bookContext.contentHash)) {
-        this.sendError(ws, "bad_msg", "snapshot book does not match room");
+      if (msg.t === "leave") {
+        if (!appleFenceMatches(state, participant.connectionGeneration, msg)) return yield* failMessage("stale_controller_generation", "controller state is stale");
+        yield* self.leaveRoomEffect({ actingUserId: meta.userId, deliberate: true });
         return;
       }
-      const controllerSequence = frame.sequence;
-      const current = state.latestSyncSnapshot;
-      if (current && (state.roomEpoch !== current.roomEpoch || state.controllerGeneration !== current.controllerGeneration || controllerSequence <= current.sequence)) {
+      if (msg.t === "speaker.request") {
+        if (!appleFenceMatches(state, participant.connectionGeneration, msg)) return yield* failMessage("stale_controller_generation", "controller state is stale");
+        if (state.status !== "active") return yield* failMessage("not_active", "speaker floor is available when reading");
+        if (state.speakerFloor?.userId === meta.userId && runtime.now() - state.speakerFloor.grantedAt < CONFIG.RATE_LIMITS.speakerRequestCooldownMs) return;
+        if (state.speakerFloor && state.speakerFloor.userId !== meta.userId) return yield* failMessage("speaker_busy", "another participant has the floor");
+        const requestId = typeof msg.requestId === "string" && msg.requestId.length <= 128 ? msg.requestId : null;
+        if (!requestId) return yield* failMessage("bad_msg", "requestId required");
+        state.speakerFloor = { userId: meta.userId, requestId, grantedAt: runtime.now() };
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.broadcastApple({ t: "speaker.granted", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, requestId, speakerUserId: meta.userId }));
         return;
       }
-      state.latestSyncSnapshot = {
-        sessionId: state.sessionId,
-        roomEpoch: state.roomEpoch,
-        controllerGeneration: state.controllerGeneration,
-        connectionGeneration: participant.connectionGeneration,
-        controllerUserId: meta.userId,
-        sequence: controllerSequence,
-        frame,
-      };
-      this.recordObservation(state, "sync", participant.connectionGeneration, { readerSequence: controllerSequence });
-      await this.saveAppleState(state);
-      this.broadcastApple({ t: "sync.frame", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, from: meta.userId, frame });
-      return;
-    }
-    if (msg.t === "sdp.offer" || msg.t === "sdp.answer") {
-      if (!this.isBoundedUserId(msg.to) || !this.isBoundedString(msg.sdp, 20_000)) {
-        this.sendError(ws, "bad_msg", "invalid SDP relay");
+      if (msg.t === "speaker.release") {
+        if (!appleFenceMatches(state, participant.connectionGeneration, msg)) return yield* failMessage("stale_controller_generation", "controller state is stale");
+        if (state.speakerFloor?.userId !== meta.userId) return;
+        state.speakerFloor = null;
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, speakerUserId: meta.userId }));
         return;
       }
-      const targetParticipant = state.participants[msg.to];
-      const target = targetParticipant?.connectionState === "connected"
-        ? this.findAppleSocketByUserId(msg.to, targetParticipant.connectionGeneration)
-        : null;
-      if (!target || !targetParticipant || targetParticipant.connectionState !== "connected") {
-        this.sendError(ws, "no_such_peer", `peer ${msg.to} not connected`);
+      if (msg.t === "sync.frame") {
+        if (meta.userId !== state.controllerUserId) return yield* failMessage("forbidden", "only the controller can publish shared progress");
+        if (!appleRoomFenceMatches(state, msg.frame)) return yield* failMessage("stale_controller_generation", "controller state is stale");
+        const parsedSnapshot = ControllerSnapshot.safeParse(msg.frame);
+        if (!parsedSnapshot.success) return yield* failMessage("bad_msg", "invalid controller snapshot");
+        const frame = parsedSnapshot.data;
+        if (!isSnapshotForBook(frame, state.bookContext.bookId, state.bookContext.contentHash)) return yield* failMessage("bad_msg", "snapshot book does not match room");
+        const controllerSequence = frame.sequence;
+        const current = state.latestSyncSnapshot;
+        if (current && (state.roomEpoch !== current.roomEpoch || state.controllerGeneration !== current.controllerGeneration || controllerSequence <= current.sequence)) return;
+        state.latestSyncSnapshot = { sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, controllerUserId: meta.userId, sequence: controllerSequence, frame };
+        self.recordObservation(state, "sync", participant.connectionGeneration, { readerSequence: controllerSequence }, runtime.now(), runtime.randomUUID);
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.broadcastApple({ t: "sync.frame", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, from: meta.userId, frame }));
         return;
       }
-      state.sdpRelayCount = (state.sdpRelayCount ?? 0) + 1;
-      if (state.sdpRelayCount > CONFIG.RATE_LIMITS.appleSdpRelaysPerSession) {
-        this.sendError(ws, "rate_limited", "signaling relay budget exhausted");
+      if (msg.t === "sdp.offer" || msg.t === "sdp.answer") {
+        if (!self.isBoundedUserId(msg.to) || !self.isBoundedString(msg.sdp, 20_000)) return yield* failMessage("bad_msg", "invalid SDP relay");
+        const targetParticipant = state.participants[msg.to];
+        const target = targetParticipant?.connectionState === "connected" ? self.findAppleSocketByUserId(msg.to, targetParticipant.connectionGeneration) : null;
+        if (!target || !targetParticipant || targetParticipant.connectionState !== "connected") return yield* failMessage("no_such_peer", `peer ${msg.to} not connected`);
+        state.sdpRelayCount = (state.sdpRelayCount ?? 0) + 1;
+        if (state.sdpRelayCount > CONFIG.RATE_LIMITS.appleSdpRelaysPerSession) return yield* failMessage("rate_limited", "signaling relay budget exhausted");
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.sendTo(target, { t: msg.t, v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, from: meta.userId, sdp: msg.sdp }));
         return;
       }
-      await this.saveAppleState(state);
-      this.sendTo(target, {
-        t: msg.t,
-        v: 1,
-        sessionId: state.sessionId,
-        roomEpoch: state.roomEpoch,
-        controllerGeneration: state.controllerGeneration,
-        connectionGeneration: participant.connectionGeneration,
-        from: meta.userId,
-        sdp: msg.sdp,
-      });
-      return;
-    }
-    if (msg.t === "ice") {
-      const candidate = msg.candidate;
-      if (!this.isBoundedUserId(msg.to) || !candidate || typeof candidate !== "object"
-        || !this.isBoundedString(candidate.candidate, 4 * 1024)
-        || (candidate.sdpMid !== undefined && candidate.sdpMid !== null && !this.isBoundedString(candidate.sdpMid, 4 * 1024))
-        || (candidate.sdpMLineIndex !== undefined && candidate.sdpMLineIndex !== null
-          && (!Number.isInteger(candidate.sdpMLineIndex) || candidate.sdpMLineIndex < 0 || candidate.sdpMLineIndex > 65535))) {
-        this.sendError(ws, "bad_msg", "invalid ICE candidate");
+      if (msg.t === "ice") {
+        const candidate = msg.candidate;
+        if (!self.isBoundedUserId(msg.to) || !candidate || typeof candidate !== "object"
+          || !self.isBoundedString(candidate.candidate, 4 * 1024)
+          || (candidate.sdpMid !== undefined && candidate.sdpMid !== null && !self.isBoundedString(candidate.sdpMid, 4 * 1024))
+          || (candidate.sdpMLineIndex !== undefined && candidate.sdpMLineIndex !== null && (!Number.isInteger(candidate.sdpMLineIndex) || candidate.sdpMLineIndex < 0 || candidate.sdpMLineIndex > 65535))) return yield* failMessage("bad_msg", "invalid ICE candidate");
+        const targetParticipant = state.participants[msg.to];
+        const target = targetParticipant?.connectionState === "connected" ? self.findAppleSocketByUserId(msg.to, targetParticipant.connectionGeneration) : null;
+        if (!target || !targetParticipant || targetParticipant.connectionState !== "connected") return yield* failMessage("no_such_peer", `peer ${msg.to} not connected`);
+        state.sdpRelayCount = (state.sdpRelayCount ?? 0) + 1;
+        if (state.sdpRelayCount > CONFIG.RATE_LIMITS.appleSdpRelaysPerSession) return yield* failMessage("rate_limited", "signaling relay budget exhausted");
+        yield* self.saveAppleStateEffect(state);
+        yield* Effect.sync(() => self.sendTo(target, { t: "ice", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: participant.connectionGeneration, from: meta.userId, candidate: { candidate: candidate.candidate, sdpMid: candidate.sdpMid ?? null, sdpMLineIndex: candidate.sdpMLineIndex ?? null } }));
         return;
       }
-      const targetParticipant = state.participants[msg.to];
-      const target = targetParticipant?.connectionState === "connected"
-        ? this.findAppleSocketByUserId(msg.to, targetParticipant.connectionGeneration)
-        : null;
-      if (!target || !targetParticipant || targetParticipant.connectionState !== "connected") {
-        this.sendError(ws, "no_such_peer", `peer ${msg.to} not connected`);
-        return;
-      }
-      state.sdpRelayCount = (state.sdpRelayCount ?? 0) + 1;
-      if (state.sdpRelayCount > CONFIG.RATE_LIMITS.appleSdpRelaysPerSession) {
-        this.sendError(ws, "rate_limited", "signaling relay budget exhausted");
-        return;
-      }
-      await this.saveAppleState(state);
-      this.sendTo(target, {
-        t: "ice",
-        v: 1,
-        sessionId: state.sessionId,
-        roomEpoch: state.roomEpoch,
-        controllerGeneration: state.controllerGeneration,
-        connectionGeneration: participant.connectionGeneration,
-        from: meta.userId,
-        candidate: {
-          candidate: candidate.candidate,
-          sdpMid: candidate.sdpMid ?? null,
-          sdpMLineIndex: candidate.sdpMLineIndex ?? null,
-        },
-      });
-      return;
-    }
-    this.sendError(ws, "unknown", `no handler for ${String(msg.t ?? "message")}`);
+      yield* failMessage("unknown", `no handler for ${String(msg.t ?? "message")}`);
+    });
   }
 
   private isBoundedString(value: unknown, maxBytes: number): value is string {
@@ -1558,60 +1889,59 @@ export class AppleSessionRoom extends DurableObject<Env> {
     }
   }
 
+  private appleCorrelationFor(ws: WebSocket): string {
+    const tag = this.ctx.getTags(ws)[0];
+    try {
+      const correlationId = JSON.parse(tag ?? "{}").correlationId;
+      if (typeof correlationId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(correlationId)) return correlationId;
+    } catch { /* Ignore malformed hibernated tags. */ }
+    return crypto.randomUUID();
+  }
+
   private isAppleSocket(ws: WebSocket): boolean {
     const tag = this.ctx.getTags(ws)[0];
     try { return JSON.parse(tag ?? "{}").apple === true; } catch { return false; }
   }
 
-  private async handleAppleClose(ws: WebSocket, code: number) {
-    if (this.supersededAppleSockets.has(ws)) return;
-    const meta = this.metaFor(ws);
-    const state = await this.appleState();
-    if (!meta || !state) return;
-    const tagGeneration = this.appleSocketGeneration(ws);
-    const participant = state.participants[meta.userId];
-    if (!participant || participant.connectionGeneration !== tagGeneration) return;
-    if (code === 1000) {
-      delete state.participants[meta.userId];
-      delete state.seatReservations[meta.userId];
-      this.removeAppleAdmissionLeases(state, meta.userId);
-      const controllerChanged = state.controllerUserId === meta.userId;
-      if (state.speakerFloor?.userId === meta.userId) {
-        const floor = state.speakerFloor;
-        state.speakerFloor = null;
-        this.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId });
+  private handleAppleCloseEffect(ws: WebSocket, code: number) {
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.supersededAppleSockets.has(ws)) return;
+      const meta = self.metaFor(ws);
+      const state = yield* self.appleStateEffect();
+      if (!meta || !state) return;
+      const tagGeneration = self.appleSocketGeneration(ws);
+      const participant = state.participants[meta.userId];
+      if (!participant || participant.connectionGeneration !== tagGeneration) return;
+      const runtime = yield* AppleRoomRuntime;
+      const releasedFloor = state.speakerFloor?.userId === meta.userId ? state.speakerFloor : null;
+      if (releasedFloor) state.speakerFloor = null;
+      let controllerChanged = false;
+      if (code === 1000) {
+        delete state.participants[meta.userId];
+        delete state.seatReservations[meta.userId];
+        self.removeAppleAdmissionLeases(state, meta.userId);
+        controllerChanged = state.controllerUserId === meta.userId;
+        if (controllerChanged) self.chooseAppleController(state, false);
+      } else {
+        participant.connectionState = "reconnecting";
+        participant.reservedUntil = runtime.now() + CONFIG.APPLE_CONTROLLER_RECLAIM_MS;
+        state.seatReservations[meta.userId] = { reservedUntil: participant.reservedUntil, connectionGeneration: participant.connectionGeneration };
+        if (state.controllerUserId === meta.userId) {
+          self.chooseAppleController(state, true);
+          controllerChanged = true;
+        }
       }
-      if (controllerChanged) this.chooseAppleController(state, false);
-      if (controllerChanged) this.broadcastControllerChange(state);
-    } else {
-      participant.connectionState = "reconnecting";
-      if (state.speakerFloor?.userId === meta.userId) {
-        const floor = state.speakerFloor;
-        state.speakerFloor = null;
-        this.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: floor.userId });
-      }
-      participant.reservedUntil = Date.now() + CONFIG.APPLE_CONTROLLER_RECLAIM_MS;
-      state.seatReservations[meta.userId] = { reservedUntil: participant.reservedUntil, connectionGeneration: participant.connectionGeneration };
-      if (state.controllerUserId === meta.userId) {
-        this.chooseAppleController(state, true);
-        this.broadcastControllerChange(state);
-      }
-    }
-    state.rosterGeneration += 1;
-    if (!Object.values(state.participants).some((value) => value.connectionState === "connected")) state.lastEmptyAt = Date.now();
-    await this.saveAppleState(state);
-    this.broadcastAppleRoster(state);
-    await this.scheduleAppleAlarm(state);
-  }
-
-  private async scheduleAppleAlarm(state: AppleStoredState) {
-    const values = Object.values(state.seatReservations).map((r) => r.reservedUntil);
-    values.push(...Object.values(state.pendingAdmissionLeases).map((lease) => lease.expiresAt));
-    if (!state.hasEverBeenOccupied) values.push(state.startupExpiresAt);
-    else if (state.lastEmptyAt) values.push(state.lastEmptyAt + CONFIG.APPLE_EMPTY_ROOM_MS);
-    if (state.status === "ended") values.push(Date.now() + CONFIG.STORAGE_PURGE_AFTER_END_MS);
-    if (values.length > 0) await this.ctx.storage.setAlarm(Math.min(...values));
-    else await this.ctx.storage.setAlarm(Date.now() + CONFIG.APPLE_EMPTY_ROOM_MS);
+      state.rosterGeneration += 1;
+      if (!Object.values(state.participants).some((value) => value.connectionState === "connected")) state.lastEmptyAt = runtime.now();
+      yield* self.saveAppleStateEffect(state);
+      yield* Effect.sync(() => {
+        if (releasedFloor) self.broadcastApple({ t: "speaker.released", v: 1, sessionId: state.sessionId, roomEpoch: state.roomEpoch, controllerGeneration: state.controllerGeneration, connectionGeneration: 0, speakerUserId: releasedFloor.userId });
+        if (controllerChanged) self.broadcastControllerChange(state);
+        self.broadcastAppleRoster(state);
+      });
+      yield* self.scheduleAppleAlarmEffect(state);
+    });
   }
 
   // ---------- Hello ----------

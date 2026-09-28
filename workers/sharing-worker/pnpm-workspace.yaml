@@ -1,2 +1,6 @@
 packages:
   - '../../packages/sharing-protocol'
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true

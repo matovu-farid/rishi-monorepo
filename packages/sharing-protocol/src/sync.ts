@@ -113,9 +113,23 @@ export const SyncMsg = z.discriminatedUnion("t", [
 export type SyncMsg = z.infer<typeof SyncMsg>;
 
 const Format = z.enum(["epub", "pdf"]);
+// A native Readium locator is retained as JSON alongside the legacy CFI/page
+// fields. Keep it well below the 16 KiB sync-frame limit.
+const MAX_READIUM_LOCATOR_BYTES = 8 * 1024;
+const ReadiumLocator = z.string().min(1).max(MAX_READIUM_LOCATOR_BYTES).refine(
+  (value) => new TextEncoder().encode(value).byteLength <= MAX_READIUM_LOCATOR_BYTES,
+  { message: "readiumLocator exceeds the 8 KiB maximum" },
+).refine((value) => {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}, { message: "readiumLocator must be a JSON object" });
 const AuthoritativePosition = z.union([
-  z.object({ format: z.literal("epub"), cfi: Cfi }).strict(),
-  z.object({ format: z.literal("pdf"), page: Page, offsetY: FiniteNumber.max(10_000_000) }).strict(),
+  z.object({ format: z.literal("epub"), cfi: Cfi, readiumLocator: ReadiumLocator.optional(), positionSource: z.enum(["reader", "readAloud"]).optional() }).strict(),
+  z.object({ format: z.literal("pdf"), page: Page, offsetY: FiniteNumber.max(10_000_000), readiumLocator: ReadiumLocator.optional(), positionSource: z.enum(["reader", "readAloud"]).optional() }).strict(),
 ]);
 
 const authoritativeFields = {
