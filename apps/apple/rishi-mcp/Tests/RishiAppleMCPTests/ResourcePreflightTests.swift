@@ -2,32 +2,33 @@ import XCTest
 @testable import RishiAppleMCP
 
 final class ResourcePreflightTests: XCTestCase {
-    func testDefaultMemoryFloorLeavesHostHeadroom() {
-        XCTAssertEqual(ResourcePreflight.defaultMinimumMemoryBytes, 8 * 1024 * 1024 * 1024)
+    func testMemoryLevelsAndEnvironmentFloorsDoNotRejectSufficientDisk() {
+        XCTAssertNoThrow(
+            try ResourcePreflight.requireSufficient(
+                for: URL(fileURLWithPath: "/unused"),
+                environment: [
+                    "RISHI_MCP_MIN_FREE_MEMORY_GB": "1024",
+                    "RISHI_E2E_MIN_FREE_MEMORY_GB": "1024",
+                ],
+                capacityProvider: { _ in
+                    ResourceCapacity(diskBytes: 40 * 1024 * 1024 * 1024, memoryBytes: 1)
+                }
+            )
+        )
     }
 
-    func testSharedFloorIsUsedWhenMCPFloorIsMissingOrMalformed() {
-        XCTAssertEqual(
-            ResourcePreflight.configuredMinimum(
-                key: "RISHI_MCP_MIN_FREE_MEMORY_GB",
-                fallback: "RISHI_E2E_MIN_FREE_MEMORY_GB",
-                defaultValue: ResourcePreflight.defaultMinimumMemoryBytes,
-                environment: ["RISHI_E2E_MIN_FREE_MEMORY_GB": "7"]
-            ),
-            ResourcePreflight.defaultMinimumMemoryBytes
-        )
-        XCTAssertEqual(
-            ResourcePreflight.configuredMinimum(
-                key: "RISHI_MCP_MIN_FREE_MEMORY_GB",
-                fallback: "RISHI_E2E_MIN_FREE_MEMORY_GB",
-                defaultValue: ResourcePreflight.defaultMinimumMemoryBytes,
-                environment: [
-                    "RISHI_MCP_MIN_FREE_MEMORY_GB": "not-a-number",
-                    "RISHI_E2E_MIN_FREE_MEMORY_GB": "7",
-                ]
-            ),
-            ResourcePreflight.defaultMinimumMemoryBytes
-        )
+    func testInsufficientDiskIsRejectedEvenWhenMemoryIsHigh() {
+        XCTAssertThrowsError(
+            try ResourcePreflight.requireSufficient(
+                for: URL(fileURLWithPath: "/unused"),
+                environment: [:],
+                capacityProvider: { _ in
+                    ResourceCapacity(diskBytes: 1, memoryBytes: UInt64.max)
+                }
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Insufficient free disk"))
+        }
     }
 
     func testConfiguredFloorCannotLowerTheDefault() {
@@ -40,20 +41,14 @@ final class ResourcePreflightTests: XCTestCase {
             ),
             ResourcePreflight.defaultMinimumDiskBytes
         )
-    }
-
-    func testAvailableMemoryDoesNotDoubleCountPurgeablePages() throws {
-        let vmStat = """
-        Mach Virtual Memory Statistics: (page size of 16384 bytes)
-        Pages free:                             10.
-        Pages inactive:                         20.
-        Pages speculative:                       3.
-        Pages purgeable:                      1000.
-        """
-
         XCTAssertEqual(
-            try ResourcePreflight.availableMemoryBytes(from: vmStat),
-            UInt64(33 * 16384)
+            ResourcePreflight.configuredMinimum(
+                key: "RISHI_MCP_MIN_FREE_DISK_GB",
+                fallback: "RISHI_E2E_MIN_FREE_DISK_GB",
+                defaultValue: ResourcePreflight.defaultMinimumDiskBytes,
+                environment: ["RISHI_E2E_MIN_FREE_DISK_GB": "30"]
+            ),
+            30 * 1024 * 1024 * 1024
         )
     }
 }

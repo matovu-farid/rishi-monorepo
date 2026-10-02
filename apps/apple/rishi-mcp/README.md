@@ -36,12 +36,15 @@ derived-data directories. Those driver-owned directories are removed only
 after the XCTest process tree has been confirmed stopped; explicitly configured
 derived-data directories are never removed by the driver.
 The lock remains held until the owned XCTest session is stopped.
-Before Xcode starts, it also requires at least 20 GiB of free disk and 8 GiB of
-available memory. The floors can only be raised with
-`RISHI_MCP_MIN_FREE_DISK_GB` and `RISHI_MCP_MIN_FREE_MEMORY_GB` (or the shared
-`RISHI_E2E_*` names). Once a session is running, the driver rechecks the same
-reserve every five seconds and stops its owned XCTest process if the reserve
-is crossed; cleanup keeps the build lock until descendant cleanup is confirmed.
+Before Xcode starts, the driver requires at least 20 GiB of free disk. This
+disk floor can only be raised with `RISHI_MCP_MIN_FREE_DISK_GB`, or with the
+shared `RISHI_E2E_MIN_FREE_DISK_GB` fallback when the MCP-specific key is
+absent or invalid. Once a session is running, the driver rechecks the disk
+reserve every five seconds and stops its owned XCTest process if it is crossed;
+cleanup keeps the build lock until descendant cleanup is confirmed. Memory
+snapshots continue to report `vm_stat` page data, available bytes, and process
+RSS as telemetry, but memory levels and environment settings never block a
+launch or stop a session.
 
 ## Codex configuration
 

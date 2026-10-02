@@ -136,15 +136,12 @@ struct RishiE2EHostCLI {
             let report = try await withThrowingTaskGroup(of: SharedReadingRunReport.self) { group in
                 group.addTask { await runTask.value }
                 group.addTask {
-                    while true {
-                        try await Task.sleep(for: .seconds(5))
-                        do {
-                            try ResourcePreflight.requireSufficient(for: runRoot)
-                        } catch let error as ResourcePreflightError {
-                            runTask.cancel()
-                            throw HostError.resourcePressure(error.message)
-                        }
-                    }
+                    let error = try await ResourceWatchdog.run(
+                        sleep: { try await Task.sleep(for: .seconds(5)) },
+                        check: { try ResourcePreflight.requireSufficient(for: runRoot) },
+                        onPressure: { _ in runTask.cancel() }
+                    )
+                    throw HostError.resourcePressure(error.message)
                 }
                 defer { group.cancelAll() }
                 return try await group.next()!

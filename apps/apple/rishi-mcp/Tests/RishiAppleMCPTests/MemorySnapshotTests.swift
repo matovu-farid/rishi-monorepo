@@ -14,9 +14,9 @@ private actor ProcessInvocationRecorder {
 }
 
 final class MemorySnapshotTests: XCTestCase {
-    func testSnapshotEmitsAvailableAndConfiguredMinimumMemoryBytes() async throws {
+    func testSnapshotEmitsAvailableMemoryWithoutConfiguredMinimum() async throws {
         let snapshot = MemorySnapshot(
-            environment: ["RISHI_MCP_MIN_FREE_MEMORY_GB": "12"],
+            environment: [:],
             run: { _, arguments, _, _ in
                 if arguments == ["vm_stat"] {
                     return CommandResult(
@@ -40,7 +40,7 @@ final class MemorySnapshotTests: XCTestCase {
         let result = try await snapshot.snapshot(match: "")
 
         XCTAssertEqual(result["host"]?["availableMemoryBytes"]?.intValue, 40_960)
-        XCTAssertEqual(result["host"]?["configuredMinimumMemoryBytes"]?.intValue, 12 * 1024 * 1024 * 1024)
+        XCTAssertNil(result["host"]?["configuredMinimumMemoryBytes"])
     }
 
     func testUnfilteredSnapshotDoesNotExposeHostProcessCommands() async throws {

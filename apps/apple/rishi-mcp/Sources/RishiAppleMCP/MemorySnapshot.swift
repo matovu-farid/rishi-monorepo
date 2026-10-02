@@ -57,19 +57,12 @@ public struct MemorySnapshot: MemorySnapshotting, Sendable {
             .compactMap { Self.parsePageCounters(from: vmResult.stdout)[$0] }
             .reduce(0, +)
         let availableMemoryBytes = availablePages * pageSize
-        let configuredMinimumMemoryBytes = ResourcePreflight.configuredMinimum(
-            key: "RISHI_MCP_MIN_FREE_MEMORY_GB",
-            fallback: "RISHI_E2E_MIN_FREE_MEMORY_GB",
-            defaultValue: ResourcePreflight.defaultMinimumMemoryBytes,
-            environment: environment
-        )
         return .object([
             "host": .object([
                 "pageSize": .integer(pageSize),
                 "pages": .object(pages),
                 "processRssKb": .integer(processRSSKb),
                 "availableMemoryBytes": .integer(availableMemoryBytes),
-                "configuredMinimumMemoryBytes": .integer(Int(configuredMinimumMemoryBytes)),
             ]),
             "matchingProcesses": .array(processes),
         ])
