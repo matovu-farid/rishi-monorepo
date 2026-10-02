@@ -1,0 +1,857 @@
+
+Running 115 tests using 4 workers
+
+  ✓    1 [electron] › e2e/auth.spec.ts:15:7 › Auth surface › Sign In control is reachable from the library (335ms)
+  ✓    4 [electron] › e2e/ai-chat.spec.ts:41:7 › Voice chat / premium gate › voice chat launcher renders in the reader (153ms)
+  ✓    5 [electron] › e2e/auth.spec.ts:23:7 › Auth surface › welcome modal reappears after clearing localStorage (1.6s)
+  ✓    3 [electron] › e2e/ai-chat-pdf.spec.ts:54:7 › Voice chat / premium gate (PDF) › voice chat launcher renders in the pdf reader (1.7s)
+  ✓    2 [electron] › e2e/ai-chat-azw3.spec.ts:69:9 › Voice chat / premium gate (AZW3) › voice chat launcher renders in the AZW3 reader (1.5s)
+  ✓    6 [electron] › e2e/ai-chat.spec.ts:47:7 › Voice chat / premium gate › clicking voice chat without auth opens the premium dialog (1.3s)
+  ✓    8 [electron] › e2e/ai-chat-pdf.spec.ts:60:7 › Voice chat / premium gate (PDF) › clicking voice chat without auth opens the premium dialog (75ms)
+  ✓    9 [electron] › e2e/ai-chat-azw3.spec.ts:75:9 › Voice chat / premium gate (AZW3) › clicking voice chat without auth opens the premium dialog (AZW3) (53ms)
+  ✓    7 [electron] › e2e/auth.spec.ts:33:7 › Auth surface › "Maybe later" dismisses the welcome modal and persists (3.3s)
+  ✓   10 [electron] › e2e/ai-chat.spec.ts:54:7 › Voice chat / premium gate › "Maybe later" closes the premium dialog (884ms)
+  ✓   11 [electron] › e2e/ai-chat-pdf.spec.ts:67:7 › Voice chat / premium gate (PDF) › "Maybe later" closes the premium dialog (860ms)
+  ✓   13 [electron] › e2e/azw3-column-alignment.spec.ts:9:5 › AZW3 reader keeps the leftmost column aligned across pages (9.9s)
+  ✓   15 [electron] › e2e/azw3-parity.spec.ts:14:7 › AZW3 reader — feature parity with MOBI › chapter Next/Prev chevrons advance the counter (8.8s)
+  ✓   14 [electron] › e2e/azw3-open.spec.ts:11:5 › AZW3 book opens and renders the first chapter (8.8s)
+  ✓   16 [electron] › e2e/azw3-real-import-routing.spec.ts:23:5 › AZW3 .azw3 file imports with kind=azw3 (not mobi) (8.6s)
+  -   19 [electron] › e2e/epub-cache-no-flash.spec.ts:28:6 › warm-restore reopen does not flash the inner loading view
+  ✘   17 [electron] › e2e/azw3-parity.spec.ts:59:7 › AZW3 reader — feature parity with MOBI › View > Show TOC opens the TOC sheet (9.2s)
+  ✓   18 [electron] › e2e/azw3-render-content.spec.ts:11:5 › AZW3 reader paints the book content into the iframe (9.3s)
+  ✓   20 [electron] › e2e/epub-first-open.spec.ts:25:5 › first open of an EPUB renders content (no infinite loader) (8.9s)
+  ✓   21 [electron] › e2e/azw3-render-content.spec.ts:121:5 › AZW3 reader paginates single-section books (8.8s)
+  ✓   23 [electron] › e2e/epub-reader.spec.ts:40:7 › EPUB reader › renders prev and next page arrows (597ms)
+  ✘   22 [electron] › e2e/azw3-parity.spec.ts:88:7 › AZW3 reader — feature parity with MOBI › Bookmarks > Add Bookmark stores a bookmark in the DB (9.5s)
+  -   26 [electron] › e2e/epub-warm-restore.spec.ts:69:6 › first open populates the cache, second open hits it
+  ✓   25 [electron] › e2e/epub-reader.spec.ts:45:7 › EPUB reader › next-page click advances the persisted CFI (1.1s)
+  -   27 [electron] › e2e/epub-reader.spec.ts:57:7 › EPUB reader › TOC toggle opens and closes the table of contents
+  ✓   29 [electron] › e2e/epub-reader.spec.ts:66:7 › EPUB reader › keyboard arrows change the persisted CFI (1.2s)
+  ✓   12 [electron] › e2e/ai-chat-azw3.spec.ts:82:9 › Voice chat / premium gate (AZW3) › "Maybe later" closes the premium dialog (AZW3) (30.8s)
+  ✓   24 [electron] › e2e/epub-text-selection.spec.ts:87:7 › EPUB text selection › no pointer-event overlay covers the epub iframe (swipeable overlay must be absent) (1.2s)
+  ✓   28 [electron] › e2e/import.spec.ts:28:7 › Import & metadata extraction › getPdfData returns valid metadata for a PDF fixture (165ms)
+  ✓   33 [electron] › e2e/import.spec.ts:38:7 › Import & metadata extraction › getBookData returns EPUB metadata without hanging (201ms)
+  ✓   34 [electron] › e2e/import.spec.ts:48:7 › Import & metadata extraction › getMobiData returns MOBI metadata (11ms)
+  ✓   35 [electron] › e2e/import.spec.ts:57:7 › Import & metadata extraction › checkFileSize returns ok or warn for fixture PDFs (3ms)
+  ✓   36 [electron] › e2e/import.spec.ts:66:7 › Import & metadata extraction › copyFile + exists round-trips through getAppDataPath (9ms)
+  ✓   37 [electron] › e2e/import.spec.ts:80:7 › Import & metadata extraction › importing a PDF persists it in getBooks() (52ms)
+  ✓   32 [electron] › e2e/epub-text-selection.spec.ts:126:7 › EPUB text selection › selecting text inside the epub iframe yields a non-empty selection (1.2s)
+  ✓   31 [electron] › e2e/ai-chat-azw3.spec.ts:69:9 › Voice chat / premium gate (MOBI) › voice chat launcher renders in the MOBI reader (8ms)
+  ✓   38 [electron] › e2e/library.spec.ts:31:7 › Library › search input accepts and clears text (551ms)
+  ✓   40 [electron] › e2e/ai-chat-azw3.spec.ts:75:9 › Voice chat / premium gate (MOBI) › clicking voice chat without auth opens the premium dialog (MOBI) (1.4s)
+  ✓   30 [electron] › e2e/epub-reader.spec.ts:85:7 › EPUB reader › rapid forward navigation advances the persisted CFI (1.3s)
+  ✓   41 [electron] › e2e/library.spec.ts:39:7 › Library › imported book appears in library and opens reader (2.7s)
+  ✓   44 [electron] › e2e/library.spec.ts:74:7 › Library › search filters book list by title (3.3s)
+  ✘   39 [electron] › e2e/menu-book-epub.spec.ts:12:5 › focused EPUB book window menu hides PDF-only items (12.3s)
+  ✓   45 [electron] › e2e/library.spec.ts:101:7 › Library › right-click context menu deletes a book (3.8s)
+  ✓   42 [electron] › e2e/ai-chat-azw3.spec.ts:82:9 › Voice chat / premium gate (MOBI) › "Maybe later" closes the premium dialog (MOBI) (8.2s)
+  ✘   43 [electron] › e2e/menu-book-pdf.spec.ts:12:5 › focused PDF book window menu has Bookmarks, Reader, Show Thumbnails, Dual Page (12.5s)
+  ✘   48 [electron] › e2e/menu-commands.spec.ts:11:5 › View > Switch to Dark Mode toggles theme in renderer (2.9s)
+  ✓   49 [electron] › e2e/menu-library.spec.ts:5:5 › library window menu has File/Edit/View/Window/Help but no Bookmarks/Reader (2.3s)
+  ✓   46 [electron] › e2e/library.spec.ts:120:7 › Library › book grid uses data-tour="book-grid" (2.1s)
+  ✘   47 [electron] › e2e/menu-bookmarks-submenu.spec.ts:13:5 › Bookmarks > recent submenu reflects added bookmarks (10.6s)
+  ✘   51 [electron] › e2e/menu-recent.spec.ts:12:5 › File > Open Recent lists imported books and opens them (5.5s)
+  ✓   53 [electron] › e2e/mobi.spec.ts:28:7 › MOBI reader › MOBI book opens and renders (1.9s)
+  -   54 [electron] › e2e/navigation-history-epub.spec.ts:75:7 › Navigation history — EPUB › TOC click → pill → pop returns to original CFI
+  ✓   52 [electron] › e2e/mobi-global-page-counter.spec.ts:14:5 › MOBI page counter advances globally across chapter boundaries (17.7s)
+  ✘   55 [electron] › e2e/mobi.spec.ts:49:7 › MOBI reader › non-existent book id does not crash (16.9s)
+  ✘   57 [electron] › e2e/navigation-history-pdf.spec.ts:126:7 › Navigation history — PDF › TOC jump → pill appears → pop returns to original page (5.7s)
+  ✘   56 [electron] › e2e/navigation-history-epub.spec.ts:173:7 › Navigation history — EPUB › simulated internal link jump → pill → pop returns to original CFI (14.1s)
+  ✘   50 [electron] › e2e/menu-commands.spec.ts:41:5 › Bookmarks > Add Bookmark adds a row in the DB when a PDF is open (39.1s)
+  ✓   58 [electron] › e2e/no-toolbar.spec.ts:4:5 › reader has no in-window top toolbar after phase 2 (10.0s)
+  ✓   60 [electron] › e2e/navigation-history-epub.spec.ts:263:7 › Navigation history — EPUB › sequential page-flips without a jump do not show the pill (5.2s)
+  ✘   59 [electron] › e2e/navigation-history-pdf.spec.ts:208:7 › Navigation history — PDF › engagement tap → flip away → pop returns to engaged page (6.3s)
+  ✓   63 [electron] › e2e/pdf-import.spec.ts:33:7 › Book import & open lifecycle › library shows empty state with no books (511ms)
+[diag] importBook OK, id= [33m1[39m
+[diag] openBook OK
+[renderer/warning] %cElectron Security Warning (Disabled webSecurity) font-weight: bold; This renderer process has "webSecurity" disabled. This
+  exposes users of this app to severe security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[renderer/warning] %cElectron Security Warning (allowRunningInsecureContent) font-weight: bold; This renderer process has "allowRunningInsecureContent"
+  enabled. This exposes users of this app to severe security risks.
+
+  
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[renderer/warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[renderer/error] Failed to load resource: the server responded with a status of 500 ()
+[renderer/error] Connecting to 'sentry-ipc://scope/sentry_key' violates the following Content Security Policy directive: "connect-src 'self' blob: ws://localhost:* http://localhost:* local-file: https://cdnjs.cloudflare.com https://api.fidexa.org https://api.openai.com wss://api.openai.com". The action has been blocked.
+[renderer/error] Fetch API cannot load sentry-ipc://scope/sentry_key. Refused to connect because it violates the document's Content Security Policy.
+[renderer/error] Connecting to 'sentry-ipc://scope/sentry_key' violates the following Content Security Policy directive: "connect-src 'self' blob: ws://localhost:* http://localhost:* local-file: https://cdnjs.cloudflare.com https://api.fidexa.org https://api.openai.com wss://api.openai.com". The action has been blocked.
+[renderer/error] Fetch API cannot load sentry-ipc://scope/sentry_key. Refused to connect because it violates the document's Content Security Policy.
+[renderer/warning] [sync:pull] server responded 500
+  ✓   61 [electron] › e2e/pdf-auto-advance-page.spec.ts:44:5 › PDF: AUDIO_ENDED on last paragraph of a page keeps playing on next page (10.8s)
+  ✓   65 [electron] › e2e/pdf-import.spec.ts:38:7 › Book import & open lifecycle › PDF imports, opens, and renders pages (3.5s)
+[diag] book page settled
+[diag] waiting for page1 data + currentViewParagraphs
+[diag] page1 + currentViewParagraphs ready
+[diag] startState: {"pageNumber":1,"paragraphCount":4,"lastParagraphIndex":"10010"}
+[diag] advanceResult: {"lastIndex":"10010","finalActive":"10010","paragraphCount":4}
+[diag] <mark> visible
+[diag] taking before screenshot
+[diag] before screenshot OK {"pageNumber":1,"highlightedParagraphIndex":"10010","activeIndex":"10010","playingState":"stopped","viewIndexes":["10001","10004","10007","10010"]}
+[diag] NEXT dispatched. preBoundary = {"hasVirtualizer":true,"pageCount":14,"pageNumber":1}
+  ✓   67 [electron] › e2e/pdf-import.spec.ts:58:7 › Book import & open lifecycle › EPUB imports and reaches the reader view (1.4s)
+  ✓   62 [electron] › e2e/pdf-footer-detection.spec.ts:54:5 › builds a non-empty FooterMask for a book with running footers (11.0s)
+  -   69 [electron] › e2e/pdf-footer-detection.spec.ts:103:6 › masked items live in the bottom band
+[diag] page2Advance: {"firstPage2Index":"20001","page2Count":9}
+[diag] after screenshot done
+[snap-back] sampled timeline (every 50ms):
+t=0ms page=2 scrollTop=1419 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20001 active=20001 lastPlayed=20001 state=playing flag=true
+t=53ms page=2 scrollTop=1419 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20001 active=20001 lastPlayed=20001 state=playing flag=false
+t=157ms page=2 scrollTop=1419 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20002 active=20002 lastPlayed=20002 state=playing flag=false
+t=361ms page=2 scrollTop=1419 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20003 active=20003 lastPlayed=20003 state=playing flag=false
+t=568ms page=2 scrollTop=1420 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20008 active=20008 lastPlayed=20008 state=playing flag=false
+t=721ms page=2 scrollTop=1422.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20008 active=- lastPlayed=20008 state=loading flag=false
+t=773ms page=2 scrollTop=1428.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20009 active=20009 lastPlayed=20009 state=playing flag=false
+t=926ms page=2 scrollTop=1435 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20009 active=- lastPlayed=20009 state=loading flag=false
+t=978ms page=2 scrollTop=1439.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20013 active=20013 lastPlayed=20013 state=playing flag=false
+t=1135ms page=2 scrollTop=1451.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20013 active=- lastPlayed=20013 state=loading flag=false
+t=1186ms page=2 scrollTop=1465.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20014 active=20014 lastPlayed=20014 state=playing flag=false
+t=1342ms page=2 scrollTop=1484 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20014 active=- lastPlayed=20014 state=loading flag=false
+t=1394ms page=2 scrollTop=1488 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20015 active=20015 lastPlayed=20015 state=playing flag=false
+t=1549ms page=2 scrollTop=1512.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20017 active=20017 lastPlayed=20017 state=playing flag=false
+t=1706ms page=2 scrollTop=1520.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20017 active=20017 lastPlayed=20017 state=playing flag=false
+t=1757ms page=2 scrollTop=1525 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2277ms page=2 scrollTop=1561.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2327ms page=2 scrollTop=1649.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2379ms page=2 scrollTop=1859.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2429ms page=2 scrollTop=2175.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2481ms page=2 scrollTop=2378.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2535ms page=2 scrollTop=2507.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2587ms page=2 scrollTop=2597.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2639ms page=2 scrollTop=2663.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2690ms page=2 scrollTop=2727 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2741ms page=2 scrollTop=2761.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2792ms page=2 scrollTop=2788 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2844ms page=2 scrollTop=2807.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2895ms page=2 scrollTop=2821 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=2947ms page=2 scrollTop=2830.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+t=3000ms page=2 scrollTop=2835.5 mounted=[1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11] hl=20017 active=- lastPlayed=20017 state=waitingForParagraphs flag=true
+  ✓   68 [electron] › e2e/pdf-import.spec.ts:70:7 › Book import & open lifecycle › back to library after delete shows empty state (4.1s)
+  ✓   64 [electron] › e2e/pdf-next-paragraph-snap-back.spec.ts:41:5 › NEXT on last paragraph of page N lands on page N+1 and does not snap back (2.5s wait) (16.6s)
+  ✓   71 [electron] › e2e/pdf-reader.spec.ts:38:7 › PDF reader › voice chat launcher is present (3.2s)
+  ✓   66 [electron] › e2e/pdf-persistence.spec.ts:12:5 › PDF page persists across close + reopen (17.1s)
+  ✓   73 [electron] › e2e/pdf-reader.spec.ts:44:7 › PDF reader › TTS orb is present (3.0s)
+  ✓   72 [electron] › e2e/pdf-scroll-position.spec.ts:21:5 › PDF sub-page scroll position persists across close + reopen (17.8s)
+  -   76 [electron] › e2e/pdf-warm-restore.spec.ts:33:6 › reopening a PDF hits the warm-restore cache and renders pages
+  ✘   74 [electron] › e2e/pdf-scroll-up-jitter.spec.ts:28:5 › scrolling up across a page boundary does not jitter (13.7s)
+  ✘   75 [electron] › e2e/pdf-reader.spec.ts:50:7 › PDF reader › keyboard navigation advances and restores the persisted page index (7.9s)
+  ✓   77 [electron] › e2e/read-aloud-from-selection.spec.ts:84:7 › Read Aloud From Selection › dispatching readAloudFromSelection with a stored selection triggers PLAY_FROM (2.3s)
+  ✓   80 [electron] › e2e/read-aloud-from-selection.spec.ts:147:7 › Read Aloud From Selection › dispatching readAloudFromSelection without a stored selection falls back to PLAY (151ms)
+  -   81 [electron] › e2e/read-aloud-from-selection.spec.ts:200:7 › Read Aloud From Selection › IPC reader:readAloudFromSelection works from a live iframe selection (empty store)
+  ✓   82 [electron] › e2e/scanner.spec.ts:30:7 › Book scanner / discovery modal › Add Book opens the discovery modal with scan controls (621ms)
+  ✓   83 [electron] › e2e/scanner.spec.ts:40:7 › Book scanner / discovery modal › discovery modal shows a scanning indicator (917ms)
+  ✓   84 [electron] › e2e/scanner.spec.ts:48:7 › Book scanner / discovery modal › Cancel closes the discovery modal (1.1s)
+  ✓   78 [electron] › e2e/resume-paragraph.spec.ts:70:7 › resume from last-played paragraph › reopen hydrates lastPlayedParagraphIndex from books.last_paragraph (10.3s)
+  ✓   85 [electron] › e2e/search.spec.ts:30:7 › Search › library search input round-trips text (330ms)
+  ✘   87 [electron] › e2e/search.spec.ts:42:7 › Search › searchBookText IPC accepts a query (3ms)
+  ✘   70 [electron] › e2e/pdf-footer-detection.spec.ts:108:5 › paragraph indices stay stable when the heuristic engages (gaps preserved) (41.3s)
+  ✓   86 [electron] › e2e/smoke.spec.ts:15:7 › Smoke › app boots and shows library shell (7ms)
+  ✓   89 [electron] › e2e/smoke.spec.ts:21:7 › Smoke › library starts empty (5ms)
+  ✓   90 [electron] › e2e/smoke.spec.ts:26:7 › Smoke › preload exposes core IPC surface (8ms)
+  ✓   79 [electron] › e2e/pdf-reader.spec.ts:68:7 › PDF reader › invalid book id on library window is intercepted by the route guard (5.2s)
+  ✓   91 [electron] › e2e/tts.spec.ts:41:7 › Text-to-speech controls › orb is fixed-position bottom-right (667ms)
+  ✓   94 [electron] › e2e/tts.spec.ts:46:7 › Text-to-speech controls › expanding the orb reveals Play / Previous / Next / Stop (471ms)
+  ✓   88 [electron] › e2e/tts-page-navigation.spec.ts:38:7 › TTS state follows EPUB page navigation › clicking Next page refreshes player paragraphs to the new page (2.8s)
+  ✓   92 [electron] › e2e/tutorial.spec.ts:31:7 › Onboarding tour › first step targets the Add Books area (2.4s)
+  ✓   96 [electron] › e2e/tts-page-navigation.spec.ts:61:7 › TTS state follows EPUB page navigation › entering loading state pauses the audio element BEFORE the TTS fetch resolves (2.5s)
+  ✓   97 [electron] › e2e/tutorial.spec.ts:37:7 › Onboarding tour › Next advances to the second step (2.8s)
+  ✓   95 [electron] › e2e/tts.spec.ts:54:7 › Text-to-speech controls › Stop is disabled when nothing is playing (4.7s)
+  ✓   98 [electron] › e2e/tts-page-navigation.spec.ts:143:7 › TTS state follows EPUB page navigation › INVARIANT: highlight (activeParagraph) is always on the visible page during playback (2.3s)
+  ✓   99 [electron] › e2e/tutorial.spec.ts:44:7 › Onboarding tour › Skip dismisses the tour and persists completion (2.4s)
+  ✓   93 [electron] › e2e/window-split.spec.ts:11:5 › opening two books results in two book windows + one library (10.6s)
+  ✓  102 [electron] › e2e/tutorial.spec.ts:52:7 › Onboarding tour › completed tour does not relaunch on next visit (3.3s)
+  ✘  101 [electron] › e2e/tts-page-navigation.spec.ts:332:7 › TTS state follows EPUB page navigation › clicking Next during playback pauses the OLD page audio immediately (1.8s)
+  ✓  100 [electron] › e2e/tts.spec.ts:59:7 › Text-to-speech controls › Play without auth opens premium dialog (5.6s)
+  ✓  103 [electron] › e2e/window-split.spec.ts:35:5 › opening the same book twice does not duplicate windows (9.3s)
+  ✘  104 [electron] › e2e/tts-page-navigation.spec.ts:484:7 › TTS state follows EPUB page navigation › audio.play() is NOT called for stale blob when state moves on during loadAndPlayAudio (2.0s)
+  ✓  106 [electron] › e2e/tts-page-navigation.spec.ts:695:7 › TTS state follows EPUB page navigation › PLAY after STOP + page nav targets the NEW page, not the old (2.1s)
+  ✓  105 [electron] › e2e/window-split.spec.ts:54:5 › book window windowIdentity is book; library is library (8.6s)
+  ✓  107 [electron] › e2e/tts-page-navigation.spec.ts:783:7 › TTS state follows EPUB page navigation › audio pauses synchronously with navMachine leaving idle (no bleed during curl) (1.8s)
+  ✘  108 [electron] › e2e/tts-page-navigation.spec.ts:893:7 › TTS state follows EPUB page navigation › Stop+Play immediately after Next does NOT replay the old page (2.0s)
+  ✓  109 [electron] › e2e/tts-page-navigation.spec.ts:993:7 › TTS state follows EPUB page navigation › T1: Play -> Next via UI button -> Play button recovers (BUG) (2.1s)
+  ✘  110 [electron] › e2e/tts-page-navigation.spec.ts:1114:7 › TTS state follows EPUB page navigation › T2: Stuck-loop reproducer - PLAY after pageNavigating timeout must not cause unwanted nav (BUG) (3.2s)
+  ✓  111 [electron] › e2e/tts-page-navigation.spec.ts:1289:7 › TTS state follows EPUB page navigation › T3: paused.clean -> click Play UI button -> resumes (RESUME, not PLAY) (2.0s)
+  ✓  112 [electron] › e2e/tts-page-navigation.spec.ts:1421:7 › TTS state follows EPUB page navigation › auto-advance past last paragraph keeps playing on next page (5.7s)
+  ✓  113 [electron] › e2e/tts-page-navigation.spec.ts:1580:7 › TTS state follows EPUB page navigation › PAGE_NAVIGATING + NAV_NO_PROGRESS lands in stopped with cleared highlight (no loop-back) (1.8s)
+=== manual NEXT boundary timeline ===
+startLocation=epubcfi(/6/4!/4/10/2/1:0)
+  t=   1ms  state=waitingForParagraphs loc=epubcfi(/6/4!/4/10/2/1:0) firstOfView=epubcfi(/6/4!/4/10/2,/1:0,/1:33) active=null
+  t= 155ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/32/2,/1:0,/1:16)
+  t= 364ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/34/2,/1:0,/1:17)
+  t= 467ms  state=loading    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=null
+  t= 572ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/36,/2/1:0,/1:4)
+  t= 681ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/38,/1:0,/1:34)
+  t= 893ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/40,/1:0,/1:36)
+  t=1104ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/42,/1:0,/1:32)
+  t=1314ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/44,/1:0,/1:32)
+  t=1524ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/46,/1:0,/1:34)
+  t=1734ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/48,/1:0,/1:34)
+  t=1836ms  state=loading    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=null
+  t=1941ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/50,/1:0,/1:35)
+  t=2048ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/52,/1:0,/1:36)
+  t=2256ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/54,/1:0,/1:36)
+  t=2467ms  state=playing    loc=epubcfi(/6/4!/4/32/2/1:0) firstOfView=epubcfi(/6/4!/4/32/2,/1:0,/1:16) active=epubcfi(/6/4!/4/56,/1:0,/1:33)
+=== end timeline ===
+  ✓  114 [electron] › e2e/tts-page-navigation.spec.ts:1670:7 › TTS state follows EPUB page navigation › manual NEXT on last paragraph of a view advances to next view at paragraph 0 (no loop-back) (4.4s)
+  ✘  115 [electron] › e2e/tts-page-navigation.spec.ts:1953:7 › TTS state follows EPUB page navigation › player PREV at first paragraph lands on last paragraph of previous page (2.4s)
+
+
+  1) [electron] › e2e/azw3-parity.spec.ts:59:7 › AZW3 reader — feature parity with MOBI › View > Show TOC opens the TOC sheet 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mtrue[39m
+    Received: [31mfalse[39m
+
+      75 |
+      76 |       const clicked = await clickMenuItem(launched.app, ['View', 'Show TOC'])
+    > 77 |       expect(clicked).toBe(true)
+         |                       ^
+      78 |
+      79 |       // ReaderTOC renders a Radix Sheet. Either a panel with role=dialog or
+      80 |       // the document containing the "Contents" / chapter list shows up.
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/azw3-parity.spec.ts:77:23
+
+    Error Context: test-results/azw3-parity-AZW3-reader-—--243ca-how-TOC-opens-the-TOC-sheet-electron/error-context.md
+
+  2) [electron] › e2e/azw3-parity.spec.ts:88:7 › AZW3 reader — feature parity with MOBI › Bookmarks > Add Bookmark stores a bookmark in the DB 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mtrue[39m
+    Received: [31mfalse[39m
+
+      155 |         // eslint-disable-next-line no-await-in-loop -- E2E retry: menu click requires the focus state from above.
+      156 |         const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
+    > 157 |         expect(clicked).toBe(true)
+          |                         ^
+      158 |         // eslint-disable-next-line no-await-in-loop -- E2E retry: wait for bookmark IPC to flush before reading count.
+      159 |         await launched.page.waitForTimeout(800)
+      160 |         // eslint-disable-next-line no-await-in-loop -- E2E retry: each attempt re-reads the bookmark count to decide whether to keep retrying.
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/azw3-parity.spec.ts:157:25
+
+    Error Context: test-results/azw3-parity-AZW3-reader-—--c2bfd-stores-a-bookmark-in-the-DB-electron/error-context.md
+
+  3) [electron] › e2e/menu-book-epub.spec.ts:12:5 › focused EPUB book window menu hides PDF-only items 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeDefined[2m()[22m
+
+    Received: [31mundefined[39m
+
+      42 |
+      43 |     const menu = await getApplicationMenu(launched.app)
+    > 44 |     expect(findMenuItem(menu, ['View', 'Show TOC'])).toBeDefined()
+         |                                                      ^
+      45 |     expect(findMenuItem(menu, ['View', 'Show Thumbnails'])).toBeUndefined()
+      46 |     expect(findMenuItem(menu, ['View', 'Dual Page'])).toBeUndefined()
+      47 |     const labels = menu.map((m) => m.label)
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/menu-book-epub.spec.ts:44:54
+
+    Error Context: test-results/menu-book-epub-focused-EPU-d3037-w-menu-hides-PDF-only-items-electron/error-context.md
+
+  4) [electron] › e2e/menu-book-pdf.spec.ts:12:5 › focused PDF book window menu has Bookmarks, Reader, Show Thumbnails, Dual Page 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoEqual[2m([22m[32mexpected[39m[2m) // deep equality[22m
+
+    Expected: [32mArrayContaining ["Bookmarks", "Reader"][39m
+    Received: [31m["Rishi", "File", "Edit", "View", "Window", "Help"][39m
+
+      42 |     const menu = await getApplicationMenu(launched.app)
+      43 |     const labels = menu.map((m) => m.label)
+    > 44 |     expect(labels).toEqual(expect.arrayContaining(['Bookmarks', 'Reader']))
+         |                    ^
+      45 |     expect(findMenuItem(menu, ['View', 'Show Thumbnails'])).toBeDefined()
+      46 |     expect(findMenuItem(menu, ['View', 'Dual Page'])).toBeDefined()
+      47 |   } finally {
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/menu-book-pdf.spec.ts:44:20
+
+    Error Context: test-results/menu-book-pdf-focused-PDF--1a103-r-Show-Thumbnails-Dual-Page-electron/error-context.md
+
+  5) [electron] › e2e/menu-bookmarks-submenu.spec.ts:13:5 › Bookmarks > recent submenu reflects added bookmarks 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeDefined[2m()[22m
+
+    Received: [31mundefined[39m
+
+      54 |     // Sanity check: Bookmarks top-level should now be in the menu.
+      55 |     const before = await getApplicationMenu(launched.app)
+    > 56 |     expect(findMenuItem(before, ['Bookmarks'])).toBeDefined()
+         |                                                 ^
+      57 |
+      58 |     const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
+      59 |     expect(clicked).toBe(true)
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/menu-bookmarks-submenu.spec.ts:56:49
+
+    Error Context: test-results/menu-bookmarks-submenu-Boo-811f7-nu-reflects-added-bookmarks-electron/error-context.md
+
+  6) [electron] › e2e/menu-commands.spec.ts:11:5 › View > Switch to Dark Mode toggles theme in renderer 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mnot[2m.[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: not [32m"light"[39m
+
+      33 |       document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+      34 |     )
+    > 35 |     expect(themeAfter).not.toBe(themeBefore)
+         |                            ^
+      36 |   } finally {
+      37 |     await closeApp(launched)
+      38 |   }
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/menu-commands.spec.ts:35:28
+
+    Error Context: test-results/menu-commands-View-Switch--c8ac2-e-toggles-theme-in-renderer-electron/error-context.md
+
+  7) [electron] › e2e/menu-commands.spec.ts:41:5 › Bookmarks > Add Bookmark adds a row in the DB when a PDF is open 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mtrue[39m
+    Received: [31mfalse[39m
+
+      114 |       // eslint-disable-next-line no-await-in-loop -- E2E retry: menu click depends on focus state above.
+      115 |       const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
+    > 116 |       expect(clicked).toBe(true)
+          |                       ^
+      117 |       // eslint-disable-next-line no-await-in-loop -- E2E retry: wait for IPC to flush before reading count.
+      118 |       await launched.page.waitForTimeout(1200)
+      119 |       // eslint-disable-next-line no-await-in-loop -- E2E retry: re-read bookmark count to decide whether to keep retrying.
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/menu-commands.spec.ts:116:23
+
+    Error Context: test-results/menu-commands-Bookmarks-Ad-f62ff-n-the-DB-when-a-PDF-is-open-electron/error-context.md
+
+  8) [electron] › e2e/menu-recent.spec.ts:12:5 › File > Open Recent lists imported books and opens them 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeGreaterThan[2m([22m[32mexpected[39m[2m)[22m
+
+    Expected: > [32m1[39m
+    Received:   [31m1[39m
+
+      51 |     expect(await clickMenuItem(launched.app, ['File', 'Open Recent', 'Recent A'])).toBe(true)
+      52 |     await launched.page.waitForTimeout(1800)
+    > 53 |     expect(launched.app.windows().length).toBeGreaterThan(before)
+         |                                           ^
+      54 |   } finally {
+      55 |     await closeApp(launched)
+      56 |   }
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/menu-recent.spec.ts:53:43
+
+    Error Context: test-results/menu-recent-File-Open-Rece-f7146-ported-books-and-opens-them-electron/error-context.md
+
+  9) [electron] › e2e/mobi.spec.ts:49:7 › MOBI reader › non-existent book id does not crash ────────
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByText('Book not found')
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 15000ms[22m
+    [2m  - waiting for getByText('Book not found')[22m
+
+
+      56 |     // positively confirms the error path mounted (no crash, no white-screen)
+      57 |     // rather than just that <body> exists.
+    > 58 |     await expect(app.page.getByText('Book not found')).toBeVisible({ timeout: 15000 })
+         |                                                        ^
+      59 |   })
+      60 | })
+      61 |
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/mobi.spec.ts:58:56
+
+    Error Context: test-results/mobi-MOBI-reader-non-existent-book-id-does-not-crash-electron/error-context.md
+
+    Error Context: test-results/mobi-MOBI-reader-non-existent-book-id-does-not-crash-electron/error-context.md
+
+  10) [electron] › e2e/navigation-history-epub.spec.ts:173:7 › Navigation history — EPUB › simulated internal link jump → pill → pop returns to original CFI 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('[data-testid="nav-history-back-label"]')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 10000ms[22m
+    [2m  - waiting for locator('[data-testid="nav-history-back-label"]')[22m
+
+
+      50 | ): Promise<void> {
+      51 |   const timeout = opts.timeout ?? 10000
+    > 52 |   await expect(bookPage.locator('[data-testid="nav-history-back-label"]')).toBeVisible({
+         |                                                                            ^
+      53 |     timeout
+      54 |   })
+      55 | }
+        at waitForPill (/Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/navigation-history-epub.spec.ts:52:76)
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/navigation-history-epub.spec.ts:248:11
+
+    Error Context: test-results/navigation-history-epub-Na-b07fc-pop-returns-to-original-CFI-electron/error-context.md
+
+    Error Context: test-results/navigation-history-epub-Na-b07fc-pop-returns-to-original-CFI-electron/error-context.md
+
+  11) [electron] › e2e/navigation-history-pdf.spec.ts:126:7 › Navigation history — PDF › TOC jump → pill appears → pop returns to original page 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeLessThanOrEqual[2m([22m[32mexpected[39m[2m)[22m
+
+    Expected: <= [32m2[39m
+    Received:    [31m4[39m
+
+      192 |       initialPage - 1
+      193 |     )
+    > 194 |     expect(restoredPage).toBeLessThanOrEqual(initialPage + 1)
+          |                          ^
+      195 |   })
+      196 |
+      197 |   // -------------------------------------------------------------------------
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/navigation-history-pdf.spec.ts:194:26
+
+    Error Context: test-results/navigation-history-pdf-Nav-32eaa-op-returns-to-original-page-electron/error-context.md
+
+    Error Context: test-results/navigation-history-pdf-Nav-32eaa-op-returns-to-original-page-electron/error-context.md
+
+  12) [electron] › e2e/navigation-history-pdf.spec.ts:208:7 › Navigation history — PDF › engagement tap → flip away → pop returns to engaged page 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeLessThanOrEqual[2m([22m[32mexpected[39m[2m)[22m
+
+    Expected: <= [32m3[39m
+    Received:    [31m8[39m
+
+      284 |       engagedPage - 1
+      285 |     )
+    > 286 |     expect(restoredPage).toBeLessThanOrEqual(engagedPage + 1)
+          |                          ^
+      287 |   })
+      288 | })
+      289 |
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/navigation-history-pdf.spec.ts:286:26
+
+    Error Context: test-results/navigation-history-pdf-Nav-357bc-pop-returns-to-engaged-page-electron/error-context.md
+
+    Error Context: test-results/navigation-history-pdf-Nav-357bc-pop-returns-to-engaged-page-electron/error-context.md
+
+  13) [electron] › e2e/pdf-footer-detection.spec.ts:108:5 › paragraph indices stay stable when the heuristic engages (gaps preserved) 
+
+    TimeoutError: page.waitForFunction: Timeout 30000ms exceeded.
+
+      180 |     }, targetPage)
+      181 |
+    > 182 |     await bookPage.waitForFunction(
+          |                    ^
+      183 |       (page: number) => {
+      184 |         const w = window as Window
+      185 |         const s = w.__rishi!.pdfStore.getState()
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/pdf-footer-detection.spec.ts:182:20
+
+    Error Context: test-results/pdf-footer-detection-parag-16930-tic-engages-gaps-preserved--electron/error-context.md
+
+  14) [electron] › e2e/pdf-reader.spec.ts:50:7 › PDF reader › keyboard navigation advances and restores the persisted page index 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeGreaterThan[2m([22m[32mexpected[39m[2m)[22m
+
+    Expected: > [32m1[39m
+    Received:   [31m1[39m
+
+    Call Log:
+    - Timeout 5000ms exceeded while waiting on the predicate
+
+      56 |     const before = pageOf(await getBookLocation(app.page, bookId))
+      57 |     await bookPage.keyboard.press('ArrowRight')
+    > 58 |     await expect
+         |     ^
+      59 |       .poll(async () => pageOf(await getBookLocation(app.page, bookId)), { timeout: 5000 })
+      60 |       .toBeGreaterThan(before)
+      61 |     const advanced = pageOf(await getBookLocation(app.page, bookId))
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/pdf-reader.spec.ts:58:5
+
+    Error Context: test-results/pdf-reader-PDF-reader-keyb-ed8c4-es-the-persisted-page-index-electron/error-context.md
+
+    Error Context: test-results/pdf-reader-PDF-reader-keyb-ed8c4-es-the-persisted-page-index-electron/error-context.md
+
+  15) [electron] › e2e/pdf-scroll-up-jitter.spec.ts:28:5 › scrolling up across a page boundary does not jitter 
+
+    Error: a page above the prior mount window must remount during scroll-up
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mtrue[39m
+    Received: [31mfalse[39m
+
+      101 |       remountedAbove,
+      102 |       'a page above the prior mount window must remount during scroll-up'
+    > 103 |     ).toBe(true)
+          |       ^
+      104 |
+      105 |     // The user's intent was scrollTop = target. Allow slight settling
+      106 |     // (virtualizer may end up slightly different due to measurement
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/pdf-scroll-up-jitter.spec.ts:103:7
+
+    Error Context: test-results/pdf-scroll-up-jitter-scrol-a94f9-ge-boundary-does-not-jitter-electron/error-context.md
+
+  16) [electron] › e2e/search.spec.ts:42:7 › Search › searchBookText IPC accepts a query ───────────
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeGreaterThan[2m([22m[32mexpected[39m[2m)[22m
+
+    Expected: > [32m0[39m
+    Received:   [31m0[39m
+
+      51 |     }, bookId)
+      52 |     expect(Array.isArray(result)).toBe(true)
+    > 53 |     expect((result as unknown[]).length).toBeGreaterThan(0)
+         |                                          ^
+      54 |   })
+      55 | })
+      56 |
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/search.spec.ts:53:42
+
+    Error Context: test-results/search-Search-searchBookText-IPC-accepts-a-query-electron/error-context.md
+
+    Error Context: test-results/search-Search-searchBookText-IPC-accepts-a-query-electron/error-context.md
+
+  17) [electron] › e2e/tts-page-navigation.spec.ts:332:7 › TTS state follows EPUB page navigation › clicking Next during playback pauses the OLD page audio immediately 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mfalse[39m
+    Received: [31mtrue[39m
+
+      427 |       }
+      428 |     })
+    > 429 |     expect(playingBefore.paused).toBe(false)
+          |                                  ^
+      430 |     expect(
+      431 |       playingBefore.cfiOfSrc,
+      432 |       'Audio is playing a blob we did not issue from the mock TTS'
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/tts-page-navigation.spec.ts:429:34
+
+    Error Context: test-results/tts-page-navigation-TTS-st-48a44--OLD-page-audio-immediately-electron/error-context.md
+
+    Error Context: test-results/tts-page-navigation-TTS-st-48a44--OLD-page-audio-immediately-electron/error-context.md
+
+  18) [electron] › e2e/tts-page-navigation.spec.ts:484:7 › TTS state follows EPUB page navigation › audio.play() is NOT called for stale blob when state moves on during loadAndPlayAudio 
+
+    Error: audio.play() was called for off-page CFI(s): [{"ts":1892.5,"src":"blob:http://127.0.0.1:50485/a7fdb31c-bfd4-4ffa-aedc-467b9047e995","cfi":"epubcfi(/6/4!/4/10/2,/1:0,/1:33)"}]. Visible page: epubcfi(/6/4!/4/32/2,/1:0,/1:16), epubcfi(/6/4!/4/34/2,/1:0,/1:17), epubcfi(/6/4!/4/36,/2/1:0,/1:4)... bleedAppeared=true
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoEqual[2m([22m[32mexpected[39m[2m) // deep equality[22m
+
+    [32m- Expected  - 1[39m
+    [31m+ Received  + 7[39m
+
+    [32m- Array [][39m
+    [31m+ Array [[39m
+    [31m+   Object {[39m
+    [31m+     "cfi": "epubcfi(/6/4!/4/10/2,/1:0,/1:33)",[39m
+    [31m+     "src": "blob:http://127.0.0.1:50485/a7fdb31c-bfd4-4ffa-aedc-467b9047e995",[39m
+    [31m+     "ts": 1892.5,[39m
+    [31m+   },[39m
+    [31m+ ][39m
+
+      684 |       bleeds,
+      685 |       `audio.play() was called for off-page CFI(s): ${JSON.stringify(bleeds)}. Visible page: ${visibleCfis.slice(0, 3).join(', ')}... bleedAppeared=${bleedAppeared}`
+    > 686 |     ).toEqual([])
+          |       ^
+      687 |
+      688 |     await sendPlayerEvent(bookPage, 'STOP')
+      689 |     await bookPage.evaluate(() => {
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/tts-page-navigation.spec.ts:686:7
+
+    Error Context: test-results/tts-page-navigation-TTS-st-2bcc2--on-during-loadAndPlayAudio-electron/error-context.md
+
+    Error Context: test-results/tts-page-navigation-TTS-st-2bcc2--on-during-loadAndPlayAudio-electron/error-context.md
+
+  19) [electron] › e2e/tts-page-navigation.spec.ts:893:7 › TTS state follows EPUB page navigation › Stop+Play immediately after Next does NOT replay the old page 
+
+    Error: After Next + Stop + Play, the player issued 1 priority-1 TTS request(s) for the OLD page CFI (epubcfi(/6/4!/4/10/2,/1:0,/1:33)). All active requests: [{"cfiRange":"epubcfi(/6/4!/4/10/2,/1:0,/1:33)","text":"A Mind Technology for Living Your","priority":1}]. New page CFIs: epubcfi(/6/4!/4/10/2,/1:0,/1:33), epubcfi(/6/4!/4/12/2,/1:0,/1:19), epubcfi(/6/4!/4/14/2,/1:0,/1:7)...
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoEqual[2m([22m[32mexpected[39m[2m) // deep equality[22m
+
+    [32m- Expected  - 1[39m
+    [31m+ Received  + 7[39m
+
+    [32m- Array [][39m
+    [31m+ Array [[39m
+    [31m+   Object {[39m
+    [31m+     "cfiRange": "epubcfi(/6/4!/4/10/2,/1:0,/1:33)",[39m
+    [31m+     "priority": 1,[39m
+    [31m+     "text": "A Mind Technology for Living Your",[39m
+    [31m+   },[39m
+    [31m+ ][39m
+
+      961 |       replayedOld,
+      962 |       `After Next + Stop + Play, the player issued ${replayedOld.length} priority-1 TTS request(s) for the OLD page CFI (${oldFirstCfi}). All active requests: ${JSON.stringify(activeRequests)}. New page CFIs: ${[...newPageCfis].slice(0, 3).join(', ')}...`
+    > 963 |     ).toEqual([])
+          |       ^
+      964 |
+      965 |     // And: at least one priority-1 request must target the NEW page.
+      966 |     const newPageActive = activeRequests.filter((r) => newPageCfis.has(r.cfiRange))
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/tts-page-navigation.spec.ts:963:7
+
+    Error Context: test-results/tts-page-navigation-TTS-st-e0eba-oes-NOT-replay-the-old-page-electron/error-context.md
+
+    Error Context: test-results/tts-page-navigation-TTS-st-e0eba-oes-NOT-replay-the-old-page-electron/error-context.md
+
+  20) [electron] › e2e/tts-page-navigation.spec.ts:1114:7 › TTS state follows EPUB page navigation › T2: Stuck-loop reproducer - PLAY after pageNavigating timeout must not cause unwanted nav (BUG) 
+
+    Error: STUCK LOOP DETECTED: clicking Play after pageNavigating timeout caused an unwanted page advance. Page first-paragraph CFI was epubcfi(/6/4!/4/10/2,/1:0,/1:33), now epubcfi(/6/4!/4/32/2,/1:0,/1:16). The user's PLAY click was misinterpreted as a request for the next page.
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mfalse[39m
+    Received: [31mtrue[39m
+
+      1266 |         `an unwanted page advance. Page first-paragraph CFI was ${pageBefore}, now ${pageAfter}. ` +
+      1267 |         `The user's PLAY click was misinterpreted as a request for the next page.`
+    > 1268 |     ).toBe(false)
+           |       ^
+      1269 |
+      1270 |     // Teardown
+      1271 |     await sendPlayerEvent(bookPage, 'STOP')
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/tts-page-navigation.spec.ts:1268:7
+
+    Error Context: test-results/tts-page-navigation-TTS-st-2dac5-not-cause-unwanted-nav-BUG--electron/error-context.md
+
+    Error Context: test-results/tts-page-navigation-TTS-st-2dac5-not-cause-unwanted-nav-BUG--electron/error-context.md
+
+  21) [electron] › e2e/tts-page-navigation.spec.ts:1953:7 › TTS state follows EPUB page navigation › player PREV at first paragraph lands on last paragraph of previous page 
+
+    Error: After PREV at first paragraph, the active paragraph must be the LAST paragraph of the previous page. Got activeIndex='epubcfi(/6/4!/4/80,/1:0,/1:62)', firstIndex='epubcfi(/6/4!/4/80,/1:0,/1:62)', lastIndex='epubcfi(/6/4!/4/124,/1:0,/1:63)'. If activeIndex matches firstIndex, the bug is present: the player landed on paragraph 0 of the previous page instead of its last paragraph.
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32m"epubcfi(/6/4!/4/[7m124[27m,/1:0,/1:6[7m3[27m)"[39m
+    Received: [31m"epubcfi(/6/4!/4/[7m80[27m,/1:0,/1:6[7m2[27m)"[39m
+
+      2050 |         `If activeIndex matches firstIndex, the bug is present: the player landed ` +
+      2051 |         `on paragraph 0 of the previous page instead of its last paragraph.`
+    > 2052 |     ).toBe(afterPrev.lastIndex)
+           |       ^
+      2053 |
+      2054 |     // Defense in depth: when the page has > 1 paragraph, first and last
+      2055 |     // differ, so the assertion above is meaningful. Guard against fixtures
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/tts-page-navigation.spec.ts:2052:7
+
+    Error Context: test-results/tts-page-navigation-TTS-st-3fc31--paragraph-of-previous-page-electron/error-context.md
+
+    Error Context: test-results/tts-page-navigation-TTS-st-3fc31--paragraph-of-previous-page-electron/error-context.md
+
+  21 failed
+    [electron] › e2e/azw3-parity.spec.ts:59:7 › AZW3 reader — feature parity with MOBI › View > Show TOC opens the TOC sheet 
+    [electron] › e2e/azw3-parity.spec.ts:88:7 › AZW3 reader — feature parity with MOBI › Bookmarks > Add Bookmark stores a bookmark in the DB 
+    [electron] › e2e/menu-book-epub.spec.ts:12:5 › focused EPUB book window menu hides PDF-only items 
+    [electron] › e2e/menu-book-pdf.spec.ts:12:5 › focused PDF book window menu has Bookmarks, Reader, Show Thumbnails, Dual Page 
+    [electron] › e2e/menu-bookmarks-submenu.spec.ts:13:5 › Bookmarks > recent submenu reflects added bookmarks 
+    [electron] › e2e/menu-commands.spec.ts:11:5 › View > Switch to Dark Mode toggles theme in renderer 
+    [electron] › e2e/menu-commands.spec.ts:41:5 › Bookmarks > Add Bookmark adds a row in the DB when a PDF is open 
+    [electron] › e2e/menu-recent.spec.ts:12:5 › File > Open Recent lists imported books and opens them 
+    [electron] › e2e/mobi.spec.ts:49:7 › MOBI reader › non-existent book id does not crash ─────────
+    [electron] › e2e/navigation-history-epub.spec.ts:173:7 › Navigation history — EPUB › simulated internal link jump → pill → pop returns to original CFI 
+    [electron] › e2e/navigation-history-pdf.spec.ts:126:7 › Navigation history — PDF › TOC jump → pill appears → pop returns to original page 
+    [electron] › e2e/navigation-history-pdf.spec.ts:208:7 › Navigation history — PDF › engagement tap → flip away → pop returns to engaged page 
+    [electron] › e2e/pdf-footer-detection.spec.ts:108:5 › paragraph indices stay stable when the heuristic engages (gaps preserved) 
+    [electron] › e2e/pdf-reader.spec.ts:50:7 › PDF reader › keyboard navigation advances and restores the persisted page index 
+    [electron] › e2e/pdf-scroll-up-jitter.spec.ts:28:5 › scrolling up across a page boundary does not jitter 
+    [electron] › e2e/search.spec.ts:42:7 › Search › searchBookText IPC accepts a query ─────────────
+    [electron] › e2e/tts-page-navigation.spec.ts:332:7 › TTS state follows EPUB page navigation › clicking Next during playback pauses the OLD page audio immediately 
+    [electron] › e2e/tts-page-navigation.spec.ts:484:7 › TTS state follows EPUB page navigation › audio.play() is NOT called for stale blob when state moves on during loadAndPlayAudio 
+    [electron] › e2e/tts-page-navigation.spec.ts:893:7 › TTS state follows EPUB page navigation › Stop+Play immediately after Next does NOT replay the old page 
+    [electron] › e2e/tts-page-navigation.spec.ts:1114:7 › TTS state follows EPUB page navigation › T2: Stuck-loop reproducer - PLAY after pageNavigating timeout must not cause unwanted nav (BUG) 
+    [electron] › e2e/tts-page-navigation.spec.ts:1953:7 › TTS state follows EPUB page navigation › player PREV at first paragraph lands on last paragraph of previous page 
+  7 skipped
+  87 passed (3.9m)
+
+> rishi-electron@1.4.0 pretest:e2e:sharing /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron
+> node scripts/ensure-native-abi.cjs
+
+
+> rishi-electron@1.4.0 test:e2e:sharing /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron
+> playwright test --config=playwright.sharing.config.ts -- --reporter=list
+
+[sharing setup] Starting wrangler dev…
+[wrangler-dev] 
+ ⛅️ wrangler 4.95.0
+───────────────────
+[wrangler-dev] Cloudflare agent skills are available for: Claude Code, Cursor, OpenCode, Codex. Run wrangler in an interactive terminal to install them, or use `--install-skills` to install without prompting.
+[wrangler-dev] Your Worker has access to the following bindings:
+[wrangler-dev] Binding                                                  Resource                  Mode
+[wrangler-dev] env.SESSION_ROOM (SessionRoom)                           Durable Object            local
+[wrangler-dev] env.AUTH_BASE_URL ("https://rishi.fidexa.org")           Environment Variable      local
+[wrangler-dev] env.TEST_AUTH_ALLOWED ("(hidden)")                       Environment Variable      local
+[wrangler-dev] env.WORKER_HMAC_SECRET ("(hidden)")                      Environment Variable      local
+[wrangler-dev] 
+[wrangler-dev] ❓ Your types might be out of date. Re-run `wrangler types` to ensure your types are correct.
+[wrangler-dev] ⎔ Starting local server...
+[wrangler-dev] [wrangler:info] Ready on http://localhost:8788
+[sharing setup] wrangler dev ready at http://localhost:8788
+Error: No tests found.
+Make sure that arguments are regular expressions matching test files.
+You may need to escape symbols like "$" or "*" and quote the arguments.
+[sharing teardown] Stopping wrangler dev…
+
+ ELIFECYCLE  Command failed with exit code 1.
+[sharing setup] Starting wrangler dev…
+[wrangler-dev] 
+ ⛅️ wrangler 4.95.0
+───────────────────
+[wrangler-dev] Cloudflare agent skills are available for: Claude Code, Cursor, OpenCode, Codex. Run wrangler in an interactive terminal to install them, or use `--install-skills` to install without prompting.
+[wrangler-dev] Your Worker has access to the following bindings:
+[wrangler-dev] Binding                                                  Resource                  Mode
+[wrangler-dev] env.SESSION_ROOM (SessionRoom)                           Durable Object            local
+[wrangler-dev] env.AUTH_BASE_URL ("https://rishi.fidexa.org")           Environment Variable      local
+[wrangler-dev] env.TEST_AUTH_ALLOWED ("(hidden)")                       Environment Variable      local
+[wrangler-dev] env.WORKER_HMAC_SECRET ("(hidden)")                      Environment Variable      local
+[wrangler-dev] 
+[wrangler-dev] ❓ Your types might be out of date. Re-run `wrangler types` to ensure your types are correct.
+[wrangler-dev] ⎔ Starting local server...
+[wrangler-dev] [wrangler:info] Ready on http://localhost:8788
+[sharing setup] wrangler dev ready at http://localhost:8788
+
+Running 10 tests using 4 workers
+
+[wrangler-dev] {"event":"session.created","ts":1780392843346,"sessionId":"s_049088b2-909b-4fcc-9e73-576d4db0ad3b","host":"host-ft1"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (519ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_049088b2-909b-4fcc-9e73-576d4db0ad3b/wss 101 Switching Protocols (74ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392843799,"sessionId":"s_049088b2-909b-4fcc-9e73-576d4db0ad3b","userId":"host-ft1","role":"host"}
+[wrangler-dev] {"event":"session.created","ts":1780392844046,"sessionId":"s_65c7fa61-b042-40ae-97f8-dae887bb91bc","host":"host-a1"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (76ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_65c7fa61-b042-40ae-97f8-dae887bb91bc/wss 101 Switching Protocols (5ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392844125,"sessionId":"s_65c7fa61-b042-40ae-97f8-dae887bb91bc","userId":"host-a1","role":"host"}
+[wrangler-dev] {"event":"session.created","ts":1780392844782,"sessionId":"s_128cd619-5967-4e21-aea5-348a125cc0b1","host":"e2e-host"}
+{"event":"session.created","ts":1780392844783,"sessionId":"s_c5863dc4-95d9-46f7-add9-26e4b40150b6","host":"host-r1"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (916ms)
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (933ms)
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_65c7fa61-b042-40ae-97f8-dae887bb91bc/redeem 200 OK (1109ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_128cd619-5967-4e21-aea5-348a125cc0b1/wss 101 Switching Protocols (333ms)
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_c5863dc4-95d9-46f7-add9-26e4b40150b6/redeem 200 OK (4ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392845661,"sessionId":"s_128cd619-5967-4e21-aea5-348a125cc0b1","userId":"e2e-host","role":"host"}
+{"event":"peer.admitted","ts":1780392845677,"sessionId":"s_c5863dc4-95d9-46f7-add9-26e4b40150b6","userId":"host-r1","role":"host"}
+{"event":"peer.admitted","ts":1780392845884,"sessionId":"s_c5863dc4-95d9-46f7-add9-26e4b40150b6","userId":"viewer-r1","role":"viewer"}
+[wrangler:info] GET /v1/sessions/s_c5863dc4-95d9-46f7-add9-26e4b40150b6/wss 101 Switching Protocols (327ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_65c7fa61-b042-40ae-97f8-dae887bb91bc/wss 101 Switching Protocols (116ms)
+[wrangler-dev] {"event":"peer.queued","ts":1780392846059,"sessionId":"s_65c7fa61-b042-40ae-97f8-dae887bb91bc","userId":"viewer-a1"}
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_c5863dc4-95d9-46f7-add9-26e4b40150b6/wss 101 Switching Protocols (23ms)
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_128cd619-5967-4e21-aea5-348a125cc0b1/redeem 200 OK (19ms)
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_049088b2-909b-4fcc-9e73-576d4db0ad3b/redeem 200 OK (9ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_049088b2-909b-4fcc-9e73-576d4db0ad3b/wss 101 Switching Protocols (13ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392848164,"sessionId":"s_049088b2-909b-4fcc-9e73-576d4db0ad3b","userId":"viewer-ft1","role":"viewer"}
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_128cd619-5967-4e21-aea5-348a125cc0b1/wss 101 Switching Protocols (2ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392848345,"sessionId":"s_128cd619-5967-4e21-aea5-348a125cc0b1","userId":"e2e-viewer","role":"viewer"}
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_c5863dc4-95d9-46f7-add9-26e4b40150b6/wss 101 Switching Protocols (2ms)
+  ✘   2 [sharing] › e2e/sharing.approval.spec.ts:14:5 › requiresApproval: viewer queued → host approves → both live (21.1s)
+  ✓   3 [sharing] › e2e/sharing.file-transfer.spec.ts:25:5 › viewer without book receives P2P file transfer and sync follows (24.9s)
+  ✓   4 [sharing] › e2e/sharing.reconnect.spec.ts:13:5 › viewer WS drop → reconnecting → seamless rejoin within 30s grace (24.9s)
+  ✓   1 [sharing] › e2e/sharing.rate-limit.spec.ts:12:5 › request.sharer rate-limit: second request within 15s receives rate_limited error (25.7s)
+[wrangler-dev] {"event":"session.created","ts":1780392861632,"sessionId":"s_2af109e7-82d0-4672-87f5-56181b99a049","host":"host-a2"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (9ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_2af109e7-82d0-4672-87f5-56181b99a049/wss 101 Switching Protocols (3ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392861645,"sessionId":"s_2af109e7-82d0-4672-87f5-56181b99a049","userId":"host-a2","role":"host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_2af109e7-82d0-4672-87f5-56181b99a049/redeem 200 OK (2ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_2af109e7-82d0-4672-87f5-56181b99a049/wss 101 Switching Protocols (2ms)
+[wrangler-dev] {"event":"peer.queued","ts":1780392861855,"sessionId":"s_2af109e7-82d0-4672-87f5-56181b99a049","userId":"viewer-a2"}
+[wrangler-dev] {"event":"session.created","ts":1780392865255,"sessionId":"s_f70b547b-5be9-42ea-b6af-56c205fc5be9","host":"e2e-host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (5ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_f70b547b-5be9-42ea-b6af-56c205fc5be9/wss 101 Switching Protocols (1ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392865264,"sessionId":"s_f70b547b-5be9-42ea-b6af-56c205fc5be9","userId":"e2e-host","role":"host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_f70b547b-5be9-42ea-b6af-56c205fc5be9/redeem 200 OK (2ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_f70b547b-5be9-42ea-b6af-56c205fc5be9/wss 101 Switching Protocols (2ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392865477,"sessionId":"s_f70b547b-5be9-42ea-b6af-56c205fc5be9","userId":"e2e-viewer","role":"viewer"}
+  ✓   5 [sharing] › e2e/sharing.approval.spec.ts:72:5 › requiresApproval: host rejects → viewer reaches failed (15.7s)
+  ✓   6 [sharing] › e2e/sharing.spec.ts:16:7 › Shared reading — happy path › host creates session, viewer joins, both reach live (15.9s)
+[wrangler-dev] {"event":"session.created","ts":1780392880789,"sessionId":"s_969019b4-e4b0-40d3-9b92-5a19fae1b7ff","host":"host-2"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (3ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_969019b4-e4b0-40d3-9b92-5a19fae1b7ff/wss 101 Switching Protocols (1ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392880797,"sessionId":"s_969019b4-e4b0-40d3-9b92-5a19fae1b7ff","userId":"host-2","role":"host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_969019b4-e4b0-40d3-9b92-5a19fae1b7ff/redeem 200 OK (2ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_969019b4-e4b0-40d3-9b92-5a19fae1b7ff/wss 101 Switching Protocols (2ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392881008,"sessionId":"s_969019b4-e4b0-40d3-9b92-5a19fae1b7ff","userId":"viewer-2","role":"viewer"}
+  ✓   7 [sharing] › e2e/sharing.spec.ts:51:7 › Shared reading — happy path › sharer page-turn propagates to viewer within 5s (15.5s)
+[wrangler-dev] {"event":"session.created","ts":1780392896320,"sessionId":"s_958a2836-eadb-4fe3-bef0-01bda39304af","host":"host-3"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (3ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_958a2836-eadb-4fe3-bef0-01bda39304af/wss 101 Switching Protocols (1ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392896325,"sessionId":"s_958a2836-eadb-4fe3-bef0-01bda39304af","userId":"host-3","role":"host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_958a2836-eadb-4fe3-bef0-01bda39304af/redeem 200 OK (2ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_958a2836-eadb-4fe3-bef0-01bda39304af/wss 101 Switching Protocols (3ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392896542,"sessionId":"s_958a2836-eadb-4fe3-bef0-01bda39304af","userId":"viewer-3","role":"viewer"}
+[wrangler-dev] {"event":"role.transferred","ts":1780392897288,"sessionId":"s_958a2836-eadb-4fe3-bef0-01bda39304af","from":"host-3","to":"viewer-3"}
+  ✓   8 [sharing] › e2e/sharing.spec.ts:89:7 › Shared reading — happy path › host passes sharer role to viewer, sharerId updates on both sides (16.3s)
+[wrangler-dev] {"event":"session.created","ts":1780392912687,"sessionId":"s_8f4fd643-73ca-43af-a63e-e54e8c0d67e8","host":"host-4"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (3ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_8f4fd643-73ca-43af-a63e-e54e8c0d67e8/wss 101 Switching Protocols (1ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392912694,"sessionId":"s_8f4fd643-73ca-43af-a63e-e54e8c0d67e8","userId":"host-4","role":"host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_8f4fd643-73ca-43af-a63e-e54e8c0d67e8/redeem 200 OK (4ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_8f4fd643-73ca-43af-a63e-e54e8c0d67e8/wss 101 Switching Protocols (1ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392912908,"sessionId":"s_8f4fd643-73ca-43af-a63e-e54e8c0d67e8","userId":"viewer-4","role":"viewer"}
+  ✓   9 [sharing] › e2e/sharing.spec.ts:143:7 › Shared reading — happy path › host kicks viewer → viewer transitions to failed/idle (15.6s)
+[wrangler-dev] {"event":"session.created","ts":1780392928224,"sessionId":"s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99","host":"host-5"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions 200 OK (4ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99/wss 101 Switching Protocols (2ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392928231,"sessionId":"s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99","userId":"host-5","role":"host"}
+[wrangler-dev] [wrangler:info] POST /v1/sessions/s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99/redeem 200 OK (3ms)
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99/wss 101 Switching Protocols (2ms)
+[wrangler-dev] {"event":"peer.admitted","ts":1780392928445,"sessionId":"s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99","userId":"viewer-5","role":"viewer"}
+[wrangler-dev] [wrangler:info] GET /v1/sessions/s_80f5f2dc-43f5-41ac-832b-1a1b4dc96e99/wss 101 Switching Protocols (1ms)
+  ✓  10 [sharing] › e2e/sharing.spec.ts:189:7 › Shared reading — happy path › host window closes → viewer sees HostSuspendedBanner; host reopens → session resumes (18.7s)
+[sharing teardown] Stopping wrangler dev…
+
+
+  1) [sharing] › e2e/sharing.approval.spec.ts:14:5 › requiresApproval: viewer queued → host approves → both live 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBeGreaterThan[2m([22m[32mexpected[39m[2m)[22m
+
+    Expected: > [32m0[39m
+    Received:   [31m0[39m
+
+      57 |
+      58 |     const hostSnap = await readSessionSnapshot(host.page)
+    > 59 |     expect(hostSnap.context.pendingJoiners.length).toBeGreaterThan(0)
+         |                                                    ^
+      60 |
+      61 |     await sendSessionEvent(host.page, { type: 'APPROVE_JOIN', userId: 'viewer-a1' })
+      62 |     await waitForBothLive(host.page, viewer.page)
+        at /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/e2e/sharing.approval.spec.ts:59:52
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/test-failed-4.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/test-failed-2.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #4: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/test-failed-3.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/error-context.md
+
+    attachment #6: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace test-results/sharing.approval-requiresA-12140-→-host-approves-→-both-live-sharing/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [sharing] › e2e/sharing.approval.spec.ts:14:5 › requiresApproval: viewer queued → host approves → both live 
+  9 passed (1.8m)

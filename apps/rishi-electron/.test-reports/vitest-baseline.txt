@@ -1,0 +1,70 @@
+
+ RUN  v4.1.5 /Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron
+
+DOMException [NotSupportedError]: Failed to fetch from "kindle:flow:0001?mime=text/css": URL scheme "kindle" is not supported.
+    at Function.validateSchema (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/fetch/utilities/FetchRequestValidationUtility.js:90:19)
+    at Fetch.send (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/fetch/Fetch.js:126:39)
+    at ResourceFetch.fetch (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/fetch/ResourceFetch.js:70:38)
+    at HTMLLinkElement.#loadStyleSheet (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/html-link-element/HTMLLinkElement.js:383:44)
+    at HTMLLinkElement.[connectedToDocument] (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/html-link-element/HTMLLinkElement.js:213:41)
+    at HTMLLinkElement.[connectedToNode] (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/node/Node.js:794:53)
+    at HTMLHeadElement.[appendChild] (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/node/Node.js:413:45)
+    at HTMLHeadElement.[appendChild] (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/element/Element.js:1028:62)
+    at HTMLHeadElement.appendChild (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/node/Node.js:306:48)
+    at Function.append (file:///Users/faridmatovu/projects/rishi-monorepo/apps/rishi-electron/node_modules/happy-dom/lib/nodes/parent-node/ParentNodeUtility.js:19:28)
+AggregateError: 
+    at internalConnectMultiple (node:net:1139:18)
+    at afterConnectMultiple (node:net:1714:7) {
+  code: 'ECONNREFUSED',
+  [errors]: [
+    Error: connect ECONNREFUSED ::1:3000
+        at createConnectionError (node:net:1677:14)
+        at afterConnectMultiple (node:net:1707:16) {
+      errno: -61,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 3000
+    },
+    Error: connect ECONNREFUSED 127.0.0.1:3000
+        at createConnectionError (node:net:1677:14)
+        at afterConnectMultiple (node:net:1707:16) {
+      errno: -61,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 3000
+    }
+  ]
+}
+AggregateError: 
+    at internalConnectMultiple (node:net:1139:18)
+    at afterConnectMultiple (node:net:1714:7) {
+  code: 'ECONNREFUSED',
+  [errors]: [
+    Error: connect ECONNREFUSED ::1:3000
+        at createConnectionError (node:net:1677:14)
+        at afterConnectMultiple (node:net:1707:16) {
+      errno: -61,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 3000
+    },
+    Error: connect ECONNREFUSED 127.0.0.1:3000
+        at createConnectionError (node:net:1677:14)
+        at afterConnectMultiple (node:net:1707:16) {
+      errno: -61,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 3000
+    }
+  ]
+}
+
+ Test Files  217 passed (217)
+      Tests  1835 passed (1835)
+   Start at  12:18:58
+   Duration  19.34s (transform 3.82s, setup 11.62s, import 25.26s, tests 23.44s, environment 48.46s)
+
