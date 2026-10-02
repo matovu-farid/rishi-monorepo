@@ -183,6 +183,22 @@ struct SignedInContent: View {
                 dependencies.voicePresenter.scheduleRegisteredReaderCleanup()
                 readerWindows.open(book: book, user: user)
             }
+            router.onCatalystSharedReaderPresented = { presentation in
+                dependencies.voicePresenter.scheduleRegisteredReaderCleanup()
+                return readerWindows.openShared(presentation)
+            }
+            readerWindows.configureSharedReading(
+                contextLookup: { windowID, routeID in
+                    router.sharedReaderPresentation(id: routeID, accountID: windowID.userID)?.context
+                },
+                close: { routeID, accountID in
+                    router.closeSharedReader(id: routeID, accountID: accountID)
+                }
+            )
+            if let route = router.catalystSharedReaderRoute,
+               let presentation = router.sharedReaderPresentation(for: route, accountID: user.id) {
+                readerWindows.openShared(presentation)
+            }
         }
         .onDisappear {
             readerWindows.invalidate(userID: user.id)

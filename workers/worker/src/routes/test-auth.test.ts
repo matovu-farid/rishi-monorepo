@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import { hashPassword } from "better-auth/crypto"
 
 /**
  * Tests for /test/* — test-only auth routes. HARD GATED by:
@@ -6,11 +7,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
  *   a. c.env.ENABLE_TEST_AUTH === 'true'   (string, since wrangler passes vars
  *                                          as strings; missing → 404)
  *   b. X-Test-Auth-Secret header matches c.env.TEST_AUTH_SECRET (constant time)
- *   c. ENABLE_TEST_AUTH must be present at all
+ *   c. TEST_AUTH_EMAIL_DOMAIN, when configured, restricts disposable emails
  *
  * Any failure of any gate returns 404 (NOT 401/403) so probers see "no
- * such endpoint". This file exercises both POST /test/sign-in (sign up or
- * sign in via email+password) and DELETE /test/users/:email (full account
+ * such endpoint". This file exercises both POST /test/sign-in (fresh account
+ * creation plus email+password session) and DELETE /test/users/:email (full account
  * teardown — books, R2 objects, highlights, conversations, messages,
  * bookmarks, and Better-Auth rows).
  */
@@ -28,29 +29,36 @@ interface FakeUser {
   email: string
 }
 
-const { state, COLS, deleteCalls } = vi.hoisted(() => {
+const { state, COLS, deleteCalls, grantTrialIfAbsent, getByName, deleteAccount } = vi.hoisted(() => {
   const COLS = {
     id: { __col: "id" } as const,
     email: { __col: "email" } as const,
+    providerId: { __col: "providerId" } as const,
     userId: { __col: "userId" } as const,
+    password: { __col: "password" } as const,
     fileR2Key: { __col: "fileR2Key" } as const,
     coverR2Key: { __col: "coverR2Key" } as const,
     bookId: { __col: "bookId" } as const,
     conversationId: { __col: "conversationId" } as const,
   }
+  const grantTrialIfAbsent = vi.fn()
+  const getByName = vi.fn(() => ({ grantTrialIfAbsent }))
   return {
     state: {
-      users: [] as Array<{ id: string; email: string }>,
+      users: [] as Array<{ id: string; email: string; name?: string }>,
       books: [] as Array<FakeBook>,
       highlights: [] as Array<{ id: string; userId: string }>,
       conversations: [] as Array<{ id: string; userId: string }>,
       messages: [] as Array<{ id: string; conversationId: string }>,
       bookmarks: [] as Array<{ id: string; userId: string }>,
-      sessions: [] as Array<{ id: string; userId: string }>,
-      accounts: [] as Array<{ id: string; userId: string }>,
+      sessions: [] as Array<{ id: string; userId: string; token?: string }>,
+      accounts: [] as Array<{ id: string; userId: string; providerId?: string; password?: string }>,
     },
     COLS,
     deleteCalls: { r2: [] as string[] },
+    grantTrialIfAbsent,
+    getByName,
+    deleteAccount: vi.fn().mockResolvedValue({ alreadyDeleted: false }),
   }
 })
 
@@ -67,7 +75,7 @@ function resetState() {
 }
 
 // ─── Mock schema ──────────────────────────────────────────────────────────────
-vi.mock("@rishi/shared/schema", () => ({
+vi.mock("../db/schema", () => ({
   books: { ...COLS, __table: "books" },
   highlights: { ...COLS, __table: "highlights" },
   conversations: { ...COLS, __table: "conversations" },
@@ -187,26 +195,63 @@ vi.mock("../db/drizzle", () => {
         }
         return builder
       },
+      insert(table: { __table?: string }) {
+        const key = tableKey(table)
+        return {
+          values(values: Record<string, unknown>) {
+            return {
+              async run() {
+                if (!key) return
+                state[key].push(values as never)
+              },
+            }
+          },
+        }
+      },
     }
   }
   return { createDb }
 })
 
-// ─── Mock createAuth (Better-Auth API) ────────────────────────────────────────
-const { authBehavior } = vi.hoisted(() => ({
-  authBehavior: {
-    signUpEmail: vi.fn(),
-    signInEmail: vi.fn(),
-  },
-}))
+// ─── Mock createAuth (Better-Auth internal adapter) ──────────────────────────
+const { authBehavior } = vi.hoisted(() => {
+  const authBehavior = {
+    createUser: vi.fn(async (data: { id: string; email: string; name: string }) => {
+      state.users.push(data)
+      return data
+    }),
+    createAccount: vi.fn(async (data: { id: string; userId: string; providerId: string }) => {
+      state.accounts.push(data)
+      return data
+    }),
+    createSession: vi.fn(async (userId: string) => {
+      const created = {
+        id: `session-${state.sessions.length + 1}`,
+        userId,
+        token: `tok-${state.sessions.length + 1}`,
+      }
+      state.sessions.push(created)
+      return { ...created, expiresAt: new Date(), createdAt: new Date(), updatedAt: new Date() }
+    }),
+  }
+  return { authBehavior }
+})
 
 vi.mock("../auth", () => ({
   createAuth: () => ({
-    api: {
-      signUpEmail: authBehavior.signUpEmail,
-      signInEmail: authBehavior.signInEmail,
-    },
+    $context: Promise.resolve({
+      internalAdapter: {
+        createUser: authBehavior.createUser,
+        createAccount: authBehavior.createAccount,
+        createSession: authBehavior.createSession,
+      },
+    }),
   }),
+}))
+
+vi.mock("../account-deletion", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../account-deletion")>(),
+  deleteAccount,
 }))
 
 // ─── Now import the route under test ──────────────────────────────────────────
@@ -223,8 +268,10 @@ const baseEnv = {
   BETTER_AUTH_SECRET: "test-secret",
   PUBLIC_API_URL: "https://api.fidexa.org",
   PUBLIC_WEB_URL: "https://rishi.fidexa.org",
+  TEST_AUTH_EMAIL_DOMAIN: "x.co",
   DB: {} as unknown,
   BOOK_STORAGE: fakeR2 as unknown,
+  USER_USAGE_LEDGER: { getByName },
 } as unknown as Record<string, unknown>
 
 const SECRET = "super-secret-token"
@@ -251,8 +298,29 @@ async function call(
 
 beforeEach(() => {
   resetState()
-  authBehavior.signUpEmail.mockReset()
-  authBehavior.signInEmail.mockReset()
+  authBehavior.createUser.mockReset()
+  authBehavior.createUser.mockImplementation(async (data: { id: string; email: string; name: string }) => {
+    state.users.push(data)
+    return data
+  })
+  authBehavior.createAccount.mockReset()
+  authBehavior.createAccount.mockImplementation(async (data: { id: string; userId: string; providerId: string }) => {
+    state.accounts.push(data)
+    return data
+  })
+  authBehavior.createSession.mockReset()
+  authBehavior.createSession.mockImplementation(async (userId: string) => {
+    const created = {
+      id: `session-${state.sessions.length + 1}`,
+      userId,
+      token: `tok-${state.sessions.length + 1}`,
+    }
+    state.sessions.push(created)
+    return { ...created, expiresAt: new Date(), createdAt: new Date(), updatedAt: new Date() }
+  })
+  grantTrialIfAbsent.mockReset()
+  getByName.mockClear()
+  deleteAccount.mockClear()
   fakeR2.delete.mockClear()
 })
 
@@ -337,20 +405,45 @@ describe("POST /test/sign-in — gating", () => {
     )
     expect(res.status).toBe(404)
   })
+
+  it("keeps the legacy secret-gated flow working when no email domain is configured", async () => {
+    const { TEST_AUTH_EMAIL_DOMAIN: _domain, ...envWithoutDomain } = envWithGate()
+    const res = await call(
+      "/sign-in",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Test-Auth-Secret": SECRET,
+        },
+        body: JSON.stringify({ email: "new@x.co", password: "pw12345678" }),
+      },
+      envWithoutDomain,
+    )
+    expect(res.status).toBe(200)
+  })
 })
 
 // ─── Happy paths: POST /test/sign-in ──────────────────────────────────────────
 describe("POST /test/sign-in — happy paths", () => {
-  it("creates a new user when one doesn't exist + returns session token", async () => {
-    authBehavior.signUpEmail.mockResolvedValue({
-      user: { id: "user_new", email: "new@x.co" },
-      token: "tok_new",
-    })
-    authBehavior.signInEmail.mockResolvedValue({
-      user: { id: "user_new", email: "new@x.co" },
-      token: "tok_new",
+  it("rejects addresses outside the configured test domain", async () => {
+    const res = await call("/sign-in", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Test-Auth-Secret": SECRET,
+      },
+      body: JSON.stringify({ email: "new@outside.example", password: "pw12345678" }),
     })
 
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({
+      error: "email must use the configured test domain",
+    })
+    expect(authBehavior.createUser).not.toHaveBeenCalled()
+  })
+
+  it("creates a new user when one doesn't exist + returns session token", async () => {
     const res = await call("/sign-in", {
       method: "POST",
       headers: {
@@ -365,18 +458,25 @@ describe("POST /test/sign-in — happy paths", () => {
       userId: string
       email: string
     }
-    expect(body.token).toBe("tok_new")
-    expect(body.userId).toBe("user_new")
+    expect(body.token).toBe(state.sessions[0]?.token)
+    expect(body.token).toEqual(expect.any(String))
+    expect(body.userId).toMatch(/^[0-9a-f-]{36}$/)
     expect(body.email).toBe("new@x.co")
-    expect(authBehavior.signUpEmail).toHaveBeenCalledOnce()
+    expect(state.users).toHaveLength(1)
+    expect(state.accounts).toHaveLength(1)
+    expect(state.sessions).toHaveLength(1)
+    expect(state.sessions[0]?.token).toBe(body.token)
+    expect(getByName).toHaveBeenCalledWith(body.userId)
+    expect(grantTrialIfAbsent).toHaveBeenCalledOnce()
   })
 
-  it("signs in an existing user when signUpEmail rejects with 'user exists'", async () => {
-    // signUpEmail throws when user already exists — caller falls through to signInEmail.
-    authBehavior.signUpEmail.mockRejectedValue(new Error("user already exists"))
-    authBehavior.signInEmail.mockResolvedValue({
-      user: { id: "user_existing", email: "old@x.co" },
-      token: "tok_existing",
+  it("allows a disposable account to sign in again", async () => {
+    state.users.push({ id: "user_existing", email: "old@x.co", name: "old" })
+    state.accounts.push({
+      id: "account-existing",
+      userId: "user_existing",
+      providerId: "credential",
+      password: await hashPassword("pw12345678"),
     })
 
     const res = await call("/sign-in", {
@@ -388,10 +488,120 @@ describe("POST /test/sign-in — happy paths", () => {
       body: JSON.stringify({ email: "old@x.co", password: "pw12345678" }),
     })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { token: string; userId: string }
-    expect(body.token).toBe("tok_existing")
-    expect(body.userId).toBe("user_existing")
-    expect(authBehavior.signInEmail).toHaveBeenCalledOnce()
+    expect(((await res.json()) as { userId: string }).userId).toBe("user_existing")
+    expect(state.users).toHaveLength(1)
+    expect(state.accounts).toHaveLength(1)
+    expect(state.sessions).toHaveLength(1)
+    expect(state.sessions[0]?.userId).toBe("user_existing")
+    expect(grantTrialIfAbsent).toHaveBeenCalledOnce()
+  })
+
+  it("does not create a session for an existing test account with the wrong password", async () => {
+    state.users.push({ id: "user_existing", email: "old@x.co", name: "old" })
+    state.accounts.push({
+      id: "account-existing",
+      userId: "user_existing",
+      providerId: "credential",
+      password: await hashPassword("the-correct-password"),
+    })
+
+    const res = await call("/sign-in", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Test-Auth-Secret": SECRET,
+      },
+      body: JSON.stringify({ email: "old@x.co", password: "wrong-password" }),
+    })
+
+    expect(res.status).toBe(401)
+    expect(state.sessions).toHaveLength(0)
+    expect(grantTrialIfAbsent).not.toHaveBeenCalled()
+  })
+
+  it("returns 503 without creating a session when the ledger binding is missing", async () => {
+    const { USER_USAGE_LEDGER: _ledger, ...envWithoutLedger } = envWithGate()
+
+    const res = await call(
+      "/sign-in",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Test-Auth-Secret": SECRET,
+        },
+        body: JSON.stringify({ email: "new@x.co", password: "pw12345678" }),
+      },
+      envWithoutLedger,
+    )
+
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({
+      error: "Trial credit provisioning is temporarily unavailable",
+    })
+    expect(state.users).toHaveLength(0)
+    expect(state.sessions).toHaveLength(0)
+  })
+
+  it("reports missing ledger before validating the preflight body", async () => {
+    const { USER_USAGE_LEDGER: _ledger, ...envWithoutLedger } = envWithGate()
+    const res = await call(
+      "/sign-in",
+      {
+        method: "POST",
+        headers: { "X-Test-Auth-Secret": SECRET },
+        body: "{}",
+      },
+      envWithoutLedger,
+    )
+
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({
+      error: "Trial credit provisioning is temporarily unavailable",
+    })
+    expect(authBehavior.createUser).not.toHaveBeenCalled()
+    expect(grantTrialIfAbsent).not.toHaveBeenCalled()
+  })
+
+  it("returns 503 when trial credit provisioning fails", async () => {
+    grantTrialIfAbsent.mockRejectedValueOnce(new Error("ledger unavailable"))
+
+    const res = await call("/sign-in", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Test-Auth-Secret": SECRET,
+      },
+      body: JSON.stringify({ email: "new@x.co", password: "pw12345678" }),
+    })
+
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({
+      error: "Trial credit provisioning is temporarily unavailable",
+    })
+    expect(getByName).toHaveBeenCalled()
+    expect(deleteAccount).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ DB: baseEnv.DB }),
+      expect.any(String),
+    )
+  })
+
+  it("returns 500 when credit-grant rollback cannot delete the newly created account", async () => {
+    grantTrialIfAbsent.mockRejectedValueOnce(new Error("ledger unavailable"))
+    deleteAccount.mockRejectedValueOnce(new Error("cleanup unavailable"))
+
+    const res = await call("/sign-in", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Test-Auth-Secret": SECRET,
+      },
+      body: JSON.stringify({ email: "new@x.co", password: "pw12345678" }),
+    })
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: "test account cleanup failed" })
   })
 
   it("rejects malformed body with 400 (still gated — but past the gate)", async () => {
@@ -435,69 +645,46 @@ describe("DELETE /test/users/:email — gating", () => {
 
 // ─── Happy path: DELETE /test/users/:email ────────────────────────────────────
 describe("DELETE /test/users/:email — happy paths", () => {
-  it("cascades books + highlights + conversations + messages + bookmarks and R2 objects", async () => {
-    // Seed
+  it("does not delete an account outside the configured test domain", async () => {
+    state.users.push({ id: "u1", email: "victim@outside.example" })
+
+    const res = await call("/users/victim@outside.example", {
+      method: "DELETE",
+      headers: { "X-Test-Auth-Secret": SECRET },
+    })
+
+    expect(res.status).toBe(404)
+    expect(deleteAccount).not.toHaveBeenCalled()
+    expect(state.users).toEqual([{ id: "u1", email: "victim@outside.example" }])
+  })
+
+  it("delegates teardown to the canonical account deletion workflow", async () => {
     state.users.push({ id: "u1", email: "del@x.co" })
-    state.users.push({ id: "u2", email: "other@x.co" }) // unrelated — must survive
-    state.books.push({
-      id: "b1",
-      userId: "u1",
-      fileR2Key: "books/u1/hashA",
-      coverR2Key: "covers/u1/hashA",
+    deleteAccount.mockResolvedValueOnce({
+      deletionId: "deletion-1",
+      alreadyDeleted: false,
+      revocationStatus: "legacy_no_token",
+      r2ObjectsRemoved: 3,
     })
-    state.books.push({
-      id: "b2",
-      userId: "u1",
-      fileR2Key: "books/u1/hashB",
-      coverR2Key: null,
-    })
-    state.books.push({
-      id: "b3",
-      userId: "u2",
-      fileR2Key: "books/u2/keep",
-      coverR2Key: null,
-    })
-    state.highlights.push({ id: "h1", userId: "u1" })
-    state.highlights.push({ id: "h2", userId: "u2" })
-    state.conversations.push({ id: "c1", userId: "u1" })
-    state.messages.push({ id: "m1", conversationId: "c1" })
-    state.bookmarks.push({ id: "bm1", userId: "u1" })
-    state.sessions.push({ id: "s1", userId: "u1" })
-    state.accounts.push({ id: "a1", userId: "u1" })
 
     const res = await call("/users/del@x.co", {
       method: "DELETE",
       headers: { "X-Test-Auth-Secret": SECRET },
     })
+
     expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      deleted: boolean
-      userId: string
-      booksRemoved: number
-      r2ObjectsRemoved: number
-    }
-    expect(body.deleted).toBe(true)
-    expect(body.userId).toBe("u1")
-    expect(body.booksRemoved).toBe(2)
-    // 3 R2 keys: 2 fileR2Key (b1, b2) + 1 coverR2Key (b1 only — b2's was null)
-    expect(body.r2ObjectsRemoved).toBe(3)
-
-    // u1's data gone
-    expect(state.books.find((b) => b.userId === "u1")).toBeUndefined()
-    expect(state.highlights.find((h) => h.userId === "u1")).toBeUndefined()
-    expect(state.conversations.find((c) => c.userId === "u1")).toBeUndefined()
-    expect(state.bookmarks.find((b) => b.userId === "u1")).toBeUndefined()
-    expect(state.sessions.find((s) => s.userId === "u1")).toBeUndefined()
-    expect(state.accounts.find((a) => a.userId === "u1")).toBeUndefined()
-    expect(state.users.find((u) => u.id === "u1")).toBeUndefined()
-    // u2 untouched
-    expect(state.books.find((b) => b.userId === "u2")).toBeDefined()
-    expect(state.highlights.find((h) => h.userId === "u2")).toBeDefined()
-    expect(state.users.find((u) => u.id === "u2")).toBeDefined()
-
-    // R2 deletes
-    expect(deleteCalls.r2.sort()).toEqual(
-      ["books/u1/hashA", "books/u1/hashB", "covers/u1/hashA"].sort(),
+    expect(await res.json()).toEqual({
+      deleted: true,
+      userId: "u1",
+      deletionId: "deletion-1",
+      alreadyDeleted: false,
+      revocationStatus: "legacy_no_token",
+      r2ObjectsRemoved: 3,
+    })
+    expect(deleteAccount).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ DB: baseEnv.DB }),
+      "u1",
     )
   })
 
@@ -509,26 +696,41 @@ describe("DELETE /test/users/:email — happy paths", () => {
     expect(res.status).toBe(404)
   })
 
-  it("is resilient when R2 delete throws (still reports remaining work)", async () => {
+  it("fails closed when canonical teardown fails", async () => {
     state.users.push({ id: "u1", email: "del@x.co" })
-    state.books.push({
-      id: "b1",
-      userId: "u1",
-      fileR2Key: "books/u1/willFail",
-      coverR2Key: null,
-    })
-    fakeR2.delete.mockImplementationOnce(async () => {
-      throw new Error("R2 down")
-    })
+    deleteAccount.mockRejectedValueOnce(new Error("R2 down"))
     const res = await call("/users/del@x.co", {
       method: "DELETE",
       headers: { "X-Test-Auth-Secret": SECRET },
     })
-    // We still want a 2xx — partial R2 failures shouldn't strand the test
-    // teardown.
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { deleted: boolean; booksRemoved: number }
-    expect(body.deleted).toBe(true)
-    expect(body.booksRemoved).toBe(1)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({
+      code: "ACCOUNT_DELETION_UNAVAILABLE",
+      retryable: true,
+      action: "retry",
+    })
+  })
+
+  it("preserves retryable account-deletion status for the E2E client's retry loop", async () => {
+    state.users.push({ id: "u1", email: "del@x.co" })
+    deleteAccount.mockRejectedValueOnce(Object.assign(new Error("pending"), {
+      code: "ACCOUNT_DELETION_PENDING",
+      status: 503,
+      retryable: true,
+      retryAt: 123456789,
+    }))
+
+    const res = await call("/users/del@x.co", {
+      method: "DELETE",
+      headers: { "X-Test-Auth-Secret": SECRET },
+    })
+
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({
+      code: "ACCOUNT_DELETION_PENDING",
+      retryable: true,
+      action: "retry",
+      retryAt: 123456789,
+    })
   })
 })

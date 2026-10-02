@@ -1,35 +1,29 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
-import {
-  books,
-  highlights,
-  conversations,
-  messages,
-  bookmarks,
-  user,
-  session,
-  account,
-} from "../db/schema";
+import { and, eq } from "drizzle-orm";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
+import { account, user } from "../db/schema";
 import { createDb } from "../db/drizzle";
 import { createAuth } from "../auth";
+import {
+  accountDeletionErrorBody,
+  accountDeletionErrorEnvelope,
+  deleteAccount,
+} from "../account-deletion";
 
+type TestAuthEnv = Env & {
+  TEST_AUTH_EMAIL_DOMAIN?: string;
+};
 
 /**
  * Test-only auth routes mounted at /test/*.
  *
- * These exist so end-to-end tests (Playwright + Detox in the parity effort)
- * can spin up a fresh user account, exercise sync, and tear it down — without
- * going through the OAuth browser dance. They are HARD GATED by three checks:
- *
- *   a. c.env.ENABLE_TEST_AUTH === 'true'   (wrangler vars are strings)
- *   b. X-Test-Auth-Secret header matches c.env.TEST_AUTH_SECRET (constant-time)
- *   c. c.env.ENABLE_TEST_AUTH must be PRESENT (defense in depth)
- *
- * Any gate failure returns 404 — NOT 401/403 — so probers see "no such
- * endpoint". Production wrangler.jsonc deliberately does NOT define either
- * variable; they must be set explicitly on dev/staging via `wrangler secret put`.
+ * These exist so end-to-end tests can spin up a disposable user account,
+ * exercise sync, and tear it down without going through an OAuth browser
+ * dance. They are hard-gated by the explicit test flag, secret, and an
+ * allowlisted email domain. Production wrangler configuration defines none of
+ * those test controls.
  */
-
 export const testAuthRoutes = new Hono<{
   Bindings: Env;
   Variables: { userId: string };
@@ -38,10 +32,8 @@ export const testAuthRoutes = new Hono<{
 /**
  * Constant-time string comparison.
  *
- * We do the XOR-then-OR ourselves instead of using `crypto.subtle.timingSafeEqual`
- * (which exists on the Cloudflare Workers runtime but NOT on Node, breaking
- * vitest). The loop runs to the longer length so an attacker can't time the
- * mismatch by sending a 1-char header.
+ * The loop runs to the longer encoded length so a short mismatching header
+ * does not immediately reveal the expected secret length.
  */
 function timingSafeEqual(a: string, b: string): boolean {
   const encoder = new TextEncoder();
@@ -55,38 +47,65 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/**
- * Verifies all three gates. Returns null on success, or a 404 Response that
- * the caller should return immediately. We use 404 (not 401/403) so an
- * attacker probing production sees the same response as for any other
- * unknown path.
- */
+function testEmailDomain(env: Env): string | null {
+  const configured = (env as TestAuthEnv).TEST_AUTH_EMAIL_DOMAIN
+    ?.trim()
+    .toLowerCase()
+    .replace(/^@/, "");
+  return configured || null;
+}
+
 function gateOrNotFound(c: {
   env: Env;
   req: { header: (name: string) => string | undefined };
 }): Response | null {
-  const enabled = c.env.ENABLE_TEST_AUTH;
-  if (!enabled || enabled !== "true") {
+  if (c.env.ENABLE_TEST_AUTH !== "true") {
     return new Response("Not Found", { status: 404 });
   }
+
   const expected = c.env.TEST_AUTH_SECRET;
-  if (!expected) {
-    return new Response("Not Found", { status: 404 });
-  }
   const provided = c.req.header("X-Test-Auth-Secret");
-  if (!provided || !timingSafeEqual(provided, expected)) {
+  if (!expected || !provided || !timingSafeEqual(provided, expected)) {
     return new Response("Not Found", { status: 404 });
   }
+
   return null;
 }
 
+function isAllowedTestEmail(email: string, domain: string | null): boolean {
+  return domain === null || email.toLowerCase().endsWith(`@${domain}`);
+}
+
+async function rollbackCreatedUser(
+  db: ReturnType<typeof createDb>,
+  env: Env,
+  userId: string,
+): Promise<boolean> {
+  try {
+    await deleteAccount(db, env, userId);
+    return true;
+  } catch (error) {
+    console.error("test account cleanup failed", { userId, error });
+    return false;
+  }
+}
+
 // ─── POST /sign-in ────────────────────────────────────────────────────────────
-// Either creates a new user (via Better-Auth signUpEmail) and signs them in,
-// or — if the user already exists — just signs them in. Returns the bearer
-// session token along with userId + email.
+// Creates a disposable credential account when missing, provisions its trial,
+// and returns a Better Auth session token. Existing disposable users receive a
+// fresh session without modifying their account.
 testAuthRoutes.post("/sign-in", async (c) => {
   const gate = gateOrNotFound(c);
   if (gate) return gate;
+
+  // Fail closed before reading the request body: no test account can be
+  // created unless its trial ledger can be addressed and provisioned.
+  if (!c.env.USER_USAGE_LEDGER || typeof c.env.USER_USAGE_LEDGER.getByName !== "function") {
+    return c.json(
+      { error: "Trial credit provisioning is temporarily unavailable" },
+      503,
+    );
+  }
 
   let body: unknown;
   try {
@@ -94,174 +113,131 @@ testAuthRoutes.post("/sign-in", async (c) => {
   } catch {
     return c.json({ error: "Invalid JSON" }, 400);
   }
-  const { email, password } = (body ?? {}) as {
-    email?: string;
-    password?: string;
+
+  const { email: rawEmail, password } = (body ?? {}) as {
+    email?: unknown;
+    password?: unknown;
   };
   if (
-    !email ||
-    typeof email !== "string" ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-    !password ||
+    typeof rawEmail !== "string" ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ||
     typeof password !== "string" ||
     password.length < 1
   ) {
     return c.json({ error: "email and password required" }, 400);
   }
 
+  const email = rawEmail.toLowerCase();
+  const domain = testEmailDomain(c.env);
+  if (!isAllowedTestEmail(email, domain)) {
+    return c.json({ error: "email must use the configured test domain" }, 400);
+  }
+
+  const db = createDb(c.env.DB);
   const auth = await createAuth(c.env);
-  const headers = c.req.raw.headers;
+  const authContext = await auth.$context;
+  const adapter = authContext.internalAdapter;
+  const existingUser = await db
+    .select()
+    .from(user)
+    .where(eq(user.email, email))
+    .get();
 
-  // Try to sign up first. If the user already exists, Better-Auth throws
-  // (or returns a recognisable error) — we swallow it and fall through to
-  // signInEmail. This matches the brief's "create if missing" semantics.
+  let userId = existingUser?.id;
+  let createdUser = false;
+
   try {
-    await auth.api.signUpEmail({
-      body: {
+    if (userId) {
+      const credentialAccount = await db
+        .select()
+        .from(account)
+        .where(and(eq(account.userId, userId), eq(account.providerId, "credential")))
+        .get();
+      let passwordMatches = false;
+      if (credentialAccount?.password) {
+        try {
+          passwordMatches = await verifyPassword({ hash: credentialAccount.password, password });
+        } catch {
+          passwordMatches = false;
+        }
+      }
+      if (!passwordMatches) {
+        return c.json({ error: "Invalid email or password" }, 401);
+      }
+    }
+
+    if (!userId) {
+      const passwordHash = await hashPassword(password);
+      const created = await adapter.createUser({
+        id: randomUUID(),
         email,
-        password,
         name: email.split("@")[0] || "Test User",
-      },
-      headers,
-      asResponse: false,
-    });
-  } catch (err) {
-    // Likely "user exists" — proceed to sign in. We don't differentiate here
-    // because all other errors will surface again in the signInEmail call.
-    void err;
-  }
+        emailVerified: true,
+      });
+      if (!created?.id) throw new Error("Better Auth did not create a user");
 
-  let signed;
-  try {
-    signed = await auth.api.signInEmail({
-      body: { email, password },
-      headers,
-      asResponse: false,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "sign-in failed";
-    return c.json({ error: message }, 401);
-  }
+      userId = created.id;
+      createdUser = true;
+      await adapter.createAccount({
+        accountId: userId,
+        providerId: "credential",
+        userId,
+        password: passwordHash,
+      });
+    }
 
-  // Better-Auth's signInEmail returns { user, token } in v1.6+.
-  const token = (signed as { token?: string })?.token;
-  const userId = (signed as { user?: { id?: string } })?.user?.id;
-  if (!token || !userId) {
-    return c.json({ error: "sign-in did not return a token" }, 500);
+    await c.env.USER_USAGE_LEDGER.getByName(userId).grantTrialIfAbsent();
+    const session = await adapter.createSession(userId);
+    if (!session?.token) throw new Error("Better Auth did not create a session");
+
+    return c.json({ token: session.token, userId, email });
+  } catch (error) {
+    if (createdUser && userId) {
+      const cleaned = await rollbackCreatedUser(db, c.env, userId);
+      if (!cleaned) return c.json({ error: "test account cleanup failed" }, 500);
+    }
+
+    console.error("test auth provisioning failed", { userId, error });
+    return c.json(
+      { error: "Trial credit provisioning is temporarily unavailable" },
+      503,
+    );
   }
-  return c.json({ token, userId, email });
 });
 
 // ─── DELETE /users/:email ─────────────────────────────────────────────────────
-// Cascades a user's data:
-//   1. R2 objects for every book (fileR2Key + coverR2Key)
-//   2. D1 rows: books, highlights, conversations, messages (via convs), bookmarks
-//   3. Better-Auth rows: session, account, user
-// Returns { deleted, userId, booksRemoved, r2ObjectsRemoved }. Returns 404 if
-// the user doesn't exist (also returns 404 on gating failures — same code so
-// probers can't distinguish).
+// Account teardown is delegated to the canonical deletion workflow so this
+// route cannot silently omit ledger, sharing, retention, or future cleanup.
 testAuthRoutes.delete("/users/:email", async (c) => {
   const gate = gateOrNotFound(c);
   if (gate) return gate;
 
-  // Better-Auth lowercases emails on storage, so we normalize on lookup
-  // — otherwise a mixed-case test email (e.g. nanoid-generated) creates
-  // the user as `foo@x` but the delete looks up `FoO@x` and 404s.
-  const email = decodeURIComponent(c.req.param("email")).toLowerCase();
-  const db = createDb(c.env.DB);
+  let email: string;
+  try {
+    email = decodeURIComponent(c.req.param("email")).toLowerCase();
+  } catch {
+    return c.json({ error: "user not found" }, 404);
+  }
 
-  // Look up the user by email (case-insensitive normalized above).
+  const domain = testEmailDomain(c.env);
+  if (!isAllowedTestEmail(email, domain)) {
+    return c.json({ error: "user not found" }, 404);
+  }
+
+  const db = createDb(c.env.DB);
   const userRow = await db
     .select()
     .from(user)
     .where(eq(user.email, email))
     .get();
-  if (!userRow) {
-    return c.json({ error: "user not found" }, 404);
+  if (!userRow) return c.json({ error: "user not found" }, 404);
+
+  try {
+    const deletion = await deleteAccount(db, c.env, userRow.id);
+    return c.json({ deleted: true, userId: userRow.id, ...deletion });
+  } catch (error) {
+    console.error("test account teardown failed", { userId: userRow.id, error });
+    const body = accountDeletionErrorEnvelope(error, randomUUID());
+    return c.json(body, accountDeletionErrorBody(error)?.status ?? 500);
   }
-  const userId = userRow.id;
-
-  // ── R2 teardown ──────────────────────────────────────────────────────────
-  const userBooks = await db
-    .select()
-    .from(books)
-    .where(eq(books.userId, userId))
-    .all();
-  const otherUserBooks = await db
-    .select()
-    .from(books)
-    .all();
-  const referencedByOtherUsers = new Set(
-    otherUserBooks
-      .filter((book) => book.userId !== userId)
-      .flatMap((book) => [book.fileR2Key, book.coverR2Key])
-      .filter((key): key is string => Boolean(key)),
-  );
-
-  let r2ObjectsRemoved = 0;
-  for (const b of userBooks) {
-    for (const key of [b.fileR2Key, b.coverR2Key]) {
-      if (!key || referencedByOtherUsers.has(key)) continue;
-      try {
-        await c.env.BOOK_STORAGE.delete(key);
-        r2ObjectsRemoved++;
-      } catch (err) {
-        // Don't strand teardown on a transient R2 failure — the row will still
-        // be removed so a retry can target only the remaining objects.
-        console.error("R2 delete failed:", key, err);
-      }
-    }
-  }
-  const booksRemoved = userBooks.length;
-
-  // ── Messages: scoped via conversationId since the messages row lacks
-  // userId. Collect this user's conversation ids first, then delete by each.
-  // Each table-delete is wrapped — `no such table` errors (which surface on
-  // a fresh local D1 that's missing a migration) shouldn't strand teardown.
-  const safeRun = async (label: string, fn: () => Promise<unknown>) => {
-    try {
-      await fn();
-    } catch (err) {
-      console.error(`teardown ${label} failed:`, err);
-    }
-  };
-
-  await safeRun("messages-by-conv", async () => {
-    const userConvs = await db
-      .select()
-      .from(conversations)
-      .where(eq(conversations.userId, userId))
-      .all();
-    for (const conv of userConvs) {
-      await db
-        .delete(messages)
-        .where(eq(messages.conversationId, conv.id))
-        .run();
-    }
-  });
-
-  // ── D1 user-scoped tables ────────────────────────────────────────────────
-  await safeRun("books", () =>
-    db.delete(books).where(eq(books.userId, userId)).run(),
-  );
-  await safeRun("highlights", () =>
-    db.delete(highlights).where(eq(highlights.userId, userId)).run(),
-  );
-  await safeRun("conversations", () =>
-    db.delete(conversations).where(eq(conversations.userId, userId)).run(),
-  );
-  await safeRun("bookmarks", () =>
-    db.delete(bookmarks).where(eq(bookmarks.userId, userId)).run(),
-  );
-
-  // ── Better-Auth rows (verification + passkey cascade via FK ON DELETE) ──
-  await safeRun("session", () =>
-    db.delete(session).where(eq(session.userId, userId)).run(),
-  );
-  await safeRun("account", () =>
-    db.delete(account).where(eq(account.userId, userId)).run(),
-  );
-  await safeRun("user", () => db.delete(user).where(eq(user.id, userId)).run());
-
-  return c.json({ deleted: true, userId, booksRemoved, r2ObjectsRemoved });
 });

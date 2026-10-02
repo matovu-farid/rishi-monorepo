@@ -26,7 +26,7 @@
 		E10000000000000000000001 /* RishiWatchShared in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000001 /* RishiWatchShared */; };
 		E10000000000000000000002 /* RishiWatchShared in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000001 /* RishiWatchShared */; };
 		E10000000000000000000003 /* RishiWatchShared in Frameworks */ = {isa = PBXBuildFile; productRef = E20000000000000000000001 /* RishiWatchShared */; };
-		E10000000000000000000004 /* RishiWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E46000000000000000000001 /* RishiWatch.app */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E10000000000000000000004 /* RishiWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E46000000000000000000001 /* RishiWatch.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -646,10 +646,10 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.1.5;
-				RISHI_API_BASE_URL = "https://api.fidexa.org";
-				RISHI_SHARING_WEBSOCKET_URL = "wss://sharing.fidexa.org";
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				RISHI_API_BASE_URL = "https://api.fidexa.org";
+				RISHI_SHARING_WEBSOCKET_URL = "wss://sharing.fidexa.org";
 				SENTRY_DSN = "";
 				"SENTRY_DSN[sdk=iphoneos*]" = "https://689d8c7e1b31cfa825de58b740f42a74@o4510586781958144.ingest.de.sentry.io/4511885472104528";
 				"SENTRY_DSN[sdk=iphonesimulator*]" = "";
@@ -706,10 +706,10 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.1.5;
-				RISHI_API_BASE_URL = "https://api.fidexa.org";
-				RISHI_SHARING_WEBSOCKET_URL = "wss://sharing.fidexa.org";
 				PRODUCT_BUNDLE_IDENTIFIER = org.fidexa.rishi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				RISHI_API_BASE_URL = "https://api.fidexa.org";
+				RISHI_SHARING_WEBSOCKET_URL = "wss://sharing.fidexa.org";
 				SENTRY_DSN = "";
 				"SENTRY_DSN[sdk=iphoneos*]" = "https://689d8c7e1b31cfa825de58b740f42a74@o4510586781958144.ingest.de.sentry.io/4511885472104528";
 				"SENTRY_DSN[sdk=iphonesimulator*]" = "";

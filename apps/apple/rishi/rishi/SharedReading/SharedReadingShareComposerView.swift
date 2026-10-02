@@ -15,7 +15,6 @@ enum SharedReadingSessionCreation {
 
     private static func shouldRepair(_ error: SharedReadingError) -> Bool {
         error.code == .bookNotReady
-            || (error.code == .sessionLinkInvalid && error.message.localizedCaseInsensitiveContains("book not found"))
     }
 }
 
@@ -28,9 +27,8 @@ struct SharedReadingShareComposerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var isBusy = false
+    @State private var hasStartedCreation = false
     @State private var message: String?
-    @State private var isError = false
-    @State private var creatorInvitationToEnqueue: SharedReadingInvitation?
 
     init(
         api: SharedReadingAPI,
@@ -47,59 +45,41 @@ struct SharedReadingShareComposerView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Text(bookTitle)
-                        .font(.headline)
-                    Text("The book is shared immediately. Readers must sign in, finish onboarding, and import the verified book before joining the room.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Button("Create reading link") { createLink() }
-                        .disabled(isBusy)
-                        .accessibilityIdentifier("shared-reading-create-link")
-                }
-
-                #if DEBUG
-                if let message {
-                    Section("Development diagnostics") {
-                        Label(message, systemImage: isError ? "exclamationmark.triangle" : "info.circle")
-                            .foregroundStyle(isError ? .red : .secondary)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("shared-reading-error")
+        Group {
+            if let message {
+                VStack(spacing: 20) {
+                    ContentUnavailableView(
+                        "Couldn’t start group reading",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(message)
+                    )
+                    HStack {
+                        Button("Cancel") { dismiss() }
+                            .buttonStyle(.bordered)
+                        Button("Try Again") { retryCreation() }
+                            .buttonStyle(.borderedProminent)
                     }
                 }
-                #endif
-            }
-            .navigationTitle("Start group reading")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .disabled(isBusy)
+                .accessibilityIdentifier("shared-reading-error")
+            } else {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Starting group reading…")
+                        .font(.headline)
+                    Text(bookTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+                .accessibilityIdentifier("shared-reading-starting")
             }
         }
         .interactiveDismissDisabled(isBusy)
-        .onDisappear {
-            enqueueCreatorAfterDismiss()
-        }
-        #if !DEBUG
-        .alert(
-            message ?? "",
-            isPresented: Binding(
-                get: { message != nil },
-                set: { if !$0 { message = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { message = nil }
-        }
-        #endif
+        .task { createLinkIfNeeded() }
     }
 
-    private func createLink() {
+    private func createLinkIfNeeded() {
+        guard !hasStartedCreation else { return }
+        hasStartedCreation = true
         isBusy = true
         Task {
             defer { isBusy = false }
@@ -114,18 +94,23 @@ struct SharedReadingShareComposerView: View {
                 }
             } catch let error as SharedReadingError {
                 Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .create, outcome: .failed, correlationID: error.correlationId, errorCode: error.code.rawValue))
-                await MainActor.run { message = error.message; isError = true }
+                await MainActor.run { message = error.presentationMessage }
             } catch {
                 Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .create, outcome: .failed, errorCode: "UNKNOWN"))
-                await MainActor.run { message = "Rishi could not create the reading link."; isError = true }
+#if DEBUG
+                await MainActor.run { message = "Couldn’t start group reading: \(String(describing: error))" }
+#else
+                await MainActor.run { message = "Rishi could not create the reading link." }
+#endif
             }
         }
     }
 
-    private func enqueueCreatorAfterDismiss() {
-        guard let creatorInvitationToEnqueue else { return }
-        self.creatorInvitationToEnqueue = nil
-        onCreated?(creatorInvitationToEnqueue)
+    private func retryCreation() {
+        guard !isBusy else { return }
+        message = nil
+        hasStartedCreation = false
+        createLinkIfNeeded()
     }
 
     private func enqueueCreatorAndDismiss(for share: SharedReadingCreateResponse) {
@@ -133,16 +118,17 @@ struct SharedReadingShareComposerView: View {
             !token.isEmpty
         else {
             message = "Rishi could not open this reading session."
-            isError = true
             return
         }
 
-        // RootView owns the session sheet. Retaining the token until this
-        // composer disappears prevents two sheet presentations from racing.
-        creatorInvitationToEnqueue = SharedReadingInvitation(
+        // The parent owns the sheet's onDismiss callback and starts the reader
+        // only after that transition has finished.
+        let invitation = SharedReadingInvitation(
             sessionID: share.sessionId,
             shareURL: share.shareURL
         )
+        Log.sharedReading(.sessionLifecycle, context: .init(operation: .create, outcome: .ready, sessionID: share.sessionId))
+        onCreated?(invitation)
         dismiss()
     }
 }

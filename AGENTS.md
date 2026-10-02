@@ -32,6 +32,12 @@ the main thread clean and coherent over long sessions.
 - Tests are not required by default. Add or update them when requested, when fixing a regression, or when a change has meaningful risk.
 - Do not block feature implementation on tests unless the user explicitly requests TDD or a test-first approach.
 
+### Shared reading verification
+
+- The user performs manual cross-device verification of shared reading. Do not require or attempt automated end-to-end verification for this feature; it is not a reliable verification path here.
+- Still perform applicable implementation checks before handoff: review the changes, typecheck relevant packages, build the iPhone Simulator and Mac Catalyst apps, and install/launch the simulator app when feasible.
+- Report exactly which checks ran and their limits. A successful build or launch does not establish that controller navigation, play/pause, or local audio synchronization works across two signed-in devices. Leave that behavioral verification to the user and provide a concise manual-check handoff.
+
 ## Worker database access
 
 - In `workers/**`, use Drizzle for all database schema access and mutations in application and test code.

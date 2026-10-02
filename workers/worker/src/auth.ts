@@ -15,6 +15,7 @@ import {
   restoredAppleEntitlement,
   subscription,
 } from "./db/schema";
+import * as schema from "./db/schema";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import type Stripe from "stripe";
@@ -153,13 +154,19 @@ export async function createAuth(env: Env) {
     : null;
 
   return betterAuth({
-    database: drizzleAdapter(db, { provider: "sqlite" }),
+    // `createDb` supplies relation helpers, but Better Auth's adapter also
+    // needs the concrete table map when the D1 client does not expose a full
+    // schema. Keep this explicit so email/password provisioning and the
+    // regular auth routes initialize consistently in production.
+    database: drizzleAdapter(db, { provider: "sqlite", schema }),
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.PUBLIC_API_URL,
     trustedOrigins: [env.PUBLIC_WEB_URL, "rishi-electron://", "rishimobile://"],
-    // Email/password is only used by the /test/sign-in route, gated on
-    // ENABLE_TEST_AUTH (dev/staging only). Production keeps OAuth-only.
-    emailAndPassword: { enabled: env.ENABLE_TEST_AUTH === "true" },
+    // Email/password is intentionally disabled. The temporary E2E route
+    // creates disposable users and Better Auth sessions directly after its
+    // separate high-entropy gate; production password hashing is never
+    // enabled or changed by the test harness.
+    emailAndPassword: { enabled: false },
     user: {
       deleteUser: { enabled: true },
     },

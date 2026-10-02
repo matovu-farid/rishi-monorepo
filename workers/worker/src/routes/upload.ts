@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq, and, count, sum } from "drizzle-orm";
 
 import { createDb } from "../db/drizzle";
-import { books } from "../db/schema";
+import { books, deletionState } from "../db/schema";
 import { signR2Url } from "../r2-presign";
 import { requireAuth } from "../middleware";
 import { requireAiDataConsent } from "../middleware/ai-data-consent";
@@ -94,6 +94,7 @@ function isR2KeySafe(r2Key: string, expectedPrefix: string): boolean {
 // Does NOT sign Content-Type in headers (signQuery only) so the client's PUT
 // can use whatever Content-Type it likes without breaking the signature.
 uploadRoutes.post("/upload-url", requireAuth, requireAiDataConsent, async (c) => {
+  const handlerStartedAt = new Date();
   const body = await c.req
     .json<{ key?: unknown; content_type?: unknown }>()
     .catch(() => null);
@@ -158,11 +159,23 @@ uploadRoutes.post("/upload-url", requireAuth, requireAiDataConsent, async (c) =>
     );
   }
 
+  // Check the deletion fence immediately before signing. A marker that appears
+  // after this check is still safe: the PUT signature uses handlerStartedAt,
+  // which necessarily predates that marker and is covered by its 301s drain.
+  const pendingDeletion = await db.select({ userId: deletionState.userId })
+    .from(deletionState)
+    .where(eq(deletionState.userId, userId))
+    .get();
+  if (pendingDeletion) {
+    return c.json({ error: "Account deletion in progress" }, 423);
+  }
+
   // ─── Sign the PUT URL against the iOS-supplied key ──────────────────────
   const signedUrl = await signR2Url(c.env, {
     key: body.key,
     method: "PUT",
     expiresSec: UPLOAD_URL_EXPIRES_SEC,
+    signingTime: handlerStartedAt,
   });
 
   // Date wire format = seconds since 2001-01-01 reference date — see

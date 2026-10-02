@@ -16,7 +16,12 @@ const R2_BUCKET = "rishi-books";
  */
 export async function signR2Url(
   env: R2SigningEnv,
-  opts: { key: string; method: "PUT" | "GET"; expiresSec: number },
+  opts: {
+    key: string;
+    method: "PUT" | "GET";
+    expiresSec: number;
+    signingTime?: Date;
+  },
 ): Promise<string> {
   const url = new URL(
     `https://${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET}/${opts.key}`,
@@ -34,7 +39,12 @@ export async function signR2Url(
   });
 
   const signed = await aws.sign(new Request(url, { method: opts.method }), {
-    aws: { signQuery: true },
+    aws: {
+      signQuery: true,
+      ...(opts.signingTime
+        ? { datetime: opts.signingTime.toISOString().replace(/[:-]|\.\d{3}/g, "") }
+        : {}),
+    },
   });
   return signed.url.toString();
 }

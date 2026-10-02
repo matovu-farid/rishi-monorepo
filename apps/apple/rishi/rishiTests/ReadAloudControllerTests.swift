@@ -10,6 +10,12 @@ import Testing
 @MainActor
 struct ReadAloudControllerTests {
 
+    private struct ControllerNoopPositionStore: PositionStore {
+        func position(for bookId: BookID) async throws -> Position? { nil }
+        func upsert(_ position: Position) async throws {}
+        func delete(_ id: PositionID) async throws {}
+    }
+
     private let testBookID = "test-book"
     private let testMetadata = NowPlayingMetadata(title: "Test Book")
 
@@ -17,17 +23,18 @@ struct ReadAloudControllerTests {
         script: FakeTTSEngine.Script = .holds,
         source: any TTSChunkSource = ControllerNoopChunkSource(),
         nowPlayingController: NowPlayingController? = nil,
+        settingsStore: any TTSSettingsStore = InMemoryTTSSettingsStore(),
+        presenceStore: any TTSPresenceStore = ControllerNoopPresenceStore(),
         audioSessionConfigurator: FakeAudioSessionConfigurator = FakeAudioSessionConfigurator(),
         onPersistReadAloudPosition: (@MainActor (Locator) async -> Void)? = nil
     ) -> ReadAloudController {
         let state = TTSPlaybackState()
         let engine = FakeTTSEngine(state: state, script: script)
-        let settingsStore = InMemoryTTSSettingsStore()
         let prewarmer = TTSPrewarmer(source: source)
         let coordinator = AudioSessionCoordinator(configurator: audioSessionConfigurator)
         let presence = rishi.TTSPresenceController(
             state: state,
-            store: ControllerNoopPresenceStore()
+            store: presenceStore
         )
         let userId = UserID()
         return ReadAloudController(
@@ -64,6 +71,48 @@ struct ReadAloudControllerTests {
             onPassageChange: onPassageChange,
             onParagraphsExhausted: onParagraphsExhausted
         )
+    }
+
+    @Test("a fresh shared follower controller attempts start with its reader model")
+    func freshSharedFollowerControllerAttemptsStartWithReaderModel() async {
+        let controller = makeController()
+        let readerViewModel = ReaderViewModel(
+            book: Book(
+                userId: UUID(),
+                title: "Shared PDF",
+                formatType: .pdf,
+                fileURL: "Books/x/shared.pdf"
+            ),
+            userId: UUID(),
+            documentURL: URL(fileURLWithPath: "/dev/null"),
+            positionStore: ControllerNoopPositionStore(),
+            debounceSeconds: 5
+        )
+        var failedFirstUtterances = 0
+        controller.onFirstUtteranceFailed = { failedFirstUtterances += 1 }
+        let revision = SharedReadingEffectRevision(
+            authority: SharedReadingAuthorityRevision(
+                sessionId: UUID().uuidString,
+                roomEpoch: 1,
+                controllerGeneration: 1,
+                connectionGeneration: 1,
+                progressSequence: 1,
+                bookId: "shared-book",
+                contentHash: "shared-hash"
+            ),
+            generation: 1
+        )
+
+        _ = await controller.applySharedFollowerAudioReconfiguration(
+            readerViewModel: readerViewModel,
+            rate: 1,
+            cursor: nil,
+            phase: .playing,
+            revision: revision
+        )
+
+        #expect(failedFirstUtterances == 1)
+        #expect(controller.bridge == nil)
     }
 
     @Test("paragraphs populated and bridge non-nil after start")
@@ -448,6 +497,120 @@ struct ReadAloudControllerTests {
         await controller.stop()
     }
 
+    @Test("a newer shared room rate wins when an older suspended rate completes")
+    func newerSharedRateWinsAfterOlderApplyResumes() async {
+        let gate = ControllerFirstLoadGate()
+        let settingsStore = ControllerGatedSettingsStore(gate: gate)
+        let presenceStore = ControllerRecordingPresenceStore()
+        let controller = makeController(
+            settingsStore: settingsStore,
+            presenceStore: presenceStore
+        )
+        let scopeID = UUID()
+
+        await gate.armNextLoad()
+        let olderApply = Task {
+            await controller.applySharedSessionRate(
+                1.25,
+                fence: SharedRateMutationFence(scopeID: scopeID, revision: 1)
+            )
+        }
+        await gate.waitUntilFirstLoadSuspends()
+
+        let newerApply = await controller.applySharedSessionRate(
+            1.5,
+            fence: SharedRateMutationFence(scopeID: scopeID, revision: 2)
+        )
+        #expect(newerApply)
+        await gate.releaseFirstLoad()
+        #expect(!(await olderApply.value))
+
+        #expect(controller.pickerInitial.speed == 1.5)
+        #expect(presenceStore.read()?.speed == 1.5)
+
+        await controller.start(paragraphs: ["one"], bookID: testBookID, metadata: testMetadata, onPassageChange: { _ in })
+        #expect(controller.pickerInitial.speed == 1.5)
+        #expect(presenceStore.read()?.speed == 1.5)
+        await controller.stop()
+    }
+
+    @Test("a stale old-room clear cannot restore personal speed over a new room rate")
+    func oldRoomClearCannotOverwriteNewRoomRate() async {
+        let gate = ControllerFirstLoadGate()
+        let settingsStore = ControllerGatedSettingsStore(gate: gate)
+        let presenceStore = ControllerRecordingPresenceStore()
+        let controller = makeController(
+            settingsStore: settingsStore,
+            presenceStore: presenceStore
+        )
+        let oldScope = UUID()
+        let newScope = UUID()
+
+        #expect(await controller.applySharedSessionRate(
+            1.25,
+            fence: SharedRateMutationFence(scopeID: oldScope, revision: 1)
+        ))
+        await gate.armNextLoad()
+        let oldRoomClear = Task {
+            await controller.clearSharedSessionRate(
+                fence: SharedRateMutationFence(scopeID: oldScope, revision: 2)
+            )
+        }
+        await gate.waitUntilFirstLoadSuspends()
+
+        #expect(await controller.applySharedSessionRate(
+            1.5,
+            fence: SharedRateMutationFence(scopeID: newScope, revision: 3)
+        ))
+        await gate.releaseFirstLoad()
+        await oldRoomClear.value
+
+        #expect(controller.pickerInitial.speed == 1.5)
+        #expect(presenceStore.read()?.speed == 1.5)
+
+        await controller.start(paragraphs: ["one"], bookID: testBookID, metadata: testMetadata, onPassageChange: { _ in })
+        #expect(controller.pickerInitial.speed == 1.5)
+        #expect(presenceStore.read()?.speed == 1.5)
+        await controller.stop()
+    }
+
+    @Test("room-effective speed stays temporary and room exit restores the saved personal speed")
+    func sharedRateRemainsTemporaryUntilRoomExit() async {
+        let settingsStore = InMemoryTTSSettingsStore()
+        let personalSettings = TTSSettings(voice: "marin", speed: 0.75)
+        let userID = UserID()
+        await settingsStore.save(personalSettings, userId: userID)
+
+        let state = TTSPlaybackState()
+        let presenceStore = ControllerRecordingPresenceStore()
+        let controller = ReadAloudController(
+            ttsEngine: FakeTTSEngine(state: state, script: .holds),
+            ttsState: state,
+            ttsSettingsStore: settingsStore,
+            ttsPrewarmer: TTSPrewarmer(source: ControllerNoopChunkSource()),
+            ttsPresence: rishi.TTSPresenceController(state: state, store: presenceStore),
+            coordidator: AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator()),
+            userId: userID
+        )
+        let scopeID = UUID()
+
+        #expect(await controller.applySharedSessionRate(
+            1.5,
+            fence: SharedRateMutationFence(scopeID: scopeID, revision: 1)
+        ))
+        #expect(controller.pickerInitial.speed == 1.5)
+        #expect(presenceStore.read()?.speed == 1.5)
+        #expect((await settingsStore.load(userId: userID)).speed == 0.75)
+
+        await controller.clearSharedSessionRate(
+            fence: SharedRateMutationFence(scopeID: scopeID, revision: 2)
+        )
+
+        #expect(controller.pickerInitial.speed == 0.75)
+        #expect(presenceStore.read()?.speed == 0.75)
+        #expect((await settingsStore.load(userId: userID)).speed == 0.75)
+    }
+
     @Test(
         "calling start twice tears down the first bridge and installs a new one"
     )
@@ -599,6 +762,67 @@ private final class ControllerNoopPresenceStore: TTSPresenceStore, @unchecked Se
     func read() -> TTSPresenceSnapshot? { nil }
     func write(_ snapshot: TTSPresenceSnapshot) {}
     func clear() {}
+}
+
+private final class ControllerRecordingPresenceStore: TTSPresenceStore, @unchecked Sendable {
+    private let snapshots = ControllerLockedBox<[TTSPresenceSnapshot]>([])
+
+    func read() -> TTSPresenceSnapshot? { snapshots.value.last }
+    func write(_ snapshot: TTSPresenceSnapshot) { snapshots.mutate { $0.append(snapshot) } }
+    func clear() { snapshots.mutate { $0.removeAll() } }
+}
+
+private actor ControllerFirstLoadGate {
+    private var shouldSuspendNextLoad = false
+    private var suspended = false
+    private var suspensionWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func armNextLoad() {
+        shouldSuspendNextLoad = true
+        suspended = false
+    }
+
+    func suspendIfArmed() async {
+        guard shouldSuspendNextLoad else { return }
+        shouldSuspendNextLoad = false
+        suspended = true
+        suspensionWaiter?.resume()
+        suspensionWaiter = nil
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilFirstLoadSuspends() async {
+        guard !suspended else { return }
+        await withCheckedContinuation { suspensionWaiter = $0 }
+    }
+
+    func releaseFirstLoad() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
+private actor ControllerGatedSettingsStore: TTSSettingsStore {
+    private let gate: ControllerFirstLoadGate
+    private var settings = TTSSettings.default
+
+    init(gate: ControllerFirstLoadGate) {
+        self.gate = gate
+    }
+
+    func load(userId: UserID) async -> TTSSettings {
+        await gate.suspendIfArmed()
+        return settings
+    }
+
+    func save(_ settings: TTSSettings, userId: UserID) async {
+        self.settings = settings
+    }
+
+    func remove(userId: UserID) async {
+        settings = .default
+    }
 }
 
 private actor ControllerRecordingChunkSource: TTSChunkSource {

@@ -122,7 +122,7 @@ export class SharingHttpClient extends Context.Tag("SharingHttpClient")<
 export class AuthIdentityLookup extends Context.Tag("AuthIdentityLookup")<
   AuthIdentityLookup,
   {
-    readonly lookup: (authorization: string) => Effect.Effect<Response, SharingDependencyFailure, SharingHttpClient>;
+    readonly lookup: (authorization: string, correlationId?: string) => Effect.Effect<Response, SharingDependencyFailure, SharingHttpClient>;
   }
 >() {}
 
@@ -159,6 +159,7 @@ export type SharingDiagnostic = {
   readonly outcome: "error";
   readonly code: string;
   readonly status?: number;
+  readonly upstreamStatus?: number;
   readonly causeKind?: "typed_failure" | "defect_or_interruption";
 };
 
@@ -187,9 +188,13 @@ export function makeSharingWorkerLayer(
   const authIdentityLookup = Layer.effect(AuthIdentityLookup, Effect.gen(function* () {
     const http = yield* SharingHttpClient;
     return {
-      lookup: (authorization: string) => http.fetch(
+      lookup: (authorization: string, correlationId?: string) => http.fetch(
         `${bindings.AUTH_BASE_URL}/api/v1/reading-sessions/auth-context`,
-        { headers: { authorization, accept: "application/json" } },
+        { headers: {
+          authorization,
+          accept: "application/json",
+          ...(correlationId ? { "x-rishi-correlation-id": correlationId } : {}),
+        } },
         "auth.provider",
         "auth",
       ),

@@ -221,6 +221,7 @@ public struct ReaderView: UIViewControllerRepresentable {
             navigator.view.trailingAnchor.constraint(equalTo: container.view.trailingAnchor),
         ])
         navigator.didMove(toParent: container)
+        coordinator.navigatorDidAttach()
     }
 
     private func backgroundUIColor(_ theme: ReaderTheme) -> UIColor {

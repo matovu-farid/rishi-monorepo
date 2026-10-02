@@ -43,6 +43,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public var isFollowingReadAloud = false
     private var readAloudFollowTask: Task<Void, Never>?
     private var programmaticNavigationCallbacks = 0
+    private var programmaticNavigationGeneration: UInt64 = 0
     private var hasReceivedInitialLocation = false
 
     /// Forwarded to the screen so it can present the highlight context
@@ -81,9 +82,10 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// ``makeNavigatorIfNeeded()`` via ``handleArrowKey(_:)``.
     public var onPageBackward: () -> Void = {}
 
-    /// Fired once after Readium reports the initial visible location. The
-    /// reader uses this boundary to start non-critical background work only
-    /// after the first page exists, not merely after `setupPDFView`.
+    /// Fired once after the navigator has attached to the visible reader
+    /// container. A later initial-location callback may refine reader state,
+    /// but it must not be the only readiness signal: Readium can omit that
+    /// callback when a navigator is restored from an existing view hierarchy.
     public var onFirstContentReady: @MainActor () async -> Void = {}
 
     /// Dismisses a pending selection when Escape is pressed. Returns true
@@ -132,6 +134,14 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public func cancelPendingFirstContentCallback() {
         firstContentCallbackTask?.cancel()
         firstContentCallbackTask = nil
+    }
+
+    /// Records the reliable UIKit attachment boundary. This is called only
+    /// after the navigator is a child of the visible SwiftUI container, so
+    /// consumers can safely reveal reader-owned affordances even when Readium
+    /// does not subsequently emit its initial `locationDidChange` callback.
+    public func navigatorDidAttach() {
+        reportFirstContentReadyIfNeeded()
     }
 
     private func reportFirstContentReadyIfNeeded() {
@@ -341,6 +351,7 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// text-highlight locator used for the jump, so this is intentionally a
     /// one-shot callback token rather than locator equality matching.
     public func registerProgrammaticNavigation() {
+        programmaticNavigationGeneration &+= 1
         programmaticNavigationCallbacks = 1
     }
 
@@ -460,6 +471,23 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public func go(to locator: ReadiumShared.Locator) async -> Bool {
         guard let nav = navigator else { return false }
         return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+    }
+
+    /// Follows a controller-authored shared location without treating its
+    /// Readium callback as a local page turn. Unlike bookmark/search jumps,
+    /// this must not invoke the local user-navigation lifecycle.
+    @discardableResult
+    public func goToSharedPosition(_ locator: ReadiumShared.Locator) async -> Bool {
+        guard let nav = navigator else { return false }
+        registerProgrammaticNavigation()
+        let registration = programmaticNavigationGeneration
+        let didNavigate = await nav.go(to: locator, options: NavigatorGoOptions(animated: false))
+        // A rejected or callback-free jump must not suppress the next real
+        // swipe. An unrelated newer registration owns its own callback token.
+        if programmaticNavigationGeneration == registration {
+            programmaticNavigationCallbacks = 0
+        }
+        return didNavigate
     }
 
     /// Imperatively clears the live selection (used after a highlight

@@ -659,9 +659,9 @@ app.route("/api/devices", devicesRoutes);
 // Quick task 260612-f7p — streaming chat for iOS RishiChat (v1 no RAG).
 app.route("/api/chat", chatRoutes);
 app.route("/api/ai/chapter-summaries", chapterSummariesRoutes);
-// ─── Test-only routes (hard-gated by ENABLE_TEST_AUTH + TEST_AUTH_SECRET) ────
-// All endpoints under /test/* return 404 unless three checks pass — see
-// src/routes/test-auth.ts. Production keeps both env vars unset.
+// ─── Test-only routes (hard-gated by explicit test-auth configuration) ───────
+// All endpoints under /test/* return 404 unless the auth flag and secret gate
+// pass — see src/routes/test-auth.ts. Production keeps test auth unset.
 app.route("/test", testAuthRoutes);
 // ─── Ops-admin routes (hard-gated by ENABLE_OPS_ADMIN + OPS_ADMIN_SECRET) ────
 // All endpoints under /ops/flags return 404 unless the same three-check
@@ -1693,6 +1693,11 @@ export const scheduled = async (controller: ScheduledController, env: Env): Prom
   if (controller.cron === "* * * * *") {
     const nowMs = Date.now();
     let firstFailure: unknown;
+    try {
+      await retryPendingDeletions(db, env);
+    } catch (error) {
+      firstFailure = error;
+    }
     for (const prefix of ACCOUNT_R2_RECONCILIATION_PREFIXES) {
       try {
         await reconcileAccountR2Page(db, env.BOOK_STORAGE, prefix, nowMs);
@@ -1703,11 +1708,30 @@ export const scheduled = async (controller: ScheduledController, env: Env): Prom
     if (firstFailure !== undefined) throw firstFailure;
     return;
   }
-  await retryPendingDeletions(db, env);
-  await purgeExpiredShares(db, env.BOOK_STORAGE);
-  await precreateShareLinks(db, env);
-  await purgeExpiredRetention(db);
-  await redactOwnerlessAppleNotificationLogs(db);
+  // A failed deletion retry must not prevent the once-daily maintenance jobs
+  // from running. Keep their order and surface the first failure after every
+  // job has had a chance to run.
+  let firstFailure: unknown;
+  const jobs: Array<[string, () => Promise<unknown>]> = [
+    ["account_deletion_retry", () => retryPendingDeletions(db, env)],
+    ["expired_share_purge", () => purgeExpiredShares(db, env.BOOK_STORAGE)],
+    ["share_link_precreation", () => precreateShareLinks(db, env)],
+    ["retention_purge", () => purgeExpiredRetention(db)],
+    ["apple_notification_redaction", () => redactOwnerlessAppleNotificationLogs(db)],
+  ];
+  for (const [job, run] of jobs) {
+    try {
+      await run();
+    } catch (error) {
+      firstFailure ??= error;
+      console.error("scheduled maintenance failed", {
+        event: "scheduled_maintenance.failed",
+        job,
+        category: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure;
 };
 
 export default {

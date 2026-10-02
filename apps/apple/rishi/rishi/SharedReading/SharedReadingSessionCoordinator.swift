@@ -14,6 +14,9 @@ struct SharedReadingSessionCoordinatorSnapshot: Sendable, Equatable {
     let lastSentSyncSequence: Int64
     let latestProgress: SharedReadingProgress?
     let authoritativeProgressIsAbsent: Bool
+    let hasAuthoritativeState: Bool
+    let hasAuthoritativeRoster: Bool
+    let signalingFailure: SharedReadingError?
 }
 
 actor SharedReadingSessionCoordinator {
@@ -40,6 +43,10 @@ actor SharedReadingSessionCoordinator {
     private(set) var lastSentSyncSequence: Int64 = -1
     private(set) var latestProgress: SharedReadingProgress?
     private(set) var authoritativeProgressIsAbsent = false
+    private var hasAuthoritativeState = false
+    private var hasAuthoritativeRoster = false
+    private var signalingFailure: SharedReadingError?
+    private var latestTransportError: SharedReadingError?
 
     init(
         transport: any SharedReadingSignalingTransport,
@@ -78,6 +85,10 @@ actor SharedReadingSessionCoordinator {
         lastSentSyncSequence = -1
         latestProgress = nil
         authoritativeProgressIsAbsent = false
+        hasAuthoritativeState = false
+        hasAuthoritativeRoster = false
+        signalingFailure = nil
+        latestTransportError = nil
         Log.sharedReading(.sessionLifecycle, context: .init(
             outcome: .started,
             roomEpoch: admission.roomEpoch.rawValue,
@@ -88,8 +99,11 @@ actor SharedReadingSessionCoordinator {
         let transport = self.transport
         let refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)? = self.refreshAdmission.map { refresh in
             { @Sendable [weak self] in
+                try Task.checkCancellation()
                 let admission = try await refresh()
-                await self?.applyLocalAdmission(admission)
+                try Task.checkCancellation()
+                guard let self else { throw CancellationError() }
+                try await self.applyLocalAdmission(admission)
                 return admission
             }
         }
@@ -99,6 +113,8 @@ actor SharedReadingSessionCoordinator {
                 guard let self else { return }
                 await self.handle(event)
             }
+            guard !Task.isCancelled, let self else { return }
+            await self.handleTransportStreamEnded()
         }
 
         do {
@@ -170,8 +186,26 @@ actor SharedReadingSessionCoordinator {
             lastAcceptedSyncSequence: lastAcceptedSyncSequence,
             lastSentSyncSequence: lastSentSyncSequence,
             latestProgress: latestProgress,
-            authoritativeProgressIsAbsent: authoritativeProgressIsAbsent
+            authoritativeProgressIsAbsent: authoritativeProgressIsAbsent,
+            hasAuthoritativeState: hasAuthoritativeState,
+            hasAuthoritativeRoster: hasAuthoritativeRoster,
+            signalingFailure: signalingFailure
         )
+    }
+
+    func latestTransportFailure() -> SharedReadingError? { latestTransportError }
+
+    func reportTerminalSyncSendFailure(_ error: SharedReadingError) {
+        guard error.code == .sessionEnded || error.code == .removedFromSession else { return }
+        signalingFailure = error
+        hasAuthoritativeState = false
+        hasAuthoritativeRoster = false
+        authoritativeProgressIsAbsent = false
+        latestProgress = nil
+        currentParticipantUserId = nil
+        participants = []
+        speakerUserId = nil
+        publishSnapshot()
     }
 
     func requestSpeaker() async throws {
@@ -188,6 +222,9 @@ actor SharedReadingSessionCoordinator {
         try ensureNotEnded()
         guard status == .active else {
             throw SharedReadingError.from(code: .waitingForController)
+        }
+        guard hasAuthoritativeState, hasAuthoritativeRoster, signalingFailure == nil else {
+            throw SharedReadingError.from(code: .signalingDegraded, message: "The reading room is not synchronized. Leave and rejoin to continue.")
         }
         guard isLocalController else {
             throw SharedReadingError.from(code: .waitingForController)
@@ -236,8 +273,15 @@ actor SharedReadingSessionCoordinator {
         )
     }
 
-    private func applyLocalAdmission(_ admission: SharedReadingAdmission) {
-        guard !didFinish, admission.status != .ended else { return }
+    private func applyLocalAdmission(_ admission: SharedReadingAdmission) throws {
+        try Task.checkCancellation()
+        guard !didFinish, admission.status != .ended else {
+            throw SharedReadingError.from(code: .sessionEnded)
+        }
+        guard admission.roomEpoch >= roomEpoch,
+              admission.connectionGeneration >= connectionGeneration else {
+            throw SharedReadingError.from(code: .staleControllerGeneration)
+        }
         if admission.roomEpoch > roomEpoch {
             roomEpoch = admission.roomEpoch
             rosterGeneration = 0
@@ -250,6 +294,14 @@ actor SharedReadingSessionCoordinator {
             latestProgress = nil
         }
         connectionGeneration = admission.connectionGeneration
+        status = admission.status
+        hasAuthoritativeState = false
+        hasAuthoritativeRoster = false
+        signalingFailure = nil
+        authoritativeProgressIsAbsent = false
+        lastAcceptedSyncSequence = -1
+        lastSentSyncSequence = -1
+        latestProgress = nil
         publishSnapshot()
     }
 
@@ -328,6 +380,7 @@ actor SharedReadingSessionCoordinator {
                 connectionGeneration: roster.connectionGeneration
             ) else { return }
             participants = roster.participants
+            hasAuthoritativeRoster = true
             currentParticipantUserId = roster.participants.first(where: { $0.isController })?.userId ?? currentParticipantUserId
             publishSnapshot()
         case .speakerGranted(let granted):
@@ -365,11 +418,59 @@ actor SharedReadingSessionCoordinator {
         case .error(let error):
             if error.code == .sessionEnded || error.code == .removedFromSession {
                 await finishLocally(disconnectTransport: false)
+            } else if error.stage != nil {
+                // Preserve staged transport and reconnect API failures. They
+                // are emitted by the signaling transport immediately before
+                // its terminal stream close, and must not be replaced by a
+                // generic event-stream error.
+                latestTransportError = error
             }
         }
     }
 
+    private func handleTransportStreamEnded() async {
+        guard !didFinish else { return }
+        let failure: SharedReadingError
+        if let latestTransportError {
+            failure = latestTransportError
+        } else {
+            let correlationID = await transport.latestHandshakeCorrelationID()
+            guard !didFinish else { return }
+            failure = SharedReadingError(
+                code: .signalingDegraded,
+                message: "The reading room connection closed. Leave and rejoin to continue.",
+                retryable: true,
+                action: .retry,
+                correlationId: correlationID,
+                stage: "websocket.event_stream",
+                diagnostic: "closed_without_terminal_error"
+            )
+        }
+        signalingFailure = failure
+        hasAuthoritativeState = false
+        hasAuthoritativeRoster = false
+        authoritativeProgressIsAbsent = false
+        latestProgress = nil
+        currentParticipantUserId = nil
+        participants = []
+        speakerUserId = nil
+        Log.sharedReading(.sessionLifecycle, level: .error, context: .init(
+            outcome: .disconnected,
+            correlationID: failure.correlationId,
+            sessionID: sessionId,
+            statusCode: failure.httpStatus,
+            errorCode: failure.code.rawValue,
+            diagnostic: failure.diagnostic,
+            stage: failure.stage,
+            localSocketCode: failure.localSocketCode
+        ))
+        publishSnapshot()
+    }
+
     private func applySessionState(_ state: SharedReadingSessionStateEvent) async {
+        let previousEpoch = roomEpoch
+        let previousControllerGeneration = controllerGeneration
+        let hadAuthoritativeState = hasAuthoritativeState
         guard acceptsAuthority(
             sessionId: state.sessionId,
             roomEpoch: state.roomEpoch,
@@ -378,11 +479,18 @@ actor SharedReadingSessionCoordinator {
         ) else { return }
         status = state.status
         currentParticipantUserId = state.controllerUserId
-        lastAcceptedSyncSequence = -1
-        lastSentSyncSequence = -1
-        latestProgress = nil
-        authoritativeProgressIsAbsent = false
-        participants = []
+        hasAuthoritativeState = true
+        signalingFailure = nil
+        latestTransportError = nil
+        if !hadAuthoritativeState || previousEpoch != roomEpoch
+            || previousControllerGeneration != controllerGeneration {
+            hasAuthoritativeRoster = false
+            lastAcceptedSyncSequence = -1
+            lastSentSyncSequence = -1
+            latestProgress = nil
+            authoritativeProgressIsAbsent = false
+            participants = []
+        }
         publishSnapshot()
 
         if state.status == .ended {
@@ -434,6 +542,8 @@ actor SharedReadingSessionCoordinator {
             lastSentSyncSequence = -1
             latestProgress = nil
             authoritativeProgressIsAbsent = false
+            hasAuthoritativeState = false
+            hasAuthoritativeRoster = false
         }
 
         guard incomingControllerGeneration >= controllerGeneration,
@@ -475,6 +585,10 @@ actor SharedReadingSessionCoordinator {
         speakerUserId = nil
         lastAcceptedSyncSequence = -1
         lastSentSyncSequence = -1
+        hasAuthoritativeState = false
+        hasAuthoritativeRoster = false
+        signalingFailure = nil
+        latestTransportError = nil
         publishSnapshot()
 
         eventTask?.cancel()
@@ -502,7 +616,10 @@ actor SharedReadingSessionCoordinator {
                 lastAcceptedSyncSequence: lastAcceptedSyncSequence,
                 lastSentSyncSequence: lastSentSyncSequence,
                 latestProgress: latestProgress,
-                authoritativeProgressIsAbsent: authoritativeProgressIsAbsent
+                authoritativeProgressIsAbsent: authoritativeProgressIsAbsent,
+                hasAuthoritativeState: hasAuthoritativeState,
+                hasAuthoritativeRoster: hasAuthoritativeRoster,
+                signalingFailure: signalingFailure
             )
         )
     }

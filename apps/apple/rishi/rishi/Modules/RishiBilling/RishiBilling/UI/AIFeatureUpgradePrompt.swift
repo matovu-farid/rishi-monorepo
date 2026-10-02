@@ -6,6 +6,8 @@ extension AIFeatureBlockReason {
         switch self {
         case .trialExhausted:
             return "You're out of trial credits"
+        case .insufficientTrialCreditsForVoiceChat:
+            return "Not enough credits for Voice Chat"
         case .subscriptionExpired:
             return "Your subscription has expired"
         case .narrationAllowanceExhausted:
@@ -19,6 +21,8 @@ extension AIFeatureBlockReason {
         switch self {
         case .trialExhausted:
             return "Upgrade to Rishi Reader or Rishi Voice to keep listening. Your books stay fully readable either way."
+        case .insufficientTrialCreditsForVoiceChat:
+            return "Voice Chat needs 2 credits to start. Use your remaining credit for Natural AI narration, or see plans to keep chatting."
         case .subscriptionExpired:
             return "Renew your subscription to keep using Natural AI narration and Voice Chat. Your books stay fully readable either way."
         case .narrationAllowanceExhausted:

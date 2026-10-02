@@ -2,7 +2,8 @@
   "name": "rishi-worker",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "test": "vitest run",
+    "dev": "wrangler dev --var ENVIRONMENT:development",
     "deploy": "bun run verify:migrations && wrangler deploy --minify",
     "generate-types": "wrangler types",
     "type-check": "bun generate-types && tsc",

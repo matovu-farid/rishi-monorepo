@@ -214,6 +214,46 @@ struct ReaderViewModelTests {
         #expect(restored.locations.totalProgression == narratedLocator.locations.totalProgression)
     }
 
+    @Test("programmatic shared navigation updates visible locator without replacing narration resume")
+    func programmaticSharedNavigationKeepsVisibleAndNarrationLocatorsSeparate() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let vm = ReaderViewModel(
+            book: makeBook(),
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let mediaType = firstLink.mediaType ?? .xhtml
+        let oldNarrationLocator = Locator(
+            href: href,
+            mediaType: mediaType,
+            locations: Locator.Locations(progression: 0.25, totalProgression: 0.25)
+        )
+        let newVisibleLocator = Locator(
+            href: href,
+            mediaType: mediaType,
+            locations: Locator.Locations(progression: 0.8, totalProgression: 0.8)
+        )
+        let userNavigationCount = LockedBox(0)
+        vm.onUserNavigation = { _ in userNavigationCount.mutate { $0 += 1 } }
+
+        vm.didChangeReadAloudLocation(oldNarrationLocator)
+        vm.didChangeLocation(newVisibleLocator, isProgrammatic: true)
+
+        let visible = try #require(vm.visibleNavigatorLocator)
+        let narrationResume = try #require(vm.latestLocator)
+        #expect(visible.locations.progression == newVisibleLocator.locations.progression)
+        #expect(narrationResume.locations.progression == oldNarrationLocator.locations.progression)
+        #expect(userNavigationCount.value == 0)
+    }
+
     @Test("manual navigation remains authoritative after a read-aloud update")
     func manualNavigationRemainsAuthoritativeAfterReadAloudUpdate() async throws {
         let url = try aliceURL()

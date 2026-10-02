@@ -92,6 +92,7 @@ function errorDetails(code: string): { retryable: boolean; action: SharingErrorA
     case "ROOM_FULL": return { retryable: true, action: "manualRetry", message: "This reading room is full." };
     case "RATE_LIMITED": return { retryable: true, action: "retry", message: "Too many requests. Please try again shortly." };
     case "USERNAME_UNAVAILABLE": return { retryable: true, action: "retry", message: "The account service is temporarily unavailable." };
+    case "INVALID_RESPONSE": return { retryable: true, action: "retry", message: "The reading-session service returned an unexpected response. Try again, and contact support if it keeps happening." };
     default: return { retryable: true, action: "retry", message: "Rishi could not complete this reading-session action." };
   }
 }
@@ -267,6 +268,7 @@ function errorResponse(c: any, error: unknown) {
     const status = error.code === "SESSION_ENDED" ? 410
       : error.code === "BOOK_HASH_MISMATCH" || error.code === "BAD_REQUEST" ? 422
       : error.code === "INVALID_RESPONSE" && error.status === 502 ? 502
+      : error.status === 500 ? 500
       : error.status === 409 ? 409
       : error.status === 403 ? 403
       : error.status === 404 ? 404

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest"
 
 /**
  * Tests for POST /api/sync/upload-url — Phase 17 plan 17-08 (Gap 3).
@@ -33,7 +33,7 @@ interface FakeBookRow {
   isDeleted: boolean
 }
 
-const { bookStore, COLS } = vi.hoisted(() => {
+const { bookStore, deletionStateTable, signingDatetimes, state, COLS } = vi.hoisted(() => {
   const COLS = {
     fileR2Key: { __col: "fileR2Key" } as const,
     fileHash: { __col: "fileHash" } as const,
@@ -41,17 +41,31 @@ const { bookStore, COLS } = vi.hoisted(() => {
     isDeleted: { __col: "isDeleted" } as const,
     id: { __col: "id" } as const,
     fileSize: { __col: "fileSize" } as const,
+    deletionUserId: { __col: "deletionUserId" } as const,
   }
-  return { bookStore: [] as FakeBookRow[], COLS }
+  return {
+    bookStore: [] as FakeBookRow[],
+    deletionStateTable: { userId: COLS.deletionUserId },
+    signingDatetimes: [] as Array<string | undefined>,
+    state: {
+      deletionMarkerUserId: null as string | null,
+      afterStorageChecks: undefined as (() => void) | undefined,
+    },
+    COLS,
+  }
 })
 
 function resetStore() {
   bookStore.length = 0
+  signingDatetimes.length = 0
+  state.deletionMarkerUserId = null
+  state.afterStorageChecks = undefined
 }
 
 // ─── Mock ../db/schema so `books` resolves to our column ids ────────────────
 vi.mock("../db/schema", () => ({
   books: COLS,
+  deletionState: deletionStateTable,
   // Other tables referenced transitively by sibling imports — empty stubs.
   highlights: {},
   conversations: {},
@@ -106,7 +120,8 @@ vi.mock("../db/drizzle", () => {
       select(fields?: Record<string, unknown>) {
         const selectFields = fields
         return {
-          from(_table: unknown) {
+          from(table: unknown) {
+            const isDeletionState = table === deletionStateTable
             const ctx: { pred?: Pred } = {}
             const builder = {
               where(pred: Pred) {
@@ -114,6 +129,11 @@ vi.mock("../db/drizzle", () => {
                 return builder
               },
               get() {
+                if (isDeletionState) {
+                  return state.deletionMarkerUserId
+                    ? { userId: state.deletionMarkerUserId }
+                    : undefined
+                }
                 const match = bookStore.find((r) =>
                   ctx.pred ? evalPred(ctx.pred, r) : true,
                 )
@@ -135,6 +155,7 @@ vi.mock("../db/drizzle", () => {
                       const value = (r as unknown as Record<string, unknown>)[colName]
                       return acc + (typeof value === "number" ? value : 0)
                     }, 0)
+                    state.afterStorageChecks?.()
                   } else if (v.__col) {
                     if (!match) return undefined
                     out[key] = (match as unknown as Record<string, unknown>)[v.__col]
@@ -163,12 +184,14 @@ vi.mock("../db/drizzle", () => {
 vi.mock("aws4fetch", () => ({
   AwsClient: class {
     constructor(_cfg: unknown) {}
-    async sign(req: Request) {
+    async sign(req: Request, init?: { aws?: { datetime?: string } }) {
+      signingDatetimes.push(init?.aws?.datetime)
       return {
         url: new URL(
           req.url +
             (req.url.includes("?") ? "&" : "?") +
-            "X-Amz-Signed-Url-Stub=1&X-Amz-Expires=300",
+            "X-Amz-Signed-Url-Stub=1&X-Amz-Expires=300" +
+            (init?.aws?.datetime ? `&X-Amz-Date=${init.aws.datetime}` : ""),
         ),
       }
     }
@@ -269,6 +292,10 @@ beforeEach(() => {
   setUser(AUTHED_USER)
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("POST /api/sync/upload-url — iOS contract", () => {
@@ -296,6 +323,37 @@ describe("POST /api/sync/upload-url — iOS contract", () => {
     const expiresAt = body.expires_at as number
     expect(expiresAt).toBeGreaterThan(0)
     expect(Math.abs(expiresAt - before)).toBeLessThan(5)
+  })
+
+  it("rejects a PUT URL when deletion starts after early checks but before signing", async () => {
+    state.afterStorageChecks = () => {
+      state.deletionMarkerUserId = AUTHED_USER
+    }
+
+    const res = await callUploadUrl({
+      key: `books/${AUTHED_USER}/${BOOK_ID}.epub`,
+      content_type: "application/epub+zip",
+    })
+
+    expect(res.status).toBe(423)
+    expect(await res.json()).toEqual({ error: "Account deletion in progress" })
+    expect(signingDatetimes).toEqual([])
+  })
+
+  it("uses the handler-start time when signing a successful PUT URL", async () => {
+    const handlerStart = new Date("2026-09-16T12:34:56.789Z")
+    vi.useFakeTimers({ now: handlerStart })
+    state.afterStorageChecks = () => {
+      vi.setSystemTime(new Date("2026-09-16T12:35:01.789Z"))
+    }
+
+    const res = await callUploadUrl({
+      key: `books/${AUTHED_USER}/${BOOK_ID}.epub`,
+      content_type: "application/epub+zip",
+    })
+
+    expect(res.status).toBe(200)
+    expect(signingDatetimes).toEqual(["20260916T123456Z"])
   })
 
   it("rejects path traversal in the supplied key with 403", async () => {

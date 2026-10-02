@@ -4,6 +4,11 @@ import { createDb } from "../db/drizzle";
 import { userRoutes } from "./user";
 import { createTestD1, getTestMigrationFiles } from "../test-utils/d1";
 import { user, usernames } from "../db/schema";
+import { deleteAccount } from "../account-deletion";
+
+vi.mock("../account-deletion", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../account-deletion")>(), deleteAccount: vi.fn(),
+}));
 
 vi.mock("../middleware", () => ({
   requireAuth: async (c: { set: (key: string, value: string) => void }, next: () => Promise<void>) => {
@@ -25,6 +30,23 @@ function request(d1: D1Database, input: string, init?: RequestInit) {
 }
 
 describe("authenticated /api/user profile", () => {
+  it.each([503, 409])("[W4-USER-ROUTE] returns retryable %s instead of false success", async (status) => {
+      const body = status === 503
+        ? { code: "ACCOUNT_DELETION_PENDING", status, retryable: true, retryAt: 123456789 }
+        : { code: "ACCOUNT_DELETION_CONFLICT", status, retryable: true };
+      vi.mocked(deleteAccount).mockRejectedValueOnce(Object.assign(new Error(body.code), body));
+      const d1 = createTestD1();
+      try {
+        const response = await request(d1, "/api/user", { method: "DELETE" });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toMatchObject({
+          code: body.code,
+          retryable: true,
+          action: "retry",
+          ...(status === 503 ? { retryAt: 123456789 } : {}),
+        });
+      } finally { d1.close(); }
+  });
   it("returns a repaired username and the stable profile shape", async () => {
     const d1 = createTestD1(":memory:", { migrations: getTestMigrationFiles() });
     try {

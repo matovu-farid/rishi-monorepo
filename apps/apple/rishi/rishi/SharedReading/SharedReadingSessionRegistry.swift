@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 protocol SharedReadingSessionRegistryHandle: AnyObject {
+    /// The registry claims the server leave before it starts local teardown.
+    /// A view-owned cancellation can run after `cancelLocally()` has removed
+    /// registration, so registration presence is not a safe ownership signal.
+    func claimRegistryDrainRemoteLeaveOwnership()
     func cancelLocally() async
     func leaveRemotely() async
 }
@@ -73,6 +77,13 @@ final class SharedReadingSessionRegistry {
         Log.sharedReading(.registry, context: .init(outcome: .started))
         for (id, _) in draining { entries.removeValue(forKey: id) }
 
+        // Claim every remote leave before the first suspension point. Each
+        // handle's local teardown unregisters itself, so the durable claim is
+        // what prevents a concurrent recovery cancellation from stealing the
+        // transition's bounded remote-leave responsibility.
+        for entry in draining.values {
+            entry.handle.claimRegistryDrainRemoteLeaveOwnership()
+        }
         for entry in draining.values { await entry.handle.cancelLocally() }
         await clearAccountState(accountID)
         let tracker = SharedReadingRemoteLeaveTracker(count: draining.count)

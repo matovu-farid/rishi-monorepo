@@ -1,4 +1,5 @@
 import Foundation
+import ReadiumShared
 
 protocol SharedReadingSignalingTransport: Sendable {
     var events: AsyncStream<SharedReadingSignalingEvent> { get }
@@ -12,10 +13,12 @@ protocol SharedReadingSignalingTransport: Sendable {
     func disconnect() async
     func send(_ message: SharedReadingSignalingOutgoingMessage) async throws
     func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async
+    func latestHandshakeCorrelationID() async -> String?
 }
 
 extension SharedReadingSignalingTransport {
     func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async {}
+    func latestHandshakeCorrelationID() async -> String? { nil }
 }
 
 enum SharedReadingSignalingEvent: Sendable, Equatable {
@@ -114,7 +117,7 @@ struct SharedReadingSyncFrame: Codable, Sendable, Equatable {
             position = text
         } else {
             let object = try c.decode(SharedReadingWirePositionPayload.self, forKey: .position)
-            position = Self.locatorJSONString(from: object)
+            position = try Self.locatorJSONString(from: object)
         }
         isPlaying = try c.decode(Bool.self, forKey: .isPlaying)
         ttsRate = try c.decode(Double.self, forKey: .ttsRate)
@@ -135,26 +138,25 @@ struct SharedReadingSyncFrame: Codable, Sendable, Equatable {
         try c.encode(ttsRate, forKey: .ttsRate)
     }
 
-    private static func locatorJSONString(from payload: SharedReadingWirePositionPayload) -> String {
-        let locations: [String: Any]
-        switch payload.format {
-        case .epub:
-            locations = ["otherLocations": ["cfi": payload.cfi ?? ""]]
-        case .pdf:
-            locations = [
-                "position": payload.page ?? 0,
-                "progression": payload.offsetY ?? 0,
-            ]
+    private static func locatorJSONString(from payload: SharedReadingWirePositionPayload) throws -> String {
+        if let native = payload.readiumLocator {
+            guard !native.isEmpty, native.utf8.count <= SharedReadingWirePosition.maxLocatorBytes,
+                  let locator = try? Locator(jsonString: native), !locator.href.string.isEmpty else {
+                throw SharedReadingError.from(code: .serviceUnavailable, message: "The shared reading position is invalid.")
+            }
+            return try ReaderPositionLocator(locator: locator, source: payload.positionSource ?? .reader).encodedJSONString()
         }
-        let object: [String: Any] = [
-            "href": "",
-            "type": payload.format == .pdf ? "application/pdf" : "application/xhtml+xml",
-            "locations": locations,
-        ]
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object),
-              let string = String(data: data, encoding: .utf8) else { return "{}" }
-        return string
+        // A legacy frame has no publication resource href. Keep its metadata
+        // for a publication-backed PDF fallback in the reader, but never make
+        // an href-empty Readium Locator which could jump to the wrong chapter.
+        guard payload.format != .pdf || (payload.page ?? -1) >= 0 else {
+            throw SharedReadingError.from(code: .serviceUnavailable, message: "The shared PDF page is invalid.")
+        }
+        let data = try JSONEncoder().encode(payload)
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw SharedReadingError.from(code: .serviceUnavailable, message: "The shared reading position is invalid.")
+        }
+        return value
     }
 }
 
@@ -163,6 +165,8 @@ private struct SharedReadingWirePositionPayload: Codable {
     let cfi: String?
     let page: Int?
     let offsetY: Double?
+    let readiumLocator: String?
+    let positionSource: ReaderPositionLocator.Source?
 }
 
 struct SharedReadingControllerTransferEvent: Codable, Sendable, Equatable {
@@ -281,8 +285,11 @@ enum SharedReadingSignalingOutgoingMessage: Sendable, Equatable {
 
     fileprivate func encoded(maxFrameBytes: Int) throws -> Data {
         let data = try JSONEncoder().encode(OutgoingEnvelope(message: self))
-        guard data.count <= maxFrameBytes else {
-            throw SharedReadingError.from(code: .serviceUnavailable, message: "Shared reading frame exceeded the 64 KiB limit.")
+        let frameLimit: Int
+        if case .syncFrame = self { frameLimit = min(maxFrameBytes, 16 * 1024) }
+        else { frameLimit = maxFrameBytes }
+        guard data.count <= frameLimit else {
+            throw SharedReadingError.from(code: .serviceUnavailable, message: "Shared reading frame exceeded the room limit.")
         }
         return data
     }
@@ -361,7 +368,7 @@ private struct OutgoingEnvelope: Encodable {
             try encode(fence: fence, into: &container)
         case .syncFrame(let frame):
             try container.encode("sync.frame", forKey: .t)
-            try container.encode(SharedReadingWireSnapshot(frame: frame), forKey: .frame)
+            try container.encode(try SharedReadingWireSnapshot(frame: frame), forKey: .frame)
         case .sdpOffer(let toUserId, let sdp):
             try container.encode("sdp.offer", forKey: .t)
             try container.encode(toUserId, forKey: .to)
@@ -401,59 +408,63 @@ private struct SharedReadingWireSnapshot: Encodable {
     let ttsRate: Double
     let source = "controller"
 
-    init(frame: SharedReadingSyncFrame) {
+    init(frame: SharedReadingSyncFrame) throws {
         roomEpoch = frame.roomEpoch
         controllerGeneration = frame.controllerGeneration
         sequence = frame.sequence
         bookId = frame.bookId
         contentHash = frame.contentHash
         format = frame.format
-        position = SharedReadingWirePosition(frame: frame)
+        position = try SharedReadingWirePosition(frame: frame)
         isPlaying = frame.isPlaying
         ttsRate = frame.ttsRate
     }
 }
 
 private struct SharedReadingWirePosition: Encodable {
+    static let maxLocatorBytes = 8 * 1024
     let format: SharedReadingBookFormat
     let cfi: String?
     let page: Int?
     let offsetY: Double?
+    let readiumLocator: String
+    let positionSource: ReaderPositionLocator.Source
 
-    init(frame: SharedReadingSyncFrame) {
+    init(frame: SharedReadingSyncFrame) throws {
         format = frame.format
-        cfi = frame.format == .epub ? Self.epubCFI(from: frame.position) : nil
-        page = frame.format == .pdf ? Self.pdfPage(from: frame.position) : nil
-        offsetY = frame.format == .pdf ? Self.pdfOffsetY(from: frame.position) : nil
-    }
-
-    private static func epubCFI(from position: String) -> String {
-        guard let locator = try? ReaderPositionLocator.decode(jsonString: position),
-              let data = locator.readiumLocator.data(using: .utf8),
+        guard let position = try? ReaderPositionLocator.decode(jsonString: frame.position),
+              !position.readiumLocator.isEmpty,
+              position.readiumLocator.utf8.count <= Self.maxLocatorBytes,
+              let native = position.toReadiumLocator(), !native.href.string.isEmpty,
+              let data = position.readiumLocator.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let locations = object["locations"] as? [String: Any],
-              let otherLocations = locations["otherLocations"] as? [String: Any],
-              let cfi = otherLocations["cfi"] as? String,
-              !cfi.isEmpty else { return position }
-        return cfi
-    }
-
-    private static func pdfPage(from position: String) -> Int {
-        guard let locator = try? ReaderPositionLocator.decode(jsonString: position),
-              let data = locator.readiumLocator.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let locations = object["locations"] as? [String: Any],
-              let page = locations["position"] as? Int else { return 0 }
-        return max(0, page)
-    }
-
-    private static func pdfOffsetY(from position: String) -> Double {
-        guard let locator = try? ReaderPositionLocator.decode(jsonString: position),
-              let data = locator.readiumLocator.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let locations = object["locations"] as? [String: Any],
-              let progression = locations["progression"] as? Double else { return 0 }
-        return max(0, progression)
+              let locations = object["locations"] as? [String: Any] else {
+            throw SharedReadingError.from(code: .serviceUnavailable, message: "The reader position cannot be shared.")
+        }
+        readiumLocator = position.readiumLocator
+        positionSource = position.source
+        switch frame.format {
+        case .epub:
+            let other = locations["otherLocations"] as? [String: Any]
+            guard let partialCFI = (other?["partialCfi"] ?? other?["cfi"]) as? String,
+                  !partialCFI.isEmpty else {
+                throw SharedReadingError.from(code: .serviceUnavailable, message: "The EPUB position cannot be shared.")
+            }
+            cfi = partialCFI
+            page = nil
+            offsetY = nil
+        case .pdf:
+            guard let pageNumber = locations["position"] as? Int, pageNumber >= 0 else {
+                throw SharedReadingError.from(code: .serviceUnavailable, message: "The PDF page cannot be shared.")
+            }
+            let progression = locations["progression"] as? Double ?? 0
+            guard progression.isFinite else {
+                throw SharedReadingError.from(code: .serviceUnavailable, message: "The PDF position cannot be shared.")
+            }
+            cfi = nil
+            page = pageNumber
+            offsetY = min(1, max(0, progression))
+        }
     }
 }
 
@@ -534,6 +545,7 @@ final class SharedReadingSignalingEventHub: @unchecked Sendable {
 actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     static let maxFrameBytes = 64 * 1024
     static let maxReconnectDelaySeconds: Double = 5 * 60
+    private static let maxReconnectAttempts = 6
 
     private let urlSession: URLSession
     private let backoff: @Sendable (Int) -> Duration
@@ -550,11 +562,16 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     private var reconnectTask: Task<Void, Never>?
     private var generation = 0
     private var reconnectAttempt = 0
-    private var pendingReconnectDecision: SharedReadingReconnectDecision = .retry(after: .zero)
+    private var pendingReconnectDecision: SharedReadingReconnectDecision = .refreshAdmission
+    private var hasAuthoritativeSessionState = false
     private var isDisconnecting = false
     private var isTerminal = false
     private var refreshAdmission: (@Sendable () async throws -> SharedReadingAdmission)?
     private var refreshBearerToken: (@Sendable () async throws -> String)?
+    private var currentHandshakeCorrelationID: String?
+    private var latestHandshakeFailure: SharedReadingError?
+    private var latestAdmissionRefreshFailure: SharedReadingError?
+    private var didRefreshBearerForJoin = false
 
     init(
         urlSession: URLSession = .shared,
@@ -584,7 +601,11 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         self.refreshBearerToken = refreshBearerToken
         isDisconnecting = false
         reconnectAttempt = 0
-        pendingReconnectDecision = .retry(after: .zero)
+        pendingReconnectDecision = .refreshAdmission
+        hasAuthoritativeSessionState = false
+        latestHandshakeFailure = nil
+        latestAdmissionRefreshFailure = nil
+        didRefreshBearerForJoin = false
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -607,6 +628,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         receiveTask = nil
         currentTask?.cancel(with: .goingAway, reason: nil)
         currentTask = nil
+        hasAuthoritativeSessionState = false
         Log.sharedReading(.socket, context: .init(outcome: .disconnected))
         eventHub.finish()
     }
@@ -615,15 +637,32 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         guard !isTerminal else {
             throw SharedReadingError.from(code: .sessionEnded)
         }
-        guard let currentTask, currentTask.state == .running else {
-            throw SharedReadingError.from(code: .signalingDegraded, message: "Shared reading signaling is not connected.")
+        guard hasAuthoritativeSessionState, let currentTask, currentTask.state == .running else {
+            throw SharedReadingError(
+                code: .signalingDegraded,
+                message: "Shared reading signaling is not connected.",
+                retryable: true,
+                action: .retry,
+                correlationId: currentHandshakeCorrelationID,
+                stage: "websocket.send",
+                diagnostic: "authoritative_state_not_received"
+            )
         }
 
         let data = try message.encoded(maxFrameBytes: Self.maxFrameBytes)
         do {
             try await currentTask.send(.data(data))
-        } catch {
-            throw SharedReadingError.from(code: .signalingDegraded)
+        } catch let error as NSError {
+            throw SharedReadingError(
+                code: .signalingDegraded,
+                message: SharedReadingError.from(code: .signalingDegraded).message,
+                retryable: true,
+                action: .retry,
+                correlationId: currentHandshakeCorrelationID,
+                stage: "websocket.send",
+                diagnostic: "send_failed",
+                localSocketCode: error.code
+            )
         }
     }
 
@@ -639,10 +678,16 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
             "jwt.\(Data(bearerToken.utf8).base64URLString())",
             "admission.\(admission.admissionTicket)",
         ]
-        let task = urlSession.webSocketTask(with: admission.websocketURL, protocols: protocols)
+        let correlationID = UUID().uuidString
+        var request = URLRequest(url: admission.websocketURL)
+        request.setValue(correlationID, forHTTPHeaderField: "X-Rishi-Correlation-ID")
+        request.setValue(protocols.joined(separator: ", "), forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        currentHandshakeCorrelationID = correlationID
+        let task = urlSession.webSocketTask(with: request)
         currentTask = task
         task.resume()
-        Log.sharedReading(.socket, context: .init(outcome: .connected, roomEpoch: admission.roomEpoch.rawValue, connectionGeneration: admission.connectionGeneration.rawValue))
+        hasAuthoritativeSessionState = false
+        Log.sharedReading(.socket, context: .init(outcome: .started, attempt: reconnectAttempt, roomEpoch: admission.roomEpoch.rawValue, connectionGeneration: admission.connectionGeneration.rawValue))
         receiveTask?.cancel()
         receiveTask = Task { [weak self, task] in
             await self?.receiveLoop(task, generation: currentGeneration)
@@ -655,10 +700,112 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
                 let message = try await task.receive()
                 await handle(message, generation: generation)
             } catch {
+                guard !Task.isCancelled, generation == self.generation, !isDisconnecting, !isTerminal else { break }
+                let nsError = error as NSError
+                let response = task.response as? HTTPURLResponse
+                let failure: SharedReadingError
+                if response?.statusCode == 101 {
+                    failure = SharedReadingError(
+                        code: .serviceUnavailable,
+                        message: SharedReadingError.from(code: .serviceUnavailable).message,
+                        retryable: true,
+                        action: .retry,
+                        correlationId: currentHandshakeCorrelationID,
+                        stage: "websocket.receive",
+                        localSocketCode: nsError.code
+                    )
+                    latestHandshakeFailure = failure
+                    eventHub.yield(.error(failure))
+                } else {
+                    failure = handshakeFailure(response: response, localErrorCode: nsError.code)
+                    latestHandshakeFailure = failure
+                    eventHub.yield(.error(failure))
+                    pendingReconnectDecision = reconnectDecision(forHandshakeFailure: failure)
+                }
+                Log.sharedReading(.socket, level: .error, context: .init(
+                    outcome: .failed, correlationID: failure.correlationId,
+                    statusCode: failure.httpStatus,
+                    attempt: reconnectAttempt,
+                    roomEpoch: currentAdmission?.roomEpoch.rawValue,
+                    connectionGeneration: currentAdmission?.connectionGeneration.rawValue,
+                    errorCode: failure.code.rawValue,
+                    diagnostic: failure.diagnostic,
+                    stage: failure.stage,
+                    localSocketCode: failure.localSocketCode
+                ))
                 break
             }
         }
         await handleDisconnect(generation: generation)
+    }
+
+    private func handshakeFailure(response: HTTPURLResponse?, localErrorCode: Int) -> SharedReadingError {
+        let rawCode = response?.value(forHTTPHeaderField: "X-Rishi-Error-Code")
+        let workerCode = rawCode.flatMap(SharedReadingErrorCode.init(rawValue:))
+        let code: SharedReadingErrorCode
+        if let workerCode {
+            code = workerCode
+        } else {
+            switch response?.statusCode {
+            case 401: code = .authRequired
+            case 403: code = .forbidden
+            case 404, 410: code = .sessionEnded
+            case 409: code = .roomFull
+            default: code = .serviceUnavailable
+            }
+        }
+        let fallback = SharedReadingError.from(code: code)
+        return SharedReadingError(
+            code: code,
+            message: fallback.message,
+            retryable: fallback.retryable,
+            action: fallback.action,
+            correlationId: Self.safeCorrelationID(response?.value(forHTTPHeaderField: "X-Rishi-Correlation-ID")) ?? currentHandshakeCorrelationID,
+            stage: response?.value(forHTTPHeaderField: "X-Rishi-Error-Stage") ?? "websocket.handshake",
+            httpStatus: response?.statusCode,
+            diagnostic: workerCode == nil ? rawCode : nil,
+            localSocketCode: localErrorCode
+        )
+    }
+
+    private func reconnectDecision(forHandshakeFailure error: SharedReadingError) -> SharedReadingReconnectDecision {
+        switch error.code {
+        case .authRequired:
+            return didRefreshBearerForJoin ? .stop(error.code) : .refreshBearer
+        case .admissionRequired, .admissionTicketExpired, .admissionTicketMismatch,
+                .admissionTicketStale, .invalidAdmission, .reconnectExpired:
+            return .refreshAdmission
+        case .sessionEnded, .sessionNotFound, .removedFromSession, .forbidden, .accountDeleted, .accountDeletionInProgress,
+                .roomFull, .sessionLinkInvalid, .onboardingRequired,
+                .malformedWebSocketRequest, .webSocketUpgradeRequired:
+            return .stop(error.code)
+        default:
+            return .refreshAdmission
+        }
+    }
+
+    private static func safeCorrelationID(_ value: String?) -> String? {
+        guard let value, (1...100).contains(value.utf8.count),
+              value.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_").contains($0) })
+        else { return nil }
+        return value
+    }
+
+    private static func withHandshakeContext(
+        _ error: SharedReadingError,
+        stage: String
+    ) -> SharedReadingError {
+        SharedReadingError(
+            code: error.code,
+            message: error.message,
+            retryable: error.retryable,
+            action: error.action,
+            correlationId: error.correlationId,
+            stage: error.stage ?? stage,
+            httpStatus: error.httpStatus,
+            diagnostic: error.diagnostic,
+            localSocketCode: error.localSocketCode
+        )
     }
 
     private func handle(_ message: URLSessionWebSocketTask.Message, generation: Int) async {
@@ -761,7 +908,7 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
     static func shouldTerminateImmediately(after event: SharedReadingSignalingEvent) -> Bool {
         switch event {
         case .error(let error):
-            return error.code == .sessionEnded || error.code == .removedFromSession
+            return error.code == .sessionEnded || error.code == .removedFromSession || error.code == .accountDeleted || error.code == .accountDeletionInProgress
         case .sessionState, .sessionEnded, .syncFrame, .syncAbsent, .controllerTransfer, .participantRemove, .participantRoster, .speakerGranted, .speakerReleased, .sdpOffer, .sdpAnswer, .ice:
             return false
         }
@@ -782,20 +929,48 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
 
     private func handleDisconnect(generation: Int) async {
         guard generation == self.generation else { return }
+        let hadState = hasAuthoritativeSessionState
+        hasAuthoritativeSessionState = false
         currentTask = nil
         receiveTask = nil
         guard !isDisconnecting, !isTerminal else { return }
+        Log.sharedReading(.socket, level: .warning, context: .init(
+            outcome: .disconnected, attempt: reconnectAttempt,
+            connectionGeneration: currentAdmission?.connectionGeneration.rawValue,
+            errorCode: hadState ? "AFTER_STATE" : "BEFORE_STATE"
+        ))
         scheduleReconnect(pendingReconnectDecision)
     }
 
     private func scheduleReconnect(_ decision: SharedReadingReconnectDecision) {
         guard reconnectTask == nil else { return }
         if case .stop(let code) = decision {
-            eventHub.yield(.error(.from(code: code)))
+            // Keep the actual handshake response when a terminal decision is
+            // made (notably after a refreshed bearer is rejected as well).
+            // Rebuilding from only the error code drops the Worker's stage,
+            // status, and correlation ID; the coordinator then mistakes the
+            // stream close for a generic SIGNALING_DEGRADED failure.
+            let failure = latestHandshakeFailure.flatMap { $0.code == code ? $0 : nil }
+                ?? .from(code: code)
+            eventHub.yield(.error(failure))
             terminateAfterTerminalEvent()
             return
         }
         reconnectAttempt += 1
+        if reconnectAttempt > Self.maxReconnectAttempts {
+            let failure = latestAdmissionRefreshFailure ?? latestHandshakeFailure ?? SharedReadingError(
+                code: .signalingDegraded,
+                message: "Could not reconnect to the reading session. Leave and try joining again.",
+                retryable: true,
+                action: .retry,
+                correlationId: currentHandshakeCorrelationID,
+                stage: "websocket.reconnect",
+                diagnostic: "retry_limit_exceeded"
+            )
+            eventHub.yield(.error(failure))
+            terminateAfterTerminalEvent()
+            return
+        }
         let attempt = reconnectAttempt
         Log.sharedReading(.reconnect, level: .warning, context: .init(outcome: .retrying, attempt: attempt))
         let delay: Duration
@@ -816,52 +991,123 @@ actor SharedReadingSignalingClient: SharedReadingSignalingTransport {
         guard !isDisconnecting, !isTerminal else { return }
 
         switch decision {
-        case .retry:
-            break
-        case .refreshAdmission:
-            guard let refreshAdmission else {
-                eventHub.yield(.error(.from(code: .reconnectExpired)))
-                return
-            }
-            do {
-                currentAdmission = try await refreshAdmission()
-            } catch let error as SharedReadingError {
-                eventHub.yield(.error(error))
-                return
-            } catch {
-                eventHub.yield(.error(.from(code: .serviceUnavailable)))
-                return
-            }
         case .refreshBearer:
             guard let refreshBearerToken else {
-                eventHub.yield(.error(.from(code: .authRequired)))
+                eventHub.yield(.error(latestHandshakeFailure ?? .from(code: .authRequired)))
+                terminateAfterTerminalEvent()
                 return
             }
             do {
                 Log.sharedReading(.authenticationRefresh, context: .init(outcome: .started, attempt: attempt))
                 bearerToken = try await refreshBearerToken()
+                didRefreshBearerForJoin = true
                 Log.sharedReading(.authenticationRefresh, context: .init(outcome: .completed, attempt: attempt))
             } catch let error as SharedReadingError {
                 Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, correlationID: error.correlationId, attempt: attempt, errorCode: error.code.rawValue))
-                eventHub.yield(.error(error))
+                eventHub.yield(.error(Self.withHandshakeContext(error, stage: "websocket.authentication_refresh")))
+                terminateAfterTerminalEvent()
                 return
             } catch {
                 Log.sharedReading(.authenticationRefresh, level: .error, context: .init(outcome: .failed, attempt: attempt, errorCode: "UNKNOWN"))
-                eventHub.yield(.error(.from(code: .authRequired)))
+                eventHub.yield(.error(SharedReadingError(
+                    code: .serviceUnavailable,
+                    message: SharedReadingError.from(code: .serviceUnavailable).message,
+                    retryable: true,
+                    action: .retry,
+                    stage: "websocket.authentication_refresh",
+                    diagnostic: "UNKNOWN"
+                )))
+                terminateAfterTerminalEvent()
                 return
             }
         case .stop(let code):
-            eventHub.yield(.error(.from(code: code)))
+            eventHub.yield(.error(latestHandshakeFailure ?? .from(code: code)))
             terminateAfterTerminalEvent()
+            return
+        case .retry, .refreshAdmission:
+            break
+        }
+        // Admission tickets are single use, including when the WebSocket
+        // handshake never produced an authoritative state. Never reopen with
+        // the ticket that was passed to the previous URLSessionWebSocketTask.
+        guard let refreshAdmission else {
+            let failure = SharedReadingError(
+                code: .reconnectExpired,
+                message: SharedReadingError.from(code: .reconnectExpired).message,
+                retryable: true,
+                action: .retry,
+                correlationId: currentHandshakeCorrelationID,
+                stage: "websocket.admission_refresh",
+                diagnostic: "refresh_handler_missing"
+            )
+            latestAdmissionRefreshFailure = failure
+            eventHub.yield(.error(failure))
+            terminateAfterTerminalEvent()
+            return
+        }
+        do {
+            let admission = try await refreshAdmission()
+            guard !Task.isCancelled, !isDisconnecting, !isTerminal else { return }
+            currentAdmission = admission
+            latestAdmissionRefreshFailure = nil
+        } catch let error as SharedReadingError {
+            guard !Task.isCancelled, !isDisconnecting, !isTerminal else { return }
+            let failure = Self.withHandshakeContext(error, stage: "websocket.admission_refresh")
+            latestAdmissionRefreshFailure = failure
+            Log.sharedReading(.reconnect, level: .error, context: .init(
+                outcome: .failed,
+                correlationID: failure.correlationId,
+                statusCode: failure.httpStatus,
+                attempt: attempt,
+                errorCode: failure.code.rawValue,
+                diagnostic: failure.diagnostic,
+                stage: failure.stage,
+                localSocketCode: failure.localSocketCode
+            ))
+            if failure.retryable { scheduleReconnect(.refreshAdmission) }
+            else { eventHub.yield(.error(failure)); terminateAfterTerminalEvent() }
+            return
+        } catch {
+            guard !Task.isCancelled, !isDisconnecting, !isTerminal else { return }
+            let failure = SharedReadingError(
+                code: .serviceUnavailable,
+                message: SharedReadingError.from(code: .serviceUnavailable).message,
+                retryable: true,
+                action: .retry,
+                correlationId: nil,
+                stage: "websocket.admission_refresh",
+                diagnostic: "unknown_error"
+            )
+            latestAdmissionRefreshFailure = failure
+            Log.sharedReading(.reconnect, level: .error, context: .init(
+                outcome: .failed,
+                correlationID: failure.correlationId,
+                statusCode: failure.httpStatus,
+                attempt: attempt,
+                errorCode: failure.code.rawValue,
+                diagnostic: failure.diagnostic,
+                stage: failure.stage
+            ))
+            scheduleReconnect(.refreshAdmission)
             return
         }
         await open()
     }
 
     func confirmAuthoritativeSessionState(_ state: SharedReadingSessionStateEvent) async {
-        guard !isTerminal, state.status != .ended else { return }
+        guard !isTerminal, state.status != .ended,
+              let admission = currentAdmission,
+              state.roomEpoch == admission.roomEpoch,
+              state.connectionGeneration == admission.connectionGeneration else { return }
+        hasAuthoritativeSessionState = true
         reconnectAttempt = 0
-        pendingReconnectDecision = .retry(after: .zero)
+        latestAdmissionRefreshFailure = nil
+        pendingReconnectDecision = .refreshAdmission
+        latestHandshakeFailure = nil
+        didRefreshBearerForJoin = false
+        Log.sharedReading(.socket, context: .init(outcome: .connected, roomEpoch: state.roomEpoch.rawValue, connectionGeneration: state.connectionGeneration.rawValue))
     }
+
+    func latestHandshakeCorrelationID() -> String? { currentHandshakeCorrelationID }
 
 }

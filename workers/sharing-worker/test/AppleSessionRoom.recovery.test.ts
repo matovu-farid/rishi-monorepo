@@ -948,7 +948,7 @@ describe("AppleSessionRoom admission recovery", () => {
       await (_instance as any).alarm();
 
       const after = await ctx.storage.get<any>("apple-state");
-      expect(after.status).toBe("waiting");
+      expect(after.status).toBe("active");
       expect(after.participants.u_controller).toBeUndefined();
       expect(after.controllerUserId).toBe("u_owner");
       expect(after.controllerGeneration).toBe(3);

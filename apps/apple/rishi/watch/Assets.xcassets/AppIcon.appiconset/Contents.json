@@ -1,6 +1,12 @@
 {
   "images" : [
     {
+      "filename" : "WatchAppStore.png",
+      "idiom" : "universal",
+      "platform" : "watchos",
+      "size" : "1024x1024"
+    },
+    {
       "filename" : "Watch38mmNotificationCenter.png",
       "idiom" : "watch",
       "role" : "notificationCenter",

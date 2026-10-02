@@ -22,6 +22,7 @@ private let librarySignposter = OSSignposter(
 @MainActor
 public struct LibraryRootView: View {
     @Environment(LibraryViewModel.self) private var vm: LibraryViewModel
+    @Environment(AppRouter.self) private var router
 
 
     public let importCoordinator: ImportCoordinator
@@ -51,6 +52,9 @@ public struct LibraryRootView: View {
     @State private var shareBookIDs: [BookID] = []
     @State private var showSharedReadingComposer = false
     @State private var sharedReadingBook: Book?
+    @State private var pendingSharedReadingBook: Book?
+    @State private var showSharedReadingSwitchConfirmation = false
+    @State private var pendingCreatorInvitation: SharedReadingInvitation?
     #if DEBUG
     @State private var e2eFixtureImportStarted = false
     #endif
@@ -332,7 +336,7 @@ public struct LibraryRootView: View {
         .sheet(isPresented: $showShareComposer) {
             shareComposerContent()
         }
-        .sheet(isPresented: $showSharedReadingComposer) {
+        .sheet(isPresented: $showSharedReadingComposer, onDismiss: finishSharedReadingComposerDismissal) {
             if let sharedReadingAPI, let sharedReadingBook {
                 SharedReadingShareComposerView(
                     api: sharedReadingAPI,
@@ -342,10 +346,27 @@ public struct LibraryRootView: View {
                         { await repair(sharedReadingBook.id) }
                     },
                     onCreated: { invitation in
-                        AppRouter.enqueueCreatedSession(invitation)
+                        guard showSharedReadingComposer else { return }
+                        pendingCreatorInvitation = invitation
                     }
                 )
             }
+        }
+        .confirmationDialog(
+            "Already in a reading session",
+            isPresented: $showSharedReadingSwitchConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Stay in current session", role: .cancel) {
+                pendingSharedReadingBook = nil
+            }
+            Button("Leave and start new") {
+                let book = pendingSharedReadingBook
+                pendingSharedReadingBook = nil
+                if let book { presentSharedReadingComposer(for: book) }
+            }
+        } message: {
+            Text("Your current room will stay open while the new one starts. Other readers can continue after you leave.")
         }
     }
 
@@ -407,8 +428,29 @@ public struct LibraryRootView: View {
 
     private func beginSharedReading(ids: [BookID], books: [Book]) {
         guard ids.count == 1, let id = ids.first, let book = books.first(where: { $0.id == id }), sharedReadingAPI != nil else { return }
+        if router.hasActiveSharedReader {
+            pendingSharedReadingBook = book
+            showSharedReadingSwitchConfirmation = true
+            return
+        }
+        presentSharedReadingComposer(for: book)
+    }
+
+    private func presentSharedReadingComposer(for book: Book) {
+        pendingCreatorInvitation = nil
         sharedReadingBook = book
         showSharedReadingComposer = true
+    }
+
+    private func finishSharedReadingComposerDismissal() {
+        sharedReadingBook = nil
+        guard let invitation = pendingCreatorInvitation else {
+            Log.sharedReading(.sessionLifecycle, context: .init(operation: .create, outcome: .skipped))
+            return
+        }
+        pendingCreatorInvitation = nil
+        Log.sharedReading(.sessionLifecycle, context: .init(operation: .create, outcome: .completed, sessionID: invitation.sessionID))
+        AppRouter.enqueueCreatedSession(invitation)
     }
 
 }

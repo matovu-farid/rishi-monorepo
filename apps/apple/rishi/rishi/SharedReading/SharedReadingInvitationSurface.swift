@@ -9,6 +9,7 @@ struct SharedReadingInvitationSurface: View {
     let api: SharedReadingAPI
     let invitation: SharedReadingInvitation
 
+    @Environment(\.dismiss) private var dismiss
     @State private var recipients = ""
     @State private var isBusy = false
     @State private var message: String?
@@ -85,6 +86,12 @@ struct SharedReadingInvitationSurface: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { dismiss() }
+                    .disabled(isBusy)
+            }
+        }
     }
 
     private var parsedRecipients: [String] {
@@ -112,9 +119,13 @@ struct SharedReadingInvitationSurface: View {
                     isError = result.failed > 0
                 }
             } catch let error as SharedReadingError {
-                await MainActor.run { message = error.message; isError = true }
+                await MainActor.run { message = error.presentationMessage; isError = true }
             } catch {
+#if DEBUG
+                await MainActor.run { message = "Invitation delivery failed: \(String(describing: error))"; isError = true }
+#else
                 await MainActor.run { message = "Email delivery failed. You can still share the link."; isError = true }
+#endif
             }
         }
     }

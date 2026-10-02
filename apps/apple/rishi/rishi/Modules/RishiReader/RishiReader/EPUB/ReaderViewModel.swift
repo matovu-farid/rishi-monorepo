@@ -33,10 +33,13 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// Most recent locator emitted by the navigator delegate (or
     /// restored from the position store on load).
     public private(set) var latestLocator: Locator?
+    /// Most recent position reported by the visible navigator. Narration can
+    /// advance the resume cursor without moving the reader viewport.
+    public private(set) var visibleNavigatorLocator: Locator?
     /// Exact locator last reported by Read Aloud. Manual navigation clears
     /// this candidate; programmatic page-follow does not.
     private var readAloudResumeLocator: Locator?
-    private var latestPositionSource: ReaderPositionLocator.Source = .reader
+    public private(set) var latestPositionSource: ReaderPositionLocator.Source = .reader
     private var hasManualNavigationSinceLoad = false
 
     /// Title pulled from the publication once loaded.
@@ -254,6 +257,7 @@ public final class ReaderViewModel: @unchecked Sendable {
         isProgrammatic: Bool = false,
         isInitialLocation: Bool = false
     ) {
+        visibleNavigatorLocator = locator
         let hasExactResume = readAloudResumeLocator != nil
         if !hasExactResume || (!isInitialLocation && !isProgrammatic) {
             latestLocator = locator

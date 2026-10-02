@@ -17,6 +17,20 @@ describe("signR2Url — presigned R2 URL shape", () => {
     expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
   });
 
+  it("uses an explicit signing time for X-Amz-Date", async () => {
+    const signingTime = new Date("2026-09-16T12:34:56.789Z");
+    const url = new URL(
+      await signR2Url(env, {
+        key: "books/u/b.epub",
+        method: "PUT",
+        expiresSec: 300,
+        signingTime,
+      }),
+    );
+
+    expect(url.searchParams.get("X-Amz-Date")).toBe("20260916T123456Z");
+  });
+
   it("signs ONLY the host header (x-amz-expires must not be a signed header)", async () => {
     // If X-Amz-Expires is signed as a header, R2 expects the PUT to replay it;
     // the client never does -> SignatureDoesNotMatch. SignedHeaders must be 'host'.

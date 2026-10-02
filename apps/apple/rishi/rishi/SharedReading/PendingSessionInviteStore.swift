@@ -11,5 +11,16 @@ actor PendingSessionInviteStore {
 
     func save(token: String) { defaults.set(token, forKey: key) }
     func load() -> String? { defaults.string(forKey: key) }
+    /// An older redemption must not erase a different link queued while its
+    /// network request was in flight.
+    @discardableResult
+    func clear(token: String) -> Bool {
+        guard defaults.string(forKey: key) == token else { return false }
+        defaults.removeObject(forKey: key)
+        return true
+    }
+
+    /// Explicit account teardown and test reset may clear the whole queue.
+    /// Asynchronous redemption completion must use `clear(token:)` instead.
     func clear() { defaults.removeObject(forKey: key) }
 }

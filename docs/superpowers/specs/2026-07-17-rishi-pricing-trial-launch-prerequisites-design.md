@@ -37,10 +37,10 @@ The Worker is the only public gateway, but it is a thin one: it authenticates th
 Create a server-owned entitlement snapshot with these states:
 
 - `trial_active`: remaining non-expiring trial credits;
-- `trial_exhausted`: core reading remains available and AI features direct the user to plans;
+- `trial_exhausted`: no trial credits remain; core reading remains available and AI features direct the user to plans;
 - `reader_active`: current monthly allowance period plus remaining narration and Voice Chat time;
 - `voice_active`: current monthly allowance period plus remaining narration and Voice Chat time; and
-- `subscription_expired`: core reading remains available and AI features direct the user to renew or upgrade.
+- `subscription_expired`: a paid allowance period has expired and no trial credits remain; core reading remains available and AI features direct the user to renew or upgrade. If non-expiring trial credits remain, the snapshot falls back to `trial_active` until those credits are exhausted.
 
 The snapshot includes plan, allowance-period start/end, remaining narration seconds, remaining Voice Chat seconds, remaining trial credits, and any active voice-session status. `/api/billing/me` evolves from its binary premium response into this snapshot. The iOS app uses it for routing and display only.
 

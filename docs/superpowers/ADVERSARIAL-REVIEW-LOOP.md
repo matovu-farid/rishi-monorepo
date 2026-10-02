@@ -65,6 +65,35 @@ Each round should behave like a **different reviewer**:
 - Prefer dispatching a **subagent** or explicit “adversarial reviewer” pass over re-reading your own draft in the same context.
 - If you authored the plan, the re-review round should explicitly look for **latent issues in your own fixes** (common failure: marking an issue “fixed” with wording that does not survive implementation).
 
+### Review concurrency and token control
+
+Run **exactly one active reviewer per artifact and scope**. Do not launch two
+agents to cold-review the same unchanged plan or code diff at the same time.
+Independence means the reviewer is separate from the author; it does not require
+duplicate concurrent reviews.
+
+Before dispatching a reviewer:
+
+1. Check for an existing active review of the same artifact, commit/diff, and
+   acceptance criteria. Reuse or wait for that review instead of spawning a
+   duplicate.
+2. Record the reviewer scope and reviewed revision. A re-review may start only
+   after findings have been applied and the artifact or diff has changed.
+3. Parallel reviews are allowed only when their scopes are explicitly disjoint
+   (for example, migration safety versus UI accessibility), with separate file
+   ownership and acceptance criteria. “Two opinions on the same thing” is not a
+   disjoint scope.
+4. If duplicate same-scope reviews are launched accidentally, stop the less
+   advanced review immediately and retain the review with the most completed
+   evidence. Do not wait for both.
+
+Default model allocation for cost control: Sol plans and synthesizes, Luna
+implements bounded tasks, and Terra performs the independent review. Terra may
+implement complex state machines, migrations, concurrency, security-sensitive
+changes, or cross-service contracts; that implementation must still receive a
+fresh independent review. Reserve stronger escalation for unresolved Critical
+issues rather than routine duplicate review.
+
 ---
 
 ## Severity
@@ -141,6 +170,7 @@ Also include after review:
 | PASS WITH NOTES while High issues are latent | User asked for zero issues; notes are not enough |
 | Skipping codebase grep | Plan misses call sites (e.g. refresh hooks in modifiers) |
 | Same agent summarizing its own review as PASS | No independence; use subagent or cold re-read |
+| Two agents reviewing the same unchanged artifact concurrently | Duplicates token spend and findings; keep one reviewer and re-review only after fixes change the artifact |
 
 ---
 

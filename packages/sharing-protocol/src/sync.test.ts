@@ -58,6 +58,50 @@ describe("AuthoritativeSync", () => {
   it("rejects out-of-range PDF pages", () => {
     expect(AuthoritativeSync.safeParse({ ...controller, t: "position", format: "pdf", position: { format: "pdf", page: 1_000_001, offsetY: 0 } }).success).toBe(false);
   });
+
+  it.each([
+    { format: "epub", cfi: "epubcfi(/6/2)", readiumLocator: '{"href":"chapter.xhtml"}' },
+    { format: "pdf", page: 2, offsetY: 0, readiumLocator: '{"href":"book.pdf"}' },
+  ])("accepts a native locator alongside a $format position", (position) => {
+    expect(AuthoritativeSync.safeParse({ ...controller, t: "position", format: position.format, position }).success).toBe(true);
+    expect(ControllerSnapshot.safeParse({ ...controller, t: "snapshot", format: position.format, position }).success).toBe(true);
+  });
+
+  it.each(["reader", "readAloud"] as const)("accepts %s source on both native position variants", (positionSource) => {
+    for (const position of [
+      { format: "epub", cfi: "epubcfi(/6/2)", positionSource },
+      { format: "pdf", page: 2, offsetY: 0, positionSource },
+    ]) {
+      expect(AuthoritativeSync.safeParse({ ...controller, t: "position", format: position.format, position }).success).toBe(true);
+      expect(ControllerSnapshot.safeParse({ ...controller, t: "snapshot", format: position.format, position }).success).toBe(true);
+    }
+  });
+
+  it("keeps old source-less frames valid and rejects unknown sources", () => {
+    expect(AuthoritativeSync.safeParse({ ...controller, t: "position" }).success).toBe(true);
+    expect(ControllerSnapshot.safeParse({ ...controller, t: "snapshot" }).success).toBe(true);
+    expect(AuthoritativeSync.safeParse({ ...controller, t: "position", position: { ...controller.position, positionSource: "unknown" } }).success).toBe(false);
+  });
+
+  it.each(["", "not JSON", "[]", JSON.stringify({ href: "x".repeat(8 * 1024) })])("rejects an invalid or oversized native locator", (readiumLocator) => {
+    const position = { ...controller.position, readiumLocator };
+    expect(AuthoritativeSync.safeParse({ ...controller, t: "position", position }).success).toBe(false);
+    expect(ControllerSnapshot.safeParse({ ...controller, t: "snapshot", position }).success).toBe(false);
+  });
+
+  it("bounds native locators by UTF-8 bytes, including multibyte text", () => {
+    const atLimit = JSON.stringify({ href: "é".repeat(4_090) + "x" });
+    const overLimit = JSON.stringify({ href: "é".repeat(4_090) + "xx" });
+    expect(new TextEncoder().encode(atLimit).byteLength).toBe(8 * 1024);
+    expect(new TextEncoder().encode(overLimit).byteLength).toBe(8 * 1024 + 1);
+
+    const atLimitPosition = { ...controller.position, readiumLocator: atLimit };
+    const overLimitPosition = { ...controller.position, readiumLocator: overLimit };
+    expect(AuthoritativeSync.safeParse({ ...controller, t: "position", position: atLimitPosition }).success).toBe(true);
+    expect(ControllerSnapshot.safeParse({ ...controller, t: "snapshot", position: atLimitPosition }).success).toBe(true);
+    expect(AuthoritativeSync.safeParse({ ...controller, t: "position", position: overLimitPosition }).success).toBe(false);
+    expect(ControllerSnapshot.safeParse({ ...controller, t: "snapshot", position: overLimitPosition }).success).toBe(false);
+  });
 });
 
 describe("controller snapshot ordering", () => {

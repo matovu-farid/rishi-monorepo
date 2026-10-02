@@ -243,6 +243,21 @@ final class TestAccountClientTests: XCTestCase {
         XCTAssertEqual(transport.requests[2].url?.path, "/test/users/invitee@example.test")
     }
 
+    func testDeleteRetriesRetryableConflictFromGatedCleanup() async throws {
+        let transport = RecordingTransport(responses: [.status(401), .status(409), .status(200)])
+        let client = TestAccountClient(
+            configuration: .init(baseURL: URL(string: "https://api.example.test")!, testAuthSecret: "gate", testDomain: "example.test"),
+            transport: transport
+        )
+        let account = TestAccount(role: .participant, email: "invitee@example.test", password: "pw", userID: "u-1", bearerToken: "expired-token")
+
+        try await client.delete(account)
+
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(transport.requests[1].url?.path, "/test/users/invitee@example.test")
+        XCTAssertEqual(transport.requests[2].url?.path, "/test/users/invitee@example.test")
+    }
+
     func testRecoveryDeleteUsesOnlyConfiguredGeneratedEmailNamespace() async throws {
         let transport = RecordingTransport(responses: [.status(404)])
         let client = TestAccountClient(

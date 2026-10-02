@@ -112,10 +112,39 @@ describe("Worker scheduled triggers", () => {
 
     expect(mocks.createDb).toHaveBeenCalledWith(dbBinding);
     expect(mocks.reconcileAccountR2Page.mock.calls.map((call) => call[2])).toEqual(["books/", "covers/"]);
-    expect(mocks.retryPendingDeletions).not.toHaveBeenCalled();
+    expect(mocks.retryPendingDeletions).toHaveBeenCalledWith({ marker: "db" }, env);
+    expect(mocks.retryPendingDeletions.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.reconcileAccountR2Page.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.purgeExpiredShares).not.toHaveBeenCalled();
     expect(mocks.precreateShareLinks).not.toHaveBeenCalled();
     expect(mocks.purgeExpiredRetention).not.toHaveBeenCalled();
     expect(mocks.redactOwnerlessAppleNotificationLogs).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a deletion-retry failure after still attempting R2 reconciliation", async () => {
+    const failure = new Error("account deletion retry failed");
+    mocks.retryPendingDeletions.mockRejectedValueOnce(failure);
+
+    await expect(scheduled(minuteController, env)).rejects.toBe(failure);
+
+    expect(mocks.reconcileAccountR2Page.mock.calls.map((call) => call[2])).toEqual(["books/", "covers/"]);
+    expect(mocks.retryPendingDeletions.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.reconcileAccountR2Page.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("still runs daily maintenance when a deletion retry fails", async () => {
+    const failure = new Error("account deletion retry failed");
+    mocks.retryPendingDeletions.mockRejectedValueOnce(failure);
+    const dailyController = { ...minuteController, cron: "17 2 * * *" };
+
+    await expect(scheduled(dailyController, env)).rejects.toBe(failure);
+
+    expect(mocks.purgeExpiredShares).toHaveBeenCalledWith({ marker: "db" }, bucket);
+    expect(mocks.precreateShareLinks).toHaveBeenCalledWith({ marker: "db" }, env);
+    expect(mocks.purgeExpiredRetention).toHaveBeenCalledWith({ marker: "db" });
+    expect(mocks.redactOwnerlessAppleNotificationLogs).toHaveBeenCalledWith({ marker: "db" });
+    expect(mocks.reconcileAccountR2Page).not.toHaveBeenCalled();
   });
 });

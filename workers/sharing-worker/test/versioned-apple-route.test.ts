@@ -89,11 +89,31 @@ describe("versioned Apple sharing transport", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       sessionId,
       roomEpoch: 1,
       controllerGeneration: 1,
     });
+  });
+
+  it("keeps a missing-room acknowledgement compatible with the API Worker sentinel", async () => {
+    const sessionId = `missing-apple-${crypto.randomUUID()}`;
+    const path = `/v2/internal/rooms/${sessionId}`;
+    const body = { action: "getRoomStatus", payload: {} };
+    const token = await sign({ method: "POST", path, body, exp: Date.now() + 60_000 }, SECRET);
+
+    const response = await SELF.fetch(`https://example.com${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-rishi-internal-token": token,
+      },
+      body: JSON.stringify(body),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-rishi-correlation-id")).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(await response.json()).toEqual({ ok: true });
   });
 
   it("[W4-005] maps an active Apple purge conflict to HTTP 409 and preserves the result envelope", async () => {
@@ -119,7 +139,7 @@ describe("versioned Apple sharing transport", () => {
 
     const premature = await command("purgeAppleRoom", {});
     expect(premature.status).toBe(409);
-    expect(await premature.json()).toEqual({
+    expect(await premature.json()).toMatchObject({
       ok: false,
       code: "CONFLICT",
       error: "room must be ended before purge",

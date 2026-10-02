@@ -25,10 +25,11 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     private let voicePresenter: VoiceSessionPresenter
     private let voiceLanguageProvider: @MainActor () -> VoiceLanguageOption
 
-    /// The live entitlement snapshot store (plan 12). `nil` only to keep
-    /// `ReaderVoiceEntryLanguageTests.swift`'s 3-arg construction compiling —
-    /// production always passes `services.billing.entitlementSnapshotStore`.
+    /// The live entitlement snapshot dependencies. They remain optional for
+    /// the language-wiring test initializer; production passes both from the
+    /// billing service graph.
     private let entitlementSnapshotStore: EntitlementSnapshotStore?
+    private let entitlementRefreshCoordinator: EntitlementRefreshCoordinator?
 
     private let onRequestPaywall: (String) -> Void
     private let onVoiceStarted: (@MainActor () -> Void)?
@@ -37,12 +38,14 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
         voicePresenter: VoiceSessionPresenter,
         voiceLanguageProvider: @escaping @MainActor () -> VoiceLanguageOption,
         entitlementSnapshotStore: EntitlementSnapshotStore? = nil,
+        entitlementRefreshCoordinator: EntitlementRefreshCoordinator? = nil,
         onRequestPaywall: @escaping (String) -> Void,
         onVoiceStarted: (@MainActor () -> Void)? = nil
     ) {
         self.voicePresenter = voicePresenter
         self.voiceLanguageProvider = voiceLanguageProvider
         self.entitlementSnapshotStore = entitlementSnapshotStore
+        self.entitlementRefreshCoordinator = entitlementRefreshCoordinator
         self.onRequestPaywall = onRequestPaywall
         self.onVoiceStarted = onVoiceStarted
     }
@@ -57,7 +60,18 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
             isCheckingEntitlement = true
             defer { isCheckingEntitlement = false }
 
-            if let reason = entitlementSnapshotStore?.blockReason(for: .voiceChat) {
+            let blockReason: AIFeatureBlockReason?
+            if let entitlementSnapshotStore, let entitlementRefreshCoordinator {
+                blockReason = await EntitlementAIGate.gateAIFeature(
+                    .voiceChat,
+                    store: entitlementSnapshotStore,
+                    coordinator: entitlementRefreshCoordinator
+                )
+            } else {
+                blockReason = entitlementSnapshotStore?.blockReason(for: .voiceChat)
+            }
+
+            if let reason = blockReason {
                 pendingUpgradePrompt = reason
                 voicePresenter.cancelPrewarm()
                 return

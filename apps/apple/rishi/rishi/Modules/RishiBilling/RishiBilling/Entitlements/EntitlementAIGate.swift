@@ -5,6 +5,16 @@ import Foundation
 public enum EntitlementAIGate {
     public static let refreshInterval: TimeInterval = 30
 
+    static func snapshotAfterRefresh(
+        _ refreshResult: Result<EntitlementSnapshot, Error>?,
+        fallingBackTo storedSnapshot: EntitlementSnapshot?
+    ) -> EntitlementSnapshot? {
+        if case .success(let refreshedSnapshot) = refreshResult {
+            return refreshedSnapshot
+        }
+        return storedSnapshot
+    }
+
     public static func needsRefreshBeforeGate(
         resolution: EntitlementSnapshotResolution
     ) -> Bool {
@@ -24,13 +34,24 @@ public enum EntitlementAIGate {
         store: EntitlementSnapshotStore,
         coordinator: EntitlementRefreshCoordinator
     ) async -> AIFeatureBlockReason? {
+        var snapshot = store.resolvedSnapshot
         if needsRefreshBeforeGate(resolution: store.resolution) {
-            await coordinator.refreshIfSignedIn(reason: .aiFeatureTap)
+            let refreshResult = await coordinator.refreshIfSignedIn(reason: .aiFeatureTap)
+            snapshot = snapshotAfterRefresh(
+                refreshResult,
+                fallingBackTo: store.resolvedSnapshot
+            )
         }
-        if store.blockReason(for: feature) != nil {
-            await coordinator.refreshIfSignedIn(reason: .aiFeatureTap, force: true)
-            return store.blockReason(for: feature)
+        if snapshot?.blockReason(for: feature) != nil {
+            let refreshResult = await coordinator.refreshIfSignedIn(
+                reason: .aiFeatureTap,
+                force: true
+            )
+            snapshot = snapshotAfterRefresh(
+                refreshResult,
+                fallingBackTo: snapshot ?? store.resolvedSnapshot
+            )
         }
-        return nil
+        return snapshot?.blockReason(for: feature)
     }
 }

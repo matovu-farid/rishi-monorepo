@@ -3,6 +3,62 @@ import Observation
 import ReadiumNavigator
 import ReadiumShared
 
+enum ReadAloudLocalPlaybackPhase: Equatable {
+    case noSession
+    case playing(UUID)
+    case paused(UUID)
+}
+
+/// A room's playback speed is temporary. Readium loads settings for every
+/// utterance, so override reads here without modifying the user's preference.
+private actor SharedSessionTTSSettingsStore: TTSSettingsStore {
+    private let persisted: any TTSSettingsStore
+    private var sharedRate: Double?
+    private var sharedRateFence: SharedRateMutationFence?
+
+    init(persisted: any TTSSettingsStore) {
+        self.persisted = persisted
+    }
+
+    func load(userId: UserID) async -> TTSSettings {
+        let settings = await persisted.load(userId: userId)
+        guard let sharedRate else { return settings }
+        return TTSSettings(voice: settings.voice, model: settings.model, speed: sharedRate)
+    }
+
+    func save(_ settings: TTSSettings, userId: UserID) async {
+        await persisted.save(settings, userId: userId)
+    }
+
+    func save(_ settings: TTSSettings, userId: UserID, lease: any TTSMutationLease) async {
+        await persisted.save(settings, userId: userId, lease: lease)
+    }
+
+    func remove(userId: UserID) async {
+        await persisted.remove(userId: userId)
+    }
+
+    func setSharedRate(_ rate: Double, fence: SharedRateMutationFence) -> Bool {
+        guard canAdvance(to: fence) else { return false }
+        sharedRateFence = fence
+        let changed = sharedRate.map({ abs($0 - rate) >= 0.0001 }) ?? true
+        sharedRate = rate
+        return changed
+    }
+
+    func clearSharedRate(fence: SharedRateMutationFence) -> Bool {
+        guard sharedRateFence?.scopeID == fence.scopeID, canAdvance(to: fence) else { return false }
+        sharedRateFence = fence
+        sharedRate = nil
+        return true
+    }
+
+    private func canAdvance(to fence: SharedRateMutationFence) -> Bool {
+        guard let current = sharedRateFence else { return true }
+        return fence.revision > current.revision
+    }
+}
+
 
 
 
@@ -67,6 +123,7 @@ final class ReadAloudController {
     private let ttsEngine: any TTSPlaying
     private let ttsState: TTSPlaybackState
     private let ttsSettingsStore: any TTSSettingsStore
+    private let sharedSessionSettingsStore: SharedSessionTTSSettingsStore
     private let ttsPrewarmer: TTSPrewarmer
     private let ttsPresence: TTSPresenceController
     private let userId: UserID
@@ -112,6 +169,11 @@ final class ReadAloudController {
     /// or starting a synthesizer after one of its prerequisite awaits returns.
     private var playbackGeneration: UInt64 = 0
     private var playbackSessionToken: UUID?
+    private weak var readerViewModel: ReaderViewModel?
+    private var sharedFollowerResumeAnchor: Locator?
+    private var sharedFollowerAudioRevision: SharedReadingEffectRevision?
+    private var sharedFollowerAudioFence: SharedRateMutationFence?
+    private var sharedRateMutationFence: SharedRateMutationFence?
     private var didNotifyFirstUtterance = false
     private var firstUtteranceGeneration: UInt64?
     var onFirstUtteranceFinished: (@MainActor () -> Void)?
@@ -122,6 +184,24 @@ final class ReadAloudController {
     private var keyboardParagraphNavigationTaskID: UInt64 = 0
     private var playbackTeardownDepth = 0
     private var acceptsReadAloudPositionUpdates = true
+
+    var localPlaybackPhase: ReadAloudLocalPlaybackPhase {
+        guard hasActivePlaybackSession, let playbackSessionToken else { return .noSession }
+        return isActivelySpeaking
+            ? .playing(playbackSessionToken)
+            : .paused(playbackSessionToken)
+    }
+
+    var effectivePlaybackRate: Double { pickerInitial.speed }
+    var currentNarrationLocator: Locator? { sharedFollowerResumeAnchor ?? currentLocator }
+
+    func invalidateSharedFollowerEffects(fence: SharedRateMutationFence) {
+        guard fence.revision > (sharedFollowerAudioFence?.revision ?? 0),
+              fence.revision > (sharedRateMutationFence?.revision ?? 0) else { return }
+        sharedFollowerAudioFence = fence
+        sharedFollowerAudioRevision = nil
+        sharedRateMutationFence = fence
+    }
 
     private var isStoppingPlayback: Bool {
         playbackTeardownDepth > 0
@@ -155,6 +235,7 @@ final class ReadAloudController {
         self.ttsEngine = ttsEngine
         self.ttsState = ttsState
         self.ttsSettingsStore = ttsSettingsStore
+        self.sharedSessionSettingsStore = SharedSessionTTSSettingsStore(persisted: ttsSettingsStore)
         self.ttsPrewarmer = ttsPrewarmer
         self.ttsPresence = ttsPresence
         self.userId = userId
@@ -181,6 +262,8 @@ final class ReadAloudController {
         vm: ReaderViewModel,
         startLocator explicitStartLocator: Locator?
     ) async {
+        readerViewModel = vm
+        sharedFollowerResumeAnchor = nil
         isDisposed = false
         installTypedFailureObserver()
         guard let publication = vm.publication else {
@@ -198,7 +281,7 @@ final class ReadAloudController {
         guard isCurrentPlaybackGeneration(generation) else { return }
         let sessionToken = UUID()
 
-        let settings = await ttsSettingsStore.load(userId: userId)
+        let settings = await sharedSessionSettingsStore.load(userId: userId)
         guard isCurrentPlaybackGeneration(generation) else { return }
         pickerInitial = settings
         let startLocator = await vm.readAloudStartLocator(explicit: explicitStartLocator)
@@ -210,7 +293,7 @@ final class ReadAloudController {
         let engineFactory = makeReadiumEngineFactory(
             player: ttsEngine,
             state: ttsState,
-            settingsStore: ttsSettingsStore,
+            settingsStore: sharedSessionSettingsStore,
             userId: userId,
             sessionToken: sessionToken,
             onUtteranceFinished: { [weak self] in
@@ -590,6 +673,16 @@ final class ReadAloudController {
         guard lease?.isValid ?? true else { return }
         guard isReadiumPlaybackPaused else { return }
 
+        if let sharedFollowerResumeAnchor, let readiumSynthesizer {
+            self.sharedFollowerResumeAnchor = nil
+            currentLocator = sharedFollowerResumeAnchor
+            isReadiumPlaybackPaused = false
+            isPageEntryPrefetchEligible = false
+            ttsState.update(status: .playing)
+            readiumSynthesizer.start(from: sharedFollowerResumeAnchor)
+            return
+        }
+
         await ttsEngine.resume(lease: lease ?? TTSAlwaysValidLease())
         guard lease?.isValid ?? true else { return }
         isReadiumPlaybackPaused = false
@@ -647,6 +740,166 @@ final class ReadAloudController {
             speed: settings.speed
         )
         guard mutationLease.isValid else { return }
+    }
+
+    /// Sets the controller's speed for this reader instance only. A running
+    /// stream keeps its original rate until the caller restarts at the current
+    /// authoritative locator; the return value tells it when that is needed.
+    func applySharedSessionRate(
+        _ rate: Double,
+        fence requestedFence: SharedRateMutationFence? = nil
+    ) async -> Bool {
+        guard rate.isFinite, TTSSettings.speedRange.contains(rate) else { return false }
+        let fence = requestedFence ?? nextSharedRateFence()
+        guard advanceSharedRateFence(to: fence, allowingNewScope: true) else { return false }
+        let changed = abs(pickerInitial.speed - rate) >= 0.0001
+        _ = await sharedSessionSettingsStore.setSharedRate(rate, fence: fence)
+        guard sharedRateMutationFence == fence else { return false }
+        let saved = await ttsSettingsStore.load(userId: userId)
+        guard sharedRateMutationFence == fence else { return false }
+        pickerInitial = TTSSettings(voice: saved.voice, model: saved.model, speed: rate)
+        guard sharedRateMutationFence == fence else { return false }
+        await ttsPresence.updatePlaybackSettings(
+            voice: saved.voice,
+            model: saved.model,
+            speed: rate
+        )
+        return sharedRateMutationFence == fence && changed
+    }
+
+    func updateSharedFollowerResumeAnchor(_ locator: Locator) async {
+        switch localPlaybackPhase {
+        case .playing:
+            return
+        case .noSession:
+            sharedFollowerResumeAnchor = locator
+            await onPersistReadAloudPosition?(locator)
+            return
+        case .paused:
+            break
+        }
+        sharedFollowerResumeAnchor = locator
+        currentLocator = locator
+        await onPersistReadAloudPosition?(locator)
+    }
+
+    @discardableResult
+    func applySharedFollowerAudioReconfiguration(
+        readerViewModel: ReaderViewModel,
+        rate: Double,
+        cursor: Locator?,
+        phase: SharedReadingDesiredPlayback,
+        revision: SharedReadingEffectRevision,
+        rateFence requestedRateFence: SharedRateMutationFence? = nil,
+        restartAt requestedRestartAt: Locator? = nil
+    ) async -> Bool {
+        let rateFence = requestedRateFence ?? SharedRateMutationFence(
+            scopeID: sharedRateMutationFence?.scopeID ?? UUID(),
+            revision: max(revision.generation, (sharedRateMutationFence?.revision ?? 0) + 1)
+        )
+        guard rateFence.revision > (sharedFollowerAudioFence?.revision ?? 0) else { return false }
+        sharedFollowerAudioFence = rateFence
+        sharedFollowerAudioRevision = revision
+
+        let rateChanged = await applySharedSessionRate(rate, fence: rateFence)
+        guard sharedFollowerAudioFence == rateFence,
+              sharedFollowerAudioRevision == revision,
+              sharedRateMutationFence == rateFence else { return false }
+
+        switch phase {
+        case .paused:
+            if case .playing = localPlaybackPhase { await pause() }
+            guard sharedFollowerAudioFence == rateFence,
+                  sharedFollowerAudioRevision == revision,
+                  sharedRateMutationFence == rateFence else { return false }
+            if let target = cursor ?? (rateChanged ? currentLocator : nil) {
+                await updateSharedFollowerResumeAnchor(target)
+                guard sharedFollowerAudioFence == rateFence,
+                      sharedFollowerAudioRevision == revision,
+                      sharedRateMutationFence == rateFence else { return false }
+            }
+        case .playing:
+            let target = cursor ?? currentLocator
+            if case .paused = localPlaybackPhase, let target,
+               sharedFollowerResumeAnchor == nil || narrationCursorNeedsRealignment(to: target) {
+                await updateSharedFollowerResumeAnchor(target)
+                guard sharedFollowerAudioFence == rateFence,
+                      sharedFollowerAudioRevision == revision,
+                      sharedRateMutationFence == rateFence else { return false }
+            }
+            let restartAt = requestedRestartAt
+                ?? ((rateChanged || (target.map(narrationCursorNeedsRealignment(to:)) ?? false)) ? target : nil)
+            if let restartAt, let readiumSynthesizer, hasActivePlaybackSession {
+                sharedFollowerResumeAnchor = nil
+                currentLocator = restartAt
+                readiumSynthesizer.start(from: restartAt)
+            } else if case .paused = localPlaybackPhase {
+                await resume()
+                guard sharedFollowerAudioFence == rateFence,
+                      sharedFollowerAudioRevision == revision,
+                      sharedRateMutationFence == rateFence else { return false }
+            } else if case .noSession = localPlaybackPhase {
+                // Shared followers can create this controller before any local
+                // playback has supplied its reader model. Start from the model
+                // owned by the destination that is applying this progress.
+                await startReader(vm: readerViewModel, startLocator: target)
+                guard sharedFollowerAudioRevision == revision,
+                      sharedRateMutationFence == rateFence else { return false }
+            }
+        }
+        return sharedFollowerAudioFence == rateFence
+            && sharedFollowerAudioRevision == revision
+            && sharedRateMutationFence == rateFence
+    }
+
+    private func narrationCursorNeedsRealignment(to target: Locator) -> Bool {
+        guard let currentLocator else { return true }
+        return target.href != currentLocator.href
+            || target.locations.page != currentLocator.locations.page
+            || abs((target.locations.progression ?? 0) - (currentLocator.locations.progression ?? 0)) > 0.08
+    }
+
+    /// Restores local settings when the follower leaves the room. This never
+    /// writes the room's speed to the persisted settings store.
+    func clearSharedSessionRate(fence requestedFence: SharedRateMutationFence? = nil) async {
+        let fence = requestedFence ?? nextSharedRateFence()
+        guard advanceSharedRateFence(to: fence, allowingNewScope: false) else { return }
+        guard await sharedSessionSettingsStore.clearSharedRate(fence: fence),
+              sharedRateMutationFence == fence else { return }
+        let settings = await ttsSettingsStore.load(userId: userId)
+        guard sharedRateMutationFence == fence else { return }
+        pickerInitial = settings
+        guard sharedRateMutationFence == fence else { return }
+        await ttsPresence.updatePlaybackSettings(
+            voice: settings.voice,
+            model: settings.model,
+            speed: settings.speed
+        )
+    }
+
+    private func nextSharedRateFence() -> SharedRateMutationFence {
+        SharedRateMutationFence(
+            scopeID: sharedRateMutationFence?.scopeID ?? UUID(),
+            revision: (sharedRateMutationFence?.revision ?? 0) + 1
+        )
+    }
+
+    private func advanceSharedRateFence(
+        to fence: SharedRateMutationFence,
+        allowingNewScope: Bool
+    ) -> Bool {
+        guard let current = sharedRateMutationFence else {
+            sharedRateMutationFence = fence
+            return true
+        }
+        if current.scopeID != fence.scopeID {
+            guard allowingNewScope, fence.revision > current.revision else { return false }
+            sharedRateMutationFence = fence
+            return true
+        }
+        guard fence.revision > current.revision else { return false }
+        sharedRateMutationFence = fence
+        return true
     }
 
     /// Applies a speed selected by a system media surface. Keep this guard in
@@ -720,7 +973,7 @@ final class ReadAloudController {
             state: ttsState,
             tracker: tracker,
             prewarmer: ttsPrewarmer,
-            settingsStore: ttsSettingsStore,
+            settingsStore: sharedSessionSettingsStore,
             userId: userId,
             coordinator: coordinator,
             onPassageChange: onPassageChange,
@@ -733,7 +986,7 @@ final class ReadAloudController {
         hasStartedReadAloudSession = true
         self.paragraphs = paragraphs
         currentParagraph = nil
-        pickerInitial = await ttsSettingsStore.load(userId: userId)
+        pickerInitial = await sharedSessionSettingsStore.load(userId: userId)
         guard isCurrentPlaybackGeneration(generation), bridge === newBridge else { return }
         await ttsPresence.beginSession(
             bookID: bookID,
@@ -789,7 +1042,7 @@ final class ReadAloudController {
               !paragraph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
 
-        let settings = await ttsSettingsStore.load(userId: userId)
+        let settings = await sharedSessionSettingsStore.load(userId: userId)
         guard canPrefetchPageEntry else { return }
 
         let pieces = ParagraphChunker.chunkForTTS(

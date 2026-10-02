@@ -14,6 +14,7 @@ struct SharedReadingReconnectTests {
     func classifiesTerminalErrors() {
         #expect(SharedReadingReconnectDecision.forError(.sessionEnded) == .stop(.sessionEnded))
         #expect(SharedReadingReconnectDecision.forError(.removedFromSession) == .stop(.removedFromSession))
+        #expect(SharedReadingReconnectDecision.forError(.accountDeleted) == .stop(.accountDeleted))
     }
 
     @Test("terminal signaling events await coordinator authority validation")

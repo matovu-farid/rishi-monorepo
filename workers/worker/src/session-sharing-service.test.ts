@@ -169,7 +169,7 @@ describe("session-sharing-service", () => {
       { internalTokenSecret: "shared-secret", internalPathPrefix: "/v2/internal", now: () => 1_000 },
     );
 
-    await expect(service.purgeAppleRoom({ sessionId: "session-123" })).resolves.toBeUndefined();
+    await expect(service.purgeAppleRoom({ sessionId: "session-123" })).resolves.toEqual({ ok: true });
   });
 
   it("exposes a stable error class for local transport failures", async () => {
@@ -188,5 +188,38 @@ describe("session-sharing-service", () => {
     await expect(
       service.getRoomStatus({ sessionId: "session-123" }),
     ).rejects.toBeInstanceOf(SessionSharingServiceError);
+  });
+
+  it.each(["ended", "removed", "not_found"] as const)("[W4-SERVICE] signs account revocation and preserves %s", async (status) => {
+    const service = new SessionSharingService({ fetch: async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      const body = JSON.parse(String(init?.body));
+      expect(path).toBe("/v2/internal/rooms/room%2F1");
+      expect(body).toEqual({ action: "revokeAccountReferences", payload: {
+        accountUserId: "account", deletionOperationId: "operation",
+      } });
+      const token = new Headers(init?.headers).get("x-rishi-internal-token")!;
+      expect(JSON.parse(decodeBase64Url(token.split(".")[1]!))).toEqual({ method: "POST", path, body, exp: 61000 });
+      expect(token).toBe(await signInternalToken("secret", { method: "POST", path, body, exp: 61000 }));
+      return Response.json({ ok: true, status });
+    } }, { internalTokenSecret: "secret", internalPathPrefix: "/v2/internal", now: () => 1000 });
+    await expect(service.revokeAccountReferences({ sessionId: "room/1", accountUserId: "account", deletionOperationId: "operation" }))
+      .resolves.toEqual({ ok: true, status });
+  });
+
+  it.each([
+    [404, "SESSION_NOT_FOUND", "SESSION_NOT_FOUND"],
+    [409, "CONFLICT", "CONFLICT"],
+    [503, "SESSION_NOT_FOUND", "SERVICE_UNAVAILABLE"],
+  ])("[W4-SERVICE-ERROR] distinguishes HTTP %s %s", async (status, code, expected) => {
+    const service = new SessionSharingService({ fetch: async () => Response.json({ code }, { status: Number(status) }) }, { internalTokenSecret: "secret" });
+    await expect(service.revokeAccountReferences({ sessionId: "room", accountUserId: "account", deletionOperationId: "operation" }))
+      .rejects.toMatchObject({ code: expected, status });
+  });
+
+  it.each([null, { ok: true }, { ok: true, status: "unknown" }])("[W4-SERVICE-ACK] rejects invalid revocation acknowledgement %j", async (body) => {
+    const service = new SessionSharingService({ fetch: async () => Response.json(body) }, { internalTokenSecret: "secret" });
+    await expect(service.revokeAccountReferences({ sessionId: "room", accountUserId: "account", deletionOperationId: "operation" }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 });

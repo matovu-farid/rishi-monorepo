@@ -17,6 +17,7 @@ public enum SharedReadingDiagnosticEvent: String, Sendable {
     case recovery = "sharing.recovery"
     case registry = "sharing.registry"
     case sessionLifecycle = "sharing.session.lifecycle"
+    case bookPackageRedeem = "sharing.book_package.pending_redeem"
     case errorMapping = "sharing.error.mapping"
 }
 
@@ -25,7 +26,7 @@ public enum SharedReadingDiagnosticEvent: String, Sendable {
 /// remaining fields are bounded protocol metadata rather than user content.
 public struct SharedReadingDiagnosticContext: Sendable {
     public enum Outcome: String, Sendable {
-        case started, completed, accepted, rejected, retrying, connected, disconnected, failed, skipped, ready
+        case started, completed, finished, accepted, rejected, retrying, connected, disconnected, failed, skipped, ready
     }
 
     public enum Operation: String, Sendable {
@@ -46,7 +47,13 @@ public struct SharedReadingDiagnosticContext: Sendable {
     public let controllerGeneration: Int?
     public let connectionGeneration: Int?
     public let sequence: Int64?
+    public let importedCount: Int?
+    public let discardedCount: Int?
+    public let alreadyUsedCount: Int?
     public let errorCode: String?
+    public let diagnostic: String?
+    public let stage: String?
+    public let localSocketCode: Int?
 
     public init(
         operation: Operation? = nil,
@@ -62,7 +69,13 @@ public struct SharedReadingDiagnosticContext: Sendable {
         controllerGeneration: Int? = nil,
         connectionGeneration: Int? = nil,
         sequence: Int64? = nil,
-        errorCode: String? = nil
+        importedCount: Int? = nil,
+        discardedCount: Int? = nil,
+        alreadyUsedCount: Int? = nil,
+        errorCode: String? = nil,
+        diagnostic: String? = nil,
+        stage: String? = nil,
+        localSocketCode: Int? = nil
     ) {
         self.operation = operation
         self.outcome = outcome
@@ -77,7 +90,13 @@ public struct SharedReadingDiagnosticContext: Sendable {
         self.controllerGeneration = controllerGeneration
         self.connectionGeneration = connectionGeneration
         self.sequence = sequence
+        self.importedCount = importedCount
+        self.discardedCount = discardedCount
+        self.alreadyUsedCount = alreadyUsedCount
         self.errorCode = Self.safeErrorCode(errorCode)
+        self.diagnostic = Self.safeDiagnostic(diagnostic)
+        self.stage = Self.safeDiagnostic(stage)
+        self.localSocketCode = localSocketCode
     }
 
     fileprivate var fields: [String: String] {
@@ -98,7 +117,13 @@ public struct SharedReadingDiagnosticContext: Sendable {
         if let controllerGeneration { fields["controller_generation"] = String(max(0, controllerGeneration)) }
         if let connectionGeneration { fields["connection_generation"] = String(max(0, connectionGeneration)) }
         if let sequence { fields["sequence"] = String(max(0, sequence)) }
+        if let importedCount { fields["imported_count"] = String(max(0, importedCount)) }
+        if let discardedCount { fields["discarded_count"] = String(max(0, discardedCount)) }
+        if let alreadyUsedCount { fields["already_used_count"] = String(max(0, alreadyUsedCount)) }
         if let errorCode { fields["error_code"] = errorCode }
+        if let diagnostic { fields["diagnostic"] = diagnostic }
+        if let stage { fields["stage"] = stage }
+        if let localSocketCode { fields["local_socket_code"] = String(localSocketCode) }
         return fields
     }
 
@@ -113,6 +138,14 @@ public struct SharedReadingDiagnosticContext: Sendable {
         guard let value,
               value.count <= 64,
               value.allSatisfy({ $0.isUppercase || $0.isNumber || $0 == "_" }) else { return nil }
+        return value
+    }
+
+    private static func safeDiagnostic(_ value: String?) -> String? {
+        guard let value, !value.isEmpty, value.utf8.count <= 120,
+              value.unicodeScalars.allSatisfy({ scalar in
+                  CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-").contains(scalar)
+              }) else { return nil }
         return value
     }
 }

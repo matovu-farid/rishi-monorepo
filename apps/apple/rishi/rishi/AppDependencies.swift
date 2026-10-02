@@ -37,7 +37,8 @@ final class AppDependencies {
     private var bootstrapTask: Task<Void, Never>?
     private var identityRequestToken: UInt64 = 0
     var pendingAccountChange: AccountChangeTransaction?
-    private var synchronousAccountTransitionFence: (@MainActor () -> Void)?
+    private var synchronousAccountTransitionFences: [UUID: @MainActor () -> Void] = [:]
+    private var postSharedReadingDrainHandlers: [UUID: @MainActor (UUID) async -> Void] = [:]
     private var carPlayAccountChangeObservers: [UUID: (CarPlayAccountSnapshot?) -> Void] = [:]
 
     nonisolated private static let signposter = OSSignposter(
@@ -115,14 +116,21 @@ final class AppDependencies {
     /// Invalidates identity work synchronously, then begins the owner drain.
     /// The returned transaction is safe to await from a later Task.
     func beginAccountChange() throws -> AccountChangeTransaction {
-        synchronousAccountTransitionFence?()
+        for fence in synchronousAccountTransitionFences.values { fence() }
         identityRequestToken &+= 1
         incrementAccountGeneration()
         let services = services
+        let postSharedReadingDrainHandlers = self.postSharedReadingDrainHandlers
         let drain = Task { @MainActor in
             guard let services else { return }
             if let outgoingAccount = self.userIdBox.value {
                 await services.sharedReadingSessionRegistry.drain(accountID: outgoingAccount)
+                // The registry has completed local close and its bounded
+                // remote leave window. Only now may UI routers release their
+                // detached live contexts and memory-only invitations.
+                for handler in postSharedReadingDrainHandlers.values {
+                    await handler(outgoingAccount)
+                }
             }
             await services.audio.playbackOwner.stopForAccountChange()
         }
@@ -134,10 +142,32 @@ final class AppDependencies {
         return transaction
     }
 
+    @discardableResult
     func installSynchronousAccountTransitionFence(
         _ fence: @escaping @MainActor () -> Void
-    ) {
-        synchronousAccountTransitionFence = fence
+    ) -> UUID {
+        let token = UUID()
+        synchronousAccountTransitionFences[token] = fence
+        return token
+    }
+
+    func removeSynchronousAccountTransitionFence(_ token: UUID) {
+        synchronousAccountTransitionFences.removeValue(forKey: token)
+    }
+
+    /// Registers account-scoped UI cleanup that must happen after, never
+    /// before, the shared-reading registry's two-phase drain.
+    @discardableResult
+    func installPostSharedReadingDrainHandler(
+        _ handler: @escaping @MainActor (UUID) async -> Void
+    ) -> UUID {
+        let token = UUID()
+        postSharedReadingDrainHandlers[token] = handler
+        return token
+    }
+
+    func removePostSharedReadingDrainHandler(_ token: UUID) {
+        postSharedReadingDrainHandlers.removeValue(forKey: token)
     }
 
     func invalidateIdentityRequests() {

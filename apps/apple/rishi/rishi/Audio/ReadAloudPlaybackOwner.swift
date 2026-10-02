@@ -62,6 +62,29 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
     private(set) var generation: UInt64 = 0
     private let lifecycleQueue = PlaybackLifecycleQueue()
     private var remotePlaybackSession: RemotePlaybackSessionCapability?
+    private var sharedFollowerHost: UUID?
+    /// Unlike activeHost, this survives a scene release while its audio is
+    /// still running, so another reader cannot inherit the follower gate.
+    private var playbackHost: UUID?
+
+    /// System media and watch commands must not turn a follower into a local
+    /// controller. The host fence keeps another reader window unaffected.
+    func setSharedSessionFollower(_ isFollowing: Bool, host: UUID) {
+        if isFollowing {
+            sharedFollowerHost = host
+        } else if sharedFollowerHost == host {
+            sharedFollowerHost = nil
+        }
+        synchronizeRemoteCommandPolicy()
+    }
+
+    private var remoteCommandsBlocked: Bool {
+        sharedFollowerHost != nil && playbackHost == sharedFollowerHost
+    }
+
+    private func synchronizeRemoteCommandPolicy() {
+        nowPlayingController.setRemoteCommandsEnabled(!remoteCommandsBlocked)
+    }
 
     var hasActivePlaybackSession: Bool {
         guard let controller = activeController else { return false }
@@ -116,6 +139,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         }
         activeController = controller
         activeHost = host
+        playbackHost = host
+        synchronizeRemoteCommandPolicy()
         activeReader = nil
         watchBookTitle = nil
         generation &+= 1
@@ -130,15 +155,33 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         host: UUID,
         from startLocator: Locator? = nil
     ) async -> Bool {
+        let result = await startWithGeneration(
+            controller: controller,
+            reader: reader,
+            host: host,
+            from: startLocator
+        )
+        return result.started
+    }
+
+    /// Returns the generation installed by this exact start. Shared-reading
+    /// cleanup uses it to avoid stopping a newer request on the same host.
+    func startWithGeneration(
+        controller: ReadAloudController,
+        reader: ReaderViewModel,
+        host: UUID,
+        from startLocator: Locator? = nil
+    ) async -> (started: Bool, generation: UInt64?) {
         remotePlaybackSession?.revoke()
         return await lifecycleQueue.enqueue { [weak self] in
-            guard let self else { return false }
-            return await self.startInternal(
+            guard let self else { return (false, nil) }
+            let started = await self.startInternal(
                 controller: controller,
                 reader: reader,
                 host: host,
                 from: startLocator
             )
+            return (started, started ? self.generation : nil)
         }
     }
 
@@ -151,6 +194,7 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         let previousController = activeController
         let previousReader = activeReader
         let previousHost = activeHost
+        let previousPlaybackHost = playbackHost
         let previousBookTitle = watchBookTitle
         startGeneration &+= 1
         let requestGeneration = startGeneration
@@ -158,6 +202,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         activeController = controller
         activeReader = reader
         activeHost = host
+        playbackHost = host
+        synchronizeRemoteCommandPolicy()
         watchBookTitle = reader.book.title
         generation &+= 1
         remotePlaybackSession = RemotePlaybackSessionCapability(
@@ -186,6 +232,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             activeController = previousController
             activeReader = previousReader
             activeHost = previousHost
+            playbackHost = previousPlaybackHost
+            synchronizeRemoteCommandPolicy()
             watchBookTitle = previousBookTitle
             remotePlaybackSession = previousController.map {
                 _ in RemotePlaybackSessionCapability(
@@ -214,12 +262,25 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             // session may still be intentionally playing while the phone is
             // locked or while CarPlay reconnects.
             self.activeHost = nil
+            self.synchronizeRemoteCommandPolicy()
         }
     }
 
     func stop(host: UUID) async {
         await lifecycleQueue.enqueue { [weak self] in
             guard let self, self.activeHost == host else { return }
+            await self.stopAndClear()
+            self.generation &+= 1
+        }
+    }
+
+    /// Atomically checks ownership inside the lifecycle queue. A stale shared
+    /// reader start must not stop playback installed by a newer generation.
+    func stop(host: UUID, ifGeneration expectedGeneration: UInt64) async {
+        await lifecycleQueue.enqueue { [weak self] in
+            guard let self,
+                  self.activeHost == host,
+                  self.generation == expectedGeneration else { return }
             await self.stopAndClear()
             self.generation &+= 1
         }
@@ -247,6 +308,7 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             defer { lease?.finish() }
             guard let self else { return .failure(.revoked) }
             guard self.generation == expectedGeneration else { return .failure(.staleGeneration) }
+            guard !self.remoteCommandsBlocked else { return .failure(.revoked) }
             guard let controller = self.activeController else { return .failure(.noActivePlayback) }
             guard self.remotePlaybackSession?.isValid == true,
                   lease?.isValid ?? true,
@@ -281,6 +343,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         guard let activeController else {
             activeReader = nil
             activeHost = nil
+            playbackHost = nil
+            synchronizeRemoteCommandPolicy()
             watchBookTitle = nil
             return
         }
@@ -293,6 +357,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         self.activeController = nil
         activeReader = nil
         activeHost = nil
+        playbackHost = nil
+        synchronizeRemoteCommandPolicy()
         watchBookTitle = nil
     }
 }

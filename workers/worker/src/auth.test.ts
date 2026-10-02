@@ -181,6 +181,7 @@ describe("createAuth: Better Auth Apple social provider", () => {
     expect(apple).toBeDefined();
   });
 
+
   it("apple idToken happy path: POST /api/auth/sign-in/social returns 200 with token+user", async () => {
     const env = await makeEnv(fixture);
     const auth = await createAuth(env);

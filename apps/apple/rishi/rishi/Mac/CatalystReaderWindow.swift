@@ -66,13 +66,16 @@ struct CatalystReaderWindow: View {
                let user = signedInUser,
                user.id == input.id.userID {
                 NavigationStack {
+                    let sharedContext = coordinator.sharedContext(for: input)
                     ReaderDestinationView(
                         route: input.route,
                         hint: nil,
                         onRequestPaywall: subscriptionState.handlePaywallRequest,
                         pdfViewMode: $presentation.requestedMode,
-                        readerWindowCloseHandle: closeHandle
+                        readerWindowCloseHandle: closeHandle,
+                        sharedReadingContext: sharedContext
                     )
+                    .id(coordinator.sharedRouteID(for: input))
                 }
                 .rishiSubscriptionPresentation(isPresented: $subscriptions.isPresented, onDismiss: {
                     Task { @MainActor in

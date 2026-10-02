@@ -45,7 +45,17 @@ app.use("/v2/*", async (c, next) => {
       c.header("X-Rishi-Error-Code", (body as { code: string }).code);
       c.header("X-Rishi-Error-Stage", c.req.path.includes("/turn") ? "turn.credentials" : "internal.room-command");
     }
-    const correlated = body && typeof body === "object" && !Array.isArray(body)
+    // `{ ok: true }` is the internal RPC's explicit missing-result sentinel.
+    // Keep its exact shape for the API Worker contract; the correlation ID is
+    // already present in the response header. Decorating this ack made callers
+    // treat it as a successful domain object (e.g. a room status with no
+    // `status`) and return malformed HTTP 200 responses.
+    const isBareSuccessAck = body !== null
+      && typeof body === "object"
+      && !Array.isArray(body)
+      && (body as { ok?: unknown }).ok === true
+      && Object.keys(body).length === 1;
+    const correlated = body && typeof body === "object" && !Array.isArray(body) && !isBareSuccessAck
       ? { ...body, correlationId: requestCorrelationId }
       : body;
     return json(correlated, status as any, headers as any);
@@ -54,7 +64,7 @@ app.use("/v2/*", async (c, next) => {
 });
 
 const SAFE_DIAGNOSTIC_CODES = new Set([
-  "ACCOUNT_DELETED", "ADMISSION_TICKET_EXPIRED", "ADMISSION_TICKET_MISMATCH", "ADMISSION_TICKET_STALE", "AUTH_REQUIRED",
+  "ACCOUNT_DELETED", "ACCOUNT_DELETION_IN_PROGRESS", "ADMISSION_TICKET_EXPIRED", "ADMISSION_TICKET_MISMATCH", "ADMISSION_TICKET_STALE", "AUTH_REQUIRED",
   "ADMISSION_REQUIRED", "FORBIDDEN", "INVALID_ADMISSION", "MALFORMED_WEBSOCKET_REQUEST", "ROOM_FULL",
   "INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "SESSION_ENDED", "SESSION_NOT_FOUND", "TURN_UNAVAILABLE", "WEBSOCKET_UPGRADE_REQUIRED",
 ]);

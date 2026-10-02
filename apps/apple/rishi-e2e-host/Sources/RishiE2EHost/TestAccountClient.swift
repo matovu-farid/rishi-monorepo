@@ -273,11 +273,10 @@ public struct TestAccountClient: TestAccountManaging, Sendable {
             let response = try await transport.send(request)
             lastStatusCode = response.statusCode
             if (200..<300).contains(response.statusCode) || response.statusCode == 404 { return }
-            // The production cleanup route can briefly surface a Worker or
-            // ledger 5xx while the preceding account operation settles. A
-            // bounded retry keeps teardown reliable without retrying a
-            // deterministic client/configuration failure.
-            if (response.statusCode == 502 || response.statusCode == 503 || response.statusCode == 504), attempt < 2 {
+            // The deletion workflow can report a retryable conflict while
+            // another cleanup lease is active, or a transient Worker/ledger
+            // 5xx while the preceding account operation settles.
+            if [409, 502, 503, 504].contains(response.statusCode), attempt < 2 {
                 try await Task.sleep(for: .seconds(5))
                 continue
             }

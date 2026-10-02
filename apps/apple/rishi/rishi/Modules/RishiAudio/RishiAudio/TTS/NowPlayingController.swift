@@ -34,6 +34,8 @@ public final class NowPlayingController {
     private var lastStatus: TTSStatus?
     private var playbackRate = 1.0
     private var supportedPlaybackRates = TTSSettings.speedPresets
+    private var remoteCommandsEnabled = true
+    private var remoteCommandGeneration: UInt64 = 0
 
     public init(
         infoSurface: any NowPlayingInfoSurface,
@@ -51,18 +53,35 @@ public final class NowPlayingController {
         guard self.state == nil, self.controller == nil, observationTask == nil else { return }
         self.state = state
         self.controller = controller
+        remoteCommandGeneration &+= 1
         lastStatus = nil
         playbackRate = metadata.playbackRate
         supportedPlaybackRates = metadata.supportedPlaybackRates
         infoSurface.setMetadata(metadata)
-        installRemoteHandlers(for: controller)
+        if remoteCommandsEnabled {
+            installRemoteHandlers(for: controller)
+        }
         startObserving(state: state)
+    }
+
+    /// A shared-session follower may play local narration, but only the room
+    /// controller may change its state. Remove system command handlers while
+    /// following and fence tasks accepted immediately before the role change.
+    public func setRemoteCommandsEnabled(_ enabled: Bool) {
+        guard remoteCommandsEnabled != enabled else { return }
+        remoteCommandsEnabled = enabled
+        remoteCommandGeneration &+= 1
+        commandSurface.unregister()
+        if enabled, let controller {
+            installRemoteHandlers(for: controller)
+        }
     }
 
     public func detach() {
         guard state != nil || controller != nil || observationTask != nil else { return }
         observationTask?.cancel()
         observationTask = nil
+        remoteCommandGeneration &+= 1
         commandSurface.unregister()
         infoSurface.clear()
         state = nil
@@ -70,6 +89,7 @@ public final class NowPlayingController {
     }
 
     private func installRemoteHandlers(for controller: any TTSPlaybackControlling) {
+        let commandGeneration = remoteCommandGeneration
         // Strong capture is intentional: `TTSPlaybackControlling` is not
         // class-bound (TTSEngine is an `actor`, which cannot be `weak`),
         // and the controller's lifetime is bounded by the session —
@@ -78,44 +98,74 @@ public final class NowPlayingController {
         let handlers = RemoteCommandHandlers(
             // KEEP: MPRemoteCommandCenter handler hops into the TTSPlaybackControlling
             // actor (TTSEngine is an actor). Outer Task chains the await; no main work.
-            onPlay: {
-                Task { await controller.resume() }
+            onPlay: { [weak self] in
+                guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                Task { @MainActor [weak self] in
+                    guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                    await controller.resume()
+                }
             },
             // KEEP: same pattern as onPlay — actor hop only.
-            onPause: {
-                Task { await controller.pause() }
+            onPause: { [weak self] in
+                guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                Task { @MainActor [weak self] in
+                    guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                    await controller.pause()
+                }
             },
             onTogglePlayPause: { [weak self] in
-                let isPlaying = self?.state?.status == .playing
+                guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
                 // KEEP: actor hop only (controller is the TTSEngine actor).
-                Task {
-                    if isPlaying {
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.canExecuteRemoteCommand(generation: commandGeneration) else { return }
+                    if self.state?.status == .playing {
                         await controller.pause()
                     } else {
                         await controller.resume()
                     }
                 }
             },
-            onPreviousTrack: {
-                Task { await controller.previousTrack() }
+            onPreviousTrack: { [weak self] in
+                guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                Task { @MainActor [weak self] in
+                    guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                    await controller.previousTrack()
+                }
             },
-            onNextTrack: {
-                Task { await controller.nextTrack() }
+            onNextTrack: { [weak self] in
+                guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                Task { @MainActor [weak self] in
+                    guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                    await controller.nextTrack()
+                }
             },
-            onStop: {
-                Task { await controller.stop() }
+            onStop: { [weak self] in
+                guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                Task { @MainActor [weak self] in
+                    guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                    await controller.stop()
+                }
             },
             onChangePlaybackRate: { [weak self] rate in
                 guard let self,
+                      self.canExecuteRemoteCommand(generation: commandGeneration),
                       self.supportedPlaybackRates.contains(where: { abs($0 - rate) < 0.0001 })
                 else { return .commandFailed }
                 self.playbackRate = rate
                 self.infoSurface.setPlaybackRate(self.lastStatus == .playing ? rate : 0.0)
-                Task { await controller.changePlaybackRate(to: rate) }
+                Task { @MainActor [weak self] in
+                    guard self?.canExecuteRemoteCommand(generation: commandGeneration) == true else { return }
+                    await controller.changePlaybackRate(to: rate)
+                }
                 return .success
             }
         )
         commandSurface.register(handlers: handlers)
+    }
+
+    private func canExecuteRemoteCommand(generation: UInt64) -> Bool {
+        remoteCommandsEnabled && remoteCommandGeneration == generation && controller != nil
     }
 
     /// Lightweight 50ms poll of the @MainActor @Observable state. Cheaper

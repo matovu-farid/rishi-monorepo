@@ -315,6 +315,18 @@ struct SharedReadingRecoveredSessionReadiness: Sendable, Equatable {
 
     var isReady: Bool { hasState && hasRoster && hasExplicitProgressResult }
 
+    /// Stable, privacy-safe summary of which authoritative handshake evidence
+    /// has not arrived yet. Used only for bounded local diagnostics; it never
+    /// includes reader position, participant identity, or session content.
+    var missingEvidenceDiagnostic: String {
+        let missing = [
+            hasState ? nil : "state",
+            hasRoster ? nil : "roster",
+            hasExplicitProgressResult ? nil : "progress",
+        ].compactMap { $0 }
+        return missing.isEmpty ? "none" : "missing_" + missing.joined(separator: "_")
+    }
+
     mutating func begin(roomEpoch: SharedReadingRoomEpoch) {
         self.roomEpoch = roomEpoch
         hasState = false

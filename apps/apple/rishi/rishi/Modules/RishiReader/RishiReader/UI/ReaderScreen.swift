@@ -24,6 +24,52 @@ private enum EPUBMacCommandNotification {
     static let addBookmark = Notification.Name("RishiCommand.addBookmark")
 }
 
+public struct SharedReaderNavigationRequest: Equatable, Sendable {
+    public let revision: UInt64
+    public let position: String
+
+    public init(revision: UInt64, position: String) {
+        self.revision = revision
+        self.position = position
+    }
+}
+
+public struct SharedReaderNavigationResult {
+    public enum Outcome: Equatable {
+        case accepted
+        case failed(String)
+    }
+
+    public let revision: UInt64
+    public let outcome: Outcome
+    /// A snapshot of the navigator observation when the command completed.
+    /// Acceptance alone does not mean this locator matches the request.
+    public let observedLocator: Locator?
+
+    public init(revision: UInt64, outcome: Outcome, observedLocator: Locator?) {
+        self.revision = revision
+        self.outcome = outcome
+        self.observedLocator = observedLocator
+    }
+}
+
+/// Keeps SwiftUI from propagating high-frequency shared-reader updates into
+/// the system-hosted More menu while it is presented. The menu is immutable
+/// for a given session; its actions read the live reader/session references
+/// when invoked.
+private struct StableSharedReaderMenu<Content: View>: View, Equatable {
+    let sessionID: String
+    let isSharedFollower: Bool
+    let content: Content
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.sessionID == rhs.sessionID
+            && lhs.isSharedFollower == rhs.isSharedFollower
+    }
+
+    var body: some View { content }
+}
+
 
 @MainActor
 public struct ReaderScreen: View {
@@ -57,6 +103,9 @@ public struct ReaderScreen: View {
 
     private let onReadAloud: (() -> Void)?
     private let onReadAloudFrom: ((Locator) -> Void)?
+    private let onCopyShareLink: (() -> Void)?
+    private let sharedReadingMoreMenuContent: AnyView?
+    private let sharedReadingSessionID: String?
     private let onFirstContentReady: @MainActor () async -> Void
     private let onLoadFailed: @MainActor () async -> Void
 
@@ -67,7 +116,9 @@ public struct ReaderScreen: View {
 
     private let readAloudParagraph: String?
     private let readAloudLocator: Locator?
-    private let sharedPositionJSONString: String?
+    private let sharedNavigationRequest: SharedReaderNavigationRequest?
+    private let isSharedFollower: Bool
+    private let onSharedNavigationResult: ((SharedReaderNavigationResult) -> Void)?
     private let reservedPlayerHeight: CGFloat
     private let pdfViewMode: PDFViewModeSetting
     private let pdfViewModeBinding: Binding<PDFViewModeSetting>?
@@ -78,6 +129,9 @@ public struct ReaderScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var chrome: ReaderChromeController
+    @State private var sharedNavigationTask: Task<Void, Never>?
+    @State private var sharedQueuedNavigationRequest: SharedReaderNavigationRequest?
+    @State private var sharedNavigationWorkerGeneration = UUID()
 
     static let readerChromeInitialAutoHideDelay: Duration = .seconds(15)
     static let readerChromeAutoHideDelay: Duration = .seconds(4)
@@ -150,12 +204,17 @@ public struct ReaderScreen: View {
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         onReadAloudFrom: ((Locator) -> Void)? = nil,
+        onCopyShareLink: (() -> Void)? = nil,
+        sharedReadingMoreMenuContent: AnyView? = nil,
         onFirstContentReady: @escaping @MainActor () async -> Void = {},
         onLoadFailed: @escaping @MainActor () async -> Void = {},
         voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil,
         readAloudLocator: Locator? = nil,
-        sharedPositionJSONString: String? = nil,
+        sharedNavigationRequest: SharedReaderNavigationRequest? = nil,
+        sharedReadingSessionID: String? = nil,
+        isSharedFollower: Bool = false,
+        onSharedNavigationResult: ((SharedReaderNavigationResult) -> Void)? = nil,
         reservedPlayerHeight: CGFloat = 0,
         pdfViewMode: PDFViewModeSetting = .continuous,
         pdfViewModeBinding: Binding<PDFViewModeSetting>? = nil,
@@ -169,12 +228,17 @@ public struct ReaderScreen: View {
         self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloudFrom = onReadAloudFrom
         self.onReadAloud = onReadAloud
+        self.onCopyShareLink = onCopyShareLink
+        self.sharedReadingMoreMenuContent = sharedReadingMoreMenuContent
         self.onFirstContentReady = onFirstContentReady
         self.onLoadFailed = onLoadFailed
         self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
         self.readAloudLocator = readAloudLocator
-        self.sharedPositionJSONString = sharedPositionJSONString
+        self.sharedNavigationRequest = sharedNavigationRequest
+        self.sharedReadingSessionID = sharedReadingSessionID
+        self.isSharedFollower = isSharedFollower
+        self.onSharedNavigationResult = onSharedNavigationResult
         self.reservedPlayerHeight = max(0, reservedPlayerHeight)
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
@@ -346,8 +410,21 @@ public struct ReaderScreen: View {
             applySharedPosition()
         }
 
-        .onChange(of: sharedPositionJSONString) { _, _ in
+        .onChange(of: sharedNavigationRequest) { _, _ in
             applySharedPosition()
+        }
+        .onChange(of: isSharedFollower) { _, isFollower in
+            guard !isFollower else { return }
+            sharedNavigationWorkerGeneration = UUID()
+            sharedNavigationTask?.cancel()
+            sharedNavigationTask = nil
+            sharedQueuedNavigationRequest = nil
+        }
+        .onDisappear {
+            sharedNavigationWorkerGeneration = UUID()
+            sharedNavigationTask?.cancel()
+            sharedNavigationTask = nil
+            sharedQueuedNavigationRequest = nil
         }
 
         .onReceive(
@@ -419,7 +496,9 @@ public struct ReaderScreen: View {
         #if !os(macOS) && !targetEnvironment(macCatalyst)
 
             .toolbar {
-                trailingToolbarContent
+                ToolbarItem(placement: .topBarTrailing) {
+                    readerMoreMenu
+                }
             }
 
             .toolbar(
@@ -438,7 +517,7 @@ public struct ReaderScreen: View {
         #if targetEnvironment(macCatalyst)
             .safeAreaInset(edge: .top, spacing: 0) {
                 CatalystReaderToolbar(title: viewModel.book.title) {
-                    if onReadAloud != nil {
+                    if onReadAloud != nil && !isSharedFollower {
                         Button(action: readAloudAction) { Image(systemName: "speaker.wave.2.fill") }
                             .popoverTip(readAloudTip)
                             .accessibilityIdentifier("reader.toolbar.readAloud")
@@ -494,11 +573,13 @@ public struct ReaderScreen: View {
     }
 
     private func handlePageForwardCommand(_ note: Notification) {
+        guard !isSharedFollower else { return }
         guard activeSheet == nil, pageCommandTargetsThisReader(note) else { return }
         coordinatorRef.coordinator?.handleArrowKey(.arrowRight)
     }
 
     private func handlePageBackwardCommand(_ note: Notification) {
+        guard !isSharedFollower else { return }
         guard activeSheet == nil, pageCommandTargetsThisReader(note) else { return }
         coordinatorRef.coordinator?.handleArrowKey(.arrowLeft)
     }
@@ -666,6 +747,7 @@ public struct ReaderScreen: View {
     }
 
     private var readAloudAction: () -> Void {
+        guard !isSharedFollower else { return {} }
         guard let action = onReadAloud else {
             return {}
         }
@@ -723,80 +805,89 @@ public struct ReaderScreen: View {
 
         @ViewBuilder
         private var readerMoreMenu: some View {
-            Menu {
+            let menu = Menu {
+                #if !targetEnvironment(macCatalyst)
+                    Section("Reader") {
+                        if onReadAloud != nil && !isSharedFollower {
+                            Button(action: readAloudAction) {
+                                Label("Read Aloud", systemImage: "speaker.wave.2.fill")
+                            }
+                        }
+                        if voicePresenter != nil {
+                            Button(action: voiceAction) {
+                                Label("Voice Chat", systemImage: "waveform.circle.fill")
+                            }
+                        }
+                        Button(action: showTypographyAction) {
+                            Label("Text Size", systemImage: "textformat.size")
+                        }
+                        Button(action: showThemeAction) {
+                            Label("Appearance", systemImage: "circle.lefthalf.filled")
+                        }
+                        if let onCopyShareLink {
+                            Button {
+                                onCopyShareLink()
+                            } label: {
+                                Label("Copy share link", systemImage: "doc.on.doc")
+                            }
+                            .accessibilityIdentifier("shared-reading-copy-link")
+                        }
+                    }
+                #endif
+
                 Button(action: showTOCAction) {
                     Label("Contents", systemImage: "list.bullet.indent")
                 }
+                .disabled(isSharedFollower)
                 .accessibilityIdentifier("reader.toolbar.toc")
 
                 Button(action: bookmarkToggleAction) {
-                    Label(
-                        isCurrentLocatorBookmarked
-                            ? "Remove Bookmark" : "Add Bookmark",
-                        systemImage: isCurrentLocatorBookmarked
-                            ? "bookmark.fill" : "bookmark"
-                    )
+                    if sharedReadingSessionID != nil {
+                        Label("Toggle Bookmark", systemImage: "bookmark")
+                    } else {
+                        Label(
+                            isCurrentLocatorBookmarked
+                                ? "Remove Bookmark" : "Add Bookmark",
+                            systemImage: isCurrentLocatorBookmarked
+                                ? "bookmark.fill" : "bookmark"
+                        )
+                    }
                 }
                 .accessibilityIdentifier("reader.toolbar.bookmark")
 
                 Button(action: showBookmarksAction) {
                     Label("Bookmarks", systemImage: "bookmark.circle")
                 }
+                .disabled(isSharedFollower)
                 .accessibilityIdentifier("reader.toolbar.bookmarksList")
 
                 Button(action: showSearchAction) {
                     Label("Search", systemImage: "magnifyingglass")
                 }
+                .disabled(isSharedFollower)
                 .accessibilityIdentifier("reader.toolbar.search")
+
+                if let sharedReadingMoreMenuContent {
+                    sharedReadingMoreMenuContent
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .accessibilityIdentifier("reader.toolbar.more")
             .accessibilityLabel("More")
-        }
 
-        @ToolbarContentBuilder
-        private var trailingToolbarContent: some ToolbarContent {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-
-                if onReadAloud != nil {
-              
-               
-                        Button(action: readAloudAction) {
-                            Image(systemName: "speaker.wave.2.fill")
-                        }
-                        .popoverTip(readAloudTip)
-                        .accessibilityIdentifier("reader.toolbar.readAloud")
-                        .accessibilityLabel(A11yLabel.readerReadAloud)
-                    
-                }
-
-                if voicePresenter != nil {
-               
-                        Button(action: voiceAction) {
-                            Image(systemName: "waveform.circle.fill")
-                        }
-                        .popoverTip(voiceChatTip)
-                        .accessibilityIdentifier("reader.toolbar.voice")
-                        .accessibilityLabel(A11yLabel.readerOpenVoice)
-                    
-                }
-
-                Button(action: showTypographyAction) {
-                    Image(systemName: "textformat.size")
-                }
-                .accessibilityIdentifier("reader.toolbar.typography")
-                .accessibilityLabel(A11yLabel.readerOpenTypography)
-
-                Button(action: showThemeAction) {
-                    Image(systemName: "circle.lefthalf.filled")
-                }
-                .accessibilityIdentifier("reader.toolbar.theme")
-                .accessibilityLabel(A11yLabel.readerOpenTheme)
-
-                readerMoreMenu
+            if let sharedReadingSessionID {
+                StableSharedReaderMenu(
+                    sessionID: sharedReadingSessionID,
+                    isSharedFollower: isSharedFollower,
+                    content: menu
+                )
+                .equatable()
+            } else {
+                menu
             }
         }
+
     #endif
 
     #if canImport(UIKit)
@@ -809,6 +900,7 @@ public struct ReaderScreen: View {
                     entries: viewModel.publication?.manifest.tableOfContents
                         ?? [],
                     onSelect: { link in
+                        guard !isSharedFollower else { activeSheet = nil; return }
                         activeSheet = nil
                         let coordinator = coordinatorRef.coordinator
 
@@ -845,6 +937,7 @@ public struct ReaderScreen: View {
                 BookmarksListView(
                     bookmarks: bookmarkToggle?.bookmarks ?? [],
                     onSelect: { bookmark in
+                        guard !isSharedFollower else { activeSheet = nil; return }
                         activeSheet = nil
                         if let locator = EPUBBookmarkMatcher.locator(
                             of: bookmark
@@ -890,6 +983,7 @@ public struct ReaderScreen: View {
                         }
                     },
                     onSelect: { row in
+                        guard !isSharedFollower else { activeSheet = nil; return }
                         activeSheet = nil
                         if let locator = searchModel?.locator(for: row) {
                             let coordinator = coordinatorRef.coordinator
@@ -916,11 +1010,96 @@ public struct ReaderScreen: View {
     }
 
     private func applySharedPosition() {
-        guard let sharedPositionJSONString,
-              let locator = try? Locator(jsonString: sharedPositionJSONString)
-        else { return }
-        Task { @MainActor in
-            _ = await coordinatorRef.coordinator?.go(to: locator)
+        guard isSharedFollower, let sharedNavigationRequest else {
+            sharedNavigationWorkerGeneration = UUID()
+            sharedNavigationTask?.cancel()
+            sharedNavigationTask = nil
+            sharedQueuedNavigationRequest = nil
+            return
+        }
+        // Queue only the newest target. A single worker serializes Readium's
+        // uncancelable go(to:) calls, so an older page cannot finish last.
+        if sharedQueuedNavigationRequest.map({ $0.revision > sharedNavigationRequest.revision }) == true {
+            return
+        }
+        sharedQueuedNavigationRequest = sharedNavigationRequest
+        guard sharedNavigationTask == nil else { return }
+        let workerGeneration = UUID()
+        sharedNavigationWorkerGeneration = workerGeneration
+        sharedNavigationTask = Task { @MainActor in
+            defer {
+                if sharedNavigationWorkerGeneration == workerGeneration {
+                    sharedNavigationTask = nil
+                }
+            }
+            while !Task.isCancelled, let request = sharedQueuedNavigationRequest {
+                guard isSharedFollower,
+                      sharedNavigationWorkerGeneration == workerGeneration,
+                      self.sharedNavigationRequest?.revision == request.revision else { return }
+                sharedQueuedNavigationRequest = nil
+                let locator = (try? Locator(jsonString: request.position))
+                    ?? (try? ReaderPositionLocator.decode(jsonString: request.position).toReadiumLocator())
+                guard let locator else {
+                    guard isSharedFollower,
+                          sharedNavigationWorkerGeneration == workerGeneration,
+                          self.sharedNavigationRequest?.revision == request.revision else { continue }
+                    onSharedNavigationResult?(SharedReaderNavigationResult(
+                        revision: request.revision,
+                        outcome: .failed("The controller's reading position is invalid."),
+                        observedLocator: viewModel.visibleNavigatorLocator
+                    ))
+                    continue
+                }
+                guard let publication = viewModel.publication else {
+                    guard isSharedFollower,
+                          sharedNavigationWorkerGeneration == workerGeneration,
+                          self.sharedNavigationRequest?.revision == request.revision else { continue }
+                    onSharedNavigationResult?(SharedReaderNavigationResult(
+                        revision: request.revision,
+                        outcome: .failed("The reader is not ready to follow the controller."),
+                        observedLocator: viewModel.visibleNavigatorLocator
+                    ))
+                    continue
+                }
+                guard !locator.href.string.isEmpty,
+                      publication.readingOrder.contains(where: { $0.href == locator.href.string }) else {
+                    guard isSharedFollower,
+                          sharedNavigationWorkerGeneration == workerGeneration,
+                          self.sharedNavigationRequest?.revision == request.revision else { continue }
+                    onSharedNavigationResult?(SharedReaderNavigationResult(
+                        revision: request.revision,
+                        outcome: .failed("This shared position is not in the open book."),
+                        observedLocator: viewModel.visibleNavigatorLocator
+                    ))
+                    continue
+                }
+                guard let coordinator = coordinatorRef.coordinator else {
+                    guard isSharedFollower,
+                          sharedNavigationWorkerGeneration == workerGeneration,
+                          self.sharedNavigationRequest?.revision == request.revision else { continue }
+                    onSharedNavigationResult?(SharedReaderNavigationResult(
+                        revision: request.revision,
+                        outcome: .failed("The reader is not ready to follow the controller."),
+                        observedLocator: viewModel.visibleNavigatorLocator
+                    ))
+                    continue
+                }
+                guard isSharedFollower,
+                      sharedNavigationWorkerGeneration == workerGeneration,
+                      self.sharedNavigationRequest?.revision == request.revision else { continue }
+                let navigated = await coordinator.goToSharedPosition(locator)
+                guard isSharedFollower,
+                      sharedNavigationWorkerGeneration == workerGeneration,
+                      self.sharedNavigationRequest?.revision == request.revision,
+                      !Task.isCancelled else { continue }
+                onSharedNavigationResult?(SharedReaderNavigationResult(
+                    revision: request.revision,
+                    outcome: navigated
+                        ? .accepted
+                        : .failed("The reader could not open the controller's page."),
+                    observedLocator: viewModel.visibleNavigatorLocator
+                ))
+            }
         }
     }
 
@@ -944,10 +1123,11 @@ public struct ReaderScreen: View {
         }
 
         private var allowsTapPageNavigation: Bool {
+            if isSharedFollower { return false }
             #if targetEnvironment(macCatalyst)
-            true
+            return true
             #else
-            false
+            return false
             #endif
         }
 
@@ -994,11 +1174,13 @@ public struct ReaderScreen: View {
         }
 
         private func goForward() {
+            guard !isSharedFollower else { return }
             dismissPendingSelection()
             pageNavigator.goNext()
         }
 
         private func goBackward() {
+            guard !isSharedFollower else { return }
             dismissPendingSelection()
             pageNavigator.goPrev()
         }

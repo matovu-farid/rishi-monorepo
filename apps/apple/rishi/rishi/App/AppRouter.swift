@@ -14,6 +14,21 @@ final class AppRouter {
     nonisolated static let creatorInvitationQueued = Notification.Name("Rishi.creatorInvitationQueued")
 
     var path: NavigationPath = NavigationPath()
+    /// The direct shared reader is intentionally separate from `path`: a
+    /// NavigationPath is restoration-oriented and cannot safely carry a live
+    /// socket/coordinator. This binding is consumed by LibraryTabView only.
+    private(set) var sharedReaderRoute: SharedReadingReaderRoute?
+    #if targetEnvironment(macCatalyst)
+    /// Catalyst keeps the shared-reader identity out of the library's
+    /// NavigationStack. The live context is instead attached to the ordinary
+    /// reader WindowGroup scene for this book.
+    private(set) var catalystSharedReaderRoute: SharedReadingReaderRoute?
+    #endif
+    private var sharedReaderContexts: [UUID: SharedReadingReaderContext] = [:]
+    /// The registry remains the authoritative owner during an account drain.
+    /// This marker prevents a late Catalyst/window callback from reviving a
+    /// detached context before the post-drain handler releases it.
+    private var detachedSharedReaderAccounts = Set<UUID>()
 
     private var pendingReaderTour: (userID: UserID, bookID: BookID)?
     private var pendingAccountURLs: [URL] = []
@@ -28,11 +43,107 @@ final class AppRouter {
 
     #if targetEnvironment(macCatalyst)
         var onCatalystBookResolved: ((Book) -> Void)?
+        var onCatalystSharedReaderPresented: ((SharedReadingReaderPresentation) -> Bool)?
     #endif
 
     var onConversationResolved: ((Conversation) -> Void)?
 
     var onFileURL: ((URL) -> Void)?
+
+    /// Returns whether the live runtime was accepted by the current account's
+    /// presentation boundary. The caller owns cleanup on rejection; starting
+    /// a separate router leave would race its account-bound compensation.
+    @discardableResult
+    func presentSharedReader(_ context: SharedReadingReaderContext, for accountID: UUID) -> Bool {
+        guard AppDependencies.shared.cachedUserId == accountID,
+              context.runtime.accountID == accountID,
+              context.runtime.readerContext != nil
+        else {
+            return false
+        }
+        guard let bookID = context.join.localBookId else {
+            return false
+        }
+        let previousRoute = activeSharedReaderRoute
+        detachedSharedReaderAccounts.remove(accountID)
+        let route = SharedReadingReaderRoute(
+            id: UUID(), accountID: accountID,
+            readerRoute: context.join.response.book.format == .pdf
+                ? .pdf(bookID) : .epub(bookID),
+            sessionID: context.join.response.sessionId
+        )
+        sharedReaderContexts[route.id] = context
+        #if targetEnvironment(macCatalyst)
+        // A Catalyst library is its own WindowGroup scene. Do not mutate its
+        // navigation state; the normal reader window coordinator owns focus.
+        catalystSharedReaderRoute = route
+        #else
+        // Going directly to the reader must not leave a normal reader below it.
+        path = NavigationPath()
+        sharedReaderRoute = route
+        #endif
+        #if targetEnvironment(macCatalyst)
+        guard let presentation = sharedReaderPresentation(for: route, accountID: accountID),
+              onCatalystSharedReaderPresented?(presentation) == true else {
+            catalystSharedReaderRoute = previousRoute
+            sharedReaderContexts.removeValue(forKey: route.id)
+            return false
+        }
+        #endif
+        if let previousRoute {
+            closeSharedReader(id: previousRoute.id, accountID: previousRoute.accountID)
+        }
+        return true
+    }
+
+    func sharedReaderPresentation(for route: SharedReadingReaderRoute, accountID: UUID) -> SharedReadingReaderPresentation? {
+        guard !detachedSharedReaderAccounts.contains(accountID),
+              route.accountID == accountID, AppDependencies.shared.cachedUserId == accountID,
+              activeSharedReaderRoute?.id == route.id, let context = sharedReaderContexts[route.id] else { return nil }
+        return SharedReadingReaderPresentation(route: route, context: context)
+    }
+
+    func sharedReaderPresentation(id: UUID, accountID: UUID) -> SharedReadingReaderPresentation? {
+        guard let route = activeSharedReaderRoute, route.id == id else { return nil }
+        return sharedReaderPresentation(for: route, accountID: accountID)
+    }
+
+    func sharedReaderRouteID(for runtime: SharedReadingSessionRuntime) -> UUID? {
+        guard let route = activeSharedReaderRoute,
+              sharedReaderContexts[route.id]?.runtime === runtime else { return nil }
+        return route.id
+    }
+
+    func closeSharedReader(id: UUID, accountID: UUID) {
+        // During an account drain, only the registry may close/leave the
+        // runtime. A late scene callback must never pre-empt that sequence.
+        if detachedSharedReaderAccounts.contains(accountID) {
+            clearActiveSharedReaderRoute(id: id)
+            return
+        }
+        guard let context = sharedReaderContexts.removeValue(forKey: id), context.runtime.accountID == accountID else {
+            clearActiveSharedReaderRoute(id: id); return
+        }
+        clearActiveSharedReaderRoute(id: id)
+        Task { @MainActor in await context.runtime.leaveAndClose() }
+    }
+
+    /// Account transitions must preserve the registry entry until the registry
+    /// snapshots it for bounded remote leave. Presentation is detached only.
+    func detachSharedReaderPresentation(for accountID: UUID) {
+        detachedSharedReaderAccounts.insert(accountID)
+        guard activeSharedReaderRoute?.accountID == accountID else { return }
+        clearActiveSharedReaderRoute(accountID: accountID)
+    }
+
+    /// Called only after the registry finishes draining `accountID`.  The
+    /// registry owns local close + bounded remote leave, so this only releases
+    /// opaque router references (including in-memory invitations).
+    func clearDetachedSharedReaderContexts(for accountID: UUID) {
+        guard activeSharedReaderRoute?.accountID != accountID else { return }
+        sharedReaderContexts = sharedReaderContexts.filter { $0.value.runtime.accountID != accountID }
+        detachedSharedReaderAccounts.remove(accountID)
+    }
 
     func handle(
         url: URL,
@@ -187,6 +298,7 @@ final class AppRouter {
     }
 
     private func present(book: Book) {
+        if let shared = activeSharedReaderRoute { closeSharedReader(id: shared.id, accountID: shared.accountID) }
         onBookResolved?(book)
         #if targetEnvironment(macCatalyst)
             onCatalystBookResolved?(book)
@@ -194,6 +306,34 @@ final class AppRouter {
             var p = NavigationPath()
             p.append(ReaderRoute.route(for: book))
             path = p
+        #endif
+    }
+
+    var hasActiveSharedReader: Bool { activeSharedReaderRoute != nil }
+
+    var activeSharedReaderSessionID: String? { activeSharedReaderRoute?.sessionID }
+
+    private var activeSharedReaderRoute: SharedReadingReaderRoute? {
+        #if targetEnvironment(macCatalyst)
+        catalystSharedReaderRoute
+        #else
+        sharedReaderRoute
+        #endif
+    }
+
+    private func clearActiveSharedReaderRoute(id: UUID) {
+        #if targetEnvironment(macCatalyst)
+        if catalystSharedReaderRoute?.id == id { catalystSharedReaderRoute = nil }
+        #else
+        if sharedReaderRoute?.id == id { sharedReaderRoute = nil }
+        #endif
+    }
+
+    private func clearActiveSharedReaderRoute(accountID: UUID) {
+        #if targetEnvironment(macCatalyst)
+        if catalystSharedReaderRoute?.accountID == accountID { catalystSharedReaderRoute = nil }
+        #else
+        if sharedReaderRoute?.accountID == accountID { sharedReaderRoute = nil }
         #endif
     }
 

@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 final class ReaderWindowCloseHandle {
-    private var action: (@MainActor () async -> Void)?
+    private var actions: [@MainActor () async -> Void] = []
     private var didClose = false
 
     func register(_ action: @escaping @MainActor () async -> Void) {
@@ -15,15 +15,15 @@ final class ReaderWindowCloseHandle {
             }
             return
         }
-        self.action = action
+        actions.append(action)
     }
 
     func close() async {
         guard !didClose else { return }
         didClose = true
-        let action = self.action
-        self.action = nil
-        await action?()
+        let actions = self.actions
+        self.actions = []
+        for action in actions { await action() }
     }
 }
 
@@ -100,6 +100,15 @@ final class ReaderWindowCoordinator {
     private var openWindowAction: OpenWindowAction?
     private var closeWindowAction: DismissWindowAction?
     private var closeHandles: [ReaderWindowID: ReaderWindowCloseHandle] = [:]
+    private var sharedRouteIDs: [ReaderWindowID: UUID] = [:]
+    /// Account draining is two-phase: windows may disappear immediately, but
+    /// the registry keeps the live runtime until it has issued its bounded
+    /// leave. Keep explicit markers so those late window callbacks are local
+    /// teardown only.
+    private var detachedSharedReadingAccounts = Set<UserID>()
+    private var detachedSharedRouteAccounts: [UUID: UserID] = [:]
+    private var sharedContextLookup: ((ReaderWindowID, UUID) -> SharedReadingReaderContext?)?
+    private var sharedCloseAction: ((UUID, UUID) -> Void)?
 
     func configure(
         openWindow: OpenWindowAction,
@@ -107,6 +116,68 @@ final class ReaderWindowCoordinator {
     ) {
         openWindowAction = openWindow
         closeWindowAction = dismissWindow
+    }
+
+    func configureSharedReading(
+        contextLookup: @escaping (ReaderWindowID, UUID) -> SharedReadingReaderContext?,
+        close: @escaping (UUID, UUID) -> Void
+    ) {
+        sharedContextLookup = contextLookup
+        sharedCloseAction = close
+    }
+
+    @discardableResult
+    func openShared(_ presentation: SharedReadingReaderPresentation) -> Bool {
+        let id = ReaderWindowID(userID: presentation.route.accountID, bookID: presentation.route.readerRoute.bookId)
+        guard presentation.context.runtime.accountID == id.userID,
+              let openWindowAction,
+              let sharedContextLookup,
+              sharedContextLookup(id, presentation.route.id) != nil else { return false }
+        detachedSharedReadingAccounts.remove(id.userID)
+        detachedSharedRouteAccounts.removeValue(forKey: presentation.route.id)
+        sharedRouteIDs[id] = presentation.route.id
+        let input = ReaderWindowInput(userID: id.userID, route: presentation.route.readerRoute)
+        openWindows[input.id] = input
+        openWindowAction(id: "reader", value: input)
+        return true
+    }
+
+    func sharedRouteID(for input: ReaderWindowInput) -> UUID? {
+        sharedRouteIDs[input.id]
+    }
+
+    func sharedContext(for input: ReaderWindowInput) -> SharedReadingReaderContext? {
+        guard !detachedSharedReadingAccounts.contains(input.id.userID),
+              let routeID = sharedRouteIDs[input.id],
+              detachedSharedRouteAccounts[routeID] == nil
+        else { return nil }
+        return sharedContextLookup?(input.id, routeID)
+    }
+
+    func leaveShared(for input: ReaderWindowInput) {
+        guard let routeID = sharedRouteIDs.removeValue(forKey: input.id) else { return }
+        guard !detachedSharedReadingAccounts.contains(input.id.userID),
+              detachedSharedRouteAccounts[routeID] == nil
+        else { return }
+        sharedCloseAction?(routeID, input.id.userID)
+    }
+
+    /// Called synchronously from the account-transition fence. It must not
+    /// unregister a runtime: the registry needs that registration to perform
+    /// the bounded remote leave after local presentation has been detached.
+    func detachSharedReading(for accountID: UserID) {
+        detachedSharedReadingAccounts.insert(accountID)
+        for (windowID, routeID) in sharedRouteIDs where windowID.userID == accountID {
+            detachedSharedRouteAccounts[routeID] = accountID
+        }
+    }
+
+    /// The registry completed the drain, so no retained opaque association may
+    /// survive into a later account or a restored Catalyst window.
+    func clearDetachedSharedReading(for accountID: UserID) {
+        detachedSharedReadingAccounts.remove(accountID)
+        sharedRouteIDs = sharedRouteIDs.filter { $0.key.userID != accountID }
+        detachedSharedRouteAccounts = detachedSharedRouteAccounts.filter { $0.value != accountID }
     }
 
     func open(book: Book, user: User) {
@@ -135,6 +206,7 @@ final class ReaderWindowCoordinator {
         let id = ReaderWindowID(userID: userID, bookID: bookID)
         guard let input = openWindows.removeValue(forKey: id) else { return }
         let closeHandle = closeHandles.removeValue(forKey: id)
+        leaveShared(for: input)
         await closeHandle?.close()
         closeWindowAction?(value: input)
     }
@@ -185,6 +257,10 @@ final class ReaderWindowCoordinator {
                 activeTheme = .default
                 activePDFViewMode = .automatic
             }
+            // A replaced scene can finish tearing down after its successor
+            // has registered the same book. Only the current scene may leave
+            // the shared route, and do it before awaiting closeHandle.close().
+            leaveShared(for: input)
         }
         await closeHandle.close()
     }

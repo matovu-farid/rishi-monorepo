@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { createDb } from "./db/drizzle";
@@ -21,10 +21,13 @@ import {
   retainedAppleTransaction,
   restoredAppleEntitlement,
   devices,
+  deletionState,
   highlights,
   messages,
   passkey,
   session,
+  sessionInvites,
+  sessionInviteRedemptions,
   sharePackageItems,
   sharePackages,
   subscription,
@@ -72,11 +75,429 @@ import { userRoutes } from "./routes/user";
 import { syncRoutes } from "./routes/sync";
 import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
-import { deleteAccount } from "./account-deletion";
+import { deleteAccount, retryPendingDeletions } from "./account-deletion";
 import { hashAppleIdentity } from "./entitlement-retention";
 import { encryptSiwaRefreshToken } from "./siwa-token-crypto";
 
 type TestD1 = D1Database & { close: () => void };
+type DeletionDb = Parameters<typeof deleteAccount>[0];
+type DeletionEnvironment = Parameters<typeof deleteAccount>[1];
+type DeletionMarker = typeof deletionState.$inferSelect;
+const PRE_MARKER_UPLOAD_DRAIN_MS = 301_000;
+
+function advancePastDrain(marker: DeletionMarker): void {
+  vi.useFakeTimers({ now: Math.max(
+    marker.retryAt.getTime(),
+    marker.createdAt.getTime() + PRE_MARKER_UPLOAD_DRAIN_MS,
+  ) + 1 });
+}
+
+async function completeDeletionAfterDrain(
+  db: DeletionDb,
+  env: DeletionEnvironment,
+  userId: string,
+  marker: () => Promise<DeletionMarker | undefined>,
+) {
+  await expect(deleteAccount(db, env, userId)).rejects.toMatchObject({
+    code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true,
+  });
+  const stored = await marker();
+  expect(stored).toMatchObject({ status: "purging" });
+  const deletionId = stored!.deletionId;
+  advancePastDrain(stored!);
+  try {
+    const result = await deleteAccount(db, env, userId);
+    expect(result.deletionId).toBe(deletionId);
+    return result;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+function markerFor(db: DeletionDb, userId: string) {
+  return db.select().from(deletionState).where(eq(deletionState.userId, userId)).get();
+}
+
+describe("W4 account deletion queue", () => {
+  const connections: TestD1[] = [];
+  afterEach(() => { vi.restoreAllMocks(); connections.splice(0).forEach((d1) => d1.close()); });
+
+  async function fixture(beforeRun?: (query: string) => Promise<void>) {
+    const d1 = createD1(undefined, beforeRun);
+    connections.push(d1);
+    const db = createDb(d1);
+    const now = new Date();
+    await db.insert(user).values(["deleting", "other"].map((id) => ({
+      id, name: id, email: `${id}@example.com`, emailVerified: true, createdAt: now, updatedAt: now,
+    })));
+    await db.insert(books).values(["deleting", "other"].map((id) => ({
+      id: `${id}-book`, userId: id, title: "Book", author: "Author", filePath: "book.epub", createdAt: Date.now(), updatedAt: Date.now(),
+    })));
+    const calls: Array<{ sessionId: string; action: string; payload: Record<string, string> }> = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      calls.push({ sessionId: decodeURIComponent(new URL(String(input)).pathname.split("/").at(-1)!), ...body });
+      return Response.json(body.action === "purgeAppleRoom" ? { ok: true } : { ok: true, status: "ended" });
+    });
+    const ledger = testLedgerBinding().getByName();
+    const env = {
+      DB: d1, USER_USAGE_LEDGER: { getByName: () => ledger },
+      SHARING_INTERNAL_SECRET: "secret", SHARING_WORKER: { fetch },
+      BOOK_STORAGE: { delete: vi.fn(async () => undefined), head: vi.fn(async () => null), list: vi.fn(async () => ({ objects: [], truncated: false })) },
+    } as unknown as Env;
+    async function room(id: string, owner = "deleting", status: "open" | "ended" = "open") {
+      await db.insert(sessionInvites).values({ id, sessionId: id, ownerUserId: owner, sourceBookId: `${owner}-book`, idempotencyKey: id, contentHash: "hash", format: "epub", tokenHash: id, status, createdAt: now });
+    }
+    async function member(id: string, membershipStatus: "pending" | "admitted" | "left" | "removed" = "admitted", userId = "deleting") {
+      await db.insert(sessionInviteRedemptions).values({ id: `${id}-${userId}`, inviteId: id, userId, membershipStatus, createdAt: now, updatedAt: now });
+    }
+    const marker = () => db.select().from(deletionState).where(eq(deletionState.userId, "deleting")).get();
+    const due = () => db.update(deletionState).set({ retryAt: new Date(0) }).where(eq(deletionState.userId, "deleting"));
+    return { d1, db, env, ledger, fetch, calls, room, member, marker, due };
+  }
+
+  it("[W4-MARKER] concurrent requests preserve one marker identity and the lease loser stays pending", async () => {
+    const f = await fixture();
+    await f.room("owner");
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.fetch.mockImplementation(async () => { entered(); await gate; return Response.json({ code: "CONFLICT" }, { status: 409 }); });
+    const first = deleteAccount(f.db, f.env, "deleting").catch((error) => error);
+    await started;
+    const original = await f.marker();
+    const secondRun = deleteAccount(f.db, f.env, "deleting").catch((error) => error);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const after = await f.marker();
+    release();
+    const second = await secondRun;
+    await first;
+    expect(second).toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true, retryAt: original!.retryAt.getTime() });
+    expect(after).toEqual(original);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("[W4-MARKER-INSERT] simultaneous marker insertion is due immediately and cannot replace the winning identity", async () => {
+    let inserts = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const f = await fixture(async (query) => {
+      if (!query.startsWith('insert into "deletion_state"')) return;
+      expect(query).toContain("on conflict do nothing");
+      if (++inserts === 2) release();
+      await gate;
+    });
+    await f.room("owner");
+    f.fetch.mockImplementation(async () => Response.json({ code: "CONFLICT" }, { status: 409 }));
+    const results = await Promise.allSettled([deleteAccount(f.db, f.env, "deleting"), deleteAccount(f.db, f.env, "deleting")]);
+    expect(inserts).toBe(2);
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    expect(await f.db.select().from(deletionState).all()).toHaveLength(1);
+  });
+
+  it.each(["open", "ended"] as const)("[W4-OWNER] revokes then purges %s owner rooms, with durable invite removal", async (status) => {
+    const f = await fixture();
+    await f.room("owner", "deleting", status);
+    await f.member("owner");
+    await f.member("owner", "admitted", "other");
+    await completeDeletionAfterDrain(f.db, f.env, "deleting", f.marker);
+    expect(f.calls.map(({ action }) => action)).toEqual(["revokeAccountReferences", "purgeAppleRoom"]);
+    expect(f.calls[0]!.payload).toEqual({ accountUserId: "deleting", deletionOperationId: expect.any(String) });
+    expect(await f.db.select().from(sessionInvites).all()).toHaveLength(0);
+  });
+
+  it.each(["pending", "admitted", "left"] as const)("[W4-PARTICIPANT] acknowledges %s membership without purging another owner's room", async (membership) => {
+    const f = await fixture();
+    await f.room("participant", "other");
+    await f.member("participant", membership);
+    f.ledger.purgeAccountData.mockRejectedValueOnce(new Error("crash before finalization"));
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    expect(f.calls.map(({ action }) => action)).toEqual(["revokeAccountReferences"]);
+    expect(await f.db.select().from(sessionInviteRedemptions).get()).toMatchObject({ membershipStatus: "removed" });
+    expect(await f.db.select().from(sessionInvites).get()).toMatchObject({ ownerUserId: "other" });
+  });
+
+  it.each(["not_found", "SESSION_NOT_FOUND"])("[W4-NOT-FOUND] treats %s as durable acknowledgement", async (status) => {
+    const f = await fixture();
+    await f.room("owner");
+    f.fetch.mockImplementation(async () => status === "not_found"
+      ? Response.json({ ok: true, status }) : Response.json({ code: status }, { status: 404 }));
+    // Purge still needs its own acknowledgement when the revoke returns a result.
+    if (status === "not_found") f.fetch.mockImplementation(async (_input, init) => Response.json(
+      JSON.parse(String(init?.body)).action === "purgeAppleRoom" ? { ok: true } : { ok: true, status },
+    ));
+    await completeDeletionAfterDrain(f.db, f.env, "deleting", f.marker);
+  });
+
+  it.each([503, 409])("[W4-RETENTION] HTTP %s retains the room and account and schedules retry", async (status) => {
+    const f = await fixture();
+    await f.room("owner");
+    f.fetch.mockResolvedValue(Response.json({ code: status === 409 ? "CONFLICT" : "SERVICE_UNAVAILABLE" }, { status }));
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: status === 409 ? "ACCOUNT_DELETION_CONFLICT" : "ACCOUNT_DELETION_PENDING", status, retryable: true });
+    expect(await f.db.select().from(sessionInvites).all()).toHaveLength(1);
+    expect(await f.db.select().from(user).where(eq(user.id, "deleting")).get()).toBeTruthy();
+    expect((await f.marker())!.retryAt.getTime()).toBeGreaterThan(Date.now());
+    expect(f.ledger.purgeAccountData).not.toHaveBeenCalled();
+  });
+
+  it("[W4-LOST-RESPONSE] retry retains the stored deletion ID and deterministic room operation ID", async () => {
+    const f = await fixture();
+    await f.room("owner");
+    const payloads: unknown[] = [];
+    f.fetch.mockImplementationOnce(async (_input, init) => { payloads.push(JSON.parse(String(init?.body))); throw new Error("lost response after remote commit"); });
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    const original = (await f.marker())!;
+    advancePastDrain(original);
+    try {
+      expect(await retryPendingDeletions(f.db, f.env)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(f.calls[0]!.payload).toEqual((payloads[0] as { payload: unknown }).payload);
+    expect(original.deletionId).toBeTruthy();
+  });
+
+  it("[W4-BOUNDED] processes one sorted distinct page, then catches a newly inserted lower ID", async () => {
+    const f = await fixture();
+    for (let i = 0; i < 27; i++) {
+      const id = `room-${String(i).padStart(2, "0")}`;
+      await f.room(id);
+      await f.member(id);
+      await f.member(id, "admitted", "other");
+    }
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    expect(f.calls.filter((call) => call.action === "revokeAccountReferences").map((call) => call.sessionId))
+      .toEqual(Array.from({ length: 25 }, (_, i) => `room-${String(i).padStart(2, "0")}`));
+    expect(await f.db.select().from(sessionInvites).all()).toHaveLength(2);
+    await f.room("aaa-new");
+    const original = (await f.marker())!;
+    advancePastDrain(original);
+    try {
+      expect(await retryPendingDeletions(f.db, f.env)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(f.calls.filter((call) => call.action === "revokeAccountReferences").slice(25).map((call) => call.sessionId))
+      .toEqual(["aaa-new", "room-25", "room-26"]);
+  });
+
+  it("[W4-PURGING] resumes purging after a crash without enumerating rooms or resetting identity", async () => {
+    const f = await fixture();
+    await f.room("owner");
+    f.ledger.purgeAccountData.mockRejectedValueOnce(new Error("crash"));
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    const marker = (await f.marker())!;
+    expect(marker.status).toBe("purging");
+    advancePastDrain(marker);
+    f.fetch.mockClear();
+    const queries = vi.spyOn(f.d1, "prepare");
+    try {
+      const result = await deleteAccount(f.db, f.env, "deleting");
+      expect(result.deletionId).toBe(marker.deletionId);
+      expect(f.fetch).not.toHaveBeenCalled();
+      expect(queries.mock.calls.some(([query]) => query.includes('from "session_invites"'))).toBe(false);
+      expect(await f.marker()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+    await expect(deleteAccount(f.db, f.env, "deleting")).resolves.toMatchObject({ alreadyDeleted: true });
+  });
+
+  it("[W4-TRANSITION-LEASE] losing the pending lease cannot transition to purging", async () => {
+    const f = await fixture();
+    await f.room("owner", "other");
+    await f.member("owner");
+    f.fetch.mockImplementationOnce(async () => {
+      await f.db.update(deletionState).set({ retryAt: new Date(Date.now() + 300000) }).where(eq(deletionState.userId, "deleting"));
+      return Response.json({ ok: true, status: "removed" });
+    });
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    expect((await f.marker())!.status).toBe("pending");
+    expect(await f.db.select().from(sessionInviteRedemptions).get()).toMatchObject({ membershipStatus: "admitted" });
+    expect(f.ledger.purgeAccountData).not.toHaveBeenCalled();
+  });
+
+  it("[W4-PURGE-RETRY] lost purge response retains the owner row and retries the same revocation", async () => {
+    const f = await fixture();
+    await f.room("owner", "deleting", "ended");
+    const transport = f.fetch.getMockImplementation()!;
+    let lost = false;
+    f.fetch.mockImplementation(async (input, init) => {
+      const result = await transport(input, init);
+      if (!lost && JSON.parse(String(init?.body)).action === "purgeAppleRoom") { lost = true; throw new Error("response lost"); }
+      return result;
+    });
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    expect(await f.db.select().from(sessionInvites).all()).toHaveLength(1);
+    const original = (await f.marker())!;
+    advancePastDrain(original);
+    try {
+      const result = await deleteAccount(f.db, f.env, "deleting");
+      expect(result.deletionId).toBe(original.deletionId);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(f.calls[0]!.payload).toEqual(f.calls[2]!.payload);
+  });
+
+  it("[W4-ABSENT-FAILURE] reports typed pending when idempotent cleanup fails after account removal", async () => {
+    const f = await fixture();
+    await f.db.delete(user).where(eq(user.id, "deleting"));
+    f.ledger.purgeAccountData.mockRejectedValueOnce(new Error("ledger unavailable"));
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+  });
+
+  it("[W4-LEASE-BATCH] exact lease loss immediately before final batch guards every removal", async () => {
+    const f = await fixture();
+    await f.db.insert(verification).values({ id: "verification", identifier: "deleting", value: "private", expiresAt: new Date() });
+    await f.db.insert(subscription).values({ id: "stripe", plan: "reader", referenceId: "deleting" });
+    await f.db.insert(appleNotificationsLog).values({ notificationUuid: "notification", notificationType: "SUBSCRIBED", userId: "deleting", rawPayload: "private", receivedAt: new Date() });
+    await f.db.insert(sharePackages).values({ id: "package", senderUserId: "other", recipientUserId: "deleting", tokenHash: "package", kind: "selection", status: "pending", idempotencyKey: "package", expiresAt: new Date(), createdAt: new Date() });
+    const batch = f.db.batch.bind(f.db);
+    const spy = vi.spyOn(f.db, "batch").mockImplementation(async (queries) => {
+      await f.db.update(deletionState).set({ retryAt: new Date(Date.now() + 300000) }).where(eq(deletionState.userId, "deleting"));
+      return batch(queries);
+    });
+    await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    const marker = (await f.marker())!;
+    advancePastDrain(marker);
+    try {
+      await expect(deleteAccount(f.db, f.env, "deleting")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING" });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await f.db.select().from(user).where(eq(user.id, "deleting")).get()).toBeTruthy();
+    expect(await f.db.select().from(verification).all()).toHaveLength(1);
+    expect(await f.db.select().from(subscription).all()).toHaveLength(1);
+    expect(await f.db.select().from(appleNotificationsLog).all()).toHaveLength(1);
+    expect(await f.db.select().from(sharePackages).all()).toHaveLength(1);
+  });
+
+  it("[W4-LATE-R2-FAILURE] preserves the user and same deletion marker when the late sweep fails", async () => {
+    const f = await fixture();
+    const objects = new Set<string>();
+    let listCalls = 0;
+    let failLateDelete = true;
+    const bucket = {
+      delete: vi.fn(async (key: string) => {
+        if (failLateDelete) throw new Error(`late R2 failure for ${key}`);
+        objects.delete(key);
+      }),
+      head: vi.fn(async (key: string) => objects.has(key) ? ({ key } as R2Object) : null),
+      list: vi.fn(async ({ prefix }: { prefix?: string }) => {
+        listCalls += 1;
+        if (listCalls === 3) objects.add("books/deleting/late.epub");
+        return {
+          objects: [...objects]
+            .filter((key) => !prefix || key.startsWith(prefix))
+            .map((key) => ({ key })),
+          truncated: false,
+        };
+      }),
+    } as unknown as R2Bucket;
+
+    await expect(deleteAccount(f.db, { ...f.env, BOOK_STORAGE: bucket }, "deleting"))
+      .rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+    const drainMarker = await f.marker();
+    expect(drainMarker?.status).toBe("purging");
+    advancePastDrain(drainMarker!);
+    let failedMarker: Awaited<ReturnType<typeof f.marker>>;
+    try {
+      await expect(deleteAccount(f.db, { ...f.env, BOOK_STORAGE: bucket }, "deleting"))
+        .rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+      failedMarker = await f.marker();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await f.db.select().from(user).where(eq(user.id, "deleting")).all()).toHaveLength(1);
+    expect(failedMarker).toBeTruthy();
+    expect(failedMarker?.deletionId).toBeTruthy();
+    expect(objects).toEqual(new Set(["books/deleting/late.epub"]));
+
+    failLateDelete = false;
+    advancePastDrain(failedMarker!);
+    let resumed: Awaited<ReturnType<typeof deleteAccount>>;
+    try {
+      resumed = await deleteAccount(f.db, { ...f.env, BOOK_STORAGE: bucket }, "deleting");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(resumed.deletionId).toBe(failedMarker!.deletionId);
+    expect(await f.db.select().from(user).where(eq(user.id, "deleting")).all()).toHaveLength(0);
+    expect(await f.marker()).toBeUndefined();
+    expect(objects).toEqual(new Set());
+  });
+
+  it("[W4-UPLOAD-DRAIN] waits for pre-marker upload expiry before the final sweep and delete", async () => {
+    const initialTime = new Date("2026-09-16T15:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(initialTime);
+    try {
+      const f = await fixture();
+      const objects = new Set<string>();
+      const booksPrefix = "books/deleting/";
+      const coversPrefix = "covers/deleting/";
+      let attempt = 0;
+      let callsInRun = 0;
+      const bucket = {
+        delete: vi.fn(async (key: string) => {
+          expect(await f.db.select().from(user).where(eq(user.id, "deleting")).all()).toHaveLength(1);
+          expect(await f.marker()).toMatchObject({ status: "purging" });
+          objects.delete(key);
+        }),
+        head: vi.fn(async (key: string) => objects.has(key) ? ({ key } as R2Object) : null),
+        list: vi.fn(async ({ prefix }: { prefix?: string }) => {
+          callsInRun += 1;
+          // A pre-marker PUT lands only during the final books-prefix sweep
+          // of the first retry that is allowed past the drain deadline.
+          if (attempt === 3 && callsInRun === 3) objects.add("books/deleting/pre-marker.epub");
+          return {
+            objects: [...objects]
+              .filter((key) => !prefix || key.startsWith(prefix))
+              .map((key) => ({ key })),
+            truncated: false,
+          };
+        }),
+      } as unknown as R2Bucket;
+      const env = { ...f.env, BOOK_STORAGE: bucket };
+      const uploadExpiry = initialTime.getTime() + 300_000;
+
+      attempt = 1;
+      callsInRun = 0;
+      await expect(deleteAccount(f.db, env, "deleting"))
+        .rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+      const firstMarker = await f.marker();
+      expect(await f.db.select().from(user).where(eq(user.id, "deleting")).all()).toHaveLength(1);
+      expect(firstMarker?.status).toBe("purging");
+      expect(firstMarker?.retryAt.getTime()).toBeGreaterThanOrEqual(uploadExpiry);
+      const drainDeadline = firstMarker!.retryAt.getTime();
+
+      vi.setSystemTime(new Date(drainDeadline - 1));
+      await f.due();
+      attempt = 2;
+      callsInRun = 0;
+      await expect(retryPendingDeletions(f.db, env)).resolves.toBe(0);
+      expect(await f.db.select().from(user).where(eq(user.id, "deleting")).all()).toHaveLength(1);
+      expect((await f.marker())?.status).toBe("purging");
+      expect((await f.marker())?.retryAt.getTime()).toBe(drainDeadline);
+
+      vi.setSystemTime(new Date(drainDeadline));
+      attempt = 3;
+      callsInRun = 0;
+      await expect(retryPendingDeletions(f.db, env)).resolves.toBe(1);
+      expect(bucket.delete).toHaveBeenCalledWith("books/deleting/pre-marker.epub");
+      expect(objects).toEqual(new Set());
+      expect(await f.db.select().from(user).where(eq(user.id, "deleting")).all()).toHaveLength(0);
+      expect(await f.marker()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 function testLedgerBinding() {
   return {
@@ -163,7 +584,8 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
     const objects = new Set([
       "books/share-sender/shared-book.epub",
       "books/share-recipient/recipient-book.epub",
-      "shares/legacy-package/legacy-item/book.epub",
+      "shares/share-package-1/share-item-1/book.epub",
+      "shares/other-package/other-item/book.epub",
     ]);
     const bucket = {
       delete: vi.fn(async (keys: string | string[]) => {
@@ -178,14 +600,16 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       })),
     } as unknown as R2Bucket;
 
-    await deleteAccount(db, {
+    const env = {
       DB: d1,
       USER_USAGE_LEDGER: testLedgerBinding(),
       BOOK_STORAGE: bucket,
-    } as unknown as Env, "share-sender");
+    } as unknown as DeletionEnvironment;
+    await completeDeletionAfterDrain(db, env, "share-sender", () => markerFor(db, "share-sender"));
 
     expect(objects.has("books/share-sender/shared-book.epub")).toBe(false);
-    expect(objects.has("shares/legacy-package/legacy-item/book.epub")).toBe(false);
+    expect(objects.has("shares/share-package-1/share-item-1/book.epub")).toBe(false);
+    expect(objects.has("shares/other-package/other-item/book.epub")).toBe(true);
     expect(objects.has("books/share-recipient/recipient-book.epub")).toBe(true);
     expect(await db.select().from(sharePackages).where(eq(sharePackages.id, "share-package-1")).all()).toHaveLength(0);
     d1.close();
@@ -444,8 +868,21 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       method: "DELETE",
       headers: { Authorization: `Bearer ${auth.accessToken}` },
     }), env);
-    expect(deletionResponse.status).toBe(200);
-    expect(await deletionResponse.json()).toMatchObject({ ok: true, revocationStatus: "revoked" });
+    expect(deletionResponse.status).toBe(503);
+    expect(await deletionResponse.json()).toMatchObject({ code: "ACCOUNT_DELETION_PENDING", retryable: true });
+    const firstMarker = await markerFor(db, auth.userId);
+    expect(firstMarker?.status).toBe("purging");
+    advancePastDrain(firstMarker!);
+    try {
+      const retryDeletionResponse = await app.fetch(new Request("http://test/api/user", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${auth.accessToken}` },
+      }), env);
+      expect(retryDeletionResponse.status).toBe(200);
+      expect(await retryDeletionResponse.json()).toMatchObject({ ok: true, revocationStatus: "revoked" });
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(await db.select().from(user).where(eq(user.id, auth.userId)).all()).toHaveLength(0);
     expect(await db.select().from(appleUsers).where(eq(appleUsers.userId, auth.userId)).all()).toHaveLength(0);
@@ -534,14 +971,23 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       },
     } as unknown as Env;
 
-    await expect(deleteAccount(db, env, "retry-user")).rejects.toThrow("temporary R2 failure");
-    const resumed = await deleteAccount(db, env, "retry-user");
-    expect(resumed.alreadyDeleted).toBe(false);
+    await expect(deleteAccount(db, env, "retry-user")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+    const failedMarker = await markerFor(db, "retry-user");
+    expect(failedMarker?.status).toBe("purging");
+    advancePastDrain(failedMarker!);
+    try {
+      failOnce = false;
+      const resumed = await deleteAccount(db, env, "retry-user");
+      expect(resumed.deletionId).toBe(failedMarker!.deletionId);
+      expect(resumed.alreadyDeleted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(await db.select().from(user).where(eq(user.id, "retry-user")).all()).toHaveLength(0);
     d1.close();
   });
 
-  it("sweeps a late user-scoped upload after the parent row is deleted", async () => {
+  it("sweeps a late user-scoped upload before the parent row is deleted", async () => {
     const d1 = createD1();
     const db = createDb(d1);
     await db.insert(user).values({
@@ -561,7 +1007,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       list: vi.fn(async ({ prefix }: { prefix?: string }) => {
         listCalls += 1;
         // The first sweep sees nothing. A presigned upload arrives before the
-        // post-delete sweep, which must remove it despite no surviving book row.
+        // final pre-delete sweep, which must remove it despite no book row.
         if (listCalls === 3) objects.add("books/late-upload-user/late.epub");
         return {
           objects: [...objects]
@@ -572,7 +1018,19 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       }),
     } as unknown as R2Bucket;
 
-    await deleteAccount(db, { DB: d1, BOOK_STORAGE: bucket, USER_USAGE_LEDGER: testLedgerBinding() } as unknown as Env, "late-upload-user");
+    const env = { DB: d1, BOOK_STORAGE: bucket, USER_USAGE_LEDGER: testLedgerBinding() } as unknown as DeletionEnvironment;
+    await expect(deleteAccount(db, env, "late-upload-user")).rejects.toMatchObject({
+      code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true,
+    });
+    const marker = await markerFor(db, "late-upload-user");
+    expect(marker?.status).toBe("purging");
+    advancePastDrain(marker!);
+    try {
+      const result = await deleteAccount(db, env, "late-upload-user");
+      expect(result.deletionId).toBe(marker!.deletionId);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(bucket.delete).toHaveBeenCalledWith("books/late-upload-user/late.epub");
     expect(objects).toEqual(new Set());
     d1.close();
@@ -599,7 +1057,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
         head: vi.fn(async () => null),
         list: vi.fn(async () => ({ objects: [], truncated: false })),
       },
-    } as unknown as Env, "stripe-config-user")).rejects.toThrow("STRIPE_SECRET_KEY");
+    } as unknown as Env, "stripe-config-user")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
     expect(await db.select().from(user).where(eq(user.id, "stripe-config-user")).all()).toHaveLength(1);
     d1.close();
   });
@@ -633,7 +1091,7 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       { status: 400, headers: { "Content-Type": "application/json" } },
     )));
 
-    const result = await deleteAccount(db, {
+    const env = {
       DB: d1,
       USER_USAGE_LEDGER: testLedgerBinding(),
       BOOK_STORAGE: {
@@ -648,7 +1106,8 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       APPLE_SIWA_CLIENT_ID: "org.fidexa.rishi",
       APPLE_IDENTITY_RETENTION_SECRET_CURRENT: "test-identity-retention-secret",
       APPLE_TRANSACTION_HASH_SECRET: "test-transaction-hash-secret",
-    } as unknown as Env, "apple-config-user");
+    } as unknown as DeletionEnvironment;
+    const result = await completeDeletionAfterDrain(db, env, "apple-config-user", () => markerFor(db, "apple-config-user"));
     expect(result.revocationStatus).toBe("revocation_unavailable");
     expect(await db.select().from(user).where(eq(user.id, "apple-config-user")).all()).toHaveLength(0);
     d1.close();
@@ -676,9 +1135,22 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       },
     } as unknown as Env;
 
-    await expect(deleteAccount(db, env, "d1-failure-user")).rejects.toThrow("Failed query: delete from \"user\"");
-    failD1Delete = false;
-    await expect(deleteAccount(db, env, "d1-failure-user")).resolves.toMatchObject({ alreadyDeleted: false });
+    await expect(deleteAccount(db, env, "d1-failure-user")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+    const drainMarker = await markerFor(db, "d1-failure-user");
+    expect(drainMarker?.status).toBe("purging");
+    advancePastDrain(drainMarker!);
+    let failedMarker: Awaited<ReturnType<typeof markerFor>>;
+    try {
+      await expect(deleteAccount(db, env, "d1-failure-user")).rejects.toMatchObject({ code: "ACCOUNT_DELETION_PENDING", status: 503, retryable: true });
+      failedMarker = await markerFor(db, "d1-failure-user");
+      failD1Delete = false;
+      advancePastDrain(failedMarker!);
+      const result = await deleteAccount(db, env, "d1-failure-user");
+      expect(result.deletionId).toBe(failedMarker!.deletionId);
+      expect(result.alreadyDeleted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(await db.select().from(user).where(eq(user.id, "d1-failure-user")).all()).toHaveLength(0);
     d1.close();
   });
@@ -766,9 +1238,22 @@ describe("DELETE /api/user black-box/white-box account deletion", () => {
       method: "DELETE",
       headers: { Authorization: `Bearer ${firstAuth.accessToken}` },
     }), env);
-    expect(deleteResponse.status).toBe(200);
-
     const db = createDb(d1);
+    expect(deleteResponse.status).toBe(503);
+    expect(await deleteResponse.json()).toMatchObject({ code: "ACCOUNT_DELETION_PENDING", retryable: true });
+    const firstMarker = await markerFor(db, firstAuth.userId);
+    expect(firstMarker?.status).toBe("purging");
+    advancePastDrain(firstMarker!);
+    try {
+      const retryDeleteResponse = await app.fetch(new Request("http://test/api/user", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${firstAuth.accessToken}` },
+      }), env);
+      expect(retryDeleteResponse.status).toBe(200);
+      expect(await retryDeleteResponse.json()).toMatchObject({ ok: true, revocationStatus: "revoked" });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(await db.select().from(user).where(eq(user.id, firstAuth.userId)).all()).toHaveLength(0);
     expect(await db.select().from(appleUsers).where(eq(appleUsers.userId, firstAuth.userId)).all()).toHaveLength(0);
 

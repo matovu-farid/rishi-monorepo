@@ -174,6 +174,34 @@ function routeFailure(code: string, status: number, message: string, stage: stri
   return Effect.fail(new SessionSharingRouteFailure(code, status, message, stage));
 }
 
+function hasRedeemResponseContract(value: unknown): value is {
+  inviteId: string;
+  sessionId: string;
+  book: SessionSharingBookPayload;
+  status: "waiting" | "active";
+  redemptionId: string;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const response = value as Record<string, unknown>;
+  if (typeof response.inviteId !== "string" || !response.inviteId
+      || typeof response.sessionId !== "string" || !response.sessionId
+      || typeof response.redemptionId !== "string" || !response.redemptionId
+      || (response.status !== "waiting" && response.status !== "active")) return false;
+  if (typeof response.book !== "object" || response.book === null || Array.isArray(response.book)) return false;
+  const book = response.book as Record<string, unknown>;
+  if (typeof book.bookId !== "string" || !book.bookId
+      || typeof book.contentHash !== "string" || !book.contentHash
+      || (book.format !== "epub" && book.format !== "pdf")
+      || typeof book.fileSize !== "number" || !Number.isSafeInteger(book.fileSize) || book.fileSize <= 0
+      || typeof book.downloadURL !== "string") return false;
+  try {
+    const url = new URL(book.downloadURL);
+    return url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function diagnosed<A, E, R>(
   operation: string,
   stage: string,
@@ -395,6 +423,10 @@ export function redeemSession(input: RedeemSessionInput) {
     const payload = yield* SessionSharingArtifacts.bookPayload(book);
     if (!payload) return yield* routeFailure("BOOK_NOT_READY", 422, "The book is still being prepared", "session.redeem.book_ready");
     const redemptionId = crypto.randomUUID();
+    const response = { inviteId: invite.id, sessionId: invite.sessionId, book: payload, status: room.status, redemptionId };
+    if (!hasRedeemResponseContract(response)) {
+      return yield* routeFailure("INVALID_RESPONSE", 500, "The reading session could not prepare a valid response", "session.redeem.response_contract");
+    }
     yield* SessionSharingPersistence.query("session.redeem.insert_redemption", (db) => db.insert(sessionInviteRedemptions).values({
       id: redemptionId,
       inviteId: invite.id,
@@ -408,7 +440,7 @@ export function redeemSession(input: RedeemSessionInput) {
       .from(sessionInviteRedemptions)
       .where(and(eq(sessionInviteRedemptions.inviteId, invite.id), eq(sessionInviteRedemptions.userId, input.userId)))
       .get());
-    return { inviteId: invite.id, sessionId: invite.sessionId, book: payload, status: room.status, redemptionId: redemption?.id ?? redemptionId };
+    return { ...response, redemptionId: redemption?.id ?? response.redemptionId };
   });
   return diagnosed("session.redeem", "sharing.redeem", input.correlationId, program);
 }

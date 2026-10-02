@@ -98,6 +98,18 @@ function pendingError(retryAt: Date = new Date(Date.now() + RETRY_DELAY_MS)) {
   });
 }
 
+// Internal-only marker: the upload drain has already been durably scheduled.
+// The public response remains 503 until deletion actually finishes.
+const uploadDrainScheduled = Symbol("uploadDrainScheduled");
+
+function uploadDrainScheduledError(deadline: Date) {
+  return Object.assign(pendingError(deadline), { [uploadDrainScheduled]: true as const });
+}
+
+function isUploadDrainScheduled(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && uploadDrainScheduled in error);
+}
+
 function markerCondition(marker: DeletionMarker) {
   return and(
     eq(deletionState.userId, marker.userId),
@@ -129,7 +141,7 @@ async function waitForPreMarkerUploads(
     updatedAt: new Date(),
   }).where(markerCondition(marker));
   if (scheduled.meta.changes === 0) return reloadPending(db, marker.userId);
-  throw pendingError(deadline);
+  throw uploadDrainScheduledError(deadline);
 }
 
 function unresolvedRooms(db: WorkerDb, userId: string) {
@@ -569,6 +581,9 @@ async function executeDeletion(
     }
     return await finalizeAccountDeletion(db, env, userRow, marker, correlationId);
   } catch (error) {
+    // The drain deadline was committed by waitForPreMarkerUploads; a second
+    // CAS against the old lease would turn this into a false retry failure.
+    if (isUploadDrainScheduled(error)) throw error;
     const pending = accountDeletionErrorBody(error);
     const retryAt = pending?.code === "ACCOUNT_DELETION_PENDING"
       ? new Date(pending.retryAt)
@@ -746,17 +761,25 @@ export async function retryPendingDeletions(
     .limit(limit)
     .all();
   let completed = 0;
+  let firstFailure: { deletionId: string; correlationId: string } | undefined;
   for (const row of pending) {
+    const correlationId = `retry_${row.deletionId}`;
     try {
-      await executeDeletion(db, env, row.userId, row);
+      await executeDeletion(db, env, row.userId, row, correlationId);
       completed += 1;
     } catch (error) {
+      if (isUploadDrainScheduled(error)) continue;
+      firstFailure ??= { deletionId: row.deletionId, correlationId };
       console.error("account deletion retry failed", {
         event: "account_deletion.retry_failed",
-        userHash: userLogId(row.userId),
+        deletionId: row.deletionId,
+        correlationId,
         category: error instanceof Error ? error.name : "unknown",
       });
     }
+  }
+  if (firstFailure) {
+    throw new Error(`Account deletion retry failed: deletionId=${firstFailure.deletionId} correlationId=${firstFailure.correlationId}`);
   }
   return completed;
 }

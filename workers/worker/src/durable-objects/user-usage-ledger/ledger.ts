@@ -27,7 +27,11 @@ import {
   TRIAL_LEGACY_INITIAL_CREDITS,
   TRIAL_TTS_COST_CREDITS,
 } from "./types";
-import type { AccountEntitlementSnapshot, EntitlementSnapshot } from "./types";
+import {
+  entitlementSnapshotWithoutActivePeriod,
+  type AccountEntitlementSnapshot,
+  type EntitlementSnapshot,
+} from "./types";
 import { VoiceSessionError } from "../voice-session/errors";
 import { mintRegistrationNonce, verifyRegistrationNonce } from "../voice-session/nonce";
 import {
@@ -332,13 +336,10 @@ export class UserUsageLedger extends DurableObject<Env> {
    * have a trial ledger row. Idempotent — safe to call on every request.
    * Existing accounts on the legacy 100-credit pool are bumped to 300 once.
    *
-   * The design implies an eager grant at signup. This method is the seam
-   * for that: once wired up, the signup flow should call
-   * `env.USER_USAGE_LEDGER.getByName(userId).grantTrialIfAbsent()` directly
-   * after account creation. That wiring is explicitly out of scope for this
-   * plan (follow-up). Every other public method below also calls this
-   * defensively so the ledger behaves correctly even before that signup
-   * wiring exists.
+   * The gated Apple E2E provisioning route calls this immediately after
+   * creating and signing in the account. Every other public method below also
+   * calls it defensively, so normal account flows and older accounts retain
+   * the same idempotent ledger behavior.
    */
   async grantTrialIfAbsent(): Promise<void> {
     await this.assertLedgerWritable();
@@ -393,9 +394,10 @@ export class UserUsageLedger extends DurableObject<Env> {
    *   1. A `currentAllowancePeriod` mirror row exists and is unexpired →
    *      `reader_active`/`voice_active`, keyed off its own `plan` field.
    *   2. A row exists but has expired (no fresher sync has landed since
-   *      it lapsed) → `subscription_expired`.
-   *   3. No row has ever existed for this account → fall back to the
-   *      trial logic exactly as plan 2 implemented it.
+   *      it lapsed) → grant/read the one-time trial pool and use remaining
+   *      credits when available, otherwise return `subscription_expired`.
+   *   3. No row has ever existed for this account → grant/read trial credits
+   *      exactly as plan 2 implemented it.
    */
   async getEntitlementSnapshot(): Promise<EntitlementSnapshot> {
     await this.assertLedgerWritable();
@@ -415,7 +417,8 @@ export class UserUsageLedger extends DurableObject<Env> {
           remainingVoiceChatSeconds,
         };
       }
-      return { state: "subscription_expired" };
+      await this.grantTrialIfAbsent();
+      return entitlementSnapshotWithoutActivePeriod(await this.remainingTrialCredits());
     }
 
     await this.grantTrialIfAbsent();

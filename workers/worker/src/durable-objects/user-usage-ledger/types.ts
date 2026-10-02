@@ -30,6 +30,18 @@ export type EntitlementSnapshot =
     }
   | { state: "subscription_expired" };
 
+/**
+ * Resolve the non-paid fallback after there is no active allowance period.
+ * Existing trial/usage credits remain usable after a subscription expires.
+ */
+export function entitlementSnapshotWithoutActivePeriod(
+  remainingCredits: number,
+): EntitlementSnapshot {
+  return remainingCredits > 0
+    ? { state: "trial_active", remainingCredits }
+    : { state: "subscription_expired" };
+}
+
 export type RetainedTrialState = "never_granted" | "active" | "exhausted";
 export type RetainedFeature = "reader" | "voice";
 export type RetainedStatus = "active" | "in_grace" | "expired" | "refunded";

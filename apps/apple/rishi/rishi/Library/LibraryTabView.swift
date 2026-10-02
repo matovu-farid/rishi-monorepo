@@ -190,6 +190,18 @@ struct LibraryTabView: View {
 
     var body: some View {
         let bindableRouter = Bindable(router)
+        let sharedReaderBinding = Binding<SharedReadingReaderRoute?>(
+            get: { router.sharedReaderRoute },
+            set: { next in
+                let previous = router.sharedReaderRoute
+                if let next {
+                    guard let presentation = router.sharedReaderPresentation(for: next, accountID: user.id) else { return }
+                    router.presentSharedReader(presentation.context, for: user.id)
+                } else if let previous {
+                    router.closeSharedReader(id: previous.id, accountID: previous.accountID)
+                }
+            }
+        )
         let libraryLoadTaskID = user.id.uuidString + "-" + String(dataUseConsentGranted)
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
@@ -238,6 +250,22 @@ struct LibraryTabView: View {
                         model.requestPaywall(name, serverPaidActive: paid)
                     }
                 )
+            }
+            .navigationDestination(item: sharedReaderBinding) { sharedRoute in
+                if let presentation = router.sharedReaderPresentation(for: sharedRoute, accountID: user.id) {
+                    ReaderDestinationView(
+                        route: sharedRoute.readerRoute,
+                        hint: model.hint(for: sharedRoute.readerRoute.bookId),
+                        onRequestPaywall: { name in
+                            let paid = dependencies.entitlementSnapshotStore.resolvedSnapshot?.isPaidActive ?? false
+                            model.requestPaywall(name, serverPaidActive: paid)
+                        },
+                        sharedReadingContext: presentation.context
+                    )
+                } else {
+                    ContentUnavailableView("Reading session unavailable", systemImage: "exclamationmark.triangle")
+                        .onAppear { router.closeSharedReader(id: sharedRoute.id, accountID: sharedRoute.accountID) }
+                }
             }
             .navigationDestination(for: ConversationsRoute.self) { _ in
                 ConversationsListHost(
@@ -289,7 +317,8 @@ struct LibraryTabView: View {
                 api: dependencies.sharedReadingAPI,
                 bookService: dependencies.sessionBookService,
                 userId: user.id,
-                sessionRegistry: dependencies.sharedReadingSessionRegistry
+                sessionRegistry: dependencies.sharedReadingSessionRegistry,
+                router: router
             )
         }
 

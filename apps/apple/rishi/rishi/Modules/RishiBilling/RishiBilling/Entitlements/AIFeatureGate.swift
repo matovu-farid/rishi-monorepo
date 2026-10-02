@@ -16,12 +16,12 @@ public enum AIFeature: Sendable, Equatable {
 ///
 /// `.trialExhausted` / `.narrationAllowanceExhausted` / `.voiceChatAllowanceExhausted`
 /// correspond 1:1 to `EntitlementClientState.trialExhaustion` /
-/// `.paidNarrationExhaustion` / `.paidVoiceChatExhaustion` (plan 12) — this
-/// type exists separately only to carry the fourth, feature-independent
-/// `.subscriptionExpired` case and UI-facing copy (see `AIFeatureUpgradePrompt`),
-/// not because the underlying signal differs.
+/// `.paidNarrationExhaustion` / `.paidVoiceChatExhaustion` (plan 12). The
+/// remaining cases provide UI-specific reasons for an expired subscription
+/// and for Voice Chat's two-credit minimum.
 public enum AIFeatureBlockReason: String, Sendable, Equatable, Identifiable {
     case trialExhausted
+    case insufficientTrialCreditsForVoiceChat
     case subscriptionExpired
     case narrationAllowanceExhausted
     case voiceChatAllowanceExhausted
@@ -41,7 +41,13 @@ public extension EntitlementSnapshot {
     func blockReason(for feature: AIFeature) -> AIFeatureBlockReason? {
         switch self {
         case .trialActive(let remainingCredits):
-            return remainingCredits <= 0 ? .trialExhausted : nil
+            switch feature {
+            case .narration:
+                return remainingCredits < 1 ? .trialExhausted : nil
+            case .voiceChat:
+                if remainingCredits < 1 { return .trialExhausted }
+                return remainingCredits < 2 ? .insufficientTrialCreditsForVoiceChat : nil
+            }
 
         case .trialExhausted:
             return .trialExhausted

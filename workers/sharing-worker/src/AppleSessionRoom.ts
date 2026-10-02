@@ -144,11 +144,13 @@ interface AttachedMeta {
 
 type WssFailureCode =
   | "ACCOUNT_DELETED"
+  | "ACCOUNT_DELETION_IN_PROGRESS"
   | "ADMISSION_TICKET_EXPIRED"
   | "ADMISSION_TICKET_MISMATCH"
   | "ADMISSION_TICKET_STALE"
   | "ADMISSION_REQUIRED"
   | "AUTH_REQUIRED"
+  | "FORBIDDEN"
   | "INTERNAL_ERROR"
   | "INVALID_ADMISSION"
   | "MALFORMED_WEBSOCKET_REQUEST"
@@ -447,7 +449,7 @@ export class AppleSessionRoom extends DurableObject<Env> {
     return this.runAppleEffect(operation, program, correlationId, stage);
   }
 
-  private rejectWss(request: Request, status: number, code: WssFailureCode, stage: string, correlationId = this.correlationFor(request)): Response {
+  private rejectWss(request: Request, status: number, code: WssFailureCode, stage: string, correlationId = this.correlationFor(request), upstreamStatus?: number, socketTagBytes?: number): Response {
     const requestCorrelationId = correlationId;
     this.log("sharing.wss.rejected", {
       correlationId: requestCorrelationId,
@@ -455,6 +457,8 @@ export class AppleSessionRoom extends DurableObject<Env> {
       stage,
       code,
       status,
+      ...(upstreamStatus !== undefined ? { upstreamStatus } : {}),
+      ...(socketTagBytes !== undefined ? { socketTagBytes } : {}),
     });
     return Response.json({
       code,
@@ -481,7 +485,8 @@ export class AppleSessionRoom extends DurableObject<Env> {
   private rejectAuth(request: Request, error: unknown, correlationId?: string): Response {
     const code = error instanceof AuthVerificationError ? error.code : "INTERNAL_ERROR";
     const status = error instanceof AuthVerificationError ? error.status : 502;
-    return this.rejectWss(request, status, code, "auth.provider", correlationId);
+    const upstreamStatus = error instanceof AuthVerificationError ? error.upstreamStatus : undefined;
+    return this.rejectWss(request, status, code, "auth.provider", correlationId, upstreamStatus);
   }
 
   private bucketFor(userId: string): RateBucket {
@@ -1345,8 +1350,20 @@ export class AppleSessionRoom extends DurableObject<Env> {
         return self.rejectWss(request, 401, expired ? "ADMISSION_TICKET_EXPIRED" : "INVALID_ADMISSION", "websocket.admission.signature", correlationId);
       }
       const ticket = ticketResult.right;
-      const socketTag = JSON.stringify({ meta, apple: true, connectionGeneration: ticket.connectionGeneration, correlationId });
-      if (new TextEncoder().encode(socketTag).byteLength > 256) return self.rejectWss(request, 400, "MALFORMED_WEBSOCKET_REQUEST", "websocket.protocol", correlationId);
+      // Durable Object socket tags have a strict 256-byte limit. The full
+      // identity profile (especially OAuth avatar URLs) is already persisted
+      // on the participant during book-ready; hibernation only needs the user
+      // ID plus the Apple-session fencing metadata to route subsequent events.
+      const socketTag = JSON.stringify({
+        meta: { userId: meta.userId },
+        apple: true,
+        connectionGeneration: ticket.connectionGeneration,
+        correlationId,
+      });
+      const socketTagBytes = new TextEncoder().encode(socketTag).byteLength;
+      if (socketTagBytes > 256) {
+        return self.rejectWss(request, 500, "INTERNAL_ERROR", "websocket.socket_tag", correlationId, undefined, socketTagBytes);
+      }
       const storage = yield* AppleRoomStorage;
       const consumed = yield* storage.transaction(async (txn) => {
         const stored = await txn.get<AppleStoredState>(APPLE_KEY);
