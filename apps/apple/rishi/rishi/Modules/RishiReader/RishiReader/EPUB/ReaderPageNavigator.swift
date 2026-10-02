@@ -1,8 +1,9 @@
 #if canImport(UIKit)
 import Foundation
 import ReadiumNavigator
+import ReadiumShared
 
-/// Drives forward / backward page turns on the Readium EPUB navigator.
+/// Drives forward / backward page turns on a Readium reader navigator.
 ///
 /// Extracted from ``ReaderScreen`` (Plan 34-03, SRP): the tap handler used
 /// to reach through `coordinatorRef.coordinator?.navigator` and `await`
@@ -28,17 +29,35 @@ public struct ReaderPageNavigator {
         self.coordinatorRef = coordinatorRef
     }
 
-    /// Advances one page forward: bumps the synthetic page-turn counter (haptic)
-    /// then drives the navigator. No-op on the navigator side until Readium has
-    /// installed it.
-    public func goNext() {
+    /// Advances one page forward and reports whether Readium moved. During an
+    /// explicit PDF narration turn, the correlated intent is registered before
+    /// Readium starts its asynchronous navigation callback sequence.
+    @discardableResult
+    public func goNext(explicitForwardID: UUID? = nil) async -> Bool {
         viewModel.advancePage()
-        let navigator = coordinatorRef.coordinator?.navigator
-        // KEEP: Readium EPUBNavigatorViewController requires @MainActor;
-        // goForward is a navigator UI mutation.
-        Task { @MainActor in
-            _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
+        guard let coordinator = coordinatorRef.coordinator,
+              let navigator = coordinator.navigator else { return false }
+
+        if let pdfNavigator = navigator as? PDFNavigatorViewController,
+           let explicitForwardID {
+            let originPage = pdfNavigator.currentLocation?.locations.page
+                ?? viewModel.visibleNavigatorLocator?.locations.page
+            guard let originPage,
+                  coordinator.registerExplicitPageForward(id: explicitForwardID, originPage: originPage) else {
+                return false
+            }
+            _ = await pdfNavigator.goForward(options: NavigatorGoOptions(animated: true))
+            let finalLocation = pdfNavigator.currentLocation
+            let didMove = finalLocation?.locations.page.map { $0 != originPage } ?? false
+            _ = coordinator.completeExplicitPageForward(
+                id: explicitForwardID,
+                didMove: didMove,
+                finalLocation: finalLocation
+            )
+            return didMove
         }
+
+        return await navigator.goForward(options: NavigatorGoOptions(animated: true))
     }
 
     /// Turns one page backward. Same counter-then-navigator sequence as

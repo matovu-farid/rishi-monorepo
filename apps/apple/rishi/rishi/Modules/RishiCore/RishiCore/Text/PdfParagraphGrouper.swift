@@ -65,6 +65,29 @@ public nonisolated enum PdfParagraphGrouper {
         }
         guard !usable.isEmpty else { return [] }
 
+        return lineGroups(
+            from: usable,
+            gapRatio: gapRatio,
+            indentRatio: indentRatio
+        ).map { group in
+            usable[group].map(\.text).joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+    }
+
+    /// Returns half-open groups of usable line indexes in reading order.
+    /// Whitespace-only lines are omitted before indexing, matching
+    /// ``paragraphs(from:gapRatio:indentRatio:)``.
+    public nonisolated static func lineGroups(
+        from lines: [TextItem],
+        gapRatio: CGFloat = defaultGapRatio,
+        indentRatio: CGFloat = defaultIndentRatio
+    ) -> [Range<Int>] {
+        let usable = lines.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard !usable.isEmpty else { return [] }
+
         let centers = usable.map { $0.frame.midY }
         var pitches: [CGFloat] = []
         pitches.reserveCapacity(usable.count - 1)
@@ -82,25 +105,20 @@ public nonisolated enum PdfParagraphGrouper {
         let medianHeight = median(usable.map { $0.frame.height })
         let indentThreshold = indentRatio * medianHeight
 
-        var blocks: [String] = []
-        var current: [String] = [usable[0].text]
+        var groups: [Range<Int>] = []
+        var start = 0
         for i in 1..<usable.count {
             let gap = abs(centers[i - 1] - centers[i])
             let gapBreak = medianPitch > 0 && gap > gapRatio * medianPitch
             let indentBreak = indentThreshold > 0
                 && usable[i].frame.minX - margin > indentThreshold
             if gapBreak || indentBreak {
-                blocks.append(current.joined(separator: " "))
-                current = [usable[i].text]
-            } else {
-                current.append(usable[i].text)
+                groups.append(start..<i)
+                start = i
             }
         }
-        blocks.append(current.joined(separator: " "))
-
-        return blocks
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        groups.append(start..<usable.count)
+        return groups
     }
 
     /// Most frequent value, bucketed to the nearest point to absorb sub-point

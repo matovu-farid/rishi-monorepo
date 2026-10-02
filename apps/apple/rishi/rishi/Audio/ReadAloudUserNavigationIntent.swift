@@ -100,4 +100,7 @@ struct ReadAloudUserNavigationSnapshot: Equatable, Sendable {
     let spokenParagraph: String?
     let spokenPage: Int?
     let followCreditRemaining: Int
+    let playbackToken: UUID?
+    let playbackGeneration: UInt64
+    let utteranceEpoch: UInt64
 }

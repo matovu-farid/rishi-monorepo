@@ -192,12 +192,79 @@ struct CustomTTSEngineTests {
         _ = await speakTask.value
         #expect(await completed.isDone())
     }
+
+    @Test("a canceled utterance cannot publish its range after delayed settings load")
+    func canceledSettingsLoadDoesNotPublishRange() async {
+        let state = TTSPlaybackState()
+        let player = RecordingTTSPlayer(state: state)
+        let settings = DelayedLoadTTSSettingsStore()
+        let engine = CustomTTSEngine(
+            player: player,
+            state: state,
+            settingsStore: settings,
+            userId: UserID(),
+            voices: [englishVoice]
+        )
+        let rangeCount = LockedRangeCount()
+        let task = Task {
+            await engine.speak(
+                text: "Canceled before range publication.",
+                delay: 0,
+                voiceOrLanguage: .left(englishVoice)
+            ) { _ in rangeCount.increment() }
+        }
+
+        await settings.waitUntilLoadStarts()
+        task.cancel()
+        await settings.releaseLoad()
+        let result = await task.value
+
+        #expect(result.isSuccess == false)
+        #expect(rangeCount.value == 0)
+        #expect(await player.request == nil)
+    }
 }
 
 private actor SpeakCompletionFlag {
     private var done = false
     func markDone() { done = true }
     func isDone() -> Bool { done }
+}
+
+private actor DelayedLoadTTSSettingsStore: TTSSettingsStore {
+    private var loadStarted = false
+    private var loadContinuation: CheckedContinuation<Void, Never>?
+    private var startContinuation: CheckedContinuation<Void, Never>?
+
+    func load(userId: UserID) async -> TTSSettings {
+        loadStarted = true
+        startContinuation?.resume()
+        startContinuation = nil
+        await withCheckedContinuation { continuation in
+            loadContinuation = continuation
+        }
+        return .default
+    }
+
+    func waitUntilLoadStarts() async {
+        guard !loadStarted else { return }
+        await withCheckedContinuation { continuation in startContinuation = continuation }
+    }
+
+    func releaseLoad() {
+        loadContinuation?.resume()
+        loadContinuation = nil
+    }
+
+    func save(_ settings: TTSSettings, userId: UserID) async {}
+    func remove(userId: UserID) async {}
+}
+
+private final class LockedRangeCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); defer { lock.unlock() }; count += 1 }
 }
 
 /// Happy-path double: runs a full loading → stopped cycle so speak can finish.

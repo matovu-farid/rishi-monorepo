@@ -78,6 +78,24 @@ struct ReadAloudControllerNavigationIntentTests {
         #expect(continued == .continuePlaying(consumesFollowCredit: true))
     }
 
+    @Test("navigation extraction resolves against the latest utterance in the same session")
+    func sameSessionUtteranceAdvanceRefreshesSnapshot() {
+        let controller = makeControllerForNavIntent()
+        let original = String(repeating: "Original passage before extraction. ", count: 3)
+        let current = String(repeating: "Current passage after extraction. ", count: 3)
+        controller.simulateSpeakingForTests(paragraph: original, page: 1)
+        let snapshot = controller.beginUserNavigationIntent()
+        controller.notifyUtterancePlayingForTests(text: current)
+
+        let intent = controller.resolveUserNavigationIntent(
+            snapshot: snapshot,
+            destinationParagraphs: [current],
+            destinationPage: 2
+        )
+
+        #expect(intent == .continuePlaying(consumesFollowCredit: true))
+    }
+
     @Test("same utterance text does not refill credit; new text does")
     func creditRefillsOnlyOnNewUtteranceText() {
         let controller = makeControllerForNavIntent()
@@ -177,6 +195,7 @@ struct ReadAloudControllerNavigationIntentTests {
         )
         #expect(intent == .continuePlaying(consumesFollowCredit: false))
     }
+
 }
 
 private struct NavIntentNoopChunkSource: TTSChunkSource {

@@ -212,6 +212,13 @@ struct ReaderDestination: View {
                 guard !sharedIsFollowingController && !sharedControlsLocked else { return }
                 startReadAloud(from: locator)
             },
+            onExplicitPageForward: {
+                guard !sharedIsFollowingController && !sharedControlsLocked else { return nil }
+                return readAloud?.beginExplicitPageForwardIntent()
+            },
+            onExplicitPageForwardCompleted: { id, didMove in
+                readAloud?.completeExplicitForward(id: id, didMove: didMove)
+            },
             onCopyShareLink: onCopyShareLink,
             sharedReadingMoreMenuContent: sharedReadingMoreMenuContent,
             onFirstContentReady: {
@@ -355,6 +362,12 @@ struct ReaderDestination: View {
                     guard let paragraph = await vm.firstParagraphForPageEntryPrefetch(at: locator) else { return }
                     await readAloud?.prefetchFirstParagraph(paragraph)
                 }
+            }
+            vm.onExplicitPageForwardNavigation = { locator, id in
+                guard !sharedIsFollowingController && !sharedControlsLocked,
+                      let readAloud else { return }
+                readerTour?.userNavigated()
+                _ = readAloud.restartAtExplicitPage(locator, id: id)
             }
             syncBinding = ReaderPositionSyncBinding(
                 viewModel: vm,

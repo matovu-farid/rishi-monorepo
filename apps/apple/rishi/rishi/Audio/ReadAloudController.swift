@@ -9,6 +9,49 @@ enum ReadAloudLocalPlaybackPhase: Equatable {
     case paused(UUID)
 }
 
+enum ExplicitForwardPlaybackResult: Equatable {
+    case restarted
+    case alreadyReadingDestination
+    case rejected
+}
+
+private struct ExplicitReadAloudForwardIntent {
+    let id: UUID
+    let playbackToken: UUID
+    let playbackGeneration: UInt64
+    let navigationGeneration: UInt64
+    let spokenPage: Int?
+    let utteranceEpoch: UInt64
+}
+
+private struct PDFUtteranceCursor: Equatable, Sendable {
+    let page: Int
+    let ordinal: Int
+}
+
+private struct PDFUtteranceSkipStep {
+    let delta: Int
+    let playbackToken: UUID
+    let playbackGeneration: UInt64
+    let lease: RemoteCommandLease?
+}
+
+private struct PDFUtteranceTarget: Sendable {
+    let page: Int
+    let ordinal: Int
+    let paragraphStart: Int?
+    let locator: Locator
+}
+
+/// Readium `Publication` is used from multiple async content iterators and is
+/// internally synchronized. This box confines the detached PDF skip lookup's
+/// access to its own operation without transferring the publication value
+/// directly from the main actor.
+private final class PDFPublicationSendableBox: @unchecked Sendable {
+    let publication: Publication
+    init(_ publication: Publication) { self.publication = publication }
+}
+
 /// A room's playback speed is temporary. Readium loads settings for every
 /// utterance, so override reads here without modifying the user's preference.
 private actor SharedSessionTTSSettingsStore: TTSSettingsStore {
@@ -87,8 +130,27 @@ private func makeReadiumEngineFactory(
 
 private func makeReadiumTokenizerFactory(
     granularity: CustomTTSTokenizer.Granularity,
-    selectionText: Locator.Text? = nil
+    selectionText: Locator.Text? = nil,
+    selectionStartPage: Int? = nil,
+    selectionStartUTF16Offset: Int? = nil,
+    pdfParagraphMap: PDFNarrationParagraphMap? = nil,
+    pdfCursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor? = nil
 ) -> PublicationSpeechSynthesizer.TokenizerFactory {
+    if granularity == .sentence, let pdfParagraphMap {
+        let selectionGate = pdfCursor == nil && selectionText != nil
+            ? CustomTTSTokenizer.PDFNarrationSelectionGate(startingPage: selectionStartPage)
+            : nil
+        return { language in
+            CustomTTSTokenizer.tokenizePDF(
+                defaultLanguage: language,
+                paragraphMap: pdfParagraphMap,
+                cursor: pdfCursor,
+                selectionText: pdfCursor == nil ? selectionText : nil,
+                selectionStartUTF16Offset: pdfCursor == nil ? selectionStartUTF16Offset : nil,
+                selectionGate: selectionGate
+            )
+        }
+    }
     var didTrimSelection = false
     return { language in
         let tokenizer = CustomTTSTokenizer.tokenize(
@@ -145,6 +207,14 @@ final class ReadAloudController {
     /// from the current audio position.
     private var isReadiumPlaybackPaused = false
     private var readiumPublication: Publication?
+    private var readiumSynthesizerBuilder: (@MainActor (CustomTTSTokenizer.PDFNarrationTokenizationCursor?) -> PublicationSpeechSynthesizer?)?
+    private var readiumRestartTarget: (page: Int, paragraphStart: Int?, utteranceOrdinal: Int?)?
+    private var readiumRestartEpoch: UInt64 = 0
+    private var pdfSkipSteps: [PDFUtteranceSkipStep] = []
+    private var pdfSkipDrainTask: Task<Void, Never>?
+    private var pdfSkipDrainID: UUID?
+    private var pdfSkipExpectedSynthesizer: PublicationSpeechSynthesizer?
+    private var pdfSkipLogicalCursor: PDFUtteranceCursor?
     private var readiumPrefetcher: ReadiumTTSPrefetchCoordinator?
     private var hasStartedReadAloudSession = false
     private var isPageEntryPrefetchEligible = false
@@ -169,6 +239,12 @@ final class ReadAloudController {
     /// or starting a synthesizer after one of its prerequisite awaits returns.
     private var playbackGeneration: UInt64 = 0
     private var playbackSessionToken: UUID?
+    private var readiumUtteranceEpoch: UInt64 = 0
+    private var readiumEpochLocator: Locator?
+    private var readiumEpochText: String?
+    private var readiumObservedLocator: Locator?
+    private var readiumObservedText: String?
+    private var explicitReadAloudForwardIntent: ExplicitReadAloudForwardIntent?
     private weak var readerViewModel: ReaderViewModel?
     private var sharedFollowerResumeAnchor: Locator?
     private var sharedFollowerAudioRevision: SharedReadingEffectRevision?
@@ -290,40 +366,43 @@ final class ReadAloudController {
             vm.book.formatType == .pdf || publication.manifest.conforms(to: .pdf)
             ? .sentence
             : .paragraph
-        let engineFactory = makeReadiumEngineFactory(
-            player: ttsEngine,
-            state: ttsState,
-            settingsStore: sharedSessionSettingsStore,
-            userId: userId,
-            sessionToken: sessionToken,
-            onUtteranceFinished: { [weak self] in
-                await self?.handleUtteranceFinished(generation: generation)
-            },
-            onUtteranceFailed: { [weak self] in
-                await self?.handleUtteranceFailed(generation: generation)
-            }
-        )
-        let tokenizerFactory = makeReadiumTokenizerFactory(
-            granularity: tokenizerGranularity,
-            selectionText: startLocator?.text
-        )
+        let synthesizerBuilder: @MainActor (CustomTTSTokenizer.PDFNarrationTokenizationCursor?) -> PublicationSpeechSynthesizer? = { [weak self, weak vm] cursor in
+            guard let self, let vm else { return nil }
+            return self.makeReadiumSynthesizer(
+                publication: publication,
+                settings: self.readiumSettingsForSynthesizer(
+                    cursor: cursor,
+                    initialSettings: settings
+                ),
+                vm: vm,
+                sessionToken: sessionToken,
+                generation: generation,
+                granularity: tokenizerGranularity,
+                selectionText: startLocator?.text,
+                selectionStartPage: startLocator?.locations.page,
+                selectionStartUTF16Offset: startLocator?.locations.otherLocations[
+                    CustomTTSTokenizer.PDFLocatorMetadata.selectionStartUTF16
+                ]?.integer,
+                pdfCursor: cursor
+            )
+        }
+        readiumSynthesizerBuilder = synthesizerBuilder
 
-        guard let synthesizer = PublicationSpeechSynthesizer(
-            publication: publication,
-            config: .init(
-                defaultLanguage: publication.metadata.language,
-                voiceIdentifier: settings.voice
-            ),
-            engineFactory: engineFactory,
-            tokenizerFactory: tokenizerFactory,
-            delegate: self
-        ) else {
+        guard let synthesizer = synthesizerBuilder(nil) else {
             playbackSessionToken = nil
             onFirstUtteranceFailed?()
             return
         }
 
         playbackSessionToken = sessionToken
+        explicitReadAloudForwardIntent = nil
+        readiumUtteranceEpoch = 0
+        readiumEpochLocator = nil
+        readiumEpochText = nil
+        readiumObservedLocator = nil
+        readiumObservedText = nil
+        readiumRestartTarget = nil
+        readiumRestartEpoch &+= 1
         ttsState.claimPlaybackSession(sessionToken)
         readiumSynthesizer = synthesizer
         readiumSynthesizerGeneration = generation
@@ -396,6 +475,85 @@ final class ReadAloudController {
         // best-effort in a separate task so local disk I/O cannot delay speech.
         synthesizer.start(from: startLocator)
     }
+
+    private func makeReadiumSynthesizer(
+        publication: Publication,
+        settings: TTSSettings,
+        vm: ReaderViewModel,
+        sessionToken: UUID,
+        generation: UInt64,
+        granularity: CustomTTSTokenizer.Granularity,
+        selectionText: Locator.Text?,
+        selectionStartPage: Int?,
+        selectionStartUTF16Offset: Int?,
+        pdfCursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor?
+    ) -> PublicationSpeechSynthesizer? {
+        let engineFactory = makeReadiumEngineFactory(
+            player: ttsEngine,
+            state: ttsState,
+            settingsStore: sharedSessionSettingsStore,
+            userId: userId,
+            sessionToken: sessionToken,
+            onUtteranceFinished: { [weak self] in
+                await self?.handleUtteranceFinished(generation: generation)
+            },
+            onUtteranceFailed: { [weak self] in
+                await self?.handleUtteranceFailed(generation: generation)
+            }
+        )
+        let isPDF = publication.manifest.conforms(to: .pdf)
+        let paragraphMap = isPDF ? PDFNarrationParagraphMap(documentURL: vm.documentURL) : nil
+        let tokenizerFactory = makeReadiumTokenizerFactory(
+            granularity: granularity,
+            selectionText: selectionText,
+            selectionStartPage: selectionStartPage,
+            selectionStartUTF16Offset: selectionStartUTF16Offset,
+            pdfParagraphMap: paragraphMap,
+            pdfCursor: pdfCursor
+        )
+        return PublicationSpeechSynthesizer(
+            publication: publication,
+            config: .init(
+                defaultLanguage: publication.metadata.language,
+                voiceIdentifier: settings.voice
+            ),
+            engineFactory: engineFactory,
+            tokenizerFactory: tokenizerFactory,
+            delegate: self
+        )
+    }
+
+    private func readiumSettingsForSynthesizer(
+        cursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor?,
+        initialSettings: TTSSettings
+    ) -> TTSSettings {
+        // The initial synthesizer uses settings loaded at session start.
+        // Replacement synthesizers must pick up changes made while it played.
+        cursor == nil ? initialSettings : pickerInitial
+    }
+
+    private func acceptReadiumSynthesizerRestart() {
+        isReadiumPlaybackPaused = false
+        ttsState.update(status: .playing)
+    }
+
+    #if DEBUG
+    var pdfReplacementSettingsForTests: TTSSettings {
+        readiumSettingsForSynthesizer(cursor: .init(targetPage: 1), initialSettings: .default)
+    }
+
+    var isReadiumPlaybackPausedForTests: Bool { isReadiumPlaybackPaused }
+    var playbackStatusForTests: TTSStatus { ttsState.status }
+
+    func setReadiumPlaybackPausedForTests(_ paused: Bool) {
+        isReadiumPlaybackPaused = paused
+        ttsState.update(status: paused ? .paused : .playing)
+    }
+
+    func acceptPDFSynthesizerRestartForTests() {
+        acceptReadiumSynthesizerRestart()
+    }
+    #endif
 
     func stop(
         preservingPosition: Bool,
@@ -476,13 +634,82 @@ final class ReadAloudController {
     @discardableResult
     func beginUserNavigationIntent() -> ReadAloudUserNavigationSnapshot {
         navigationIntentGeneration &+= 1
+        explicitReadAloudForwardIntent = nil
         return ReadAloudUserNavigationSnapshot(
             generation: navigationIntentGeneration,
             isActivelySpeaking: isActivelySpeaking,
-            spokenParagraph: currentParagraph,
-            spokenPage: currentLocator?.locations.page,
-            followCreditRemaining: followCreditRemaining
+            spokenParagraph: readiumObservedText ?? currentParagraph,
+            spokenPage: (readiumObservedLocator ?? currentLocator)?.locations.page,
+            followCreditRemaining: followCreditRemaining,
+            playbackToken: playbackSessionToken,
+            playbackGeneration: playbackGeneration,
+            utteranceEpoch: readiumUtteranceEpoch
         )
+    }
+
+    /// Captures a local PDF narration session before the reader starts its
+    /// deliberate Next-page animation. Shared followers and other sessions do
+    /// not create a local restart intent.
+    func beginExplicitPageForwardIntent() -> UUID? {
+        guard isPDFReadAloudSession,
+              let playbackSessionToken,
+              readiumSynthesizer != nil,
+              ttsState.ownsPlaybackSession(playbackSessionToken) else { return nil }
+        navigationIntentGeneration &+= 1
+        let id = UUID()
+        acceptsReadAloudPositionUpdates = true
+        explicitReadAloudForwardIntent = ExplicitReadAloudForwardIntent(
+            id: id,
+            playbackToken: playbackSessionToken,
+            playbackGeneration: playbackGeneration,
+            navigationGeneration: navigationIntentGeneration,
+            spokenPage: currentLocator?.locations.page,
+            utteranceEpoch: readiumUtteranceEpoch
+        )
+        return id
+    }
+
+    /// Called on every reader Next-page exit path. A failed or boundary turn
+    /// retires only the matching intent; a successful turn leaves it armed for
+    /// the correlated destination callback.
+    func completeExplicitForward(id: UUID, didMove: Bool) {
+        guard explicitReadAloudForwardIntent?.id == id else { return }
+        if !didMove { explicitReadAloudForwardIntent = nil }
+    }
+
+    func restartAtExplicitPage(_ locator: Locator, id: UUID) -> ExplicitForwardPlaybackResult {
+        guard let intent = explicitReadAloudForwardIntent,
+              intent.id == id,
+              intent.playbackToken == playbackSessionToken,
+              intent.playbackGeneration == playbackGeneration,
+              intent.navigationGeneration == navigationIntentGeneration,
+              ttsState.ownsPlaybackSession(intent.playbackToken),
+              let activeSynthesizer = readiumSynthesizer,
+              let destinationPage = locator.locations.page else { return .rejected }
+
+        if currentLocator?.locations.page == destinationPage {
+            explicitReadAloudForwardIntent = nil
+            return .alreadyReadingDestination
+        }
+        clearPDFUtteranceSkipQueue()
+        let cursor = CustomTTSTokenizer.PDFNarrationTokenizationCursor(
+            targetPage: destinationPage
+        )
+        guard replacePDFSynthesizer(
+            old: activeSynthesizer,
+            cursor: cursor,
+            startLocator: locator,
+            targetPage: destinationPage,
+            targetParagraphStart: nil,
+            targetOrdinal: nil
+        ) else { return .rejected }
+        explicitReadAloudForwardIntent = nil
+        return .restarted
+    }
+
+    private var isPDFReadAloudSession: Bool {
+        readiumPublication?.manifest.conforms(to: .pdf) == true
+            || readerViewModel?.book.formatType == .pdf
     }
 
     /// Resolves page-turn intent for `snapshot.generation`. Returns `nil` when superseded.
@@ -499,20 +726,44 @@ final class ReadAloudController {
             ])
             return nil
         }
+        guard snapshot.playbackToken == playbackSessionToken,
+              snapshot.playbackGeneration == playbackGeneration else {
+            return nil
+        }
+        let effectiveSnapshot: ReadAloudUserNavigationSnapshot
+        if snapshot.utteranceEpoch == readiumUtteranceEpoch {
+            effectiveSnapshot = snapshot
+        } else {
+            // Extraction may take long enough for the same session to advance.
+            // Resolve against its live passage while retaining the original
+            // destination extraction and swipe generation.
+            effectiveSnapshot = ReadAloudUserNavigationSnapshot(
+                generation: snapshot.generation,
+                isActivelySpeaking: isActivelySpeaking,
+                spokenParagraph: readiumObservedText ?? currentParagraph,
+                spokenPage: (readiumObservedLocator ?? currentLocator)?.locations.page,
+                followCreditRemaining: readiumObservedText != lastLoggedUtteranceText
+                    ? 1
+                    : followCreditRemaining,
+                playbackToken: playbackSessionToken,
+                playbackGeneration: playbackGeneration,
+                utteranceEpoch: readiumUtteranceEpoch
+            )
+        }
         let intent = ReadAloudUserNavigationIntent.resolve(
-            isActivelySpeaking: snapshot.isActivelySpeaking,
-            spokenParagraph: snapshot.spokenParagraph,
+            isActivelySpeaking: effectiveSnapshot.isActivelySpeaking,
+            spokenParagraph: effectiveSnapshot.spokenParagraph,
             destinationParagraphs: destinationParagraphs,
-            spokenPage: snapshot.spokenPage,
+            spokenPage: effectiveSnapshot.spokenPage,
             destinationPage: destinationPage,
-            followCreditRemaining: snapshot.followCreditRemaining
+            followCreditRemaining: effectiveSnapshot.followCreditRemaining
         )
         switch intent {
         case .continuePlaying(consumesFollowCredit: true):
             // Only burn credit belonging to the snapshotted utterance. If the
             // utterance advanced during extract, live credit was refilled for
             // the new text — leave it alone.
-            if lastLoggedUtteranceText == snapshot.spokenParagraph {
+            if lastLoggedUtteranceText == effectiveSnapshot.spokenParagraph {
                 followCreditRemaining = max(0, followCreditRemaining - 1)
             }
             Log.event("tts.nav.intent", data: [
@@ -560,6 +811,7 @@ final class ReadAloudController {
         testSpeakingOverride = true
         guard text != lastLoggedUtteranceText else { return }
         lastLoggedUtteranceText = text
+        readiumUtteranceEpoch &+= 1
         followCreditRemaining = 1
     }
 
@@ -697,10 +949,199 @@ final class ReadAloudController {
         await coordinator.requestActiveMode(.tts)
     }
 
+    private func enqueuePDFUtteranceSkip(_ delta: Int, lease: RemoteCommandLease?) {
+        guard delta == -1 || delta == 1,
+              lease?.isValid ?? true,
+              let token = playbackSessionToken,
+              let synthesizer = readiumSynthesizer else { return }
+        if pdfSkipDrainTask == nil {
+            guard let locator = currentLocator,
+                  let page = locator.locations.page,
+                  let ordinal = locator.locations.otherLocations[
+                    CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
+                  ]?.integer else { return }
+            pdfSkipLogicalCursor = PDFUtteranceCursor(page: page, ordinal: ordinal)
+            pdfSkipExpectedSynthesizer = synthesizer
+            let drainID = UUID()
+            pdfSkipDrainID = drainID
+            pdfSkipDrainTask = Task { [weak self] in
+                await self?.drainPDFUtteranceSkips(ownerID: drainID)
+            }
+        }
+        pdfSkipSteps.append(PDFUtteranceSkipStep(
+            delta: delta,
+            playbackToken: token,
+            playbackGeneration: playbackGeneration,
+            lease: lease
+        ))
+    }
+
+    private func drainPDFUtteranceSkips(ownerID: UUID) async {
+        defer {
+            if pdfSkipDrainID == ownerID {
+                pdfSkipDrainTask = nil
+                pdfSkipDrainID = nil
+                pdfSkipExpectedSynthesizer = nil
+                pdfSkipLogicalCursor = nil
+            }
+        }
+        while !Task.isCancelled,
+              pdfSkipDrainID == ownerID,
+              !pdfSkipSteps.isEmpty {
+            let step = pdfSkipSteps.removeFirst()
+            guard step.lease?.isValid ?? true,
+                  step.playbackToken == playbackSessionToken,
+                  isCurrentPlaybackGeneration(step.playbackGeneration),
+                  let expectedSynthesizer = pdfSkipExpectedSynthesizer,
+                  readiumSynthesizer === expectedSynthesizer,
+                  let logicalCursor = pdfSkipLogicalCursor else { continue }
+
+            let target = await resolvePDFUtteranceTarget(from: logicalCursor, delta: step.delta)
+            guard !Task.isCancelled,
+                  pdfSkipDrainID == ownerID,
+                  step.lease?.isValid ?? true,
+                  step.playbackToken == playbackSessionToken,
+                  isCurrentPlaybackGeneration(step.playbackGeneration),
+                  readiumSynthesizer === expectedSynthesizer else { return }
+
+            guard let target else {
+                if step.delta > 0 {
+                    await stop(preservingPosition: true, lease: step.lease)
+                }
+                return
+            }
+            pdfSkipLogicalCursor = PDFUtteranceCursor(page: target.page, ordinal: target.ordinal)
+            clearReadAloudRestartFenceForSkip()
+            let cursor = CustomTTSTokenizer.PDFNarrationTokenizationCursor(
+                targetPage: target.page,
+                utteranceOrdinal: target.ordinal
+            )
+            guard replacePDFSynthesizer(
+                old: expectedSynthesizer,
+                cursor: cursor,
+                startLocator: target.locator,
+                targetPage: target.page,
+                targetParagraphStart: target.paragraphStart,
+                targetOrdinal: target.ordinal
+            ) else { return }
+            pdfSkipExpectedSynthesizer = readiumSynthesizer
+        }
+    }
+
+    private func resolvePDFUtteranceTarget(
+        from cursor: PDFUtteranceCursor,
+        delta: Int
+    ) async -> PDFUtteranceTarget? {
+        guard let publication = readiumPublication,
+              let base = currentLocator,
+              let readerViewModel else { return nil }
+        let documentURL = readerViewModel.documentURL
+        let publicationBox = PDFPublicationSendableBox(publication)
+        return await Task.detached(priority: .userInitiated) {
+            let publication = publicationBox.publication
+            let paragraphMap = PDFNarrationParagraphMap(documentURL: documentURL)
+            let tokenizer = CustomTTSTokenizer.tokenizePDF(
+                defaultLanguage: publication.metadata.language,
+                paragraphMap: paragraphMap
+            )
+            let pageLocator = base.copy(locations: {
+                $0.fragments = ["page=\(cursor.page)"]
+            })
+            guard let content = publication.content(from: pageLocator) else { return nil }
+            let iterator = content.iterator()
+            guard let currentPageContent = try? await iterator.next(),
+                  let tokenized = try? tokenizer(currentPageContent),
+                  let currentText = tokenized.first as? TextContentElement else { return nil }
+            let segments = currentText.segments
+            let index = segments.firstIndex {
+                $0.locator.locations.otherLocations[CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal]?.integer == cursor.ordinal
+            }
+            if let index {
+                let adjacentIndex = index + delta
+                if segments.indices.contains(adjacentIndex) {
+                    let segment = segments[adjacentIndex]
+                    let ordinal = segment.locator.locations.otherLocations[
+                        CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
+                    ]?.integer ?? adjacentIndex
+                    return PDFUtteranceTarget(
+                        page: cursor.page,
+                        ordinal: ordinal,
+                        paragraphStart: segment.locator.locations.otherLocations[
+                            CustomTTSTokenizer.PDFLocatorMetadata.paragraphStartUTF16
+                        ]?.integer,
+                        locator: segment.locator
+                    )
+                }
+            }
+
+            while true {
+                let adjacentPage = delta > 0
+                    ? try? await iterator.next()
+                    : try? await iterator.previous()
+                guard let adjacentPage,
+                      let adjacentElements = try? tokenizer(adjacentPage),
+                      let adjacentText = adjacentElements.first as? TextContentElement else { return nil }
+                guard !adjacentText.segments.isEmpty else { continue }
+                let segment = delta > 0 ? adjacentText.segments[0] : adjacentText.segments[adjacentText.segments.count - 1]
+                let page = segment.locator.locations.page ?? (cursor.page + delta)
+                let ordinal = segment.locator.locations.otherLocations[
+                    CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal
+                ]?.integer ?? 0
+                return PDFUtteranceTarget(
+                    page: page,
+                    ordinal: ordinal,
+                    paragraphStart: segment.locator.locations.otherLocations[
+                        CustomTTSTokenizer.PDFLocatorMetadata.paragraphStartUTF16
+                    ]?.integer,
+                    locator: segment.locator
+                )
+            }
+        }.value
+    }
+
+    private func clearPDFUtteranceSkipQueue() {
+        pdfSkipSteps.removeAll()
+        pdfSkipDrainTask?.cancel()
+        pdfSkipDrainTask = nil
+        pdfSkipDrainID = nil
+        pdfSkipExpectedSynthesizer = nil
+        pdfSkipLogicalCursor = nil
+    }
+
+    private func clearReadAloudRestartFenceForSkip() {
+        readiumRestartEpoch &+= 1
+        readiumRestartTarget = nil
+    }
+
+    private func replacePDFSynthesizer(
+        old: PublicationSpeechSynthesizer,
+        cursor: CustomTTSTokenizer.PDFNarrationTokenizationCursor,
+        startLocator: Locator,
+        targetPage: Int,
+        targetParagraphStart: Int?,
+        targetOrdinal: Int?
+    ) -> Bool {
+        guard let builder = readiumSynthesizerBuilder,
+              readiumSynthesizer === old,
+              let newSynthesizer = builder(cursor) else { return false }
+        readiumRestartEpoch &+= 1
+        readiumRestartTarget = (targetPage, targetParagraphStart, targetOrdinal)
+        readiumSynthesizer = newSynthesizer
+        readiumSynthesizerGeneration = playbackGeneration
+        acceptReadiumSynthesizerRestart()
+        old.stop()
+        newSynthesizer.start(from: startLocator)
+        return true
+    }
+
     func previous(lease: RemoteCommandLease? = nil) async {
         guard lease?.isValid ?? true else { return }
         if let readiumSynthesizer {
-            readiumSynthesizer.previous()
+            if isPDFReadAloudSession {
+                enqueuePDFUtteranceSkip(-1, lease: lease)
+            } else {
+                readiumSynthesizer.previous()
+            }
         } else {
             await bridge?.previous(lease: lease)
         }
@@ -709,7 +1150,11 @@ final class ReadAloudController {
     func next(lease: RemoteCommandLease? = nil) async {
         guard lease?.isValid ?? true else { return }
         if let readiumSynthesizer {
-            readiumSynthesizer.next()
+            if isPDFReadAloudSession {
+                enqueuePDFUtteranceSkip(1, lease: lease)
+            } else {
+                readiumSynthesizer.next()
+            }
         } else {
             await bridge?.next(lease: lease)
         }
@@ -717,8 +1162,45 @@ final class ReadAloudController {
 
     func repeatCurrent() async {
         if let readiumSynthesizer, let currentLocator {
-            guard await coordinator.requestActiveMode(.tts) else { return }
-            readiumSynthesizer.start(from: currentLocator)
+            guard isPDFReadAloudSession else {
+                guard await coordinator.requestActiveMode(.tts) else { return }
+                readiumSynthesizer.start(from: currentLocator)
+                return
+            }
+            guard let token = playbackSessionToken,
+                  let page = currentLocator.locations.page,
+                  let paragraphStart = currentLocator.locations.otherLocations[
+                    CustomTTSTokenizer.PDFLocatorMetadata.paragraphStartUTF16
+                  ]?.integer else {
+                Log.event("tts.readaloud.pdf.repeat_unavailable", level: .warning)
+                return
+            }
+            let targetLocator = currentLocator
+            let navigationGeneration = navigationIntentGeneration
+            let generation = playbackGeneration
+            guard await coordinator.requestActiveMode(.tts),
+                  self.readiumSynthesizer === readiumSynthesizer,
+                  self.playbackSessionToken == token,
+                  navigationIntentGeneration == navigationGeneration,
+                  isCurrentPlaybackGeneration(generation),
+                  ttsState.ownsPlaybackSession(token) else { return }
+
+            clearPDFUtteranceSkipQueue()
+            navigationIntentGeneration &+= 1
+            explicitReadAloudForwardIntent = nil
+            acceptsReadAloudPositionUpdates = true
+            let cursor = CustomTTSTokenizer.PDFNarrationTokenizationCursor(
+                targetPage: page,
+                paragraphStartUTF16: paragraphStart
+            )
+            _ = replacePDFSynthesizer(
+                old: readiumSynthesizer,
+                cursor: cursor,
+                startLocator: targetLocator,
+                targetPage: page,
+                targetParagraphStart: paragraphStart,
+                targetOrdinal: nil
+            )
         } else {
             await bridge?.repeatCurrent()
         }
@@ -1087,6 +1569,10 @@ final class ReadAloudController {
         lease: RemoteCommandLease? = nil
     ) async {
         guard lease?.isValid ?? true else { return }
+        clearPDFUtteranceSkipQueue()
+        explicitReadAloudForwardIntent = nil
+        readiumRestartTarget = nil
+        readiumRestartEpoch &+= 1
         playbackTeardownDepth += 1
         defer { playbackTeardownDepth -= 1 }
 
@@ -1115,6 +1601,7 @@ final class ReadAloudController {
         await readiumPrefetcher?.stop()
         readiumPrefetcher = nil
         readiumPublication = nil
+        readiumSynthesizerBuilder = nil
         isReadiumPlaybackPaused = false
         lastPlayingLocator = nil
         lastPlayingUtteranceText = nil
@@ -1129,6 +1616,10 @@ final class ReadAloudController {
         readiumSynthesizer = nil
         readiumState = .stopped
         playbackSessionToken = nil
+        readiumEpochLocator = nil
+        readiumEpochText = nil
+        readiumObservedLocator = nil
+        readiumObservedText = nil
         firstUtteranceGeneration = nil
         followCreditRemaining = 0
         #if DEBUG
@@ -1315,13 +1806,53 @@ extension ReadAloudController: PublicationSpeechSynthesizerDelegate {
               isCurrentPlaybackGeneration(generation)
         else { return }
         guard let sessionToken = playbackSessionToken,
-              ttsState.ownsPlaybackSession(sessionToken),
-              acceptsReadAloudPositionUpdates
+              ttsState.ownsPlaybackSession(sessionToken)
         else { return }
 
+        if let restartTarget = readiumRestartTarget {
+            let candidate: PublicationSpeechSynthesizer.Utterance?
+            switch state {
+            case let .playing(utterance, _), let .paused(utterance):
+                candidate = utterance
+            case .stopped:
+                candidate = nil
+            }
+            if let candidate {
+                let locations = candidate.locator.locations
+                let matches = locations.page == restartTarget.page
+                    && (restartTarget.paragraphStart == nil
+                        || locations.otherLocations[CustomTTSTokenizer.PDFLocatorMetadata.paragraphStartUTF16]?.integer == restartTarget.paragraphStart)
+                    && (restartTarget.utteranceOrdinal == nil
+                        || locations.otherLocations[CustomTTSTokenizer.PDFLocatorMetadata.utteranceOrdinal]?.integer == restartTarget.utteranceOrdinal)
+                guard matches else { return }
+                readiumRestartTarget = nil
+            }
+        }
+
+        switch state {
+        case let .playing(utterance, range):
+            readiumObservedLocator = range ?? utterance.locator
+            readiumObservedText = utterance.text
+            if readiumEpochText != utterance.text || readiumEpochLocator != utterance.locator {
+                readiumUtteranceEpoch &+= 1
+                readiumEpochText = utterance.text
+                readiumEpochLocator = utterance.locator
+            }
+        case let .paused(utterance):
+            readiumObservedLocator = utterance.locator
+            readiumObservedText = utterance.text
+        case .stopped:
+            break
+        }
         readiumState = state
+        let isStopped: Bool
+        if case .stopped = state { isStopped = true } else { isStopped = false }
+        guard acceptsReadAloudPositionUpdates || isStopped else { return }
         switch state {
         case .stopped:
+            clearPDFUtteranceSkipQueue()
+            explicitReadAloudForwardIntent = nil
+            readiumRestartTarget = nil
             invalidatePlaybackGeneration()
             nowPlayingController?.detach()
             isReadiumPlaybackPaused = false

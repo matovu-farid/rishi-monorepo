@@ -42,9 +42,43 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// navigation is detected separately from this state.
     public var isFollowingReadAloud = false
     private var readAloudFollowTask: Task<Void, Never>?
+    private var readAloudFollowTaskID: UUID?
+    private var readAloudFollowGeneration: UInt64 = 0
+    private var pendingReadAloudFollowLocator: Locator?
+    var readAloudFollowNavigationForTesting: (@MainActor (Locator) async -> Bool)?
     private var programmaticNavigationCallbacks = 0
     private var programmaticNavigationGeneration: UInt64 = 0
+    private var pdfProgrammaticFollow: PDFProgrammaticFollow?
+    private var explicitForward: ExplicitPageForward?
+    private var lateExplicitForwardCallback: LateExplicitForwardCallback?
     private var hasReceivedInitialLocation = false
+
+    private struct PDFProgrammaticFollow {
+        let requestID: UUID
+        let navigatorIdentity: ObjectIdentifier
+        let targetHref: String
+        let targetPage: Int
+        let followGeneration: UInt64
+        var callbackObserved: Bool
+    }
+
+    private struct ExplicitPageForward {
+        let id: UUID
+        let navigatorIdentity: ObjectIdentifier
+        let originPage: Int
+        var callbackObserved: Bool
+    }
+
+    private struct LateExplicitForwardCallback {
+        let id: UUID
+        let navigatorIdentity: ObjectIdentifier
+        let targetPage: Int
+    }
+
+    static func shouldFollowPDFTarget(targetPage: Int?, visiblePage: Int?) -> Bool {
+        guard let targetPage, let visiblePage else { return true }
+        return targetPage != visiblePage
+    }
 
     /// Forwarded to the screen so it can present the highlight context
     /// menu. The closure is also called with `nil` when the user clears
@@ -270,7 +304,8 @@ public final class ReaderNavigatorCoordinator: NSObject {
     public func highlightLocator(from selection: Selection) -> EPUBHighlightLocator? {
         var locator = selection.locator
         if let pdfSelection = pdfKitSelectionForHighlightEnrichment {
-            locator = PDFSelectionLocatorEnricher.enriching(locator, with: pdfSelection)
+            let document = (navigator as? PDFNavigatorViewController)?.pdfView?.document
+            locator = PDFSelectionLocatorEnricher.enriching(locator, with: pdfSelection, in: document)
         } else if let pdfNav = navigator as? PDFNavigatorViewController,
                   let pdfView = pdfNav.pdfView,
                   let page = pdfView.currentPage,
@@ -335,9 +370,11 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// Clears the active read-aloud passage decoration (called when TTS
     /// stops). No-ops before the navigator is built.
     public func clearReadAloudHighlight() {
-        readAloudFollowTask?.cancel()
-        readAloudFollowTask = nil
+        invalidateReadAloudFollow()
         programmaticNavigationCallbacks = 0
+        pdfProgrammaticFollow = nil
+        explicitForward = nil
+        lateExplicitForwardCallback = nil
         let group = ReaderReadAloudDecorationBuilder.groupName
         if let decorable = navigator as? any DecorableNavigator {
             decorable.apply(decorations: [], in: group)
@@ -355,6 +392,93 @@ public final class ReaderNavigatorCoordinator: NSObject {
         programmaticNavigationCallbacks = 1
     }
 
+    private func registerPDFProgrammaticFollow(
+        requestID: UUID,
+        navigator: UIViewController & VisualNavigator,
+        locator: Locator,
+        followGeneration: UInt64
+    ) {
+        guard let page = locator.locations.page else { return }
+        pdfProgrammaticFollow = PDFProgrammaticFollow(
+            requestID: requestID,
+            navigatorIdentity: ObjectIdentifier(navigator),
+            targetHref: locator.href.string,
+            targetPage: page,
+            followGeneration: followGeneration,
+            callbackObserved: false
+        )
+    }
+
+    private func clearPDFProgrammaticFollow(requestID: UUID) {
+        guard pdfProgrammaticFollow?.requestID == requestID else { return }
+        pdfProgrammaticFollow = nil
+    }
+
+    private func invalidateReadAloudFollow() {
+        readAloudFollowGeneration &+= 1
+        pendingReadAloudFollowLocator = nil
+        readAloudFollowTask?.cancel()
+        readAloudFollowTask = nil
+        readAloudFollowTaskID = nil
+        pdfProgrammaticFollow = nil
+    }
+
+    /// Arms one deliberate local PDF Next-page turn. The observed callback is
+    /// correlated to this navigator and the visible origin page; an arbitrary
+    /// callback cannot consume the intent.
+    @discardableResult
+    public func registerExplicitPageForward(id: UUID, originPage: Int) -> Bool {
+        guard let nav = navigator, nav is PDFNavigatorViewController else { return false }
+        lateExplicitForwardCallback = nil
+        explicitForward = ExplicitPageForward(
+            id: id,
+            navigatorIdentity: ObjectIdentifier(nav),
+            originPage: originPage,
+            callbackObserved: false
+        )
+        return true
+    }
+
+    /// Completes a registered Next-page turn. If Readium moved without
+    /// notifying its delegate, synthesize the tagged model update once and
+    /// retain a one-shot marker for a delayed duplicate callback.
+    @discardableResult
+    public func completeExplicitPageForward(
+        id: UUID,
+        didMove: Bool,
+        finalLocation: Locator?
+    ) -> Bool {
+        guard let request = explicitForward,
+              request.id == id,
+              navigator.map(ObjectIdentifier.init) == request.navigatorIdentity
+        else { return false }
+
+        guard didMove,
+              let finalLocation,
+              let targetPage = finalLocation.locations.page,
+              targetPage == request.originPage + 1 else {
+            explicitForward = nil
+            return false
+        }
+        if request.callbackObserved {
+            explicitForward = nil
+            return true
+        }
+
+        viewModel.didChangeLocation(
+            finalLocation,
+            isProgrammatic: false,
+            explicitForwardID: id
+        )
+        lateExplicitForwardCallback = LateExplicitForwardCallback(
+            id: id,
+            navigatorIdentity: request.navigatorIdentity,
+            targetPage: targetPage
+        )
+        explicitForward = nil
+        return false
+    }
+
     /// Follows the active read-aloud paragraph: navigates the viewport to the
     /// paragraph's locator so the page turns when the spoken paragraph has
     /// scrolled onto a later page. Uses the SAME text-anchored locator as the
@@ -370,12 +494,33 @@ public final class ReaderNavigatorCoordinator: NSObject {
             href: base.href,
             mediaType: base.mediaType
         )
-        registerProgrammaticNavigation()
+        let requestID = UUID()
+        if nav is PDFNavigatorViewController {
+            registerPDFProgrammaticFollow(
+                requestID: requestID,
+                navigator: nav,
+                locator: locator,
+                followGeneration: readAloudFollowGeneration
+            )
+        } else {
+            registerProgrammaticNavigation()
+        }
+        let programmaticGeneration = programmaticNavigationGeneration
         let didNavigate = await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
         if !didNavigate {
             // A failed Readium jump cannot produce the callback represented by
             // this token. Do not let it suppress the next real user page turn.
-            programmaticNavigationCallbacks = 0
+            if nav is PDFNavigatorViewController {
+                clearPDFProgrammaticFollow(requestID: requestID)
+            } else if programmaticNavigationGeneration == programmaticGeneration {
+                programmaticNavigationCallbacks = 0
+            }
+        } else if nav is PDFNavigatorViewController,
+                  pdfProgrammaticFollow?.requestID == requestID,
+                  pdfProgrammaticFollow?.callbackObserved == false {
+            // A successful Readium jump may not emit a visible-location
+            // callback. Never leave a token around to mask a later swipe.
+            clearPDFProgrammaticFollow(requestID: requestID)
         }
         return didNavigate
     }
@@ -384,27 +529,96 @@ public final class ReaderNavigatorCoordinator: NSObject {
     /// paragraph highlight. Used while an utterance is in flight so the
     /// viewport can keep up with a paragraph that spans a page boundary.
     public func followReadAloudLocator(_ locator: Locator) {
-        guard isFollowingReadAloud, readAloudFollowTask == nil else { return }
-        // PDF TTS emits one TextContentElement per page. The first utterance
-        // commonly starts on the page that is already visible; calling PDF
-        // `go(to:)` for that page produces no location callback, which would
-        // leave a stale programmatic token and swallow the next user turn.
-        if let publication = viewModel.publication,
-           publication.manifest.conforms(to: .pdf),
-           let currentPage = viewModel.latestLocator?.locations.page,
-           let targetPage = locator.locations.page,
-           currentPage == targetPage {
-            return
-        }
+        guard isFollowingReadAloud else { return }
+        pendingReadAloudFollowLocator = locator
+        guard readAloudFollowTask == nil else { return }
+
+        let generation = readAloudFollowGeneration
+        let taskID = UUID()
+        readAloudFollowTaskID = taskID
         readAloudFollowTask = Task { [weak self] in
             guard let self else { return }
-            self.registerProgrammaticNavigation()
-            let didNavigate = await self.go(to: locator)
-            if !didNavigate {
-                self.programmaticNavigationCallbacks = 0
+            defer {
+                if self.readAloudFollowTaskID == taskID {
+                    self.readAloudFollowTask = nil
+                    self.readAloudFollowTaskID = nil
+                }
             }
-            await MainActor.run { [weak self] in
-                self?.readAloudFollowTask = nil
+
+            while !Task.isCancelled,
+                  self.isFollowingReadAloud,
+                  self.readAloudFollowGeneration == generation,
+                  let target = self.pendingReadAloudFollowLocator {
+                self.pendingReadAloudFollowLocator = nil
+                guard let nav = self.navigator else {
+                    guard let testNavigation = self.readAloudFollowNavigationForTesting else { return }
+                    // Test navigation has no UIKit navigator identity; the
+                    // coordinator instance is its stable identity.
+                    let navigatorIdentity = ObjectIdentifier(self)
+                    let isPDF = self.viewModel.book.formatType == .pdf
+                        || self.viewModel.publication?.manifest.conforms(to: .pdf) == true
+                    let visiblePage = self.viewModel.visibleNavigatorLocator?.locations.page
+                    if isPDF, !Self.shouldFollowPDFTarget(
+                        targetPage: target.locations.page,
+                        visiblePage: visiblePage
+                    ) { continue }
+                    let didNavigate = await testNavigation(target)
+                    guard !Task.isCancelled,
+                          self.isFollowingReadAloud,
+                          self.readAloudFollowGeneration == generation,
+                          self.navigator == nil,
+                          navigatorIdentity == ObjectIdentifier(self) else { return }
+                    if !isPDF && !didNavigate {
+                        self.programmaticNavigationCallbacks = 0
+                    }
+                    continue
+                }
+                let navigatorIdentity = ObjectIdentifier(nav)
+
+                let isPDF = nav is PDFNavigatorViewController
+                    || self.viewModel.book.formatType == .pdf
+                    || self.viewModel.publication?.manifest.conforms(to: .pdf) == true
+                if isPDF,
+                   !Self.shouldFollowPDFTarget(
+                    targetPage: target.locations.page,
+                    visiblePage: (nav as? PDFNavigatorViewController)?.currentLocation?.locations.page
+                        ?? self.viewModel.visibleNavigatorLocator?.locations.page
+                   ) {
+                    continue
+                }
+
+                let requestID = UUID()
+                if isPDF {
+                    self.registerPDFProgrammaticFollow(
+                        requestID: requestID,
+                        navigator: nav,
+                        locator: target,
+                        followGeneration: generation
+                    )
+                } else {
+                    self.registerProgrammaticNavigation()
+                }
+                let didNavigate: Bool
+                if let testNavigation = self.readAloudFollowNavigationForTesting {
+                    didNavigate = await testNavigation(target)
+                } else {
+                    didNavigate = await nav.go(to: target, options: NavigatorGoOptions(animated: true))
+                }
+
+                guard !Task.isCancelled,
+                      self.isFollowingReadAloud,
+                      self.readAloudFollowGeneration == generation,
+                      self.navigator.map(ObjectIdentifier.init) == navigatorIdentity
+                else { return }
+
+                if isPDF {
+                    // Callback correlation is page/href/identity scoped. If
+                    // Readium returned without a matching callback, retire
+                    // the request before the next user navigation can arrive.
+                    self.clearPDFProgrammaticFollow(requestID: requestID)
+                } else if !didNavigate {
+                    self.programmaticNavigationCallbacks = 0
+                }
             }
         }
     }
@@ -479,12 +693,24 @@ public final class ReaderNavigatorCoordinator: NSObject {
     @discardableResult
     public func goToSharedPosition(_ locator: ReadiumShared.Locator) async -> Bool {
         guard let nav = navigator else { return false }
-        registerProgrammaticNavigation()
+        let requestID = UUID()
+        if nav is PDFNavigatorViewController {
+            registerPDFProgrammaticFollow(
+                requestID: requestID,
+                navigator: nav,
+                locator: locator,
+                followGeneration: readAloudFollowGeneration
+            )
+        } else {
+            registerProgrammaticNavigation()
+        }
         let registration = programmaticNavigationGeneration
         let didNavigate = await nav.go(to: locator, options: NavigatorGoOptions(animated: false))
         // A rejected or callback-free jump must not suppress the next real
         // swipe. An unrelated newer registration owns its own callback token.
-        if programmaticNavigationGeneration == registration {
+        if nav is PDFNavigatorViewController {
+            clearPDFProgrammaticFollow(requestID: requestID)
+        } else if programmaticNavigationGeneration == registration {
             programmaticNavigationCallbacks = 0
         }
         return didNavigate
@@ -698,19 +924,67 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
             schedulePDFViewportFitForIOS()
             #endif
         }
-        handleLocationChange(locator)
+        handleLocationChange(locator, navigatorIdentity: ObjectIdentifier(navigator as AnyObject))
     }
 
     /// Forwards a navigator location change to the view model. Only callbacks
     /// matching a registered auto-follow locator are marked programmatic; an
     /// unmatched callback is a user page turn and reaches `onUserNavigation`.
-    public func handleLocationChange(_ locator: Locator) {
+    public func handleLocationChange(
+        _ locator: Locator,
+        navigatorIdentity callbackNavigatorIdentity: ObjectIdentifier? = nil
+    ) {
         let isInitialLocation = !hasReceivedInitialLocation
         hasReceivedInitialLocation = true
+        var explicitForwardID: UUID?
+        let pdfPage = locator.locations.page
+        let callbackNavigatorIdentity = callbackNavigatorIdentity
+            ?? navigator.map(ObjectIdentifier.init)
+        let isPDFCallback = callbackNavigatorIdentity != nil
+            && viewModel.publication?.manifest.conforms(to: .pdf) == true
+
+        var isProgrammatic = false
         let tokenBefore = programmaticNavigationCallbacks
-        let isProgrammatic = programmaticNavigationCallbacks > 0
-        if isProgrammatic {
-            programmaticNavigationCallbacks -= 1
+        if isPDFCallback {
+            if let late = lateExplicitForwardCallback {
+                if late.navigatorIdentity == callbackNavigatorIdentity,
+                   late.targetPage == pdfPage {
+                    lateExplicitForwardCallback = nil
+                    Log.event("reader.nav.explicit.late_callback", data: ["id": late.id.uuidString])
+                    return
+                }
+                lateExplicitForwardCallback = nil
+            }
+
+            if let follow = pdfProgrammaticFollow {
+                let matches = follow.navigatorIdentity == callbackNavigatorIdentity
+                    && follow.targetPage == pdfPage
+                    && follow.targetHref == locator.href.string
+                if matches {
+                    isProgrammatic = true
+                    pdfProgrammaticFollow = nil
+                } else {
+                    // An unrelated visible turn must never be consumed by a
+                    // stale PDF auto-follow request.
+                    pdfProgrammaticFollow = nil
+                }
+            }
+
+            if let forward = explicitForward,
+               forward.navigatorIdentity == callbackNavigatorIdentity,
+               let page = pdfPage,
+               page == forward.originPage + 1 {
+                explicitForwardID = forward.id
+                explicitForward?.callbackObserved = true
+                explicitForward = nil
+            } else if explicitForward != nil {
+                explicitForward = nil
+            }
+        } else {
+            isProgrammatic = programmaticNavigationCallbacks > 0
+            if isProgrammatic {
+                programmaticNavigationCallbacks -= 1
+            }
         }
         Log.event("tts.nav.location", data: [
             "isProgrammatic": isProgrammatic ? "1" : "0",
@@ -730,7 +1004,8 @@ extension ReaderNavigatorCoordinator: EPUBNavigatorDelegate {
         viewModel.didChangeLocation(
             locator,
             isProgrammatic: isProgrammatic,
-            isInitialLocation: isInitialLocation
+            isInitialLocation: isInitialLocation,
+            explicitForwardID: explicitForwardID
         )
         if isInitialLocation {
             reportFirstContentReadyIfNeeded()

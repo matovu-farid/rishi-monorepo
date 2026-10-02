@@ -111,4 +111,15 @@ struct PdfParagraphGrouperTests {
         let lines = [line("Real one", y: 100), line("   ", y: 80), line("Real two", y: 60)]
         #expect(PdfParagraphGrouper.paragraphs(from: lines) == ["Real one Real two"])
     }
+
+    @Test
+    func line_groups_expose_indexes_used_by_paragraph_text() {
+        let lines = [
+            line("One", y: 200),
+            line("two", y: 188),
+            line("Three", y: 150),
+        ]
+
+        #expect(PdfParagraphGrouper.lineGroups(from: lines) == [0..<2, 2..<3])
+    }
 }

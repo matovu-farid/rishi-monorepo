@@ -69,6 +69,29 @@ struct PDFSelectionLocatorEnricherTests {
         #expect(LocatorHighlightGeometry.page(from: enriched) == 1)
     }
 
+    @Test("enriching stores the native selected UTF-16 start offset")
+    func enrichingStoresNativeSelectionStartOffset() throws {
+        let url = URL.temporaryDirectory.appendingPathComponent("enrich-offset-\(UUID().uuidString).pdf")
+        try RishiReader_FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 1, withOutline: false)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let document = try #require(PDFDocument(url: url))
+        let page = try #require(document.page(at: 0))
+        let selection = try #require(page.selection(for: page.bounds(for: .mediaBox)))
+        let rangeCount = selection.numberOfTextRanges(on: page)
+        guard rangeCount > 0 else { return }
+        let nativeRange = selection.range(at: 0, on: page)
+        #expect(nativeRange.location != NSNotFound)
+
+        let base = makePDFLocator(page: 1, text: selection.string ?? "Page 1")
+        let enriched = PDFSelectionLocatorEnricher.enriching(base, with: selection, in: document)
+        #expect(enriched.locations.otherLocations["rishiPDFSelectionStartUTF16"]?.integer == nativeRange.location)
+
+        let wrapped = try #require(EPUBSelectionCoordinator.makeLocator(fromLocator: enriched))
+        let restored = try #require(EPUBHighlightLocator.decode(jsonString: wrapped.encodedJSONString()).toReadiumLocator())
+        #expect(restored.locations.otherLocations["rishiPDFSelectionStartUTF16"]?.integer == nativeRange.location)
+    }
+
     @Test("enriching leaves locator unchanged when selection has no pages")
     func enrichingNoOpsForEmptySelection() throws {
         let url = URL.temporaryDirectory.appendingPathComponent(

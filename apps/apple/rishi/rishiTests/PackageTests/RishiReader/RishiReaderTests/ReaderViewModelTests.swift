@@ -106,6 +106,42 @@ struct ReaderViewModelTests {
         #expect(last != nil)
     }
 
+    @Test("explicit page-forward locations use their tagged callback instead of generic user navigation")
+    func explicitPageForwardUsesTaggedCallback() async throws {
+        let url = try aliceURL()
+        let vm = ReaderViewModel(
+            book: makeBook(),
+            userId: UUID(),
+            documentURL: url,
+            positionStore: InMemoryPositionStore(),
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let locator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.5, totalProgression: 0.5)
+        )
+        let intentID = UUID()
+        var genericNavigationCount = 0
+        var prefetchCount = 0
+        var explicitEvents: [(Locator, UUID)] = []
+        vm.onUserNavigation = { _ in genericNavigationCount += 1 }
+        vm.onUserNavigationForTTSPagePrefetch = { _ in prefetchCount += 1 }
+        vm.onExplicitPageForwardNavigation = { location, id in explicitEvents.append((location, id)) }
+
+        vm.didChangeLocation(locator, explicitForwardID: intentID)
+
+        #expect(explicitEvents.count == 1)
+        #expect(explicitEvents.first?.0.locations.progression == locator.locations.progression)
+        #expect(explicitEvents.first?.1 == intentID)
+        #expect(genericNavigationCount == 0)
+        #expect(prefetchCount == 0)
+    }
+
     @Test("didChangeLocation(isProgrammatic: false) fires onUserNavigation once with the locator")
     func userNavigationFiresOnUserNavigation() async throws {
         let url = try aliceURL()

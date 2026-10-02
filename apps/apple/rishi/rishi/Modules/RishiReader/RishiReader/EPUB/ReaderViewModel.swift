@@ -99,6 +99,10 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// coupling that optimization to playback lifecycle.
     public var onUserNavigationForTTSPagePrefetch: ((Locator) -> Void)?
 
+    /// Carries a deliberate local PDF page-forward intent through Readium's
+    /// asynchronous location callback without treating it as a generic swipe.
+    public var onExplicitPageForwardNavigation: ((Locator, UUID) -> Void)?
+
     /// Supplies the navigator's live visible locator when a caller needs to
     /// start read-aloud immediately after a page turn. Readium may deliver
     /// `locationDidChange` asynchronously while a page animation is still
@@ -255,7 +259,8 @@ public final class ReaderViewModel: @unchecked Sendable {
     public func didChangeLocation(
         _ locator: Locator,
         isProgrammatic: Bool = false,
-        isInitialLocation: Bool = false
+        isInitialLocation: Bool = false,
+        explicitForwardID: UUID? = nil
     ) {
         visibleNavigatorLocator = locator
         let hasExactResume = readAloudResumeLocator != nil
@@ -274,8 +279,12 @@ public final class ReaderViewModel: @unchecked Sendable {
             )
         }
         if !isProgrammatic && !isInitialLocation {
-            onUserNavigation?(locator)
-            onUserNavigationForTTSPagePrefetch?(locator)
+            if let explicitForwardID {
+                onExplicitPageForwardNavigation?(locator, explicitForwardID)
+            } else {
+                onUserNavigation?(locator)
+                onUserNavigationForTTSPagePrefetch?(locator)
+            }
         }
     }
 
@@ -384,7 +393,8 @@ public final class ReaderViewModel: @unchecked Sendable {
         {
             let passages = await Self.pdfSentences(
                 publication: publication,
-                locator: locator
+                locator: locator,
+                documentURL: documentURL
             )
             return ReaderVoiceContext(
                 title: base.title,
@@ -433,7 +443,8 @@ public final class ReaderViewModel: @unchecked Sendable {
             guard let publication else { return nil }
             return await Self.pdfSentences(
                 publication: publication,
-                locator: locator
+                locator: locator,
+                documentURL: documentURL
             ).first
         }
 
@@ -464,7 +475,8 @@ public final class ReaderViewModel: @unchecked Sendable {
             guard let publication else { return [] }
             return await Self.pdfSentences(
                 publication: publication,
-                locator: locator
+                locator: locator,
+                documentURL: documentURL
             )
         }
 
@@ -486,13 +498,14 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// synthesizer on utterance boundaries and locator text.
     nonisolated private static func pdfSentences(
         publication: Publication,
-        locator: Locator
+        locator: Locator,
+        documentURL: URL
     ) async -> [String] {
         guard let content = publication.content(from: locator) else { return [] }
 
-        let tokenizer = CustomTTSTokenizer.tokenize(
+        let tokenizer = CustomTTSTokenizer.tokenizePDF(
             defaultLanguage: publication.metadata.language,
-            granularity: .sentence
+            paragraphMap: PDFNarrationParagraphMap(documentURL: documentURL)
         )
         var sentences: [String] = []
         let targetPage = locator.locations.page

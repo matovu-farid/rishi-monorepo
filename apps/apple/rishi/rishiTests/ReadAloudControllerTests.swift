@@ -263,6 +263,27 @@ struct ReadAloudControllerTests {
         #expect(configurator.activeCalls.last?.active == true)
     }
 
+    @Test("PDF replacement reads voice settings selected after narration started")
+    func pdfReplacementUsesSettingsAppliedDuringPlayback() async {
+        let controller = makeController()
+        let selected = TTSSettings(voice: "coral", model: "gpt-4o-mini-tts", speed: 1.25)
+
+        await controller.applySettings(selected)
+
+        #expect(controller.pdfReplacementSettingsForTests == selected)
+    }
+
+    @Test("accepted PDF restart clears pause state for the next playback toggle")
+    func acceptedPDFRestartResetsPausedState() {
+        let controller = makeController()
+        controller.setReadiumPlaybackPausedForTests(true)
+
+        controller.acceptPDFSynthesizerRestartForTests()
+
+        #expect(!controller.isReadiumPlaybackPausedForTests)
+        #expect(controller.playbackStatusForTests == .playing)
+    }
+
     @Test("output route loss pauses an active legacy reader session")
     func routeLossPausesLegacyReader() async {
         let configurator = FakeAudioSessionConfigurator()

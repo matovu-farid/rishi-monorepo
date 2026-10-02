@@ -137,4 +137,46 @@ struct PDFReadAloudParagraphsTests {
             "longest paragraph (\(longest) chars) spans nearly the whole page (\(pageChars) chars)"
         )
     }
+
+    @Test("paragraph ranges preserve duplicate lines by native PDF offsets")
+    func paragraphRangesPreserveRepeatedLines() throws {
+        let url = makeTempURL("duplicate-lines")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTextPDF(to: url, lines: [
+            Line(text: "Repeated sentence.", x: 72, y: 720, fontSize: 12),
+            Line(text: "Continuation line.", x: 72, y: 704, fontSize: 12),
+            Line(text: "Repeated sentence.", x: 72, y: 560, fontSize: 12),
+            Line(text: "Continuation line.", x: 72, y: 544, fontSize: 12),
+        ])
+        let page = try firstPage(of: url)
+        let text = try #require(page.string)
+
+        guard case let .available(ranges) = PDFReadAloudParagraphs.paragraphRanges(from: page, pageText: text) else {
+            Issue.record("Expected verified PDFKit ranges")
+            return
+        }
+
+        #expect(ranges.count == 2)
+        #expect(ranges.allSatisfy { !$0.isEmpty })
+        #expect(ranges.map { (text as NSString).substring(with: NSRange(location: $0.lowerBound, length: $0.count)) }.allSatisfy { $0.contains("Repeated sentence.") })
+        #expect(ranges[0].lowerBound < ranges[1].lowerBound)
+
+        let map = PDFNarrationParagraphMap(documentURL: url)
+        #expect(map.paragraphRanges(page: 1, pageText: text) == .available(ranges))
+        #expect(map.paragraphRanges(page: 1, pageText: text + " changed") == .unavailable)
+    }
+
+    @Test("invalid native ranges fall back only to explicit blank-line boundaries")
+    func invalidNativeRangeUsesExplicitBlankLineFallback() {
+        let text = "First paragraph.\n\nSecond paragraph."
+
+        let result = PDFReadAloudParagraphs.paragraphRanges(
+            pageText: text,
+            lineGroups: [0..<1, 1..<2],
+            nativeLineRanges: [0..<5, 500..<510],
+            lineTexts: ["First paragraph.", "Second paragraph."]
+        )
+
+        #expect(result == .available([0..<16, 18..<35]))
+    }
 }

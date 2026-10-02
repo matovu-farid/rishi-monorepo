@@ -92,6 +92,7 @@ final class CustomTTSEngine: ReadiumNavigator.TTSEngine, @unchecked Sendable {
             }
 
             let settings = await settingsStore.load(userId: userId)
+            try Task.checkCancellation()
 
             // The remote stream does not expose word-level timing. Mark the
             // whole Readium paragraph active while its audio is playing.

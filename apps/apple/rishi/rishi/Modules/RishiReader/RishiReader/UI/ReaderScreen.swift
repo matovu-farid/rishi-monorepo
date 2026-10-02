@@ -103,6 +103,8 @@ public struct ReaderScreen: View {
 
     private let onReadAloud: (() -> Void)?
     private let onReadAloudFrom: ((Locator) -> Void)?
+    private let onExplicitPageForward: (() -> UUID?)?
+    private let onExplicitPageForwardCompleted: ((UUID, Bool) -> Void)?
     private let onCopyShareLink: (() -> Void)?
     private let sharedReadingMoreMenuContent: AnyView?
     private let sharedReadingSessionID: String?
@@ -207,6 +209,8 @@ public struct ReaderScreen: View {
         bookmarkMarkDirty: ((BookmarkID) async -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         onReadAloudFrom: ((Locator) -> Void)? = nil,
+        onExplicitPageForward: (() -> UUID?)? = nil,
+        onExplicitPageForwardCompleted: ((UUID, Bool) -> Void)? = nil,
         onCopyShareLink: (() -> Void)? = nil,
         sharedReadingMoreMenuContent: AnyView? = nil,
         onFirstContentReady: @escaping @MainActor () async -> Void = {},
@@ -231,6 +235,8 @@ public struct ReaderScreen: View {
         self.bookmarkMarkDirty = bookmarkMarkDirty
         self.onReadAloudFrom = onReadAloudFrom
         self.onReadAloud = onReadAloud
+        self.onExplicitPageForward = onExplicitPageForward
+        self.onExplicitPageForwardCompleted = onExplicitPageForwardCompleted
         self.onCopyShareLink = onCopyShareLink
         self.sharedReadingMoreMenuContent = sharedReadingMoreMenuContent
         self.onFirstContentReady = onFirstContentReady
@@ -1289,7 +1295,13 @@ public struct ReaderScreen: View {
         private func goForward() {
             guard !isSharedFollower else { return }
             dismissPendingSelection()
-            pageNavigator.goNext()
+            let explicitForwardID = onExplicitPageForward?()
+            Task { @MainActor in
+                let didMove = await pageNavigator.goNext(explicitForwardID: explicitForwardID)
+                if let explicitForwardID {
+                    onExplicitPageForwardCompleted?(explicitForwardID, didMove)
+                }
+            }
         }
 
         private func goBackward() {
