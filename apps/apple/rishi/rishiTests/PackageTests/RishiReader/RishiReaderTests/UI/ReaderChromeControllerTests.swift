@@ -288,4 +288,48 @@ struct ReaderChromeControllerTests {
         #expect(sleeper.sleepCallCount == 2)
         #expect(controller.isVisible == true)
     }
+
+    @Test("Pausing auto-hide keeps visible chrome up after its pending sleep resolves")
+    func pausingAutoHideKeepsChromeVisible() async {
+        let sleeper = FakeSleeper()
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: .seconds(4),
+            sleep: { duration in try await sleeper.sleep(for: duration) }
+        )
+
+        controller.show()
+        await sleeper.waitForSleep()
+        controller.pauseAutoHide()
+        sleeper.fire()
+        await Task.yield()
+
+        #expect(controller.isVisible)
+        #expect(sleeper.sleepCallCount == 1)
+    }
+
+    @Test("Resuming auto-hide arms a fresh timer")
+    func resumingAutoHideArmsFreshTimer() async {
+        let sleeper = FakeSleeper()
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: .seconds(4),
+            sleep: { duration in try await sleeper.sleep(for: duration) }
+        )
+
+        controller.show()
+        await sleeper.waitForSleep()
+        controller.pauseAutoHide()
+        sleeper.fire()
+        await Task.yield()
+
+        controller.resumeAutoHide()
+        await sleeper.waitForSleep()
+        #expect(controller.isVisible)
+        #expect(sleeper.sleepCallCount == 2)
+        #expect(sleeper.lastDuration == .seconds(4))
+
+        sleeper.fire()
+        await waitUntilHidden(controller)
+    }
 }

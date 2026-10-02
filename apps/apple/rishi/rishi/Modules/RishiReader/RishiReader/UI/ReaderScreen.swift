@@ -125,6 +125,7 @@ public struct ReaderScreen: View {
     private let keepChromeVisible: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Environment(\.dismiss) private var dismiss
 
@@ -186,6 +187,8 @@ public struct ReaderScreen: View {
 
         @State private var activeSheet: ReaderSheet?
 
+        @State private var moreMenuPresentation: ReaderMoreMenuPresentation
+
         @State private var bookmarkToggle: EPUBBookmarkToggleModel?
 
         @State private var searchModel: EPUBSearchModel?
@@ -243,12 +246,16 @@ public struct ReaderScreen: View {
         self.pdfViewMode = pdfViewMode
         self.pdfViewModeBinding = pdfViewModeBinding
         self.keepChromeVisible = keepChromeVisible
-        self._chrome = State(
-            initialValue: Self.makeChrome(
-                keepVisible: keepChromeVisible,
-                isEPUB: viewModel.book.formatType == .epub
-            )
+        let chrome = Self.makeChrome(
+            keepVisible: keepChromeVisible,
+            isEPUB: viewModel.book.formatType == .epub
         )
+        self._chrome = State(initialValue: chrome)
+        #if canImport(UIKit)
+            self._moreMenuPresentation = State(
+                initialValue: ReaderMoreMenuPresentation(chrome: chrome)
+            )
+        #endif
     }
 
     private var activePDFViewMode: PDFViewModeSetting {
@@ -496,7 +503,23 @@ public struct ReaderScreen: View {
         #if !os(macOS) && !targetEnvironment(macCatalyst)
 
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if onReadAloud != nil && !isSharedFollower {
+                        Button(action: readAloudAction) {
+                            Image(systemName: "speaker.wave.2.fill")
+                        }
+                        .popoverTip(readAloudTip)
+                        .accessibilityIdentifier("reader.toolbar.readAloud")
+                        .accessibilityLabel(A11yLabel.readerReadAloud)
+                    }
+                    if voicePresenter != nil {
+                        Button(action: voiceAction) {
+                            Image(systemName: "waveform.circle.fill")
+                        }
+                        .popoverTip(voiceChatTip)
+                        .accessibilityIdentifier("reader.toolbar.voice")
+                        .accessibilityLabel(A11yLabel.readerOpenVoice)
+                    }
                     readerMoreMenu
                 }
             }
@@ -805,36 +828,8 @@ public struct ReaderScreen: View {
 
         @ViewBuilder
         private var readerMoreMenu: some View {
+            #if targetEnvironment(macCatalyst)
             let menu = Menu {
-                #if !targetEnvironment(macCatalyst)
-                    Section("Reader") {
-                        if onReadAloud != nil && !isSharedFollower {
-                            Button(action: readAloudAction) {
-                                Label("Read Aloud", systemImage: "speaker.wave.2.fill")
-                            }
-                        }
-                        if voicePresenter != nil {
-                            Button(action: voiceAction) {
-                                Label("Voice Chat", systemImage: "waveform.circle.fill")
-                            }
-                        }
-                        Button(action: showTypographyAction) {
-                            Label("Text Size", systemImage: "textformat.size")
-                        }
-                        Button(action: showThemeAction) {
-                            Label("Appearance", systemImage: "circle.lefthalf.filled")
-                        }
-                        if let onCopyShareLink {
-                            Button {
-                                onCopyShareLink()
-                            } label: {
-                                Label("Copy share link", systemImage: "doc.on.doc")
-                            }
-                            .accessibilityIdentifier("shared-reading-copy-link")
-                        }
-                    }
-                #endif
-
                 Button(action: showTOCAction) {
                     Label("Contents", systemImage: "list.bullet.indent")
                 }
@@ -875,17 +870,135 @@ public struct ReaderScreen: View {
             }
             .accessibilityIdentifier("reader.toolbar.more")
             .accessibilityLabel("More")
+            menu
+            #else
+            let popover = Button {
+                moreMenuPresentation.binding.wrappedValue = true
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityIdentifier("reader.toolbar.more")
+            .accessibilityLabel("More")
+            .popover(
+                isPresented: moreMenuPresentation.binding,
+                arrowEdge: .top
+            ) {
+                readerMorePopoverContent
+                    .environment(\.readerMoreMenuPresentation, moreMenuPresentation)
+                    .presentationCompactAdaptation(.popover)
+            }
 
             if let sharedReadingSessionID {
                 StableSharedReaderMenu(
                     sessionID: sharedReadingSessionID,
                     isSharedFollower: isSharedFollower,
-                    content: menu
+                    content: popover
                 )
                 .equatable()
             } else {
-                menu
+                popover
             }
+            #endif
+        }
+
+        private var readerMorePopoverContent: some View {
+            ScrollView {
+                VStack(alignment: .leading, spacing: RishiSpacing.xxs) {
+                    moreMenuButton(
+                        "Text Size",
+                        systemImage: "textformat.size",
+                        identifier: "reader.toolbar.typography",
+                        action: { showTypographyAction() }
+                    )
+                    moreMenuButton(
+                        "Appearance",
+                        systemImage: "circle.lefthalf.filled",
+                        identifier: "reader.toolbar.theme",
+                        action: { showThemeAction() }
+                    )
+                    if let onCopyShareLink {
+                        moreMenuButton(
+                            "Copy share link",
+                            systemImage: "doc.on.doc",
+                            identifier: "shared-reading-copy-link",
+                            action: { onCopyShareLink() }
+                        )
+                    }
+
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    moreMenuButton(
+                        "Contents",
+                        systemImage: "list.bullet.indent",
+                        identifier: "reader.toolbar.toc",
+                        disabled: isSharedFollower,
+                        action: { showTOCAction() }
+                    )
+                    moreMenuButton(
+                        sharedReadingSessionID == nil
+                            ? (isCurrentLocatorBookmarked ? "Remove Bookmark" : "Add Bookmark")
+                            : "Toggle Bookmark",
+                        systemImage: isCurrentLocatorBookmarked ? "bookmark.fill" : "bookmark",
+                        identifier: "reader.toolbar.bookmark",
+                        action: { bookmarkToggleAction() }
+                    )
+                    moreMenuButton(
+                        "Bookmarks",
+                        systemImage: "bookmark.circle",
+                        identifier: "reader.toolbar.bookmarksList",
+                        disabled: isSharedFollower,
+                        action: { showBookmarksAction() }
+                    )
+                    moreMenuButton(
+                        "Search",
+                        systemImage: "magnifyingglass",
+                        identifier: "reader.toolbar.search",
+                        disabled: isSharedFollower,
+                        action: { showSearchAction() }
+                    )
+
+                    if let sharedReadingMoreMenuContent {
+                        sharedReadingMoreMenuContent
+                    }
+                }
+                .padding(.vertical, RishiSpacing.s)
+            }
+            .padding(.horizontal, RishiSpacing.s)
+            .frame(width: dynamicTypeSize.isAccessibilitySize ? 320 : 260, alignment: .leading)
+            .frame(maxHeight: 420)
+        }
+
+        private func moreMenuButton(
+            _ title: String,
+            systemImage: String,
+            identifier: String,
+            disabled: Bool = false,
+            action: @escaping @MainActor () -> Void
+        ) -> some View {
+            Button {
+                moreMenuPresentation.dismiss(then: action)
+            } label: {
+                HStack(spacing: RishiSpacing.s) {
+                    Image(systemName: systemImage)
+                        .font(RishiTypography.body)
+                        .imageScale(.medium)
+                        .frame(width: 24, alignment: .center)
+
+                    Text(title)
+                        .font(RishiTypography.body)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, RishiSpacing.xs)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .accessibilityIdentifier(identifier)
         }
 
     #endif

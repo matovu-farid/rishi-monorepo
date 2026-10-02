@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// Stable, non-observing shared-reading actions inserted into the reader's
-/// native More menu. Live session state must stay out of this view: navigation
-/// and playback sync update the runtime continuously, and rebuilding a native
-/// Menu while it's presented can make the system dismiss it.
+/// More popover. Live session state must stay out of this view: navigation and
+/// playback sync update the runtime continuously and should not rebuild the
+/// presentation while it is open.
 struct SharedReadingReaderMenuContent: View {
+    @Environment(\.readerMoreMenuPresentation) private var menuPresentation
+
     let hasInvitation: Bool
     let onInvite: () -> Void
     let onManageReaders: () -> Void
@@ -13,17 +15,25 @@ struct SharedReadingReaderMenuContent: View {
     var body: some View {
         Section("Shared reading") {
             if hasInvitation {
-                Button("Invite readers…") { onInvite() }
+                Button("Invite readers…") { perform { onInvite() } }
             }
-            Button("Participants…", action: onManageReaders)
+            Button("Participants…") { perform { onManageReaders() } }
             Button("Leave shared reading", role: .destructive) {
-                onLeaveSharedReading()
+                perform { onLeaveSharedReading() }
             }
+        }
+    }
+
+    private func perform(_ action: @escaping @MainActor () -> Void) {
+        if let menuPresentation {
+            menuPresentation.dismiss(then: action)
+        } else {
+            action()
         }
     }
 }
 
-/// Live session details and controller actions live outside the system Menu so
+/// Live session details and controller actions live outside the More popover so
 /// roster/progress updates cannot invalidate its presentation.
 struct SharedReadingReaderControlsSurface: View {
     @Bindable var runtime: SharedReadingSessionRuntime

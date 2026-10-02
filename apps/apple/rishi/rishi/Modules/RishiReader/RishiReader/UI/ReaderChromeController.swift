@@ -86,6 +86,7 @@ public final class ReaderChromeController {
     private let initialAutoHideDelay: Duration?
     private let sleep: @Sendable (Duration) async throws -> Void
     private var hideTask: Task<Void, Never>?
+    private var isAutoHidePaused = false
 
     /// When true the chrome is pinned: it starts visible and never toggles,
     /// hides, or auto-hides. Used on Mac Catalyst, where the toolbar (back
@@ -158,12 +159,31 @@ public final class ReaderChromeController {
         scheduleAutoHide(using: autoHideDelay)
     }
 
+    /// Suspend the idle timer while a transient reader surface is presented
+    /// inside the navigation chrome, such as the More popover.
+    public func pauseAutoHide() {
+        guard !isAutoHidePaused else { return }
+        isAutoHidePaused = true
+        cancelAutoHide()
+    }
+
+    /// Resume the idle timer after a transient chrome-hosted surface closes.
+    /// A fresh full delay gives the user time to continue reading or open a
+    /// different control after dismissing that surface.
+    public func resumeAutoHide() {
+        guard isAutoHidePaused else { return }
+        isAutoHidePaused = false
+        guard isVisible else { return }
+        scheduleAutoHide(using: autoHideDelay)
+    }
+
     // MARK: - Internal
 
     private func scheduleAutoHide(using delay: Duration) {
         cancelAutoHide()
         // Pinned chrome (Mac Catalyst) never auto-hides.
         guard !alwaysVisible else { return }
+        guard !isAutoHidePaused else { return }
         guard !accessibility.isVoiceOverRunning else { return }
 
         let sleep = self.sleep
