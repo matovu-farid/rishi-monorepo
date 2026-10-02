@@ -4,6 +4,11 @@ import SwiftUI
 /// It deliberately obtains a fresh admission ticket through `/rejoin`; the
 /// original share URL is not required and is never persisted here.
 struct ActiveReadingSessionsView: View {
+    private enum ErrorOrigin: Equatable {
+        case refresh
+        case join
+    }
+
     private struct JoinAttempt: Equatable {
         let id = UUID()
         let accountID: UserID
@@ -22,6 +27,7 @@ struct ActiveReadingSessionsView: View {
     @State private var isLoading = false
     @State private var busySessionId: String?
     @State private var error: SharedReadingError?
+    @State private var errorOrigin: ErrorOrigin?
     @State private var joinTask: Task<Void, Never>?
     @State private var joinAttempt: JoinAttempt?
     @State private var refreshToken: UUID?
@@ -108,17 +114,26 @@ struct ActiveReadingSessionsView: View {
             error == nil ? "" : "Reading session",
             isPresented: Binding(
                 get: { error != nil },
-                set: { if !$0 { error = nil } }
+                set: {
+                    if !$0 {
+                        error = nil
+                        errorOrigin = nil
+                    }
+                }
             ),
             presenting: error
         ) { presentedError in
             if presentedError.retryable {
                 Button("Try again") {
                     self.error = nil
+                    errorOrigin = nil
                     Task { await refresh(showError: true) }
                 }
             }
-            Button("OK", role: .cancel) { self.error = nil }
+            Button("OK", role: .cancel) {
+                self.error = nil
+                errorOrigin = nil
+            }
         } message: { presentedError in
             Text(presentedError.presentationMessage)
         }
@@ -159,6 +174,7 @@ struct ActiveReadingSessionsView: View {
         observedAccountGeneration = nil
         sessions = []
         error = nil
+        errorOrigin = nil
         isLoading = false
     }
 
@@ -187,7 +203,10 @@ struct ActiveReadingSessionsView: View {
                 return
             }
             sessions = refreshedSessions
-            if showError { error = nil }
+            if errorOrigin == .refresh {
+                error = nil
+                errorOrigin = nil
+            }
             Log.sharedReading(.recovery, context: .init(operation: .active, outcome: .completed))
         } catch let sharedError as SharedReadingError {
             guard refreshToken == token, !Task.isCancelled else { return }
@@ -197,7 +216,10 @@ struct ActiveReadingSessionsView: View {
                 return
             }
             Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .active, outcome: .failed, correlationID: sharedError.correlationId, errorCode: sharedError.code.rawValue))
-            if showError { error = sharedError }
+            if showError {
+                error = sharedError
+                errorOrigin = .refresh
+            }
         } catch {
             guard refreshToken == token, !Task.isCancelled else { return }
             guard AppDependencies.shared.cachedUserId == accountID,
@@ -205,7 +227,10 @@ struct ActiveReadingSessionsView: View {
                 stopRefreshing(if: token)
                 return
             }
-            if showError { self.error = SharedReadingError.from(code: .serviceUnavailable) }
+            if showError {
+                self.error = SharedReadingError.from(code: .serviceUnavailable)
+                errorOrigin = .refresh
+            }
         }
     }
 
@@ -362,13 +387,16 @@ struct ActiveReadingSessionsView: View {
             guard isCurrent(attempt) else { return }
             Log.sharedReading(.errorMapping, level: .error, context: .init(operation: .rejoin, outcome: .failed, correlationID: sharedError.correlationId, sessionID: session.sessionId, errorCode: sharedError.code.rawValue))
             error = sharedError
+            errorOrigin = .join
         } catch let serviceError as SessionBookService.ServiceError {
             guard isCurrent(attempt) else { return }
             let code: SharedReadingErrorCode = serviceError == .hashMismatch ? .bookHashMismatch : .serviceUnavailable
             error = SharedReadingError.from(code: code)
+            errorOrigin = .join
         } catch {
             guard isCurrent(attempt) else { return }
             self.error = SharedReadingError.from(code: .serviceUnavailable)
+            errorOrigin = .join
         }
     }
 

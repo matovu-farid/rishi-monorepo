@@ -447,24 +447,37 @@ export function redeemSession(input: RedeemSessionInput) {
 
 export function activeSessions(userId: string, correlationId: string, service: SessionSharingService) {
   const program = Effect.gen(function* () {
-    const redemptions = yield* SessionSharingPersistence.query("session.active.find_redemptions", (db) => db.select()
+    const rows = yield* SessionSharingPersistence.query("session.active.find_sessions", (db) => db.select({
+      redemption: sessionInviteRedemptions,
+      invite: sessionInvites,
+      book: books,
+    })
       .from(sessionInviteRedemptions)
-      .where(and(eq(sessionInviteRedemptions.userId, userId), inArray(sessionInviteRedemptions.membershipStatus, ["pending", "admitted", "left"])))
+      .innerJoin(sessionInvites, and(
+        eq(sessionInvites.id, sessionInviteRedemptions.inviteId),
+        eq(sessionInvites.status, "open"),
+      ))
+      .innerJoin(books, eq(books.id, sessionInvites.sourceBookId))
+      .where(and(
+        eq(sessionInviteRedemptions.userId, userId),
+        inArray(sessionInviteRedemptions.membershipStatus, ["pending", "admitted", "left"]),
+      ))
       .all());
-    const sessions = [];
-    for (const redemption of redemptions) {
-      const invite = yield* SessionSharingPersistence.query("session.active.find_invite", (db) => db.select()
-        .from(sessionInvites).where(and(eq(sessionInvites.id, redemption.inviteId), eq(sessionInvites.status, "open"))).get());
-      if (!invite) continue;
+    const sessions = yield* Effect.forEach(rows, (row) => Effect.gen(function* () {
+      const { redemption, invite, book } = row;
       const room = yield* getRoomOrConfirmedMissing(service, invite.sessionId);
-      if (!room || room.status === "ended") continue;
-      const book = yield* SessionSharingPersistence.query("session.active.find_book", (db) => db.select()
-        .from(books).where(eq(books.id, invite.sourceBookId)).get());
-      if (!book) continue;
+      if (!room || room.status === "ended") return null;
       const payload = yield* SessionSharingArtifacts.bookPayload(book);
-      if (payload) sessions.push({ sessionId: invite.sessionId, book: payload, status: room.status, controllerUserId: room.controllerUserId, joinedAt: redemption.createdAt });
-    }
-    return { sessions };
+      if (!payload) return null;
+      return {
+        sessionId: invite.sessionId,
+        book: payload,
+        status: room.status,
+        controllerUserId: room.controllerUserId,
+        joinedAt: redemption.createdAt,
+      };
+    }), { concurrency: 4 });
+    return { sessions: sessions.filter((session) => session !== null) };
   });
   return diagnosed("session.active", "sharing.active", correlationId, program);
 }

@@ -33,6 +33,7 @@ apps/mobile/__tests__/rag/chunker-parity.test.ts
 /RishiScreenshotDesign.fig
 /Rishi_Desktop_AppStore_*.png
 /apps/apple/fastlane/screenshots/
+/screenshots/
 
 # Xcode compiler cache
 /apps/apple/rishi/rishi.xcodeproj/-Xcc/
