@@ -101,6 +101,31 @@ struct BookFileStorageTests {
     }
 
     @Test
+    func sourceReadableRegistrationFallsBackToManagedOnReturnWithoutMaterializationServices() async throws {
+        let root = makeTempRoot("source-readable-fallback")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceDirectory = makeTempRoot("source-readable-fallback-source")
+        defer { try? FileManager.default.removeItem(at: sourceDirectory) }
+        let sourceURL = sourceDirectory.appendingPathComponent("selected.pdf")
+        try FixtureBuilders.writeTinyPDF(to: sourceURL)
+
+        let store = InMemoryBookStore()
+        let storage = makeStorage(rootURL: root, bookStore: store)
+        let ownerID = UUID()
+        let registration = try await storage.registerSourceReadable(
+            from: sourceURL,
+            ownerId: ownerID,
+            accountGeneration: 0
+        )
+        let managedURL = await storage.absoluteFileURL(for: registration.book)
+
+        #expect(registration.state == .managed)
+        #expect(registration.book.userId == ownerID)
+        #expect(FileManager.default.fileExists(atPath: managedURL.path))
+        #expect(try await store.book(registration.book.id)?.id == registration.book.id)
+    }
+
+    @Test
     func importEPUB_storesBookWithCover() async throws {
         let root = makeTempRoot("import-epub")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -159,10 +184,29 @@ struct BookFileStorageTests {
         #expect(stored == nil)
     }
 
+    @Test("purgeAll removes only the app-owned Imports staging namespace")
+    func purgeAllRemovesImportAttemptsButPreservesOtherRootFiles() async throws {
+        let root = makeTempRoot("purge-imports")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = makeStorage(rootURL: root, bookStore: InMemoryBookStore())
+        let attemptID = UUID()
+        let attemptDirectory = root.appendingPathComponent("Imports/\(attemptID.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: attemptDirectory, withIntermediateDirectories: true)
+        let stagedFile = attemptDirectory.appendingPathComponent("content.partial")
+        try Data("partial".utf8).write(to: stagedFile)
+        let unrelated = root.appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: unrelated)
+
+        try storage.purgeAll()
+
+        #expect(!FileManager.default.fileExists(atPath: attemptDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
     /// Two source files with the SAME embedded title+author+format but DIFFERENT
     /// content must remain separate so one edition cannot overwrite another.
     @Test
-    func importSameMetadataDifferentContent_yieldsSeparateBookIds() async throws {
+    func importSameMetadataDifferentContentConcurrently_yieldsSeparateBookIds() async throws {
         let root = makeTempRoot("dedup-id")
         defer { try? FileManager.default.removeItem(at: root) }
         let srcDir = makeTempRoot("dedup-id-src")
@@ -185,8 +229,9 @@ struct BookFileStorageTests {
         )
 
         let userId = UUID()
-        let bookA = try await storage.importBook(from: srcA, ownerId: userId)
-        let bookB = try await storage.importBook(from: srcB, ownerId: userId)
+        async let importedA = storage.importBook(from: srcA, ownerId: userId)
+        async let importedB = storage.importBook(from: srcB, ownerId: userId)
+        let (bookA, bookB) = try await (importedA, importedB)
 
         #expect(bookA.id != bookB.id)
         #expect((await store.snapshot()).count == 2)

@@ -63,11 +63,11 @@ struct LibraryDropDestination: ViewModifier {
                 guard !providers.isEmpty else { return false }
                 Task {
                     let urls = await Self.urls(from: providers)
+                    defer { Self.removeTemporaryCopies(urls) }
                     let supported = ImportCoordinator.filterSupported(urls)
                     guard !supported.isEmpty else { return }
-                    let outcomes = await coordinator.importBooks(supported)
+                    let outcomes = await coordinator.registerOwnedSourceReadableBooks(supported)
                     onImported(outcomes)
-                    Self.removeTemporaryCopies(urls)
                 }
                 return true
             }
@@ -76,7 +76,7 @@ struct LibraryDropDestination: ViewModifier {
                 let supported = ImportCoordinator.filterSupported(urls)
                 guard !supported.isEmpty else { return false }
                 Task {
-                    let outcomes = await coordinator.importBooks(supported)
+                    let outcomes = await coordinator.registerOwnedSourceReadableBooks(supported)
                     onImported(outcomes)
                 }
                 return true
@@ -182,7 +182,8 @@ private enum DragDropPreviewFixtures {
         let capturedUserId = userId
         return ImportCoordinator(
             storage: storage,
-            currentUserId: { capturedUserId }
+            currentUserId: { capturedUserId },
+            lifecycle: nil
         )
     }
 }

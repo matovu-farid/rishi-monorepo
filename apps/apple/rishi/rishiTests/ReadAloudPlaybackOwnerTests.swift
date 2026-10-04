@@ -21,6 +21,11 @@ private final class FakePlaybackOwner: ReadAloudPlaybackOwnering {
         installedHosts.removeAll { $0 == host }
     }
 
+    func stop(reader: ReaderViewModel) async -> Bool {
+        _ = reader
+        return false
+    }
+
     func stopForAccountChange() async {
         stopForAccountChangeCalls += 1
         installedHosts.removeAll()

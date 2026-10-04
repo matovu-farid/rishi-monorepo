@@ -238,17 +238,20 @@ public final class CarPlayCatalogLoader {
     private let bookStore: any BookStore
     private let positionStore: any PositionStore
     private let bookFileStorage: BookFileStorage
+    private let sourceResolver: any BookSourceResolving
     private let accountSnapshot: @MainActor @Sendable () -> CarPlayAccountSnapshot?
 
     public init(
         bookStore: any BookStore,
         positionStore: any PositionStore,
         bookFileStorage: BookFileStorage,
+        sourceResolver: any BookSourceResolving,
         accountSnapshot: @escaping @MainActor @Sendable () -> CarPlayAccountSnapshot?
     ) {
         self.bookStore = bookStore
         self.positionStore = positionStore
         self.bookFileStorage = bookFileStorage
+        self.sourceResolver = sourceResolver
         self.accountSnapshot = accountSnapshot
     }
 
@@ -258,11 +261,11 @@ public final class CarPlayCatalogLoader {
         let books = try await bookStore.books(for: captured.userID)
         guard accountSnapshot() == captured else { return nil }
 
-        let localBooks = await Self.localBooks(
+        guard let localBooks = await readableBooks(
             from: books,
-            storage: bookFileStorage
-        )
-        guard accountSnapshot() == captured else { return nil }
+            sourceResolver: sourceResolver,
+            account: captured
+        ) else { return nil }
 
         var positions: [Position] = []
         positions.reserveCapacity(localBooks.count)
@@ -315,18 +318,33 @@ public final class CarPlayCatalogLoader {
         return CarPlayCatalogSnapshot(sections: sections)
     }
 
-    private nonisolated static func localBooks(
+    private func readableBooks(
         from books: [Book],
-        storage: BookFileStorage
-    ) async -> [Book] {
-        await Task.detached(priority: .utility) {
-            books.filter { book in
-                book.formatType == .epub &&
-                FileManager.default.fileExists(
-                    atPath: storage.absoluteFileURL(for: book).path
-                )
+        sourceResolver: any BookSourceResolving,
+        account: CarPlayAccountSnapshot
+    ) async -> [Book]? {
+        var readable: [Book] = []
+        for book in books where book.userId == account.userID && book.formatType == .epub {
+            guard accountSnapshot() == account else { return nil }
+            do {
+                let lease = try await sourceResolver.acquireReadableSource(for: book)
+                let hasAccountAuthority: Bool
+                if case let .account(permit) = lease.access {
+                    hasAccountAuthority = permit.ownerID == account.userID &&
+                        permit.accountGeneration == account.generation &&
+                        permit.bookID == book.id
+                } else {
+                    hasAccountAuthority = false
+                }
+                let isReadable = hasAccountAuthority &&
+                    FileManager.default.fileExists(atPath: lease.url.path)
+                guard accountSnapshot() == account else { return nil }
+                if isReadable { readable.append(book) }
+            } catch {
+                guard accountSnapshot() == account else { return nil }
             }
-        }.value
+        }
+        return accountSnapshot() == account ? readable : nil
     }
 
     private nonisolated static func readCachedCoverData(

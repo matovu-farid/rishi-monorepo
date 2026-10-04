@@ -50,6 +50,25 @@ public actor RishiChatService: ChatService {
         self.clock = clock
     }
 
+    /// Creates a reader-scoped facade over this service's transport and
+    /// consent providers. Reader composition supplies source-bound local
+    /// stores and dirty effects while account chat keeps the shared instance.
+    public nonisolated func scoped(
+        conversationLookup: ConversationLookup,
+        messageStore: any MessageStore,
+        dirtyHook: (any ChatDirtyHook)?
+    ) -> RishiChatService {
+        RishiChatService(
+            userIdProvider: userIdProvider,
+            workerClient: workerClient,
+            dataUseConsentProvider: dataUseConsentProvider,
+            conversationLookup: conversationLookup,
+            messageStore: messageStore,
+            dirtyHook: dirtyHook,
+            clock: clock
+        )
+    }
+
     @available(*, deprecated, message: "Use the initializer without conversationStore; ConversationLookup is now the canonical persistence seam.")
     public init(
         userIdProvider: @escaping @Sendable () async -> UserID?,

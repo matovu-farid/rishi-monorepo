@@ -48,8 +48,14 @@ public final class UserDefaultsReaderSettingsStore: ReaderSettingsStore, @unchec
     }
 
     public func setTheme(_ theme: ReaderTheme, for bookId: BookID) async {
-        defaults.set(theme.rawValue, forKey: themeKey(bookId))
+        writeThemeSynchronously(theme, for: bookId)
         Log.reader.debug("Persisted reader theme \(theme.rawValue) for book \(bookId.uuidString)")
+    }
+
+    /// Synchronous primitive used by the scoped adapter while it holds the
+    /// source and canonical mutation admissions through the write.
+    public func writeThemeSynchronously(_ theme: ReaderTheme, for bookId: BookID) {
+        defaults.set(theme.rawValue, forKey: themeKey(bookId))
     }
 
     // MARK: - Typography
@@ -68,10 +74,16 @@ public final class UserDefaultsReaderSettingsStore: ReaderSettingsStore, @unchec
     }
 
     public func setTypography(_ typography: ReaderTypography, for bookId: BookID) async {
+        writeTypographySynchronously(typography, for: bookId)
+        Log.reader.debug("Persisted reader typography for book \(bookId.uuidString): \(typography.fontFamily.rawValue) \(typography.fontSize.points)pt lh=\(typography.lineHeight.multiplier)")
+    }
+
+    /// Synchronous primitive used by the scoped adapter inside its guarded
+    /// settings write closure.
+    public func writeTypographySynchronously(_ typography: ReaderTypography, for bookId: BookID) {
         defaults.set(typography.fontFamily.rawValue, forKey: fontFamilyKey(bookId))
         defaults.set(typography.fontSize.points, forKey: fontSizeKey(bookId))
         defaults.set(typography.lineHeight.multiplier, forKey: lineHeightKey(bookId))
-        Log.reader.debug("Persisted reader typography for book \(bookId.uuidString): \(typography.fontFamily.rawValue) \(typography.fontSize.points)pt lh=\(typography.lineHeight.multiplier)")
     }
 
     // MARK: - Keys

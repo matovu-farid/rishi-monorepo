@@ -58,6 +58,7 @@ public protocol PublicationLoading: Sendable {
 public final class PublicationLoader: PublicationLoading, Sendable {
 
     private let unpackedCache: EPUBUnpackedCache?
+    private let cachePolicy: BookSourceCachePolicy?
 
     /// Designated initialiser. Default `unpackedCache` is a system-caches
     /// backed instance so existing zero-arg call sites (
@@ -68,8 +69,12 @@ public final class PublicationLoader: PublicationLoading, Sendable {
     /// Pass `nil` to disable the cache entirely (legacy ZIP-asset path
     /// only) — used by tests that want to assert the pre-Plan-21-04
     /// behaviour.
-    public init(unpackedCache: EPUBUnpackedCache? = EPUBUnpackedCache()) {
+    public init(
+        unpackedCache: EPUBUnpackedCache? = EPUBUnpackedCache(),
+        cachePolicy: BookSourceCachePolicy? = nil
+    ) {
         self.unpackedCache = unpackedCache
+        self.cachePolicy = cachePolicy
     }
 
     /// Opens the EPUB or PDF at `fileURL`. EPUB files may use the warm
@@ -188,9 +193,20 @@ public final class PublicationLoader: PublicationLoading, Sendable {
     /// to the ZIP-asset path if Readium can't open the directory.
     private func resolveWarmDirectoryURL(for fileURL: URL) async -> URL? {
         guard fileURL.pathExtension.caseInsensitiveCompare("epub") == .orderedSame,
-              let cache = unpackedCache,
-              let bookId = Self.bookId(forFileURL: fileURL)
-        else { return nil }
+              let cache = unpackedCache else { return nil }
+
+        let bookId: BookID?
+        switch cachePolicy {
+        case .transient:
+            bookId = nil
+        case .managed(let id, _):
+            bookId = id
+        case nil:
+            // Preserve fixture and standalone loader behavior. Reader
+            // composition always supplies the source lease's explicit policy.
+            bookId = Self.bookId(forFileURL: fileURL)
+        }
+        guard let bookId else { return nil }
 
         if let warm = cache.unpackedDirectoryIfFresh(for: bookId, sourceFileURL: fileURL) {
             return warm

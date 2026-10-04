@@ -44,6 +44,7 @@ public actor SharePackageService {
         case accountChanged
         case alreadyUsed
         case syncQueueUnavailable
+        case bookNotReady
     }
 
     private struct PartialImportError: Error {
@@ -59,11 +60,15 @@ public actor SharePackageService {
     private let urlSession: URLSession
     private let pendingStore: PendingShareStore
     private let currentUserId: @Sendable () async -> UserID?
+    private let managedFingerprintProvider: (@Sendable (Book) async -> BookFileFingerprint?)?
+    private let awaitManagedFingerprintProvider: (@Sendable (Book) async throws -> BookFileFingerprint)?
     private var redemptionTask: Task<PendingShareResult, Never>?
     private var pendingRedemptionRerunRequested = false
     private var accountSwitchInProgress = false
     private var preparedCache: [PreparedCacheKey: PreparedCacheEntry] = [:]
     private var prewarmTasks: [PrewarmKey: Task<Void, Never>] = [:]
+    private var prewarmInFlightBookIDs: Set<BookID> = []
+    private var prewarmRequestedAgain: Set<BookID> = []
     private var handedOutOneTimePackageIDs: Set<String> = []
     private var activeUserID: UserID?
 
@@ -74,7 +79,9 @@ public actor SharePackageService {
         syncEngine: SyncEngine,
         urlSession: URLSession = .shared,
         pendingStore: PendingShareStore = .shared,
-        currentUserId: @escaping @Sendable () async -> UserID?
+        currentUserId: @escaping @Sendable () async -> UserID?,
+        managedFingerprintProvider: (@Sendable (Book) async -> BookFileFingerprint?)? = nil,
+        awaitManagedFingerprintProvider: (@Sendable (Book) async throws -> BookFileFingerprint)? = nil
     ) {
         self.workerClient = workerClient
         self.bookStore = bookStore
@@ -91,6 +98,8 @@ public actor SharePackageService {
         self.urlSession = urlSession
         self.pendingStore = pendingStore
         self.currentUserId = currentUserId
+        self.managedFingerprintProvider = managedFingerprintProvider
+        self.awaitManagedFingerprintProvider = awaitManagedFingerprintProvider
     }
 
     public init(
@@ -102,7 +111,9 @@ public actor SharePackageService {
         currentUserId: @escaping @Sendable () async -> UserID?,
         syncBeforeCreate: @escaping @Sendable () async -> Void,
         markBookDirty: @escaping @Sendable (BookID) async -> Void,
-        syncAfterImport: @escaping @Sendable () async -> Void = {}
+        syncAfterImport: @escaping @Sendable () async -> Void = {},
+        managedFingerprintProvider: (@Sendable (Book) async -> BookFileFingerprint?)? = nil,
+        awaitManagedFingerprintProvider: (@Sendable (Book) async throws -> BookFileFingerprint)? = nil
     ) {
         self.workerClient = workerClient
         self.bookStore = bookStore
@@ -116,6 +127,8 @@ public actor SharePackageService {
         self.urlSession = urlSession
         self.pendingStore = pendingStore
         self.currentUserId = currentUserId
+        self.managedFingerprintProvider = managedFingerprintProvider
+        self.awaitManagedFingerprintProvider = awaitManagedFingerprintProvider
     }
 
     public func enqueue(token: String) async {
@@ -166,9 +179,34 @@ public actor SharePackageService {
     public func prewarm(bookIDs: [BookID]) async {
         guard !accountSwitchInProgress else { return }
         guard let userID = try? await currentAccount() else { return }
-        let normalized = normalizedBookIDs(bookIDs)
+        let requested = normalizedBookIDs(bookIDs).filter { needsPrewarm(for: $0, userID: userID) }
+        let overlapping = requested.filter { prewarmInFlightBookIDs.contains($0) }
+        prewarmRequestedAgain.formUnion(overlapping)
+        let normalized = requested.filter { !prewarmInFlightBookIDs.contains($0) }
         guard !normalized.isEmpty else { return }
-        let booksToPrepare = normalized.filter { needsPrewarm(for: $0, userID: userID) }
+        prewarmInFlightBookIDs.formUnion(normalized)
+        defer { finishPrewarm(for: normalized, userID: userID) }
+        var booksToPrepare: [BookID] = []
+        for bookID in normalized {
+            // Keep the standalone/test initializer's historical behavior when
+            // no readiness provider is wired. Production supplies one, so
+            // imports still cannot be prewarmed before managed acceptance.
+            let isReadyForPrewarm: Bool
+            if managedFingerprintProvider == nil && awaitManagedFingerprintProvider == nil {
+                isReadyForPrewarm = true
+            } else {
+                isReadyForPrewarm = await hasManagedAcceptance(
+                    bookID: bookID,
+                    userID: userID,
+                    waitForReady: false
+                )
+            }
+            guard isReadyForPrewarm else {
+                Log.event("sharing.prewarm.skipped", data: ["book_id": bookID.uuidString, "reason": "book_not_managed_or_accepted"])
+                continue
+            }
+            booksToPrepare.append(bookID)
+        }
         guard !booksToPrepare.isEmpty else { return }
 
         for chunk in booksToPrepare.chunked(maxCount: Self.prepareBatchLimit) {
@@ -185,7 +223,7 @@ public actor SharePackageService {
             let task = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    _ = try await self.prepareForAccount(bookIDs: pendingChunk, userID: userID)
+                    _ = try await self.prepareForAccount(bookIDs: pendingChunk, userID: userID, waitForReady: false)
                 } catch is CancellationError {
                     return
                 } catch {
@@ -201,6 +239,22 @@ public actor SharePackageService {
         }
     }
 
+    /// Releases per-book claims only after readiness checks and chunk tasks
+    /// finish. If a managed-ready callback overlapped a library-wide prewarm
+    /// that skipped the still-pending book, enqueue one retry; successful
+    /// preparation makes `needsPrewarm` false and suppresses duplicate work.
+    private func finishPrewarm(for bookIDs: [BookID], userID: UserID) {
+        let completed = Set(bookIDs)
+        prewarmInFlightBookIDs.subtract(completed)
+        let rerun = completed
+            .intersection(prewarmRequestedAgain)
+            .filter { needsPrewarm(for: $0, userID: userID) }
+        prewarmRequestedAgain.subtract(completed)
+        guard !rerun.isEmpty, !accountSwitchInProgress else { return }
+        let rerunBookIDs = normalizedBookIDs(Array(rerun))
+        Task { await self.prewarm(bookIDs: rerunBookIDs) }
+    }
+
     /// Explicit lifecycle hook for sign-out/account changes. The current-user
     /// closure is still checked around every request to fence stale results.
     public func accountDidChange() {
@@ -213,6 +267,7 @@ public actor SharePackageService {
     public func beginAccountSwitchAndWait() async {
         accountSwitchInProgress = true
         pendingRedemptionRerunRequested = false
+        prewarmRequestedAgain.removeAll()
         let activePrewarmTasks = Array(prewarmTasks.values)
         invalidatePreparedCache()
         for task in activePrewarmTasks {
@@ -252,7 +307,7 @@ public actor SharePackageService {
             return cached.package.packageResponse
         }
 
-        let response = try await prepareForAccount(bookIDs: [bookID], userID: userID)
+        let response = try await prepareForAccount(bookIDs: [bookID], userID: userID, waitForReady: true)
         guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         guard let preparedBook = response.links.first(where: {
             $0.bookID.caseInsensitiveCompare(bookID.uuidString) == .orderedSame
@@ -280,7 +335,7 @@ public actor SharePackageService {
     public func prepare(bookIDs: [BookID]) async throws -> SharePrepareResponse {
         guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         let userID = try await currentAccount()
-        let response = try await prepareForAccount(bookIDs: normalizedBookIDs(bookIDs), userID: userID)
+        let response = try await prepareForAccount(bookIDs: normalizedBookIDs(bookIDs), userID: userID, waitForReady: true)
         try await ensureAccount(userID)
         guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         return response
@@ -583,7 +638,8 @@ public actor SharePackageService {
 
     private func prepareForAccount(
         bookIDs: [BookID],
-        userID: UserID
+        userID: UserID,
+        waitForReady: Bool = true
     ) async throws -> SharePrepareResponse {
         guard !accountSwitchInProgress else { throw ServiceError.accountChanged }
         let normalized = normalizedBookIDs(bookIDs)
@@ -591,9 +647,14 @@ public actor SharePackageService {
             return SharePrepareResponse(links: [], skipped: [])
         }
 
+        let (readyBookIDs, readinessSkipped) = try await shareableBookIDs(
+            normalized,
+            userID: userID,
+            waitForReady: waitForReady
+        )
         var links: [SharePreparedBook] = []
-        var skipped: [SharePrepareSkippedBook] = []
-        for chunk in normalized.chunked(maxCount: Self.prepareBatchLimit) {
+        var skipped: [SharePrepareSkippedBook] = readinessSkipped
+        for chunk in readyBookIDs.chunked(maxCount: Self.prepareBatchLimit) {
             try Task.checkCancellation()
             let response = try await workerClient.send(
                 SharePrepareEndpoint(body: .init(bookIDs: chunk.map(\.uuidString)))
@@ -627,6 +688,76 @@ public actor SharePackageService {
             }
         }
         return SharePrepareResponse(links: links, skipped: skipped)
+    }
+
+    private func shareableBookIDs(
+        _ bookIDs: [BookID],
+        userID: UserID,
+        waitForReady: Bool
+    ) async throws -> ([BookID], [SharePrepareSkippedBook]) {
+        guard managedFingerprintProvider != nil || awaitManagedFingerprintProvider != nil else {
+            return (bookIDs, [])
+        }
+        var ready: [BookID] = []
+        var skipped: [SharePrepareSkippedBook] = []
+        var needsSync = false
+        for bookID in bookIDs {
+            guard let book = try await bookStore.book(bookID), book.userId == userID else {
+                skipped.append(SharePrepareSkippedBook(bookID: bookID.uuidString, code: "book_not_found"))
+                continue
+            }
+            var fingerprint: BookFileFingerprint?
+            if waitForReady, let awaitManagedFingerprintProvider {
+                fingerprint = try await awaitManagedFingerprintProvider(book)
+            } else {
+                fingerprint = await managedFingerprintProvider?(book)
+            }
+            if isAccepted(fingerprint) {
+                ready.append(bookID)
+                continue
+            }
+            if waitForReady {
+                needsSync = true
+                skipped.append(SharePrepareSkippedBook(bookID: bookID.uuidString, code: "book_not_accepted"))
+            } else {
+                skipped.append(SharePrepareSkippedBook(bookID: bookID.uuidString, code: "book_not_managed_or_accepted"))
+            }
+        }
+        guard waitForReady, needsSync else { return (ready, skipped) }
+        await syncAfterImport()
+        try await ensureAccount(userID)
+        var stillReady = ready
+        var remaining: [SharePrepareSkippedBook] = []
+        for item in skipped {
+            guard item.code == "book_not_accepted", let bookID = BookID(uuidString: item.bookID),
+                  let book = try await bookStore.book(bookID) else {
+                remaining.append(item)
+                continue
+            }
+            let fingerprint = await managedFingerprintProvider?(book)
+            if isAccepted(fingerprint) {
+                stillReady.append(bookID)
+            } else {
+                remaining.append(item)
+            }
+        }
+        return (stillReady, remaining)
+    }
+
+    private func hasManagedAcceptance(bookID: BookID, userID: UserID, waitForReady: Bool) async -> Bool {
+        guard let book = try? await bookStore.book(bookID), book.userId == userID else { return false }
+        let fingerprint: BookFileFingerprint?
+        if waitForReady, let awaitManagedFingerprintProvider {
+            fingerprint = try? await awaitManagedFingerprintProvider(book)
+        } else {
+            fingerprint = await managedFingerprintProvider?(book)
+        }
+        return isAccepted(fingerprint)
+    }
+
+    private func isAccepted(_ fingerprint: BookFileFingerprint?) -> Bool {
+        guard let fingerprint, let acceptance = fingerprint.serverAcceptance else { return false }
+        return acceptance.sha256.caseInsensitiveCompare(fingerprint.sha256) == .orderedSame
     }
 }
 

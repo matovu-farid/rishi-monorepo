@@ -1,6 +1,16 @@
 import Foundation
 import CryptoKit
 
+public struct BookUploadSource: Sendable {
+    public let url: URL
+    public let fingerprint: BookFileFingerprint
+
+    public init(url: URL, fingerprint: BookFileFingerprint) {
+        self.url = url
+        self.fingerprint = fingerprint
+    }
+}
+
 
 
 
@@ -32,19 +42,28 @@ public final class BookUploader: Sendable {
     private let fileStorage: BookFileStorage
     private let urlSession: URLSession
     private let userIdProvider: @Sendable () async -> String?
+    private let managedSourceProvider: @Sendable (Book) async throws -> BookUploadSource?
+    private let currentGeneration: @Sendable () async -> UInt64?
+    private let persistServerAcceptance: @Sendable (Book, UInt64, BookFileFingerprint, BookServerAcceptance) async -> Bool
 
     public init(
         workerClient: WorkerClient,
         metadataStore: any SyncMetadataStore,
         fileStorage: BookFileStorage,
         urlSession: URLSession = .shared,
-        userIdProvider: @escaping @Sendable () async -> String?
+        userIdProvider: @escaping @Sendable () async -> String?,
+        managedSourceProvider: @escaping @Sendable (Book) async throws -> BookUploadSource? = { _ in nil },
+        currentGeneration: @escaping @Sendable () async -> UInt64? = { nil },
+        persistServerAcceptance: @escaping @Sendable (Book, UInt64, BookFileFingerprint, BookServerAcceptance) async -> Bool = { _, _, _, _ in false }
     ) {
         self.workerClient = workerClient
         self.metadataStore = metadataStore
         self.fileStorage = fileStorage
         self.urlSession = urlSession
         self.userIdProvider = userIdProvider
+        self.managedSourceProvider = managedSourceProvider
+        self.currentGeneration = currentGeneration
+        self.persistServerAcceptance = persistServerAcceptance
     }
 
     /// Upload a single book's bytes. Throws on any failure (without marking
@@ -57,6 +76,12 @@ public final class BookUploader: Sendable {
         let operationId = try await metadataStore.ensureOperationId(entityId: book.id, kind: .book)
         let key = Self.r2Key(for: book, userId: ownerId)
         let contentType = Self.contentType(for: book.formatType)
+
+        guard let managedSource = try await managedSourceProvider(book),
+              managedSource.fingerprint.bookID == book.id,
+              managedSource.fingerprint.ownerID == book.userId else {
+            throw UploadError.bytesUnreadable(fileStorage.absoluteFileURL(for: book))
+        }
 
         // 1. Request a presigned PUT URL from the worker.
         let presigned: PresignedURLResponse
@@ -74,7 +99,7 @@ public final class BookUploader: Sendable {
         }
 
         // 2. Read the bytes off disk.
-        let absoluteFileURL = fileStorage.absoluteFileURL(for: book)
+        let absoluteFileURL = managedSource.url
         let data: Data
         do {
             data = try Data(contentsOf: absoluteFileURL)
@@ -84,6 +109,10 @@ public final class BookUploader: Sendable {
         let fileHash = SHA256.hash(data: data)
             .map { String(format: "%02x", $0) }
             .joined()
+        guard fileHash.caseInsensitiveCompare(managedSource.fingerprint.sha256) == .orderedSame,
+              Int64(data.count) == managedSource.fingerprint.version.byteCount else {
+            throw UploadError.bytesUnreadable(absoluteFileURL)
+        }
 
         // 3. PUT to R2.
         var request = URLRequest(url: putURL)
@@ -143,6 +172,21 @@ public final class BookUploader: Sendable {
             if case UploadError.serverRejected = error { throw error }
             Log.error("sync.book.metadata.push.failed", error: error)
             throw UploadError.presignedRequestFailed("metadata push failed: \(error)")
+        }
+
+        // Persist readiness before clearing the durable queue entry. If this
+        // CAS fails (including an unavailable account generation), the dirty
+        // book remains eligible for retry and dependents stay gated.
+        guard let generation = await currentGeneration() else {
+            throw UploadError.presignedRequestFailed("account generation unavailable after server acceptance")
+        }
+        let acceptance = BookServerAcceptance(
+            sha256: fileHash,
+            acceptedOperationID: operationId,
+            acceptedAt: response.acceptedAt
+        )
+        guard await persistServerAcceptance(book, generation, managedSource.fingerprint, acceptance) else {
+            throw UploadError.presignedRequestFailed("could not persist book server acceptance")
         }
 
         // 4. markClean with the server's ETag for future change-detection.

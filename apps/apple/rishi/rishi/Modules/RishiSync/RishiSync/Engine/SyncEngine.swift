@@ -111,6 +111,7 @@ public actor SyncEngine {
         public let dataUseConsentProvider: any WorkerDataUseConsentProvider
         public let currentUserId: @Sendable () async -> UserID?
         public let localSyncObjectBuilder: LocalSyncObjectBuilder?
+        public let bookReadinessPolicy: BookReadinessPolicy?
 
         public init(
             queue: SyncQueue,
@@ -131,7 +132,8 @@ public actor SyncEngine {
             messageStore: any MessageStore,
             dataUseConsentProvider: any WorkerDataUseConsentProvider = AlwaysAllowWorkerDataUseConsentProvider(),
             currentUserId: @escaping @Sendable () async -> UserID? = { nil },
-            localSyncObjectBuilder: LocalSyncObjectBuilder? = nil
+            localSyncObjectBuilder: LocalSyncObjectBuilder? = nil,
+            bookReadinessPolicy: BookReadinessPolicy? = nil
         ) {
             self.queue = queue
             self.metadataStore = metadataStore
@@ -152,6 +154,7 @@ public actor SyncEngine {
             self.dataUseConsentProvider = dataUseConsentProvider
             self.currentUserId = currentUserId
             self.localSyncObjectBuilder = localSyncObjectBuilder
+            self.bookReadinessPolicy = bookReadinessPolicy
         }
     }
 
@@ -265,7 +268,8 @@ public actor SyncEngine {
             bookmarkUploader: bookmarkUploader,
             chapterIndexUploader: chapterIndexUploader,
             dataUseConsentProvider: dependencies.dataUseConsentProvider,
-            currentUserId: dependencies.currentUserId
+            currentUserId: dependencies.currentUserId,
+            readinessPolicy: dependencies.bookReadinessPolicy
         ))
         self.statusReporter = SyncStatusReporter(metadataStore: metadataStore)
 
@@ -465,6 +469,15 @@ public actor SyncEngine {
     /// network and storage awaits, allowing another caller to re-enter.
     @discardableResult
     public func runOnce() async -> Wave {
+        await runOnce(onWaveID: nil)
+    }
+
+    @discardableResult
+    public func runOnce(onWaveID: @escaping @MainActor @Sendable (UUID) -> Void) async -> Wave {
+        await runOnce(onWaveID: Optional(onWaveID))
+    }
+
+    private func runOnce(onWaveID: (@MainActor @Sendable (UUID) -> Void)?) async -> Wave {
         guard !resetInProgress else { return Wave() }
 
         let task: Task<Wave, Never>
@@ -487,6 +500,7 @@ public actor SyncEngine {
             }
         }
         waveWaiterCounts[token, default: 0] += 1
+        if let onWaveID { await onWaveID(token) }
 
         let waiter = WaveWaiter()
         Task {
@@ -515,6 +529,7 @@ public actor SyncEngine {
     private func clearActiveWave(token: UUID) {
         waveWaiterCounts[token] = nil
         guard activeWaveToken == token else { return }
+        status?.recordCompletedWave(token)
         activeWaveTask = nil
         activeWaveToken = nil
     }

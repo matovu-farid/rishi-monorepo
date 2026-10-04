@@ -25,6 +25,12 @@ struct RishiSearchIndexingHookTests {
         func record() { count += 1 }
     }
 
+    actor CompletionRecorder {
+        private(set) var completed = false
+
+        func markCompleted() { completed = true }
+    }
+
     private struct CountingBlockingTextExtractor: PerBookTextExtractor {
         let recorder: ExtractionRecorder
         let gate: RishiReaderLoadGate
@@ -253,7 +259,20 @@ struct RishiSearchIndexingHookTests {
         #expect(started)
         #expect(await recorder.count == 1)
 
+        let completion = CompletionRecorder()
+        let awaitExistingTask = Task {
+            await hook.scheduleIndexingAndWait(
+                for: book,
+                fileURL: URL(fileURLWithPath: "/tmp/fixture.pdf")
+            )
+            await completion.markCompleted()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await !completion.completed)
+
         await gate.open()
+        await awaitExistingTask.value
+        #expect(await completion.completed)
         let ready = await Self.waitUntil {
             IndexStatusStore(url: BookIndexLocator(rootURL: root).statusURL(bookId)).read() == .ready
         }

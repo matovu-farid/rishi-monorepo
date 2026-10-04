@@ -74,6 +74,12 @@ struct BackgroundTaskCoordinatorTests {
         let conversationUploader = ConversationUploader(workerClient: client, conversationStore: conversationStore, metadataStore: metadata)
         let messageUploader = MessageUploader(workerClient: client, messageStore: messageStore, metadataStore: metadata)
         let bookmarkUploader = BookmarkUploader(workerClient: client, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
+        let chapterIndexUploader = ChapterIndexUploader(
+            workerClient: client,
+            bookStore: bookStore,
+            persistence: NoopChapterIndexPersistence(),
+            metadataStore: metadata
+        )
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: NoopBookmarkStore(), metadataStore: metadata)
 
@@ -90,6 +96,7 @@ struct BackgroundTaskCoordinatorTests {
                 conversationUploader: conversationUploader,
                 messageUploader: messageUploader,
                 bookmarkUploader: bookmarkUploader,
+                chapterIndexUploader: chapterIndexUploader,
                 fetcher: fetcher,
                 applier: applier,
                 conversationsFetcher: conversationsFetcher,
@@ -132,6 +139,10 @@ struct BackgroundTaskCoordinatorTests {
         func bookmark(_ id: BookmarkID) async throws -> Bookmark? { nil }
         func upsert(_ bookmark: Bookmark) async throws {}
         func delete(_ id: BookmarkID) async throws {}
+    }
+    private actor NoopChapterIndexPersistence: ChapterIndexPersistence {
+        func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+        func upsertChapterIndex(_ index: ChapterIndex) async throws {}
     }
     private actor NoopConversationStore: ConversationStore {
         func conversations(for userId: UserID) async throws -> [Conversation] { [] }

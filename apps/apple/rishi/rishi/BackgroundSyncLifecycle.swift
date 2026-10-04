@@ -10,12 +10,60 @@ import Foundation
     import BackgroundTasks
 #endif
 
+private final class BackgroundImportPauseTask: @unchecked Sendable {
+    private let lock = NSLock()
+    private var triggered = false
+    private var completed = false
+    private var task: Task<Void, Never>?
+    private var waiters: [CheckedContinuation<Task<Void, Never>?, Never>] = []
+
+    func begin() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !completed else { return false }
+        triggered = true
+        return true
+    }
+
+    func store(_ task: Task<Void, Never>) {
+        lock.lock()
+        self.task = task
+        let pending = waiters
+        waiters.removeAll()
+        lock.unlock()
+        pending.forEach { $0.resume(returning: task) }
+    }
+
+    func finishAndWaitForTaskRegistration() async -> Task<Void, Never>? {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            completed = true
+            if !triggered {
+                lock.unlock()
+                continuation.resume(returning: nil)
+            } else if let task {
+                lock.unlock()
+                continuation.resume(returning: task)
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+}
+
 @MainActor
 final class BackgroundSyncLifecycle {
+
+    private struct RecoveryKey: Hashable {
+        let ownerID: UUID
+        let generation: UInt64
+    }
 
     private weak var dependencies: AppDependencies?
     private var userIdBox: UserIdBox
     private var pendingDeviceToken: Data?
+    private var activeRecoveries = Set<RecoveryKey>()
+    private var completedRecoveries = Set<RecoveryKey>()
 
     init(dependencies: AppDependencies, userIdBox: UserIdBox) {
         self.dependencies = dependencies
@@ -35,8 +83,52 @@ final class BackgroundSyncLifecycle {
         if deps.services == nil {
             await deps.bootstrap()
         }
-        guard userIdBox.value == userId else { return nil }
-        return deps.services
+        guard userIdBox.value == userId,
+              let services = deps.services else { return nil }
+        let generation = deps.accountGeneration
+        await recoverCurrentOwner(
+            ownerID: userId,
+            generation: generation,
+            recovery: services.library.bookImportRecovery
+        )
+        guard userIdBox.value == userId, deps.accountGeneration == generation else { return nil }
+        return services
+    }
+
+    /// Startup and background service resolution can race. Run owner recovery
+    /// once for each authenticated account generation, retrying if recovery
+    /// throws so a later service resolution can make progress.
+    func recoverCurrentOwner(ownerID: UserID, generation: UInt64, recovery: BookImportRecovery) async {
+        guard let deps = dependencies,
+              userIdBox.value == ownerID,
+              deps.accountGeneration == generation else { return }
+        let key = RecoveryKey(ownerID: ownerID, generation: generation)
+        guard !completedRecoveries.contains(key), !activeRecoveries.contains(key) else { return }
+        activeRecoveries.insert(key)
+        defer { activeRecoveries.remove(key) }
+        do {
+            _ = try await recovery.recover(ownerID: ownerID, generation: generation) { [weak self, weak deps] in
+                guard let self, let deps else { return false }
+                return self.userIdBox.value == ownerID && deps.accountGeneration == generation
+            }
+            guard userIdBox.value == ownerID, deps.accountGeneration == generation else { return }
+            completedRecoveries.insert(key)
+        } catch {
+            Log.event("library.import.recovery.failed", level: .info, data: ["owner_id": ownerID.uuidString, "error": String(describing: error)])
+        }
+    }
+
+    @MainActor
+    static func pauseImportsIfCurrent(
+        ownerID: UserID,
+        generation: UInt64,
+        currentOwnerID: UserID?,
+        currentGeneration: UInt64,
+        activationToken: BookImportActivationToken,
+        pauseAccount: @Sendable (UserID, UInt64, BookImportActivationToken) async -> Void
+    ) async {
+        guard currentOwnerID == ownerID, currentGeneration == generation else { return }
+        await pauseAccount(ownerID, generation, activationToken)
     }
 
     func registerSynchronously() {
@@ -95,16 +187,38 @@ final class BackgroundSyncLifecycle {
             let chapterIndexTask = Task {
                 await services.sync.chapterIndexGenerationDispatcher.run(chapterIndexBookIDs)
             }
+            let importCoordinator = services.library.bookMaterializationCoordinator
             let runTask = Task { [engine = services.sync.engine] in
                 let wave = await engine.runOnce()
                 return wave.errors.isEmpty
             }
-            task.expirationHandler = {
+            let generation = dependencies?.accountGeneration ?? 0
+            let expirationPause = BackgroundImportPauseTask()
+            task.expirationHandler = { [weak self] in
+                guard expirationPause.begin() else { return }
+                let activationToken = importCoordinator.fenceAccountForPause(ownerID: userId, generation: generation)
                 runTask.cancel()
                 chapterIndexTask.cancel()
+                let pauseTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await Self.pauseImportsIfCurrent(
+                        ownerID: userId,
+                        generation: generation,
+                        currentOwnerID: self.userIdBox.value,
+                        currentGeneration: self.dependencies?.accountGeneration ?? 0,
+                        activationToken: activationToken,
+                        pauseAccount: { ownerID, generation, activationToken in
+                            await importCoordinator.pauseAccount(ownerID: ownerID, generation: generation, activationToken: activationToken)
+                        }
+                    )
+                }
+                expirationPause.store(pauseTask)
             }
             let ok = await runTask.value
             await chapterIndexTask.value
+            if let pauseTask = await expirationPause.finishAndWaitForTaskRegistration() {
+                await pauseTask.value
+            }
             task.setTaskCompleted(success: ok)
             services.sync.backgroundTaskCoordinator.scheduleAll()
         }

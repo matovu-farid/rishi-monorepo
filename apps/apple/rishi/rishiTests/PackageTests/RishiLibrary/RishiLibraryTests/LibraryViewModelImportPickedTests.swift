@@ -97,4 +97,44 @@ struct LibraryViewModelImportPickedTests {
         #expect(vm.books.isEmpty)
         #expect(vm.importError == nil)
     }
+
+    @Test("importPicked performs one library registration refresh")
+    func importPicked_refreshesOnce() async throws {
+        let userId = UUID()
+        let root = URL.temporaryDirectory
+            .appendingPathComponent("LVMImportPicked-refresh-count-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = CountingBookStore()
+        let storage = BookFileStorage(rootURL: root, bookStore: store, coverExtractors: [:])
+        let coordinator = ImportCoordinator(storage: storage, currentUserId: { userId })
+        let vm = LibraryViewModel(
+            bookStore: store,
+            currentUserId: { userId },
+            importCoordinator: coordinator,
+            positionLoader: PositionLoader(positionStore: InMemoryPositionStore()),
+            coverResolver: BookCoverResolver(storage: storage),
+            deleteBook: { _ in }
+        )
+
+        _ = await vm.importPicked([URL(fileURLWithPath: "/tmp/ignored.txt")])
+
+        #expect(await store.booksCallCount() == 1)
+    }
+}
+
+private actor CountingBookStore: BookStore {
+    private var booksCalls = 0
+
+    func books(for userId: UserID) async throws -> [Book] {
+        booksCalls += 1
+        return []
+    }
+
+    func book(_ id: BookID) async throws -> Book? { nil }
+    func upsert(_ book: Book) async throws {}
+    func delete(_ id: BookID) async throws {}
+
+    func booksCallCount() -> Int { booksCalls }
 }

@@ -14,7 +14,156 @@ enum RishiDBModelTypes {
         SyncMetadataEntity.self,
         ChapterIndexEntity.self,
         ChapterSummaryEntity.self,
+        BookFileFingerprintEntity.self,
+        PendingBookMaterializationEntity.self,
+        BookReadingAuthorizationEntity.self,
+        AccountMutationAuthorizationEntity.self,
     ]
+}
+
+@Model
+final class BookFileFingerprintEntity {
+    @Attribute(.unique) var bookID: UUID
+    var ownerID: UUID
+    var sha256: String
+    var byteCount: Int64
+    var modificationDate: Date
+    var fileIdentifier: String?
+    var materializationRevision: UUID
+    var serverAcceptanceSHA256: String?
+    var acceptedOperationID: UUID?
+    var acceptedAt: Date?
+
+    init(_ value: BookFileFingerprint) {
+        bookID = value.bookID
+        ownerID = value.ownerID
+        sha256 = value.sha256
+        byteCount = value.version.byteCount
+        modificationDate = value.version.modificationDate
+        fileIdentifier = value.version.fileIdentifier
+        materializationRevision = value.version.materializationRevision
+        serverAcceptanceSHA256 = value.serverAcceptance?.sha256
+        acceptedOperationID = value.serverAcceptance?.acceptedOperationID
+        acceptedAt = value.serverAcceptance?.acceptedAt
+    }
+
+    var value: BookFileFingerprint {
+        let acceptance: BookServerAcceptance?
+        if let sha = serverAcceptanceSHA256, let operationID = acceptedOperationID, let acceptedAt {
+            acceptance = BookServerAcceptance(sha256: sha, acceptedOperationID: operationID, acceptedAt: acceptedAt)
+        } else {
+            acceptance = nil
+        }
+        return BookFileFingerprint(
+            bookID: bookID,
+            ownerID: ownerID,
+            sha256: sha256,
+            version: ManagedFileVersion(byteCount: byteCount, modificationDate: modificationDate, fileIdentifier: fileIdentifier, materializationRevision: materializationRevision),
+            serverAcceptance: acceptance
+        )
+    }
+}
+
+@Model
+final class PendingBookMaterializationEntity {
+    @Attribute(.unique) var bookID: UUID
+    var ownerID: UUID
+    var accountGenerationBits: Int64
+    var attemptID: UUID
+    var sourceKindRawValue: String
+    var sourceBookmark: Data?
+    var ownedSourceRelativePath: String?
+    var sourceByteCount: Int64
+    var sourceModificationDate: Date
+    var sourceFileIdentifier: String?
+    var sourceMaterializationRevision: UUID
+    var expectedSHA256: String
+    var expectedByteCount: Int64
+    var stagingRelativePath: String
+    var destinationRelativePath: String
+    var phaseRawValue: String
+    var retryableErrorCode: String?
+    var preparedFileIdentifier: String?
+    var destinationFileIdentifier: String?
+    var promotionRevision: UUID?
+
+    init(_ value: PendingBookMaterialization) {
+        bookID = value.token.bookID
+        ownerID = value.token.ownerID
+        accountGenerationBits = Int64(bitPattern: value.token.accountGeneration)
+        attemptID = value.token.attemptID
+        sourceKindRawValue = value.sourceKind.rawValue
+        sourceBookmark = value.sourceBookmark
+        ownedSourceRelativePath = value.ownedSourceRelativePath
+        sourceByteCount = value.sourceVersion.byteCount
+        sourceModificationDate = value.sourceVersion.modificationDate
+        sourceFileIdentifier = value.sourceVersion.fileIdentifier
+        sourceMaterializationRevision = value.sourceVersion.materializationRevision
+        expectedSHA256 = value.expectedSHA256
+        expectedByteCount = value.expectedByteCount
+        stagingRelativePath = value.stagingRelativePath
+        destinationRelativePath = value.destinationRelativePath
+        phaseRawValue = value.phase.rawValue
+        retryableErrorCode = value.retryableErrorCode
+        preparedFileIdentifier = value.preparedFileIdentifier
+        destinationFileIdentifier = value.destinationFileIdentifier
+        promotionRevision = value.promotionRevision
+    }
+
+    var value: PendingBookMaterialization? {
+        guard let sourceKind = BookSourceKind(rawValue: sourceKindRawValue),
+              let phase = BookMaterializationPhase(rawValue: phaseRawValue) else { return nil }
+        return PendingBookMaterialization(
+            token: BookMaterializationToken(ownerID: ownerID, accountGeneration: UInt64(bitPattern: accountGenerationBits), bookID: bookID, attemptID: attemptID),
+            sourceKind: sourceKind,
+            sourceBookmark: sourceBookmark,
+            ownedSourceRelativePath: ownedSourceRelativePath,
+            sourceVersion: ManagedFileVersion(byteCount: sourceByteCount, modificationDate: sourceModificationDate, fileIdentifier: sourceFileIdentifier, materializationRevision: sourceMaterializationRevision),
+            expectedSHA256: expectedSHA256,
+            expectedByteCount: expectedByteCount,
+            stagingRelativePath: stagingRelativePath,
+            destinationRelativePath: destinationRelativePath,
+            phase: phase,
+            retryableErrorCode: retryableErrorCode,
+            preparedFileIdentifier: preparedFileIdentifier,
+            destinationFileIdentifier: destinationFileIdentifier,
+            promotionRevision: promotionRevision
+        )
+    }
+}
+
+@Model
+final class BookReadingAuthorizationEntity {
+    @Attribute(.unique) var bookID: UUID
+    var ownerID: UUID
+    var accountGenerationBits: Int64
+    var contentRevision: UUID
+    var verifiedContentDigest: String?
+    var revoked: Bool
+    var tombstoned: Bool
+
+    init(bookID: UUID, ownerID: UUID, generation: UInt64, contentRevision: UUID, verifiedContentDigest: String? = nil, revoked: Bool = false, tombstoned: Bool) {
+        self.bookID = bookID
+        self.ownerID = ownerID
+        accountGenerationBits = Int64(bitPattern: generation)
+        self.contentRevision = contentRevision
+        self.verifiedContentDigest = verifiedContentDigest
+        self.revoked = revoked
+        self.tombstoned = tombstoned
+    }
+}
+
+@Model
+final class AccountMutationAuthorizationEntity {
+    @Attribute(.unique) var ownerID: UUID
+    var accountGenerationBits: Int64
+    var revoked: Bool
+
+    init(ownerID: UUID, generation: UInt64, revoked: Bool = false) {
+        self.ownerID = ownerID
+        accountGenerationBits = Int64(bitPattern: generation)
+        self.revoked = revoked
+    }
 }
 
 @Model

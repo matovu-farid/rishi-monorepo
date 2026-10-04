@@ -27,6 +27,15 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// Source URL of the EPUB on disk.
     public let documentURL: URL
 
+    /// Optional owner for the immutable document source. The app layer passes
+    /// its source lease here so playback owners that retain this view model
+    /// also retain access after the reader screen disappears.
+    let sourceLifetime: AnyObject?
+    public let sourceAccessPermit: BookSourceAccessPermit?
+    let sourceEffects: (any BookSourceEffectAdmitting)?
+    private let sourceInvalidationSignal: BookSourceInvalidationSignal?
+    var sourceInvalidation: AsyncStream<Void>? { sourceInvalidationSignal?.stream }
+
     /// Loaded publication; `nil` until `load()` completes.
     public private(set) var publication: Publication?
 
@@ -128,12 +137,20 @@ public final class ReaderViewModel: @unchecked Sendable {
         userId: UserID,
         documentURL: URL,
         positionStore: any PositionStore,
+        sourceLifetime: AnyObject? = nil,
+        sourceAccessPermit: BookSourceAccessPermit? = nil,
+        sourceEffects: (any BookSourceEffectAdmitting)? = nil,
+        sourceInvalidationSignal: BookSourceInvalidationSignal? = nil,
         loader: any PublicationLoading = PublicationLoader(),
         debounceSeconds: Double = 1.0
     ) {
         self.book = book
         self.userId = userId
         self.documentURL = documentURL
+        self.sourceLifetime = sourceLifetime
+        self.sourceAccessPermit = sourceAccessPermit
+        self.sourceEffects = sourceEffects
+        self.sourceInvalidationSignal = sourceInvalidationSignal
         self.positionStore = positionStore
         self.loader = loader
         self.debounceSeconds = debounceSeconds
@@ -163,6 +180,15 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// constructed in `ReaderScreen` from this `publication` value
     /// after `load()` completes, on main, where Readium expects it.
     public func load() async {
+        let loadAdmission: SourceEffectAdmission?
+        do {
+            loadAdmission = try sourceAdmission()
+        } catch {
+            loadingState = .failed(reason: "The book source is no longer available")
+            return
+        }
+        defer { loadAdmission?.release() }
+
         // Phase 21 Plan 21-03 — flip to .loading BEFORE the detached
         // parse so the cold-open overlay binds immediately. Lands on
         // the caller's executor (typically MainActor via SwiftUI's
@@ -227,6 +253,14 @@ public final class ReaderViewModel: @unchecked Sendable {
             self.loadingState = .failed(reason: "Loader returned nil publication")
             return
         }
+        let publishAdmission: SourceEffectAdmission?
+        do {
+            publishAdmission = try sourceAdmission()
+        } catch {
+            loadingState = .failed(reason: "The book source changed while it was opening")
+            return
+        }
+        defer { publishAdmission?.release() }
         // Single MainActor write block — assign publication, title,
         // latestLocator, and the loaded state atomically on the
         // caller's isolation after the full off-main round-trip
@@ -242,6 +276,14 @@ public final class ReaderViewModel: @unchecked Sendable {
             }
         }
         self.loadingState = .loaded
+    }
+
+    private func sourceAdmission() throws -> SourceEffectAdmission? {
+        switch (sourceEffects, sourceAccessPermit) {
+        case (nil, nil): return nil
+        case let (.some(effects), .some(permit)): return try effects.admit(permit)
+        default: throw BookSourceAccessError.unknownSource
+        }
     }
 
     // MARK: - Locator updates
@@ -394,7 +436,10 @@ public final class ReaderViewModel: @unchecked Sendable {
             let passages = await Self.pdfSentences(
                 publication: publication,
                 locator: locator,
-                documentURL: documentURL
+                documentURL: documentURL,
+                sourceLifetime: sourceLifetime,
+                sourceEffects: sourceEffects,
+                sourceAccessPermit: sourceAccessPermit
             )
             return ReaderVoiceContext(
                 title: base.title,
@@ -444,7 +489,10 @@ public final class ReaderViewModel: @unchecked Sendable {
             return await Self.pdfSentences(
                 publication: publication,
                 locator: locator,
-                documentURL: documentURL
+                documentURL: documentURL,
+                sourceLifetime: sourceLifetime,
+                sourceEffects: sourceEffects,
+                sourceAccessPermit: sourceAccessPermit
             ).first
         }
 
@@ -476,7 +524,10 @@ public final class ReaderViewModel: @unchecked Sendable {
             return await Self.pdfSentences(
                 publication: publication,
                 locator: locator,
-                documentURL: documentURL
+                documentURL: documentURL,
+                sourceLifetime: sourceLifetime,
+                sourceEffects: sourceEffects,
+                sourceAccessPermit: sourceAccessPermit
             )
         }
 
@@ -499,13 +550,21 @@ public final class ReaderViewModel: @unchecked Sendable {
     nonisolated private static func pdfSentences(
         publication: Publication,
         locator: Locator,
-        documentURL: URL
+        documentURL: URL,
+        sourceLifetime: AnyObject?,
+        sourceEffects: (any BookSourceEffectAdmitting)?,
+        sourceAccessPermit: BookSourceAccessPermit?
     ) async -> [String] {
         guard let content = publication.content(from: locator) else { return [] }
 
         let tokenizer = CustomTTSTokenizer.tokenizePDF(
             defaultLanguage: publication.metadata.language,
-            paragraphMap: PDFNarrationParagraphMap(documentURL: documentURL)
+            paragraphMap: PDFNarrationParagraphMap(
+                documentURL: documentURL,
+                sourceLifetime: sourceLifetime,
+                sourceEffects: sourceEffects,
+                sourceAccessPermit: sourceAccessPermit
+            )
         )
         var sentences: [String] = []
         let targetPage = locator.locations.page

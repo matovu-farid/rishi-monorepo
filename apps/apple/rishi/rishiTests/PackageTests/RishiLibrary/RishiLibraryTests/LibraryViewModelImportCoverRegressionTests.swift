@@ -14,11 +14,10 @@ import Testing
 /// instead of its extracted cover, even though the cover bytes are on
 /// disk at `<root>/Books/<bookId>/cover.png`.
 ///
-/// This suite asserts the user-observable contract: after `importBook`
-/// followed by `vm.refresh()`, the imported book MUST have a non-nil
-/// `coverURLs[book.id]` entry. The exact URL (HEIC cache vs raw PNG) is
-/// an implementation detail — the test only checks that the URL is
-/// present and points at a file that exists on disk.
+/// This suite asserts the eventual user-observable contract: after
+/// `importBook`, the base list publishes first and cover hydration eventually
+/// adds a valid URL under the same BookID. The exact URL (HEIC cache vs raw
+/// PNG) is an implementation detail.
 @MainActor
 @Suite("LibraryViewModel import cover regression")
 struct LibraryViewModelImportCoverRegressionTests {
@@ -68,6 +67,7 @@ struct LibraryViewModelImportCoverRegressionTests {
             importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
+        await vm.waitForHydration()
 
         #expect(vm.books.count == 1)
         // The load-bearing assertion — this fails on current main.
@@ -126,6 +126,7 @@ struct LibraryViewModelImportCoverRegressionTests {
             importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
         )
         await vm.refresh()
+        await vm.waitForHydration()
 
         #expect(vm.books.count == 1)
         // The load-bearing assertion — this fails on current main.

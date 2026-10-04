@@ -41,6 +41,7 @@ struct OutboundDrainer: Sendable {
     private let chapterIndexUploader: ChapterIndexUploader
     private let dataUseConsentProvider: any WorkerDataUseConsentProvider
     private let currentUserId: @Sendable () async -> UserID?
+    private let readinessPolicy: BookReadinessPolicy?
 
     struct Dependencies {
         let queue: SyncQueue
@@ -55,6 +56,7 @@ struct OutboundDrainer: Sendable {
         let chapterIndexUploader: ChapterIndexUploader
         let dataUseConsentProvider: any WorkerDataUseConsentProvider
         let currentUserId: @Sendable () async -> UserID?
+        let readinessPolicy: BookReadinessPolicy?
     }
 
     init(dependencies: Dependencies) {
@@ -70,6 +72,7 @@ struct OutboundDrainer: Sendable {
         self.chapterIndexUploader = dependencies.chapterIndexUploader
         self.dataUseConsentProvider = dependencies.dataUseConsentProvider
         self.currentUserId = dependencies.currentUserId
+        self.readinessPolicy = dependencies.readinessPolicy
     }
 
     /// Drain up to `limit` queue items and push them by kind.
@@ -86,7 +89,49 @@ struct OutboundDrainer: Sendable {
 
         // Per-kind buckets so a book-only drain doesn't accidentally swallow
         // position items as collateral.
-        let drained = await queue.dequeueNext(limit: limit)
+        let drained: [SyncQueueItem]
+        if let readinessPolicy {
+            let snapshot = await queue.snapshot()
+            var classifications: [(SyncQueueItem, BookReadinessPolicy.Decision)] = []
+            var dependencyIDs = Set<UUID>()
+            var newDependencies: [SyncQueueItem] = []
+            for item in snapshot {
+                do {
+                    let decision = try await readinessPolicy.classify(item)
+                    classifications.append((item, decision))
+                    if case let .dependency(dependency) = decision {
+                        dependencyIDs.insert(dependency.entityId)
+                        if !snapshot.contains(where: { $0 == dependency }) {
+                            try await metadataStore.markDirty(entityId: dependency.entityId, kind: dependency.kind)
+                            await queue.enqueue(dependency)
+                            newDependencies.append(dependency)
+                        }
+                    }
+                } catch {
+                    result.errors.append("readiness.classify: \(error)")
+                }
+            }
+            for dependency in newDependencies {
+                do {
+                    let decision = try await readinessPolicy.classify(dependency)
+                    classifications.append((dependency, decision))
+                } catch {
+                    result.errors.append("readiness.classify: \(error)")
+                }
+            }
+            let eligible = classifications.compactMap { item, decision -> SyncQueueItem? in
+                decision == .eligible ? item : nil
+            }.sorted { left, right in
+                let leftDependency = left.kind == .book && dependencyIDs.contains(left.entityId)
+                let rightDependency = right.kind == .book && dependencyIDs.contains(right.entityId)
+                if leftDependency != rightDependency { return leftDependency }
+                if left.kind != right.kind { return left.kind == .book }
+                return left.entityId.uuidString < right.entityId.uuidString
+            }
+            drained = await queue.claimEligible(items: Array(eligible.prefix(max(0, limit))))
+        } else {
+            drained = await queue.dequeueNext(limit: limit)
+        }
         var booksBucket: [SyncQueueItem] = []
         var positionsBucket: [SyncQueueItem] = []
         var highlightsBucket: [SyncQueueItem] = []
@@ -105,6 +150,7 @@ struct OutboundDrainer: Sendable {
             case .chapterIndex: chapterIndexesBucket.append(item)
             }
         }
+        var attemptedCount = drained.count
 
         // Books — one upload per item (no batching API today).
         for (index, item) in booksBucket.enumerated() {
@@ -127,6 +173,29 @@ struct OutboundDrainer: Sendable {
             } catch {
                 result.errors.append("book.upload: \(error)")
                 await queue.enqueue(item) // re-enqueue for the next wave
+            }
+        }
+
+        // Parent uploads can establish durable acceptance in this wave. Recheck
+        // resident children once so successful parent responses unblock them
+        // without a second sync trigger.
+        if let readinessPolicy, !booksBucket.isEmpty {
+            let candidates = await newlyEligible(
+                limit: max(0, limit - attemptedCount),
+                kinds: [.position, .highlight, .conversation, .message, .bookmark, .chapterIndex],
+                policy: readinessPolicy
+            )
+            attemptedCount += candidates.count
+            for item in candidates {
+                switch item.kind {
+                case .book: booksBucket.append(item)
+                case .position: positionsBucket.append(item)
+                case .highlight: highlightsBucket.append(item)
+                case .conversation: conversationsBucket.append(item)
+                case .message: messagesBucket.append(item)
+                case .bookmark: bookmarksBucket.append(item)
+                case .chapterIndex: chapterIndexesBucket.append(item)
+                }
             }
         }
 
@@ -172,6 +241,14 @@ struct OutboundDrainer: Sendable {
             } catch {
                 result.errors.append("conversation.push: \(error)")
                 for item in conversationsBucket { await queue.enqueue(item) }
+            }
+        }
+
+        if let readinessPolicy, !conversationsBucket.isEmpty {
+            let candidates = await newlyEligible(limit: max(0, limit - attemptedCount), kinds: [.message], policy: readinessPolicy)
+            attemptedCount += candidates.count
+            for item in candidates {
+                messagesBucket.append(item)
             }
         }
 
@@ -231,5 +308,18 @@ struct OutboundDrainer: Sendable {
         for item in items {
             await queue.enqueue(item)
         }
+    }
+
+    private func newlyEligible(limit: Int, kinds: Set<SyncEntityKind>, policy: BookReadinessPolicy) async -> [SyncQueueItem] {
+        guard limit > 0 else { return [] }
+        let snapshot = await queue.snapshot()
+        var eligible: [SyncQueueItem] = []
+        for item in snapshot {
+            guard kinds.contains(item.kind) else { continue }
+            guard (try? await policy.classify(item)) == .eligible else { continue }
+            eligible.append(item)
+            if eligible.count == limit { break }
+        }
+        return await queue.claimEligible(items: eligible)
     }
 }

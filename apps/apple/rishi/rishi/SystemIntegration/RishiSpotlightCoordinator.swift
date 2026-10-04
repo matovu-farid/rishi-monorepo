@@ -53,6 +53,7 @@ actor RishiSpotlightCoordinator {
     private var cleanupRequiredFor: UserID?
     private var cleanupRequiredGeneration: UInt64?
     private var retryTask: Task<Void, Never>?
+    private var postCommitReindexTasks: [UUID: Task<Void, Never>] = [:]
     private var cleanupRetryInProgress = false
     private var transitionInProgress = false
     private let operationGate = RishiSpotlightOperationGate()
@@ -147,6 +148,7 @@ actor RishiSpotlightCoordinator {
         let generation = indexGeneration
         retryTask?.cancel()
         retryTask = nil
+        cancelScheduledPostCommitReindexes()
         cleanupPending = false
         suppressReindexAfterCleanup = false
         cleanupRequiredFor = nil
@@ -173,7 +175,7 @@ actor RishiSpotlightCoordinator {
             return RishiSpotlightTransitionResult(identityApplied: false, cleanupComplete: false)
         }
         releaseTransition(generation: generation)
-        await requestReindex()
+        schedulePostCommitReindex(generation: generation)
         return RishiSpotlightTransitionResult(identityApplied: true, cleanupComplete: true)
     }
 
@@ -182,6 +184,7 @@ actor RishiSpotlightCoordinator {
         let generation = indexGeneration
         retryTask?.cancel()
         retryTask = nil
+        cancelScheduledPostCommitReindexes()
         cleanupPending = false
         suppressReindexAfterCleanup = true
         cleanupRequiredFor = nil
@@ -217,6 +220,34 @@ actor RishiSpotlightCoordinator {
         guard transitionOwnerGeneration == generation else { return }
         transitionOwnerGeneration = nil
         transitionInProgress = false
+    }
+
+    private func schedulePostCommitReindex(generation: UInt64) {
+        let taskID = UUID()
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            await self.runPostCommitReindex(taskID: taskID, generation: generation)
+        }
+        postCommitReindexTasks[taskID] = task
+    }
+
+    private func runPostCommitReindex(taskID: UUID, generation: UInt64) async {
+        defer { postCommitReindexTasks[taskID] = nil }
+        guard generation == indexGeneration, !Task.isCancelled else { return }
+        await requestReindex()
+    }
+
+    private func cancelScheduledPostCommitReindexes() {
+        postCommitReindexTasks.values.forEach { $0.cancel() }
+    }
+
+    func waitForScheduledPostCommitReindexes() async {
+        while !postCommitReindexTasks.isEmpty {
+            let pendingTasks = Array(postCommitReindexTasks.values)
+            for task in pendingTasks {
+                await task.value
+            }
+        }
     }
 
     private func clearIndex() async -> Bool {

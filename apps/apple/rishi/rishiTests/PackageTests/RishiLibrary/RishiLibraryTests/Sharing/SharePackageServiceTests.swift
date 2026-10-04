@@ -105,6 +105,39 @@ private final class AsyncSignal: @unchecked Sendable {
 
 @Suite("Share package service", .serialized)
 struct SharePackageServiceTests {
+    @Test("Share prewarm skips books that are not managed and accepted")
+    func prewarmSkipsPendingBooks() async throws {
+        let userID = UUID()
+        let book = Book(id: UUID(), userId: userID, title: "Pending", formatType: .pdf, fileURL: "Books/pending.pdf")
+        let bookStore = InMemoryBookStore()
+        try await bookStore.upsert(book)
+        let root = URL.temporaryDirectory.appendingPathComponent("SharePending-\(UUID().uuidString)", isDirectory: true)
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let workerClient = WorkerClient(baseURL: URL(string: "https://api.rishi.test")!, session: URLSession(configuration: configuration), tokenProvider: StaticTokenProvider("test-token"))
+        let prepareCount = LockIsolatedInt()
+        defer { ShareServiceMockURLProtocol.handler = nil; try? FileManager.default.removeItem(at: root) }
+        ShareServiceMockURLProtocol.handler = { _ in
+            prepareCount.increment()
+            return (200, Data("{\"links\":[],\"skipped\":[]}".utf8))
+        }
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            urlSession: URLSession(configuration: configuration),
+            currentUserId: { userID },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in },
+            managedFingerprintProvider: { _ in nil }
+        )
+
+        await service.prewarm(bookIDs: [book.id])
+
+        #expect(prepareCount.value == 0)
+    }
+
     @Test("single-book shares reuse a prepared response instead of creating duplicate packages")
     func singleBookShareReusesPreparedResponse() async throws {
         let userID = UUID()
@@ -259,6 +292,81 @@ struct SharePackageServiceTests {
         #expect(prepareCount.value == 2)
     }
 
+    @Test("per-book ready prewarm waits for an overlapping library batch")
+    func overlappingPrewarmIsDeduplicatedPerBook() async throws {
+        let userID = UUID()
+        let readyBookID = UUID()
+        let pendingBookID = UUID()
+        let readyBook = Book(id: readyBookID, userId: userID, title: "Ready", formatType: .pdf, fileURL: "Books/ready.pdf")
+        let pendingBook = Book(id: pendingBookID, userId: userID, title: "Pending", formatType: .pdf, fileURL: "Books/pending.pdf")
+        let bookStore = InMemoryBookStore(initial: [readyBook, pendingBook])
+        let root = URL.temporaryDirectory.appendingPathComponent("SharePrewarmOverlap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileStorage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShareServiceMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.rishi.test")!,
+            session: session,
+            tokenProvider: StaticTokenProvider("test-token"),
+            dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
+        )
+        let firstReadStarted = AsyncSignal()
+        let releaseFirstRead = AsyncSignal()
+        let secondReadStarted = AsyncSignal()
+        let readCount = LockIsolatedInt()
+        let prepareCount = LockIsolatedInt()
+        defer { ShareServiceMockURLProtocol.handler = nil }
+        ShareServiceMockURLProtocol.handler = { request in
+            guard request.url?.path == "/api/shares/prepare" else { return (404, Data()) }
+            prepareCount.increment()
+            let response = "{\"links\":[{\"book_id\":\"\(readyBookID.uuidString)\",\"public\":{\"id\":\"package\",\"expires_at\":900000000,\"link\":\"https://rishi.test/package\"},\"one_time\":{\"id\":\"one-time\",\"expires_at\":900000000,\"link\":\"https://rishi.test/one-time\"}}],\"skipped\":[]}"
+            return (200, Data(response.utf8))
+        }
+        let acceptedFingerprint = BookFileFingerprint(
+            bookID: readyBookID,
+            ownerID: userID,
+            sha256: "abc123",
+            version: ManagedFileVersion(byteCount: 10, modificationDate: .now, fileIdentifier: nil, materializationRevision: UUID()),
+            serverAcceptance: BookServerAcceptance(sha256: "abc123", acceptedOperationID: UUID(), acceptedAt: .now)
+        )
+        let service = SharePackageService(
+            workerClient: workerClient,
+            bookStore: bookStore,
+            fileStorage: fileStorage,
+            currentUserId: { userID },
+            syncBeforeCreate: {},
+            markBookDirty: { _ in },
+            managedFingerprintProvider: { book in
+                guard book.id == readyBookID else { return nil }
+                let read = readCount.value
+                readCount.increment()
+                if read == 0 {
+                    firstReadStarted.signal()
+                    await releaseFirstRead.wait()
+                    return nil
+                }
+                secondReadStarted.signal()
+                return acceptedFingerprint
+            }
+        )
+
+        let libraryBatch = Task { await service.prewarm(bookIDs: [readyBookID, pendingBookID]) }
+        await firstReadStarted.wait()
+        await service.prewarm(bookIDs: [readyBookID])
+        releaseFirstRead.signal()
+        await libraryBatch.value
+        await secondReadStarted.wait()
+
+        // The retry is detached from the original batch's completion. Wait for
+        // its mocked request to finish before asserting the number of prepares.
+        for _ in 0..<100 where prepareCount.value == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(prepareCount.value == 1)
+    }
+
     @Test("redeeming a book already in the library is a no-op")
     func existingBookIsNotDuplicated() async throws {
         let userID = UUID()
@@ -342,7 +450,7 @@ struct SharePackageServiceTests {
             dataUseConsentProvider: AlwaysAllowWorkerDataUseConsentProvider()
         )
         let firstRedeemStarted = AsyncSignal()
-        let releaseFirstRedeem = AsyncSignal()
+        let releaseFirstRedeem = DispatchSemaphore(value: 0)
         let redeemCount = LockIsolatedInt()
         defer { ShareServiceMockURLProtocol.handler = nil }
         ShareServiceMockURLProtocol.handler = { request in

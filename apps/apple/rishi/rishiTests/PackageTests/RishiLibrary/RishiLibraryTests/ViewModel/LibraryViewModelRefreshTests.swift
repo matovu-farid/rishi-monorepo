@@ -42,6 +42,49 @@ private final class SlowCoverExtractor: CoverExtractor, @unchecked Sendable {
     }
 }
 
+private actor SuspendedBookStore: BookStore {
+    private let store = InMemoryBookStore()
+    private var suspendNextRead = false
+    private var readStarted = false
+    private var readStartedWaiter: CheckedContinuation<Void, Never>?
+    private var readRelease: CheckedContinuation<Void, Never>?
+    private var failNextRead = false
+    private(set) var readCount = 0
+
+    func suspendNext() { suspendNextRead = true }
+    func failNext() { failNextRead = true }
+    func releaseRead() { readRelease?.resume(); readRelease = nil }
+    func waitForRead() async {
+        if readStarted { return }
+        await withCheckedContinuation { readStartedWaiter = $0 }
+    }
+
+    func books(for userId: UserID) async throws -> [Book] {
+        readCount += 1
+        if failNextRead {
+            failNextRead = false
+            throw TestReadFailure.failed
+        }
+        if suspendNextRead {
+            suspendNextRead = false
+            readStarted = true
+            readStartedWaiter?.resume()
+            readStartedWaiter = nil
+            await withCheckedContinuation { readRelease = $0 }
+            readStarted = false
+        }
+        return try await store.books(for: userId)
+    }
+    func book(_ id: BookID) async throws -> Book? { try await store.book(id) }
+    func upsert(_ book: Book) async throws { try await store.upsert(book) }
+    func delete(_ id: BookID) async throws { try await store.delete(id) }
+    func deleteIfUnchanged(_ id: BookID, matching expected: Book?) async throws -> Bool {
+        try await store.deleteIfUnchanged(id, matching: expected)
+    }
+}
+
+private enum TestReadFailure: Error { case failed }
+
 @MainActor
 @Suite("LibraryViewModel.refresh — concurrent position fan-out (F-P0-03)")
 struct LibraryViewModelRefreshTests {
@@ -51,7 +94,10 @@ struct LibraryViewModelRefreshTests {
         bookStore: any BookStore,
         positionStore: any PositionStore,
         root: URL? = nil,
-        coverExtractors: [String: any CoverExtractor] = [:]
+        coverExtractors: [String: any CoverExtractor] = [:],
+        deleteBook: (@Sendable (Book) async throws -> Void)? = nil,
+        accountIdentity: LibraryAccountIdentity? = nil,
+        currentIdentity: @escaping @MainActor () -> LibraryAccountIdentity? = { nil }
     ) -> LibraryViewModel {
         let root = root ?? URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("VMRefresh-\(UUID().uuidString)", isDirectory: true)
@@ -63,11 +109,219 @@ struct LibraryViewModelRefreshTests {
         )
         return LibraryViewModel(
             bookStore: bookStore,
-            positionStore: positionStore,
-            storage: storage,
             currentUserId: { userId },
-            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId })
+            boundAccountIdentity: accountIdentity,
+            currentAccountIdentity: currentIdentity,
+            importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId }),
+            positionLoader: PositionLoader(positionStore: positionStore),
+            coverResolver: BookCoverResolver(storage: storage),
+            deleteBook: deleteBook ?? { book in try await storage.delete(book) }
         )
+    }
+
+    @Test("outgoing view model rejects a refresh after its bound generation changes")
+    func rejectsNewRefreshFromObsoleteViewModel() async {
+        let userId = UUID()
+        let store = InMemoryBookStore()
+        let identity = LibraryAccountIdentity(userID: userId, generation: 4)
+        var liveIdentity: LibraryAccountIdentity? = identity
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { liveIdentity }
+        )
+        liveIdentity = LibraryAccountIdentity(userID: UUID(), generation: 5)
+
+        await vm.refresh()
+        #expect(vm.loadReadiness == .idle)
+        #expect(vm.books.isEmpty)
+    }
+
+    @Test("suspended snapshot cannot publish after account replacement")
+    func suspendedSnapshotIsFencedAfterAccountReplacement() async throws {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        let book = Book(userId: userId, title: "Stale", formatType: .pdf, fileURL: "stale.pdf")
+        try await store.upsert(book)
+        await store.suspendNext()
+        let identity = LibraryAccountIdentity(userID: userId, generation: 14)
+        var liveIdentity: LibraryAccountIdentity? = identity
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { liveIdentity }
+        )
+
+        let suspendedRefresh = Task { await vm.refresh() }
+        await store.waitForRead()
+        liveIdentity = LibraryAccountIdentity(userID: UUID(), generation: 15)
+        await store.releaseRead()
+        await suspendedRefresh.value
+
+        #expect(vm.books.isEmpty)
+        #expect(vm.loadReadiness == .idle)
+        await vm.refresh()
+        #expect(await store.readCount == 1)
+    }
+
+    @Test("a recreated model for the same user and new generation loads successfully")
+    func recreatedSameUserModelLoads() async throws {
+        let userId = UUID()
+        let book = Book(userId: userId, title: "Reauthenticated", formatType: .pdf, fileURL: "book.pdf")
+        let store = InMemoryBookStore(initial: [book])
+        let identity = LibraryAccountIdentity(userID: userId, generation: 8)
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { identity }
+        )
+
+        await vm.refresh()
+        #expect(vm.books.map(\.id) == [book.id])
+        #expect(vm.loadReadiness == .success(identity))
+    }
+
+    @Test("failed local load remains retryable and success replaces failure")
+    func localLoadFailureCanRetry() async throws {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        await store.failNext()
+        let vm = Self.makeVM(userId: userId, bookStore: store, positionStore: SlowPositionStore(perReadDelay: .zero))
+
+        await vm.refresh()
+        #expect(vm.loadReadiness == .failure(nil))
+        let book = Book(userId: userId, title: "Retry", formatType: .pdf, fileURL: "retry.pdf")
+        try await store.upsert(book)
+        await vm.refresh()
+        #expect(vm.books.map(\.id) == [book.id])
+    }
+
+    @Test("mutation arriving during a load causes one trailing current snapshot")
+    func mutationDuringLoadRunsTrailingRead() async throws {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        await store.suspendNext()
+        let vm = Self.makeVM(userId: userId, bookStore: store, positionStore: SlowPositionStore(perReadDelay: .zero))
+        let initial = Task { await vm.refresh() }
+        await store.waitForRead()
+        let added = Book(userId: userId, title: "During load", formatType: .pdf, fileURL: "during.pdf")
+        try await store.upsert(added)
+        let invalidation = Task { await vm.refresh() }
+        await store.releaseRead()
+
+        await initial.value
+        await invalidation.value
+        #expect(vm.books.map(\.id) == [added.id])
+        #expect(await store.readCount == 2)
+    }
+
+    @Test("successful deletion during a snapshot queues a trailing snapshot")
+    func deletionDuringLoadRunsTrailingRead() async throws {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        let book = Book(userId: userId, title: "Delete during load", formatType: .pdf, fileURL: "delete.pdf")
+        try await store.upsert(book)
+        await store.suspendNext()
+        let deletionFinished = AsyncSignal()
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            deleteBook: { book in
+                try await store.delete(book.id)
+                await deletionFinished.signal()
+            }
+        )
+
+        let initial = Task { await vm.refresh() }
+        await store.waitForRead()
+        let deletion = Task { await vm.delete(book) }
+        await deletionFinished.wait()
+        await store.releaseRead()
+        await initial.value
+        await deletion.value
+
+        #expect(vm.books.isEmpty)
+        #expect(vm.loadReadiness == .success(nil))
+        #expect(await store.readCount == 2)
+    }
+
+    @Test("local first snapshot loads without consent and does not start sync")
+    func consentDenialStillLoadsLocalSnapshot() async throws {
+        let userId = UUID()
+        let book = Book(userId: userId, title: "Local", formatType: .pdf, fileURL: "local.pdf")
+        let store = InMemoryBookStore(initial: [book])
+        let identity = LibraryAccountIdentity(userID: userId, generation: 11)
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { identity }
+        )
+        var syncStarted = false
+
+        let result = await vm.loadInitialSnapshotAndSyncIfNeeded(
+            accountIdentity: identity,
+            consentGranted: false,
+            autoSync: true,
+            sync: { syncStarted = true }
+        )
+
+        #expect(result == .success)
+        #expect(vm.books.map(\.id) == [book.id])
+        #expect(!syncStarted)
+    }
+
+    @Test("consent changing during a shared initial read reuses the load and starts one sync")
+    func consentFlipReusesInFlightLoad() async {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        await store.suspendNext()
+        let identity = LibraryAccountIdentity(userID: userId, generation: 12)
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .milliseconds(0)),
+            accountIdentity: identity,
+            currentIdentity: { identity }
+        )
+        var syncCount = 0
+        var readCountBeforeSync: Int?
+        let deniedLoad = Task {
+            await vm.loadInitialSnapshotAndSyncIfNeeded(
+                accountIdentity: identity,
+                consentGranted: false,
+                autoSync: true,
+                sync: { syncCount += 1 }
+            )
+        }
+        await store.waitForRead()
+        deniedLoad.cancel()
+        let grantedLoad = Task {
+            await vm.loadInitialSnapshotAndSyncIfNeeded(
+                accountIdentity: identity,
+                consentGranted: true,
+                autoSync: true,
+                sync: {
+                    syncCount += 1
+                    readCountBeforeSync = await store.readCount
+                }
+            )
+        }
+        await store.releaseRead()
+
+        #expect(await grantedLoad.value == .success)
+        #expect(await deniedLoad.value == .cancelled)
+        #expect(syncCount == 1)
+        #expect(readCountBeforeSync == 1)
+        #expect(await store.readCount == 2)
     }
 
     @Test("refresh fans out positionStore reads concurrently rather than serially")
@@ -247,6 +501,22 @@ struct LibraryViewModelRefreshTests {
 
         #expect(await refreshes.count == 1)
         #expect(vm.books.map(\.id) == [syncedBook.id])
+    }
+}
+
+private actor AsyncSignal {
+    private var signaled = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func signal() {
+        signaled = true
+        waiter?.resume()
+        waiter = nil
+    }
+
+    func wait() async {
+        guard !signaled else { return }
+        await withCheckedContinuation { waiter = $0 }
     }
 }
 

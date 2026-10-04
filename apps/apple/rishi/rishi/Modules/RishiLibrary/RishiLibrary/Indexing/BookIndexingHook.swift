@@ -24,10 +24,19 @@ public protocol BookIndexingHook: Sendable {
     func scheduleIndexing(for book: Book, fileURL: URL) async
 }
 
+/// Reader callers that must keep a source lease alive through extraction and
+/// persistence use this refinement. Unlike `scheduleIndexing`, this method
+/// returns only after the per-book indexing task has completed. Concurrent
+/// callers for the same book join the same task.
+public protocol AwaitableBookIndexingHook: BookIndexingHook {
+    func scheduleIndexingAndWait(for book: Book, fileURL: URL) async
+}
+
 /// No-op default conformer for production call sites (or tests) that do not
 /// want RAG indexing to fire — e.g. legacy test fixtures, or the synthetic
 /// `SampleBookInstaller` path where indexing is handled separately.
-public struct NoopBookIndexingHook: BookIndexingHook {
+public struct NoopBookIndexingHook: AwaitableBookIndexingHook {
     public init() {}
     public func scheduleIndexing(for _: Book, fileURL _: URL) async {}
+    public func scheduleIndexingAndWait(for _: Book, fileURL _: URL) async {}
 }

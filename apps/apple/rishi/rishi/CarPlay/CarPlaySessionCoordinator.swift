@@ -16,6 +16,7 @@ final class CarPlaySessionCoordinator {
     private var refreshTask: Task<Void, Never>?
     private var isActive = true
     private var accountObserverToken: UUID?
+    private(set) var sourceUnavailableBookID: BookID?
 
     static func isCatalogCurrent(
         _ catalogAccountSnapshot: CarPlayAccountSnapshot?,
@@ -56,8 +57,12 @@ final class CarPlaySessionCoordinator {
             bookStore: services.library.bookStore,
             positionStore: services.library.positionStore,
             bookFileStorage: services.library.bookFileStorage,
+            sourceResolver: services.library.bookSourceRegistry,
             accountSnapshot: { [weak dependencies] in dependencies?.carPlayAccountSnapshot }
         )
+        driver.onSourceUnavailable = { [weak self] bookID, account in
+            self?.sourceDidBecomeUnavailable(bookID, capturedAccount: account)
+        }
         accountObserverToken = dependencies.addCarPlayAccountChangeObserver { [weak self] _ in
             self?.accountDidChange()
         }
@@ -81,6 +86,7 @@ final class CarPlaySessionCoordinator {
 
     func disconnect() async {
         isActive = false
+        sourceUnavailableBookID = nil
         lifecycleToken = UUID()
         refreshTask?.cancel()
         refreshTask = nil
@@ -95,6 +101,10 @@ final class CarPlaySessionCoordinator {
 
     private func accountDidChange() {
         guard isActive else { return }
+        sourceUnavailableBookID = nil
+        Task { @MainActor [weak self] in
+            await self?.playback.accountDidChange()
+        }
         refreshTask?.cancel()
         lifecycleToken = UUID()
         clearCatalog()
@@ -355,10 +365,14 @@ final class CarPlaySessionCoordinator {
             )
             return
         }
+        if sourceUnavailableBookID == bookID {
+            sourceUnavailableBookID = nil
+        }
         do {
             let result = try await playback.select(bookID: bookID)
             switch result {
             case .started, .toggled:
+                sourceUnavailableBookID = nil
                 CPNowPlayingTemplate.shared.isUpNextButtonEnabled = false
                 try? await interfaceController.pushTemplate(
                     CPNowPlayingTemplate.shared,
@@ -373,6 +387,11 @@ final class CarPlaySessionCoordinator {
                     capturedAccount: dependencies.carPlayAccountSnapshot
                 )
             }
+        } catch CarPlayPlaybackDriverError.sourceUnavailable {
+            if let account = dependencies.carPlayAccountSnapshot {
+                sourceDidBecomeUnavailable(bookID, capturedAccount: account)
+            }
+            await refresh()
         } catch {
             presentAlert("Playback unavailable", message: "This book could not be started.")
             await refresh()
@@ -383,6 +402,40 @@ final class CarPlaySessionCoordinator {
         let action = CPAlertAction(title: "OK", style: .default) { _ in }
         interfaceController.presentTemplate(
             CPAlertTemplate(titleVariants: [title], actions: [action]),
+            animated: true
+        )
+    }
+
+    static func shouldPublishSourceUnavailable(
+        isActive: Bool,
+        capturedAccount: CarPlayAccountSnapshot,
+        currentAccount: CarPlayAccountSnapshot?
+    ) -> Bool {
+        isActive && capturedAccount == currentAccount
+    }
+
+    func sourceDidBecomeUnavailable(
+        _ bookID: BookID,
+        capturedAccount: CarPlayAccountSnapshot
+    ) {
+        guard Self.shouldPublishSourceUnavailable(
+            isActive: isActive,
+            capturedAccount: capturedAccount,
+            currentAccount: dependencies.carPlayAccountSnapshot
+        ) else { return }
+        guard sourceUnavailableBookID != bookID else { return }
+        sourceUnavailableBookID = bookID
+        let retry = CPAlertAction(title: "Retry", style: .default) { [weak self] _ in
+            Task { @MainActor in
+                await self?.select(bookID)
+            }
+        }
+        let dismiss = CPAlertAction(title: "OK", style: .cancel) { _ in }
+        interfaceController.presentTemplate(
+            CPAlertTemplate(
+                titleVariants: ["Book source unavailable"],
+                actions: [retry, dismiss]
+            ),
             animated: true
         )
     }

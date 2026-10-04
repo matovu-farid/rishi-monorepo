@@ -15,17 +15,20 @@ public final class SyncStatus: @unchecked Sendable {
     public var pendingCount: Int
     public var isRunning: Bool
     public var lastError: String?
+    public private(set) var lastCompletedWaveID: UUID?
 
     public init(
         lastSyncedAt: Date? = nil,
         pendingCount: Int = 0,
         isRunning: Bool = false,
-        lastError: String? = nil
+        lastError: String? = nil,
+        lastCompletedWaveID: UUID? = nil
     ) {
         self.lastSyncedAt = lastSyncedAt
         self.pendingCount = pendingCount
         self.isRunning = isRunning
         self.lastError = lastError
+        self.lastCompletedWaveID = lastCompletedWaveID
     }
 
     /// Frozen, Sendable snapshot for cross-actor reads/tests.
@@ -34,7 +37,8 @@ public final class SyncStatus: @unchecked Sendable {
             lastSyncedAt: lastSyncedAt,
             pendingCount: pendingCount,
             isRunning: isRunning,
-            lastError: lastError
+            lastError: lastError,
+            lastCompletedWaveID: lastCompletedWaveID
         )
     }
 
@@ -44,6 +48,11 @@ public final class SyncStatus: @unchecked Sendable {
         self.pendingCount = snapshot.pendingCount
         self.isRunning = snapshot.isRunning
         self.lastError = snapshot.lastError
+        self.lastCompletedWaveID = snapshot.lastCompletedWaveID
+    }
+
+    public func recordCompletedWave(_ id: UUID) {
+        lastCompletedWaveID = id
     }
 }
 
@@ -53,11 +62,19 @@ public struct SyncStatusSnapshot: Sendable, Equatable {
     public let pendingCount: Int
     public let isRunning: Bool
     public let lastError: String?
+    public let lastCompletedWaveID: UUID?
 
-    public init(lastSyncedAt: Date?, pendingCount: Int, isRunning: Bool, lastError: String?) {
+    public init(
+        lastSyncedAt: Date?,
+        pendingCount: Int,
+        isRunning: Bool,
+        lastError: String?,
+        lastCompletedWaveID: UUID? = nil
+    ) {
         self.lastSyncedAt = lastSyncedAt
         self.pendingCount = pendingCount
         self.isRunning = isRunning
         self.lastError = lastError
+        self.lastCompletedWaveID = lastCompletedWaveID
     }
 }

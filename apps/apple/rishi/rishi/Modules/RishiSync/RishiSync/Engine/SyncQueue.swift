@@ -48,6 +48,25 @@ public actor SyncQueue {
         return head
     }
 
+    /// A finite, de-duplicated view of every resident item. Readiness checks
+    /// use this before claiming so a blocked FIFO head cannot starve unrelated
+    /// ready work behind it.
+    public func snapshot() -> [SyncQueueItem] { items }
+
+    /// Removes only the requested IDs that are still resident. Blocked work
+    /// stays durable in the queue and eligible work is claimed once per wave.
+    public func claimEligible(items requested: [SyncQueueItem]) -> [SyncQueueItem] {
+        var claimed: [SyncQueueItem] = []
+        var seen = Set<Pair>()
+        for item in requested {
+            let key = Pair(entityId: item.entityId, kind: item.kind)
+            guard seen.insert(key).inserted,
+                  let index = items.firstIndex(where: { $0.entityId == item.entityId && $0.kind == item.kind }) else { continue }
+            claimed.append(items.remove(at: index))
+        }
+        return claimed
+    }
+
     public func remove(entityId: UUID, kind: SyncEntityKind) {
         items.removeAll { $0.entityId == entityId && $0.kind == kind }
     }

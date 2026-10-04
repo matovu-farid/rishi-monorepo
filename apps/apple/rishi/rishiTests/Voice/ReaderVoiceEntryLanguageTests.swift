@@ -128,6 +128,11 @@ struct ReaderVoiceEntryLanguageTests {
         )
         let entry = ReaderVoiceEntry(
             voicePresenter: presenter,
+            conversationLookup: ConversationLookup(store: StubConversationStore()),
+            messageStore: StubMessageStore(),
+            dirtyHook: StubDirtyHook(),
+            chapterIndexCoordinatorFactory: { _, _ in nil },
+            chapterIndexContentVersionProvider: { _ in nil },
             voiceLanguageProvider: { .french },
             onRequestPaywall: { _ in }
         )

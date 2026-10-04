@@ -64,8 +64,8 @@ struct SharedReadingStateReconcilerTests {
         let session = UUID()
         var reconciler = SharedReadingStateReconciler()
         let state = input(
-            playback: .paused(session),
-            narrationPosition: position(0.4)
+            narrationPosition: position(0.4),
+            playback: .paused(session)
         )
 
         #expect(reconciler.reconcile(state).isEmpty)
@@ -78,8 +78,8 @@ struct SharedReadingStateReconcilerTests {
         let state = input(
             source: .readAloud,
             desiredPlayback: .playing,
-            playback: .playing(session),
-            narrationPosition: position(0.4)
+            narrationPosition: position(0.4),
+            playback: .playing(session)
         )
 
         #expect(reconciler.reconcile(state).isEmpty)
@@ -116,9 +116,9 @@ struct SharedReadingStateReconcilerTests {
         var reconciler = SharedReadingStateReconciler()
         let target = position(0.7, href: "chapter-2.xhtml", page: 5)
         let state = input(
+            desiredPosition: target,
             source: .readAloud,
             desiredPlayback: .playing,
-            desiredPosition: target,
             visiblePosition: target,
             narrationPosition: position(0.2),
             playback: .playing(UUID())
@@ -140,9 +140,9 @@ struct SharedReadingStateReconcilerTests {
         let narration = position(0.4)
         let state = input(
             desiredPosition: target,
+            desiredPlayback: .playing,
             visiblePosition: position(0.4),
             narrationPosition: narration,
-            desiredPlayback: .playing,
             playback: .playing(UUID())
         )
 
@@ -161,9 +161,9 @@ struct SharedReadingStateReconcilerTests {
         var reconciler = SharedReadingStateReconciler()
         let target = position(0.4)
         let state = input(
+            desiredPosition: target,
             source: .readAloud,
             desiredPlayback: .playing,
-            desiredPosition: target,
             narrationPosition: position(0.401),
             playback: .playing(UUID())
         )
@@ -178,19 +178,23 @@ struct SharedReadingStateReconcilerTests {
     func staleCompletionIsRejectedAfterNewerProgress() throws {
         var reconciler = SharedReadingStateReconciler()
         let firstInput = input(desiredPosition: position(0.7), visiblePosition: position(0.4))
-        let oldEffect = #require(reconciler.reconcile(firstInput).first)
+        let firstEffects = reconciler.reconcile(firstInput)
+        let oldEffect = try #require(firstEffects.first)
         let newerInput = input(sequence: 2, desiredPosition: position(0.8), visiblePosition: position(0.4))
         _ = reconciler.reconcile(newerInput)
 
-        #expect(!reconciler.complete(oldEffect, succeeded: true, observation: matchingObservation(for: newerInput)))
+        let acceptedOldEffect = reconciler.complete(oldEffect, succeeded: true, observation: matchingObservation(for: newerInput))
+        #expect(!acceptedOldEffect)
     }
 
     @Test("failed effects can be retried after a meaningful observation change")
     func failedEffectRetriesAfterObservationChanges() throws {
         var reconciler = SharedReadingStateReconciler()
         let initial = input(desiredPosition: position(0.7), visiblePosition: position(0.4))
-        let effect = #require(reconciler.reconcile(initial).first)
-        #expect(!reconciler.complete(effect, succeeded: false, observation: matchingObservation(for: initial)))
+        let initialEffects = reconciler.reconcile(initial)
+        let effect = try #require(initialEffects.first)
+        let completed = reconciler.complete(effect, succeeded: false, observation: matchingObservation(for: initial))
+        #expect(!completed)
 
         // A repeated sample does not spin; a later changed sample permits a fresh attempt.
         #expect(reconciler.reconcile(initial).isEmpty)
@@ -216,10 +220,11 @@ struct SharedReadingStateReconcilerTests {
             if case .navigateVisible = effect { true } else { false }
         })
 
-        #expect(reconciler.deferAcceptedNavigation(
+        let deferredInitialNavigation = reconciler.deferAcceptedNavigation(
             acceptedNavigation,
             observedPosition: initial.visiblePosition
-        ))
+        )
+        #expect(deferredInitialNavigation)
         #expect(!reconciler.reconcile(initial).contains { if case .navigateVisible = $0 { true } else { false } })
 
         let changedButStillMismatched = input(
@@ -231,10 +236,11 @@ struct SharedReadingStateReconcilerTests {
             if case .navigateVisible = effect { true } else { false }
         })
         #expect(retry.revision == acceptedNavigation.revision)
-        #expect(reconciler.deferAcceptedNavigation(
+        let deferredRetryNavigation = reconciler.deferAcceptedNavigation(
             retry,
             observedPosition: changedButStillMismatched.visiblePosition
-        ))
+        )
+        #expect(deferredRetryNavigation)
 
         let matching = input(
             desiredPosition: target,
@@ -266,8 +272,10 @@ struct SharedReadingStateReconcilerTests {
     func convergedInputClearsFailedEffectSuppression() throws {
         var reconciler = SharedReadingStateReconciler()
         let initial = input(desiredPosition: position(0.7), visiblePosition: position(0.4))
-        let failed = #require(reconciler.reconcile(initial).first)
-        #expect(!reconciler.complete(failed, succeeded: false, observation: matchingObservation(for: initial)))
+        let initialEffects = reconciler.reconcile(initial)
+        let failed = try #require(initialEffects.first)
+        let completionSucceeded = reconciler.complete(failed, succeeded: false, observation: matchingObservation(for: initial))
+        #expect(!completionSucceeded)
         #expect(reconciler.reconcile(initial).isEmpty)
 
         let converged = input(
@@ -288,9 +296,9 @@ struct SharedReadingStateReconcilerTests {
     func newerPlaybackRevisionRejectsRealignmentCompletion() throws {
         var reconciler = SharedReadingStateReconciler()
         let active = input(
+            desiredPosition: position(0.7),
             source: .readAloud,
             desiredPlayback: .playing,
-            desiredPosition: position(0.7),
             narrationPosition: position(0.2),
             playback: .playing(UUID())
         )
@@ -298,24 +306,25 @@ struct SharedReadingStateReconcilerTests {
             if case .realignNarration = effect { true } else { false }
         })
         let newer = input(
+            desiredPosition: position(0.7),
             source: .readAloud,
             desiredPlayback: .paused,
-            desiredPosition: position(0.7),
             narrationPosition: position(0.2),
             playback: .playing(UUID())
         )
         _ = reconciler.reconcile(newer)
 
-        #expect(!reconciler.complete(realignment, succeeded: true, observation: matchingObservation(for: newer)))
+        let acceptedRealignment = reconciler.complete(realignment, succeeded: true, observation: matchingObservation(for: newer))
+        #expect(!acceptedRealignment)
     }
 
     @Test("a newer rate authority invalidates an in-flight narration realignment")
     func newerRateAuthorityRejectsRealignmentCompletion() throws {
         var reconciler = SharedReadingStateReconciler()
         let active = input(
+            desiredPosition: position(0.7),
             source: .readAloud,
             desiredPlayback: .playing,
-            desiredPosition: position(0.7),
             narrationPosition: position(0.2),
             playback: .playing(UUID())
         )
@@ -334,7 +343,8 @@ struct SharedReadingStateReconcilerTests {
         )
         _ = reconciler.reconcile(newer)
 
-        #expect(!reconciler.complete(realignment, succeeded: true, observation: matchingObservation(for: newer)))
+        let acceptedRealignment = reconciler.complete(realignment, succeeded: true, observation: matchingObservation(for: newer))
+        #expect(!acceptedRealignment)
     }
 
     @Test("a combined rate and cursor correction uses the newest narration target")
@@ -342,9 +352,9 @@ struct SharedReadingStateReconcilerTests {
         var reconciler = SharedReadingStateReconciler()
         let older = input(
             sequence: 1,
+            desiredPosition: position(0.6),
             source: .readAloud,
             desiredPlayback: .playing,
-            desiredPosition: position(0.6),
             narrationPosition: position(0.2),
             playback: .playing(UUID()),
             effectiveRate: 1
@@ -354,12 +364,12 @@ struct SharedReadingStateReconcilerTests {
         let latestTarget = position(0.8, href: "chapter-2.xhtml", page: 5)
         let latest = input(
             sequence: 2,
+            desiredPosition: latestTarget,
             source: .readAloud,
             desiredPlayback: .playing,
-            desiredPosition: latestTarget,
+            desiredRate: 1.5,
             narrationPosition: position(0.2),
             playback: .playing(UUID()),
-            desiredRate: 1.5,
             effectiveRate: 1
         )
         let effects = reconciler.reconcile(latest)
@@ -399,7 +409,8 @@ struct SharedReadingStateReconcilerTests {
             playback: .playing(UUID()),
             effectiveRate: unknownInput.effectiveRate
         )
-        #expect(!unknownReconciler.complete(unknownStart, succeeded: true, observation: unknownCursorObservation))
+        let unknownStartAccepted = unknownReconciler.complete(unknownStart, succeeded: true, observation: unknownCursorObservation)
+        #expect(!unknownStartAccepted)
 
         let mismatchedInput = input(
             desiredPosition: target,
@@ -418,7 +429,8 @@ struct SharedReadingStateReconcilerTests {
             playback: .playing(UUID()),
             effectiveRate: mismatchedInput.effectiveRate
         )
-        #expect(!mismatchedReconciler.complete(mismatchedStart, succeeded: true, observation: mismatchedCursorObservation))
+        let mismatchedStartAccepted = mismatchedReconciler.complete(mismatchedStart, succeeded: true, observation: mismatchedCursorObservation)
+        #expect(!mismatchedStartAccepted)
     }
 
     @Test("an unrelated rate observation change preserves pending visible navigation")
@@ -448,7 +460,8 @@ struct SharedReadingStateReconcilerTests {
             playback: changedRateObservation.playback,
             effectiveRate: changedRateObservation.effectiveRate
         )
-        #expect(reconciler.complete(navigation, succeeded: true, observation: confirmed))
+        let navigationConfirmed = reconciler.complete(navigation, succeeded: true, observation: confirmed)
+        #expect(navigationConfirmed)
 
         let converged = input(
             desiredPosition: target,

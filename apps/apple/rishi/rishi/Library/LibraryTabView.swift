@@ -21,6 +21,13 @@ struct LibraryTabDependencies {
     let readerDefaults: AppReaderDefaults
     let syncEngine: SyncEngine
     let sharePackageService: SharePackageService
+    let bookSourceRegistry: BookSourceRegistry
+    let bookImportLifecycle: BookImportLifecycle
+    let bookMaterializationCoordinator: BookMaterializationCoordinator
+    let bookImportEvents: BookImportEvents
+    let currentAccountGeneration: @Sendable () async -> UInt64?
+    let accountIdentity: LibraryAccountIdentity
+    let currentAccountIdentity: @MainActor () -> LibraryAccountIdentity?
     let sharedReadingAPI: SharedReadingAPI
     let sharedReadingSessionRegistry: SharedReadingSessionRegistry
     let sessionBookService: SessionBookService
@@ -63,10 +70,12 @@ struct LibraryTabView: View {
     @State private var presentDocumentPickerAfterPrompt = false
     @State private var pendingFirstPromptImport = false
     @State private var trialReadyAfterDocumentPicker = false
+    @State private var pendingLibraryTrialReady = false
     @State private var pendingSubscriptionConfirmation = false
     @State private var showSubscriptionConfirmation = false
     @State private var showActiveReadingSessions = false
     @State private var showConversations = false
+    @State private var completedInitialLoadIdentity: LibraryAccountIdentity?
 
     private var firstBookPromptSeenKey: String {
         "rishi.library.firstBookPrompt.seen.\(user.id.uuidString)"
@@ -95,6 +104,13 @@ struct LibraryTabView: View {
             importCoordinator: dependencies.importCoordinator,
             positionStore: dependencies.positionStore,
             bookFileStorage: dependencies.bookFileStorage,
+            bookSourceRegistry: dependencies.bookSourceRegistry,
+            bookImportLifecycle: dependencies.bookImportLifecycle,
+            bookMaterializationCoordinator: dependencies.bookMaterializationCoordinator,
+            bookImportEvents: dependencies.bookImportEvents,
+            currentAccountGeneration: dependencies.currentAccountGeneration,
+            accountIdentity: dependencies.accountIdentity,
+            currentAccountIdentity: dependencies.currentAccountIdentity,
             onBookDeleted: { bookId in
                 try await dependencies.syncEngine.markBookDeleted(bookId)
             }
@@ -119,21 +135,36 @@ struct LibraryTabView: View {
         if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
             _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: user.id)
             _ = await dependencies.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
-            await vm.refresh()
+        }
+        #endif
+        let firstLoad = await vm.loadInitialSnapshotAndSyncIfNeeded(
+            accountIdentity: dependencies.accountIdentity,
+            consentGranted: dataUseConsentGranted,
+            autoSync: dependencies.readerDefaults.autoSync,
+            sync: {
+                _ = await dependencies.syncEngine.runOnce(onWaveID: { waveID in
+                    model.expectInitialSyncCompletion(waveID: waveID)
+                })
+            }
+        )
+        guard await ensureCurrentSnapshotAfterPrewarm(firstLoad),
+              completedInitialLoadIdentity != dependencies.accountIdentity else { return }
+        await dependencies.sharePackageService.prewarm(bookIDs: vm.books.map(\.id))
+        guard await ensureCurrentSnapshotAfterPrewarm(firstLoad),
+              completedInitialLoadIdentity != dependencies.accountIdentity else { return }
+        completedInitialLoadIdentity = dependencies.accountIdentity
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
             markFirstBookPromptSeen()
         }
         #endif
-        await model.performInitialLibrarySyncIfConsented(
-            consentGranted: dataUseConsentGranted,
-            refresh: { await vm.refresh() },
-            sync: {
-                if dependencies.readerDefaults.autoSync {
-                    _ = await dependencies.syncEngine.runOnce()
-                }
-            }
-        )
 
-        if !hasSeenFirstBookPrompt && vm.books.isEmpty {
+        guard let shouldPresentPrompt = model.shouldPresentFirstBookPrompt(
+            after: firstLoad,
+            hasSeenPrompt: hasSeenFirstBookPrompt,
+            libraryIsEmpty: vm.books.isEmpty
+        ) else { return }
+        if shouldPresentPrompt {
             showFirstBookPrompt = true
             return
         }
@@ -144,8 +175,45 @@ struct LibraryTabView: View {
         onLibraryReadyForTrial()
     }
 
+    private func ensureCurrentSnapshotAfterPrewarm(_ result: LibraryViewModel.LoadResult) async -> Bool {
+        await model.revalidateInitialLibraryLoad(
+            result: result,
+            identity: dependencies.accountIdentity,
+            currentIdentity: dependencies.currentAccountIdentity,
+            readiness: { vm.loadReadiness },
+            isCancelled: { Task.isCancelled },
+            refresh: { await vm.refresh() }
+        )
+    }
+
+    private func ensureLibraryReadyForSideEffects() async -> Bool {
+        guard await ensureCurrentSnapshotAfterPrewarm(.success),
+              !Task.isCancelled,
+              dependencies.currentAccountIdentity() == dependencies.accountIdentity else { return false }
+        completedInitialLoadIdentity = dependencies.accountIdentity
+        return true
+    }
+
     @MainActor
-    private func openBook(_ book: Book) {
+    private func resumeDeferredLibraryReadyAction() async {
+        guard await ensureLibraryReadyForSideEffects() else { return }
+        if presentDocumentPickerAfterPrompt {
+            presentDocumentPickerAfterPrompt = false
+            trialReadyAfterDocumentPicker = true
+            showDocumentPicker = true
+        } else if trialReadyAfterDocumentPicker, !showDocumentPicker {
+            trialReadyAfterDocumentPicker = false
+            pendingLibraryTrialReady = false
+            onLibraryReadyForTrial()
+        } else if pendingLibraryTrialReady {
+            pendingLibraryTrialReady = false
+            onLibraryReadyForTrial()
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func openBook(_ book: Book) -> Bool {
         model.hint(book)
         // The reader exit callback and the library boundary both initiate
         // cleanup asynchronously. Serialize the next reader launch behind
@@ -153,14 +221,15 @@ struct LibraryTabView: View {
         // responsive.
         dependencies.voicePresenter.scheduleRegisteredReaderCleanup()
         #if targetEnvironment(macCatalyst)
-            readerWindows.open(book: book, user: user)
+            return readerWindows.open(book: book, user: user)
         #else
             router.path.append(ReaderRoute.route(for: book))
+            return true
         #endif
     }
 
     @MainActor
-    private func handleImported(_ outcomes: [ImportCoordinator.ImportOutcome]) {
+    private func handleImported(_ outcomes: [ImportCoordinator.ImportOutcome]) -> Bool {
         let cameFromFirstPrompt = pendingFirstPromptImport
         pendingFirstPromptImport = false
         let successes = outcomes.compactMap(\.book)
@@ -172,7 +241,7 @@ struct LibraryTabView: View {
         // after the host-provided import so it can open the visible sharing
         // composer. Normal imports retain their existing auto-open behavior.
         if RishiE2EConfiguration.isRealAuth, RishiE2EConfiguration.fixtureURL != nil {
-            return
+            return false
         }
         #endif
         if cameFromFirstPrompt,
@@ -180,12 +249,11 @@ struct LibraryTabView: View {
                book.formatType == .epub || book.formatType == .pdf
            }) {
             router.requestReaderTour(for: book.id, userID: user.id)
-            openBook(book)
-            return
+            return openBook(book)
         }
         guard successes.count == 1, let book = successes.first
-        else { return }
-        openBook(book)
+        else { return false }
+        return openBook(book)
     }
 
     var body: some View {
@@ -202,13 +270,20 @@ struct LibraryTabView: View {
                 }
             }
         )
-        let libraryLoadTaskID = user.id.uuidString + "-" + String(dataUseConsentGranted)
+        let libraryLoadTaskID = user.id.uuidString + "-" + String(dependencies.accountIdentity.generation) + "-" + String(dataUseConsentGranted)
+#if targetEnvironment(macCatalyst)
+        let closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = { book in
+            await readerWindows.closeBeforeBookDeletion(bookID: book.id, userID: book.userId)
+        }
+#else
+        let closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil
+#endif
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
           
                 path: bindableRouter.path,
                 importCoordinator: dependencies.importCoordinator,
-                onOpenBook: openBook,
+                onOpenBook: { book in _ = openBook(book) },
                 onShowSettings: settingsHandler,
                 onImported: handleImported,
                 documentPickerPresented: $showDocumentPicker,
@@ -228,6 +303,7 @@ struct LibraryTabView: View {
                     )
                     return succeeded
                 },
+                closeReaderBeforeBookDeletion: closeReaderBeforeBookDeletion,
                 onShowChats: { showConversations = true }
             )
             .toolbar {
@@ -306,9 +382,23 @@ struct LibraryTabView: View {
             .task(id: libraryLoadTaskID) {
                 await performInitialLibraryLoad()
             }
-            .onChange(of: dependencies.settings.syncStatus.isRunning) { wasRunning, isRunning in
-                guard wasRunning, !isRunning else { return }
+            .onChange(of: dependencies.settings.syncStatus.lastCompletedWaveID) { _, completedWaveID in
+                guard let completedWaveID,
+                      model.shouldRefreshLibraryAfterSyncCompletion(waveID: completedWaveID) else { return }
                 Task { await refreshAfterSyncCompletion() }
+            }
+        }
+        .overlay {
+            if case .failure(let identity) = vm.loadReadiness,
+               identity == dependencies.accountIdentity,
+               vm.books.isEmpty {
+                ContentUnavailableView {
+                    Label("Library unavailable", systemImage: "books.vertical")
+                } description: {
+                    Text("Your library could not be loaded.")
+                } actions: {
+                    Button("Retry") { Task { await performInitialLibraryLoad() } }
+                }
             }
         }
         .environment(vm)
@@ -323,15 +413,9 @@ struct LibraryTabView: View {
         }
 
         .sheet(isPresented: $showFirstBookPrompt, onDismiss: {
-            let shouldPresentPicker = presentDocumentPickerAfterPrompt
-            presentDocumentPickerAfterPrompt = false
+            pendingLibraryTrialReady = true
             Task { @MainActor in
-                if shouldPresentPicker {
-                    trialReadyAfterDocumentPicker = true
-                    showDocumentPicker = true
-                } else {
-                    onLibraryReadyForTrial()
-                }
+                await resumeDeferredLibraryReadyAction()
             }
         }) {
             SampleOrImportScreen(
@@ -360,9 +444,16 @@ struct LibraryTabView: View {
             )
         }
         .onChange(of: showDocumentPicker) { _, isPresented in
-            guard !isPresented, trialReadyAfterDocumentPicker else { return }
-            trialReadyAfterDocumentPicker = false
-            onLibraryReadyForTrial()
+            guard !isPresented,
+                  trialReadyAfterDocumentPicker else { return }
+            Task { @MainActor in
+                await resumeDeferredLibraryReadyAction()
+            }
+        }
+        .onChange(of: vm.loadReadiness) { _, readiness in
+            guard readiness == .success(dependencies.accountIdentity),
+                  pendingLibraryTrialReady || presentDocumentPickerAfterPrompt || trialReadyAfterDocumentPicker else { return }
+            Task { @MainActor in await resumeDeferredLibraryReadyAction() }
         }
 
         #if !targetEnvironment(macCatalyst)
@@ -485,6 +576,7 @@ private struct LibraryTabPreviewHost: View {
             )
         }
         .environment(vm)
+        .task { await vm.refresh() }
     }
 }
 

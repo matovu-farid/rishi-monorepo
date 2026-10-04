@@ -180,19 +180,23 @@ final class ReaderWindowCoordinator {
         detachedSharedRouteAccounts = detachedSharedRouteAccounts.filter { $0.value != accountID }
     }
 
-    func open(book: Book, user: User) {
+    @discardableResult
+    func open(book: Book, user: User) -> Bool {
         open(route: ReaderRoute.route(for: book), userID: user.id)
     }
 
-    func open(route: ReaderRoute, userID: UserID) {
+    @discardableResult
+    func open(route: ReaderRoute, userID: UserID) -> Bool {
+        guard let openWindowAction else { return false }
         let input = ReaderWindowInput(userID: userID, route: route)
         let inserted = openWindows.updateValue(input, forKey: input.id) == nil
-        openWindowAction?(id: "reader", value: input)
+        openWindowAction(id: "reader", value: input)
         if !inserted {
             // Opening a value that already exists asks SwiftUI to focus the
             // existing scene instead of creating another reader.
-            return
+            return false
         }
+        return true
     }
 
     func focus(bookID: BookID, userID: UserID) {
@@ -209,6 +213,13 @@ final class ReaderWindowCoordinator {
         leaveShared(for: input)
         await closeHandle?.close()
         closeWindowAction?(value: input)
+    }
+
+    /// Deletion must wait for the reader's close handle before the lifecycle
+    /// drains source leases and managed-file users. This entry point makes
+    /// that ordering explicit for the library's pre-delete hook.
+    func closeBeforeBookDeletion(bookID: BookID, userID: UserID) async {
+        await close(bookID: bookID, userID: userID)
     }
 
     func register(_ input: ReaderWindowInput) {

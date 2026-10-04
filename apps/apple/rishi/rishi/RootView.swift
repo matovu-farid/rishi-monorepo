@@ -146,9 +146,6 @@ struct RootView: View {
                             throw RishiAppIntentRuntimeError.unavailable
                         }
                         currentUserBox.signIn(user: user)
-                        await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(
-                            reason: .signIn
-                        )
                     } catch {
                         Log.error("root.current_user.bootstrap_failed", error: error)
                         Keychain.delete(.accessToken)

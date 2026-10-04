@@ -19,11 +19,13 @@ final class ReaderPositionSyncBinding {
 
     private let viewModel: ReaderViewModel
     private let syncEngine: SyncEngine
+    private let sourceLease: BookSourceLease
     private var task: Task<Void, Never>?
 
-    init(viewModel: ReaderViewModel, syncEngine: SyncEngine) {
+    init(viewModel: ReaderViewModel, syncEngine: SyncEngine, sourceLease: BookSourceLease) {
         self.viewModel = viewModel
         self.syncEngine = syncEngine
+        self.sourceLease = sourceLease
         start()
     }
 
@@ -53,7 +55,10 @@ final class ReaderPositionSyncBinding {
                 if currentJSON != lastJSON {
                     lastJSON = currentJSON
                     if currentJSON != nil {
-                        await self.syncEngine.markPositionDirty(bookId)
+                        if let admission = try? self.sourceLease.effectAuthority.admit(self.sourceLease.sourceAccessPermit) {
+                            defer { admission.release() }
+                            await self.syncEngine.markPositionDirty(bookId)
+                        }
                     }
                 }
                 positionSyncSignposter.endInterval(signpostName, signpostState)

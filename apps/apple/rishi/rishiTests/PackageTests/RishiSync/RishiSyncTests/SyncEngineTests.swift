@@ -381,6 +381,65 @@ struct SyncEngineTests {
         _ = await second.value
     }
 
+    @Test("a canceled waiter cannot cancel a wave while a joining callback is on MainActor")
+    func canceledWaiterPreservesJoiningWaveOwnershipDuringCallbackHop() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let fetchGate = DispatchSemaphore(value: 0)
+        defer { fetchGate.signal(); fetchGate.signal() }
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                fetchGate.wait()
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("{ \"rows\": [] }".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let callbackEntered = CompletionProbe()
+
+        let first = Task { await engine.runOnce() }
+        try await waitForRequest(path: "/api/sync/changes")
+        let joining = Task {
+            await engine.runOnce(onWaveID: { _ in
+                await callbackEntered.markCompleted()
+                try? await Task.sleep(for: .milliseconds(150))
+            })
+        }
+
+        for _ in 0..<100 {
+            if await callbackEntered.isCompleted() { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await callbackEntered.isCompleted())
+
+        first.cancel()
+        _ = await first.value
+        fetchGate.signal()
+        _ = await joining.value
+
+        let conversationFetches = EngineMockURLProtocol.capturedSnapshot()
+            .filter { $0.url?.path == "/api/sync/conversations" && $0.httpMethod == "GET" }
+        #expect(conversationFetches.count == 1)
+    }
+
     @Test("requestSync schedules a follow-up without overlapping the active wave")
     func requestSyncSchedulesFollowUpWithoutOverlap() async throws {
         EngineMockURLProtocol.reset()
@@ -801,7 +860,8 @@ struct SyncEngineTests {
 
         #expect(wave.errors.isEmpty)
         #expect(await metadata.recoverySnapshot() == nil)
-        #expect(await metadata.cursorState(for: .recovery) == nil)
+        let recoveryCursorState = try await metadata.cursorState(for: .recovery)
+        #expect(recoveryCursorState == nil)
         #expect(await metadata.incrementalCursor() == nil)
     }
 

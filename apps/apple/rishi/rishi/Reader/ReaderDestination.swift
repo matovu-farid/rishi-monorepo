@@ -1,8 +1,15 @@
 import SwiftUI
 import Observation
 import ReadiumShared
+import PDFKit
 
 struct ReaderDestinationDependencies {
+    let scopedMutationStore: BookScopedMutationStore
+    let positionStore: any PositionStore
+    let sourceLease: BookSourceLease
+    let chapterIndexPersistence: any ChapterIndexPersistence
+    let epubUnpackedCache: EPUBUnpackedCache
+    let bookSourceRegistry: BookSourceRegistry
     let readerDefaults: AppReaderDefaults
     let readerSettingsStore: any ReaderSettingsStore
     let highlightStore: any HighlightStore
@@ -12,8 +19,12 @@ struct ReaderDestinationDependencies {
     let indexingHook: any BookIndexingHook
     let syncEngine: SyncEngine
     let conversationLookup: ConversationLookup
+    let conversationStore: any ConversationStore
     let messageStore: any MessageStore
     let chatService: any ChatService
+    let readerVoiceDirtyHook: any VoiceTranscriptDirtyHook
+    let voiceChapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory
+    let voiceChapterIndexContentVersionProvider: @Sendable (BookID) async -> String?
     let entitlementSnapshotStore: EntitlementSnapshotStore
     let entitlementRefreshCoordinator: EntitlementRefreshCoordinator
     let voicePresenter: VoiceSessionPresenter
@@ -27,19 +38,141 @@ struct ReaderDestinationDependencies {
     let playbackOwner: ReadAloudPlaybackOwner
 
     @MainActor
-    static func make(services: BootstrappedServices) -> Self {
-        Self(
+    static func make(services: BootstrappedServices, book: Book, sourceLease: BookSourceLease) throws -> Self {
+        let positionStore: any PositionStore
+        let readerSettingsStore: any ReaderSettingsStore
+        let highlightStore: any HighlightStore
+        let bookmarkStore: any BookmarkStore
+        let conversationStore: any ConversationStore
+        let messageStore: any MessageStore
+        let conversationLookup: ConversationLookup
+        let chatService: any ChatService
+        let chapterIndexPersistence: any ChapterIndexPersistence
+        let readerVoiceDirtyHook: any VoiceTranscriptDirtyHook
+        let voiceChapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory
+        let voiceChapterIndexContentVersionProvider: @Sendable (BookID) async -> String?
+
+        switch sourceLease.access {
+        case .account(let permit):
+            let source = sourceLease.sourceAccessPermit
+            let effects = sourceLease.effectAuthority
+            positionStore = ScopedPositionStore(
+                base: services.library.positionStore,
+                mutations: services.library.scopedMutationStore,
+                permit: permit,
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            guard let settings = services.library.readerSettingsStore as? UserDefaultsReaderSettingsStore else {
+                throw ReaderDestinationCompositionError.readerSettingsUnavailable
+            }
+            readerSettingsStore = ScopedReaderSettingsStore(
+                base: settings,
+                mutations: services.library.scopedMutationStore,
+                permit: permit,
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            highlightStore = ScopedHighlightStore(
+                base: services.library.highlightStore,
+                mutations: services.library.scopedMutationStore,
+                permit: permit,
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            bookmarkStore = ScopedBookmarkStore(
+                base: services.library.bookmarkStore,
+                mutations: services.library.scopedMutationStore,
+                permit: permit,
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            chapterIndexPersistence = ScopedChapterIndexPersistence(
+                base: services.library.chapterIndexPersistence,
+                mutations: services.library.scopedMutationStore,
+                permit: permit,
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            let chapterContentVersion = book.chapterIndexContentVersion ?? bookChapterVersion(book, lease: sourceLease)
+            voiceChapterIndexContentVersionProvider = { [bookID = permit.bookID, chapterContentVersion] requestedBookID in
+                requestedBookID == bookID ? chapterContentVersion : nil
+            }
+            voiceChapterIndexCoordinatorFactory = { [book, sourceLease, chapterIndexPersistence, chapterContentVersion, chapterSummarizer = services.library.chapterSummarizer, unpackedCache = services.library.epubUnpackedCache] requestedBookID, requestedVersion in
+                guard requestedBookID == book.id, requestedVersion == chapterContentVersion else { return nil }
+                return ChapterIndexCoordinator(
+                    persistence: chapterIndexPersistence,
+                    source: ReaderLeaseChapterSource(book: book, lease: sourceLease, unpackedCache: unpackedCache),
+                    summarizer: chapterSummarizer
+                )
+            }
+            let scopedConversations = try ScopedConversationStore(
+                base: services.chat.conversationStore,
+                mutations: services.library.scopedMutationStore,
+                authority: .book(permit),
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            let scopedMessages = try ScopedMessageStore(
+                base: services.chat.messageStore,
+                conversations: scopedConversations,
+                mutations: services.library.scopedMutationStore,
+                authority: .book(permit),
+                originatingSource: source,
+                sourceEffects: effects
+            )
+            let sourceScopedDirtyHook = ReaderSourceScopedChatDirtyHook(
+                syncEngine: services.sync.engine,
+                source: source,
+                effects: effects
+            )
+            readerVoiceDirtyHook = sourceScopedDirtyHook
+            let admittedConversations = ReaderSourceAdmittedConversationStore(
+                base: scopedConversations,
+                source: source,
+                effects: effects,
+                onCommitted: { [engine = services.sync.engine] id in await engine.markConversationDirty(id) }
+            )
+            let admittedMessages = ReaderSourceAdmittedMessageStore(
+                base: scopedMessages,
+                source: source,
+                effects: effects,
+                onCommitted: { [engine = services.sync.engine] id in await engine.markMessageDirty(id) }
+            )
+            conversationStore = admittedConversations
+            messageStore = admittedMessages
+            conversationLookup = ConversationLookup(store: admittedConversations)
+            chatService = services.chat.service.scoped(
+                conversationLookup: conversationLookup,
+                messageStore: admittedMessages,
+                dirtyHook: sourceScopedDirtyHook
+            )
+        case .localPreview:
+            throw ReaderDestinationCompositionError.localPreviewMustUsePreviewReader
+        }
+
+        return Self(
+            scopedMutationStore: services.library.scopedMutationStore,
+            positionStore: positionStore,
+            sourceLease: sourceLease,
+            chapterIndexPersistence: chapterIndexPersistence,
+            epubUnpackedCache: services.library.epubUnpackedCache,
+            bookSourceRegistry: services.library.bookSourceRegistry,
             readerDefaults: services.settings.readerDefaults,
-            readerSettingsStore: services.library.readerSettingsStore,
-            highlightStore: services.library.highlightStore,
-            bookmarkStore: services.library.bookmarkStore,
+            readerSettingsStore: readerSettingsStore,
+            highlightStore: highlightStore,
+            bookmarkStore: bookmarkStore,
             bookFileStorage: services.library.bookFileStorage,
             bookSearch: services.library.bookSearch,
             indexingHook: services.library.indexingHook,
             syncEngine: services.sync.engine,
-            conversationLookup: services.chat.conversationLookup,
-            messageStore: services.chat.messageStore,
-            chatService: services.chat.service,
+            conversationLookup: conversationLookup,
+            conversationStore: conversationStore,
+            messageStore: messageStore,
+            chatService: chatService,
+            readerVoiceDirtyHook: readerVoiceDirtyHook,
+            voiceChapterIndexCoordinatorFactory: voiceChapterIndexCoordinatorFactory,
+            voiceChapterIndexContentVersionProvider: voiceChapterIndexContentVersionProvider,
             entitlementSnapshotStore: services.billing.entitlementSnapshotStore,
             entitlementRefreshCoordinator: services.billing.entitlementRefreshCoordinator,
             voicePresenter: services.voice.presenter,
@@ -52,6 +185,154 @@ struct ReaderDestinationDependencies {
             ttsPrewarmer: services.audio.ttsPrewarmer,
             playbackOwner: services.audio.playbackOwner
         )
+    }
+}
+
+private enum ReaderDestinationCompositionError: Error {
+    case readerSettingsUnavailable
+    case localPreviewMustUsePreviewReader
+}
+
+struct ReaderSourceScopedChatDirtyHook: ChatDirtyHook, VoiceTranscriptDirtyHook, Sendable {
+    let syncEngine: SyncEngine
+    let source: BookSourceAccessPermit
+    let effects: any BookSourceEffectAdmitting
+
+    func conversationDidUpdate(_ id: ConversationID) async {
+        guard let admission = try? effects.admit(source) else { return }
+        defer { admission.release() }
+        await syncEngine.markConversationDirty(id)
+    }
+
+    func messageDidUpdate(_ id: MessageID) async {
+        guard let admission = try? effects.admit(source) else { return }
+        defer { admission.release() }
+        await syncEngine.markMessageDirty(id)
+    }
+}
+
+/// Holds the source admission from before the database commit through the
+/// corresponding sync dirty mark. The chat service's later dirty-hook call is
+/// retained as an idempotent fallback for non-reader callers.
+struct ReaderSourceAdmittedMessageStore: MessageStore, Sendable {
+    private let base: any MessageStore
+    private let source: BookSourceAccessPermit
+    private let effects: any BookSourceEffectAdmitting
+    private let onCommitted: @Sendable (MessageID) async -> Void
+
+    init(
+        base: any MessageStore,
+        source: BookSourceAccessPermit,
+        effects: any BookSourceEffectAdmitting,
+        onCommitted: @escaping @Sendable (MessageID) async -> Void
+    ) {
+        self.base = base
+        self.source = source
+        self.effects = effects
+        self.onCommitted = onCommitted
+    }
+
+    func messages(for conversationId: ConversationID) async throws -> [Message] { try await base.messages(for: conversationId) }
+    func message(_ id: MessageID) async throws -> Message? { try await base.message(id) }
+
+    func upsert(_ message: Message) async throws {
+        let admission = try effects.admit(source)
+        defer { admission.release() }
+        try await base.upsert(message)
+        await onCommitted(message.id)
+    }
+
+    func delete(_ id: MessageID) async throws {
+        let admission = try effects.admit(source)
+        defer { admission.release() }
+        try await base.delete(id)
+        await onCommitted(id)
+    }
+}
+
+struct ReaderSourceAdmittedConversationStore: ConversationStore, Sendable {
+    private let base: any ConversationStore
+    private let source: BookSourceAccessPermit
+    private let effects: any BookSourceEffectAdmitting
+    private let onCommitted: @Sendable (ConversationID) async -> Void
+
+    init(
+        base: any ConversationStore,
+        source: BookSourceAccessPermit,
+        effects: any BookSourceEffectAdmitting,
+        onCommitted: @escaping @Sendable (ConversationID) async -> Void
+    ) {
+        self.base = base
+        self.source = source
+        self.effects = effects
+        self.onCommitted = onCommitted
+    }
+
+    func conversations(for userId: UserID) async throws -> [Conversation] { try await base.conversations(for: userId) }
+    func conversation(_ id: ConversationID) async throws -> Conversation? { try await base.conversation(id) }
+
+    func upsert(_ conversation: Conversation) async throws {
+        let admission = try effects.admit(source)
+        defer { admission.release() }
+        try await base.upsert(conversation)
+        await onCommitted(conversation.id)
+    }
+
+    func delete(_ id: ConversationID) async throws {
+        let admission = try effects.admit(source)
+        defer { admission.release() }
+        try await base.delete(id)
+        await onCommitted(id)
+    }
+}
+
+private func bookChapterVersion(_ book: Book, lease: BookSourceLease) -> String {
+    switch lease.cachePolicy {
+    case .managed(_, let version):
+        "reader-managed-\(version.materializationRevision.uuidString)"
+    case .transient:
+        "reader-transient-\(book.id.uuidString)-\(lease.sourceAccessPermit.sourceInstanceID.uuidString)"
+    }
+}
+
+private struct ReaderLeaseChapterSource: ChapterSource, Sendable {
+    let book: Book
+    let lease: BookSourceLease
+    let unpackedCache: EPUBUnpackedCache
+
+    func chapters() async -> ChapterSourceResult {
+        guard let admission = try? lease.effectAuthority.admit(lease.sourceAccessPermit) else {
+            return unavailable
+        }
+        defer { admission.release() }
+        let result: ChapterSourceResult
+        switch book.formatType {
+        case .epub:
+            do {
+                let publication = try await PublicationLoader(
+                    unpackedCache: unpackedCache,
+                    cachePolicy: lease.cachePolicy
+                ).open(fileURL: lease.url)
+                result = await EPUBChapterSource.snapshot(from: publication)
+            } catch {
+                result = unavailable
+            }
+        case .pdf:
+            if let document = PDFDocument(url: lease.url) {
+                result = await PDFChapterSource.snapshot(from: document)
+            } else {
+                result = unavailable
+            }
+        case .mobi, .azw3:
+            result = unavailable
+        }
+        guard let validation = try? lease.effectAuthority.admit(lease.sourceAccessPermit) else { return unavailable }
+        validation.release()
+        return result
+    }
+
+    private var unavailable: ChapterSourceResult {
+        ChapterSourceResult(availability: .unavailable(diagnostics: ["Chapter source unavailable"]), records: [])
     }
 }
 
@@ -95,6 +376,9 @@ struct ReaderDestination: View {
     let onCopyShareLink: (() -> Void)?
     let sharedReadingMoreMenuContent: AnyView?
     let onFirstContentReady: @MainActor () async -> Void
+    let sourceLease: BookSourceLease
+    let sourceInvalidationCleanup: ReaderSourceInvalidationCleanup
+    private let importInstrumentation: BookImportInstrumentation
 
     @State private var readAloudStartTask: Task<Void, Never>?
     @State private var readAloudStartRequest = UUID()
@@ -150,6 +434,8 @@ struct ReaderDestination: View {
     init(
         vm: ReaderViewModel,
         dependencies: ReaderDestinationDependencies,
+        sourceLease: BookSourceLease,
+        sourceInvalidationCleanup: ReaderSourceInvalidationCleanup,
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void,
         startReaderTour: Bool = false,
@@ -161,7 +447,8 @@ struct ReaderDestination: View {
         sharedReadingLocalUserID: String? = nil,
         onCopyShareLink: (() -> Void)? = nil,
         sharedReadingMoreMenuContent: AnyView? = nil,
-        onFirstContentReady: @escaping @MainActor () async -> Void = {}
+        onFirstContentReady: @escaping @MainActor () async -> Void = {},
+        importInstrumentation: BookImportInstrumentation = .shared
     ) {
         let peeked = dependencies.readerSettingsStore.peekPersistedTheme(for: vm.book.id)
         let initial = peeked ?? dependencies.readerDefaults.theme
@@ -169,6 +456,31 @@ struct ReaderDestination: View {
 
         self._vm = State(initialValue: vm)
         self.dependencies = dependencies
+        self.sourceLease = sourceLease
+        self.sourceInvalidationCleanup = sourceInvalidationCleanup
+        self.importInstrumentation = importInstrumentation
+        let readerCacheState: BookImportMeasurement.CacheState
+        let readableBytes: Int64?
+        switch sourceLease.cachePolicy {
+        case .managed(_, let version):
+            readerCacheState = .hit
+            readableBytes = version.byteCount
+        case .transient:
+            readerCacheState = .miss
+            readableBytes = nil
+        }
+        importInstrumentation.recordRequestedReaderOpen(
+            .readerSourceAcquired,
+            bookID: vm.book.id,
+            readableByteCount: readableBytes,
+            cacheState: readerCacheState
+        )
+        importInstrumentation.recordRequestedReaderOpen(
+            .readerAttachmentStarted,
+            bookID: vm.book.id,
+            readableByteCount: readableBytes,
+            cacheState: readerCacheState
+        )
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
         self.startReaderTour = startReaderTour
@@ -184,6 +496,11 @@ struct ReaderDestination: View {
         let tour = startReaderTour ? ReaderOnboardingTourCoordinator() : nil
         self._voiceEntry = State(initialValue: ReaderVoiceEntry(
             voicePresenter: dependencies.voicePresenter,
+            conversationLookup: dependencies.conversationLookup,
+            messageStore: dependencies.messageStore,
+            dirtyHook: dependencies.readerVoiceDirtyHook,
+            chapterIndexCoordinatorFactory: dependencies.voiceChapterIndexCoordinatorFactory,
+            chapterIndexContentVersionProvider: dependencies.voiceChapterIndexContentVersionProvider,
             voiceLanguageProvider: { dependencies.readerDefaults.voiceLanguage },
             entitlementSnapshotStore: dependencies.entitlementSnapshotStore,
             entitlementRefreshCoordinator: dependencies.entitlementRefreshCoordinator,
@@ -202,7 +519,11 @@ struct ReaderDestination: View {
             bookmarkStore: dependencies.bookmarkStore,
 
 
-            bookmarkMarkDirty: { [dependencies] id in await dependencies.syncEngine.markBookmarkDirty(id) },
+            bookmarkMarkDirty: { [dependencies, sourceLease] id in
+                guard let admission = try? sourceLease.effectAuthority.admit(sourceLease.sourceAccessPermit) else { return }
+                defer { admission.release() }
+                await dependencies.syncEngine.markBookmarkDirty(id)
+            },
             onReadAloud: {
                 guard !sharedIsFollowingController && !sharedControlsLocked else { return }
                 readerTour?.readAloudTapped()
@@ -279,6 +600,18 @@ struct ReaderDestination: View {
                 Task { @MainActor in await readAloud.repeatCurrent() }
             }
         )
+        .task {
+            // View-tree attachment is distinct from first visible PDF/EPUB
+            // pixels; the latter is intentionally not implied by this mark.
+            importInstrumentation.recordRequestedReaderOpen(
+                .readerAttached,
+                bookID: vm.book.id
+            )
+            sourceInvalidationCleanup.register {
+                _ = await dependencies.playbackOwner.stop(reader: vm)
+                await voiceEntry.endForReader()
+            }
+        }
         .task {
 #if targetEnvironment(macCatalyst)
             if let readerWindowCloseHandle {
@@ -371,7 +704,8 @@ struct ReaderDestination: View {
             }
             syncBinding = ReaderPositionSyncBinding(
                 viewModel: vm,
-                syncEngine: dependencies.syncEngine
+                syncEngine: dependencies.syncEngine,
+                sourceLease: sourceLease
             )
         }
         .task(id: sharedReadingJoin?.response.sessionId) {
@@ -1289,11 +1623,58 @@ struct ReaderDestination: View {
             return
         }
         didScheduleReaderIndexBackfill = true
-        let url = dependencies.bookFileStorage.absoluteFileURL(for: vm.book)
-        await dependencies.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
+        guard let indexingHook = dependencies.indexingHook as? any AwaitableBookIndexingHook else {
+            return
+        }
+        let book = vm.book
+        let registry = dependencies.bookSourceRegistry
+        let sourceLease = self.sourceLease
+        Task {
+            await ReaderIndexBackfillFence.scheduleAndDrain(
+                book: book,
+                sourceLease: sourceLease,
+                resolveManagedSource: { try await registry.awaitManagedSource(for: book) },
+                acquireManagedSource: { try await registry.acquireReadableSource(for: book) },
+                indexingHook: indexingHook,
+            )
+        }
     }
 }
 
 func readAloudUpgradeReason(for failure: WorkerAllowanceError) -> AIFeatureBlockReason {
     failure.kind == .trial ? .trialExhausted : .narrationAllowanceExhausted
+}
+
+enum ReaderIndexBackfillFence {
+    static func scheduleAndDrain(
+        book: Book,
+        sourceLease: BookSourceLease,
+        resolveManagedSource: @escaping @Sendable () async throws -> ManagedBookSource,
+        acquireManagedSource: @escaping @Sendable () async throws -> BookSourceLease,
+        indexingHook: any AwaitableBookIndexingHook
+    ) async {
+        guard case let .account(permit) = sourceLease.access,
+              permit.ownerID == book.userId,
+              permit.bookID == book.id,
+              let managed = try? await resolveManagedSource(),
+              managed.bookID == book.id,
+              managed.accountGeneration == permit.accountGeneration,
+              managed.fingerprint.bookID == book.id,
+              managed.fingerprint.ownerID == permit.ownerID,
+              let managedLease = try? await acquireManagedSource(),
+              case let .account(managedPermit) = managedLease.access,
+              managedPermit.ownerID == permit.ownerID,
+              managedPermit.accountGeneration == permit.accountGeneration,
+              managedPermit.bookID == book.id,
+              managedPermit.contentRevision == managed.fingerprint.version.materializationRevision,
+              case let .managed(managedBookID, managedVersion) = managedLease.cachePolicy,
+              managedBookID == book.id,
+              managedVersion == managed.fingerprint.version,
+              managedLease.url.standardizedFileURL == managed.url.standardizedFileURL,
+              let managedAdmission = try? managedLease.effectAuthority.admit(managedLease.sourceAccessPermit)
+        else { return }
+        defer { managedAdmission.release() }
+
+        await indexingHook.scheduleIndexingAndWait(for: book, fileURL: managedLease.url)
+    }
 }

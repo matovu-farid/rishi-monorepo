@@ -291,6 +291,7 @@ struct ReaderViewModelTests {
     }
 
     @Test("manual navigation remains authoritative after a read-aloud update")
+    @MainActor
     func manualNavigationRemainsAuthoritativeAfterReadAloudUpdate() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()
@@ -333,6 +334,7 @@ struct ReaderViewModelTests {
     }
 
     @Test("saved read-aloud locator wins over the live visible locator")
+    @MainActor
     func savedReadAloudLocatorWinsOverVisibleLocator() async throws {
         let url = try aliceURL()
         let store = InMemoryPositionStore()

@@ -54,6 +54,15 @@ struct BookUploaderTests {
         func delete(_ id: BookID) async throws { rows[id] = nil }
     }
 
+    private actor AcceptancePersistenceProbe {
+        private(set) var calls = 0
+
+        func persist() -> Bool {
+            calls += 1
+            return false
+        }
+    }
+
     // MARK: - Fixtures
 
     private func makeFileStorage() async throws -> (BookFileStorage, URL) {
@@ -77,6 +86,23 @@ struct BookUploaderTests {
         try FileManager.default.createDirectory(at: absURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("EPUB BYTES".utf8).write(to: absURL)
         return book
+    }
+
+    private func readySourceProvider(storage: BookFileStorage) -> @Sendable (Book) async throws -> BookUploadSource? {
+        { book in
+            let attrs = try FileManager.default.attributesOfItem(atPath: storage.absoluteFileURL(for: book).path)
+            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+            let modified = attrs[.modificationDate] as? Date ?? .distantPast
+            return BookUploadSource(
+                url: storage.absoluteFileURL(for: book),
+                fingerprint: BookFileFingerprint(
+                    bookID: book.id,
+                    ownerID: book.userId,
+                    sha256: "42e3cfce7d573fcbf45639d69ab08edd30db630fadac24c85813f3230ec4978c",
+                    version: ManagedFileVersion(byteCount: size, modificationDate: modified, fileIdentifier: nil, materializationRevision: UUID())
+                )
+            )
+        }
     }
 
     private func makeSession() -> URLSession {
@@ -113,6 +139,26 @@ struct BookUploaderTests {
 
     // MARK: - Tests
 
+    @Test("Pending or unverified books are rejected before any upload request")
+    func missingManagedSourceDoesNotReachNetwork() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession()
+        let (storage, root) = try await makeFileStorage()
+        let book = try makeBookOnDisk(in: root)
+        let uploader = BookUploader(
+            workerClient: makeWorkerClient(session: session),
+            metadataStore: StubMetadata(),
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { "test-user" }
+        )
+
+        await #expect(throws: BookUploader.UploadError.self) {
+            try await uploader.upload(book)
+        }
+        #expect(BookUploaderMockURLProtocol.capturedSnapshot().isEmpty)
+    }
+
     @Test("Happy path: R2 bytes → separate book metadata push → markClean")
     func happyPath() async throws {
         BookUploaderMockURLProtocol.reset()
@@ -126,7 +172,10 @@ struct BookUploaderTests {
             metadataStore: metadata,
             fileStorage: storage,
             urlSession: session,
-            userIdProvider: { "001234.abcdef0123456789.1234" }
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: readySourceProvider(storage: storage),
+            currentGeneration: { 1 },
+            persistServerAcceptance: { _, _, _, _ in true }
         )
 
         let presignedURL = "https://r2.example.invalid/books/\(book.userId.uuidString)/\(book.id.uuidString).epub?sig=abc"
@@ -179,6 +228,47 @@ struct BookUploaderTests {
         #expect(calls.first?.3 == "\"abc123\"")
     }
 
+    @Test("Failed server-acceptance persistence keeps the book dirty")
+    func failedAcceptancePersistenceDoesNotMarkClean() async throws {
+        BookUploaderMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let persistence = AcceptancePersistenceProbe()
+        let (storage, root) = try await makeFileStorage()
+        let book = try makeBookOnDisk(in: root)
+        let uploader = BookUploader(
+            workerClient: workerClient,
+            metadataStore: metadata,
+            fileStorage: storage,
+            urlSession: session,
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: readySourceProvider(storage: storage),
+            currentGeneration: { 1 },
+            persistServerAcceptance: { _, _, _, _ in await persistence.persist() }
+        )
+
+        let presignedURL = "https://r2.example.invalid/books/acceptance-failure.epub?sig=abc"
+        BookUploaderMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/upload-url" {
+                return (200, Data("{\"url\":\"\\(presignedURL)\",\"expires_at\":946684800}".utf8), nil)
+            }
+            if request.url?.absoluteString == presignedURL {
+                return (200, Data(), ["ETag": "\"abc123\""])
+            }
+            if request.url?.path == "/api/sync/push" {
+                return (200, Data("{\"accepted_at\":946684800,\"accepted\":true}".utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        await #expect(throws: BookUploader.UploadError.self) {
+            try await uploader.upload(book)
+        }
+        #expect(await persistence.calls == 1)
+        #expect(await metadata.calls().isEmpty)
+    }
+
     @Test("Stale server acknowledgement does NOT markClean")
     func staleServerAcknowledgementDoesNotMarkClean() async throws {
         BookUploaderMockURLProtocol.reset()
@@ -192,7 +282,8 @@ struct BookUploaderTests {
             metadataStore: metadata,
             fileStorage: storage,
             urlSession: session,
-            userIdProvider: { "001234.abcdef0123456789.1234" }
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: readySourceProvider(storage: storage)
         )
 
         let presignedURL = "https://r2.example.invalid/books/\(book.id.uuidString).epub?sig=stale"
@@ -228,7 +319,8 @@ struct BookUploaderTests {
             metadataStore: metadata,
             fileStorage: storage,
             urlSession: session,
-            userIdProvider: { "001234.abcdef0123456789.1234" }
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: readySourceProvider(storage: storage)
         )
 
         BookUploaderMockURLProtocol.handler = { request in
@@ -258,7 +350,8 @@ struct BookUploaderTests {
             metadataStore: metadata,
             fileStorage: storage,
             urlSession: session,
-            userIdProvider: { "001234.abcdef0123456789.1234" }
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: readySourceProvider(storage: storage)
         )
 
         // Worker returns 500 on the presign call.
@@ -286,7 +379,8 @@ struct BookUploaderTests {
             metadataStore: metadata,
             fileStorage: storage,
             urlSession: session,
-            userIdProvider: { "001234.abcdef0123456789.1234" }
+            userIdProvider: { "001234.abcdef0123456789.1234" },
+            managedSourceProvider: readySourceProvider(storage: storage)
         )
 
         let presignedURL = "https://r2.example.invalid/books/x.epub?sig=abc"

@@ -23,6 +23,11 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
     public private(set) var isCheckingEntitlement = false
 
     private let voicePresenter: VoiceSessionPresenter
+    private let conversationLookup: ConversationLookup
+    private let messageStore: any MessageStore
+    private let dirtyHook: any VoiceTranscriptDirtyHook
+    private let chapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory
+    private let chapterIndexContentVersionProvider: @Sendable (BookID) async -> String?
     private let voiceLanguageProvider: @MainActor () -> VoiceLanguageOption
 
     /// The live entitlement snapshot dependencies. They remain optional for
@@ -36,6 +41,11 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
 
     init(
         voicePresenter: VoiceSessionPresenter,
+        conversationLookup: ConversationLookup,
+        messageStore: any MessageStore,
+        dirtyHook: any VoiceTranscriptDirtyHook,
+        chapterIndexCoordinatorFactory: @escaping RealtimeVoiceSession.ChapterIndexCoordinatorFactory,
+        chapterIndexContentVersionProvider: @escaping @Sendable (BookID) async -> String?,
         voiceLanguageProvider: @escaping @MainActor () -> VoiceLanguageOption,
         entitlementSnapshotStore: EntitlementSnapshotStore? = nil,
         entitlementRefreshCoordinator: EntitlementRefreshCoordinator? = nil,
@@ -43,6 +53,11 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
         onVoiceStarted: (@MainActor () -> Void)? = nil
     ) {
         self.voicePresenter = voicePresenter
+        self.conversationLookup = conversationLookup
+        self.messageStore = messageStore
+        self.dirtyHook = dirtyHook
+        self.chapterIndexCoordinatorFactory = chapterIndexCoordinatorFactory
+        self.chapterIndexContentVersionProvider = chapterIndexContentVersionProvider
         self.voiceLanguageProvider = voiceLanguageProvider
         self.entitlementSnapshotStore = entitlementSnapshotStore
         self.entitlementRefreshCoordinator = entitlementRefreshCoordinator
@@ -107,7 +122,12 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
                 initialQuote: initialQuote,
                 bookContext: contextSnapshot,
                 currentPageProvider: currentPageProvider,
-                readerSessionIdentity: readerSessionIdentity
+                readerSessionIdentity: readerSessionIdentity,
+                readerConversationLookup: conversationLookup,
+                readerMessageStore: messageStore,
+                readerDirtyHook: dirtyHook,
+                readerChapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
+                readerChapterIndexContentVersionProvider: chapterIndexContentVersionProvider
             )
             if outcome == .live {
                 onVoiceStarted?()

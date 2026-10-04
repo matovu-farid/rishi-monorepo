@@ -83,6 +83,12 @@ public final class PDFReaderViewModel {
 
     private let positionStore: any PositionStore
     private let documentURL: URL
+    /// Retains the source lease while this VM is held by read-aloud playback.
+    let sourceLifetime: AnyObject?
+    public let sourceAccessPermit: BookSourceAccessPermit?
+    let sourceEffects: (any BookSourceEffectAdmitting)?
+    private let sourceInvalidationSignal: BookSourceInvalidationSignal?
+    var sourceInvalidation: AsyncStream<Void>? { sourceInvalidationSignal?.stream }
     private let debounceSeconds: Double
     private let documentLoader: @Sendable (URL) async -> sending PDFDocument?
     private let onPositionChanged: (@Sendable (BookID) async -> Void)?
@@ -94,6 +100,10 @@ public final class PDFReaderViewModel {
         userId: UserID,
         documentURL: URL,
         positionStore: any PositionStore,
+        sourceLifetime: AnyObject? = nil,
+        sourceAccessPermit: BookSourceAccessPermit? = nil,
+        sourceEffects: (any BookSourceEffectAdmitting)? = nil,
+        sourceInvalidationSignal: BookSourceInvalidationSignal? = nil,
         debounceSeconds: Double = 1.0,
         documentLoader: (@Sendable (URL) async -> sending PDFDocument?)? = nil,
         onPositionChanged: (@Sendable (BookID) async -> Void)? = nil
@@ -101,6 +111,10 @@ public final class PDFReaderViewModel {
         self.book = book
         self.userId = userId
         self.documentURL = documentURL
+        self.sourceLifetime = sourceLifetime
+        self.sourceAccessPermit = sourceAccessPermit
+        self.sourceEffects = sourceEffects
+        self.sourceInvalidationSignal = sourceInvalidationSignal
         self.positionStore = positionStore
         self.debounceSeconds = debounceSeconds
         self.documentLoader = documentLoader ?? { url in PDFDocument(url: url) }
@@ -117,6 +131,14 @@ public final class PDFReaderViewModel {
     /// result transfers ownership exactly once across the detached task
     /// boundary instead of treating a shared PDFKit reference as Sendable.
     public func load() async {
+        let loadAdmission: SourceEffectAdmission?
+        do {
+            loadAdmission = try sourceAdmission()
+        } catch {
+            loadingState = .failed(reason: "The book source is no longer available")
+            return
+        }
+        defer { loadAdmission?.release() }
         self.loadingState = .loading
         let loader = documentLoader
         let url = documentURL
@@ -128,6 +150,14 @@ public final class PDFReaderViewModel {
             self.loadingState = .failed(reason: "Failed to open PDF document")
             return
         }
+        let publishAdmission: SourceEffectAdmission?
+        do {
+            publishAdmission = try sourceAdmission()
+        } catch {
+            loadingState = .failed(reason: "The book source changed while it was opening")
+            return
+        }
+        defer { publishAdmission?.release() }
         self.document = doc
         self.totalPages = doc.pageCount
         self.outline = PDFOutlineExtractor.extract(from: doc)
@@ -167,6 +197,14 @@ public final class PDFReaderViewModel {
             self.currentReadAloudParagraphText = paragraphs[paragraphIndex]
         }
         self.loadingState = .loaded
+    }
+
+    private func sourceAdmission() throws -> SourceEffectAdmission? {
+        switch (sourceEffects, sourceAccessPermit) {
+        case (nil, nil): return nil
+        case let (.some(effects), .some(permit)): return try effects.admit(permit)
+        default: throw BookSourceAccessError.unknownSource
+        }
     }
 
     /// Called by the PDFView delegate (`pdfViewPageChanged`) on every page

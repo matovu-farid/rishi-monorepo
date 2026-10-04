@@ -12,6 +12,7 @@ struct SharedReadingSessionRegistryTests {
         private(set) var cancelled = 0
         private(set) var left = 0
 
+        func claimRegistryDrainRemoteLeaveOwnership() {}
         func cancelLocally() async { cancelled += 1 }
         func leaveRemotely() async { left += 1 }
     }

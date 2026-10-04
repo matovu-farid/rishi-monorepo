@@ -26,15 +26,37 @@ import Foundation
 /// from the returned map (the grid renders the gradient fallback).
 public struct BookCoverResolver: Sendable {
 
-    private let storage: BookFileStorage
+    private let storage: BookFileStorage?
+    private let resolveOverride: (@Sendable (Book) async -> URL?)?
+    private let managedReadiness: (@Sendable (Book) async -> Bool)?
 
-    public init(storage: BookFileStorage) {
+    public init(storage: BookFileStorage, isManagedReady: (@Sendable (Book) async -> Bool)? = nil) {
         self.storage = storage
+        self.resolveOverride = nil
+        self.managedReadiness = isManagedReady
+    }
+
+    /// Allows callers with a separate cover source to provide the same
+    /// asynchronous resolution contract. Production storage composition uses
+    /// `init(storage:)`; the closure is also useful for deterministic
+    /// publication tests.
+    init(
+        resolve: @escaping @Sendable (Book) async -> URL?,
+        isManagedReady: (@Sendable (Book) async -> Bool)? = nil
+    ) {
+        self.storage = nil
+        self.resolveOverride = resolve
+        self.managedReadiness = isManagedReady
     }
 
     /// Resolves a single book's cover URL using the fast-then-slow rule.
     /// This is the one place the fast/slow decision is made.
     public func coverURL(for book: Book) async -> URL? {
+        if let managedReadiness, !(await managedReadiness(book)) { return nil }
+        if let resolveOverride {
+            return await resolveOverride(book)
+        }
+        guard let storage else { return nil }
         if let warm = storage.cachedCoverURLIfFresh(for: book) {
             return warm
         }
@@ -46,9 +68,10 @@ public struct BookCoverResolver: Sendable {
     ///
     /// Each child task runs the fast-path stat off-actor on the cooperative
     /// executor, hopping into the `BookFileStorage` actor only on cache miss.
-    public func coverURLs(for books: [Book]) async -> [BookID: URL] {
+    public func coverURLs(for books: [Book], excluding excludedBookIDs: Set<BookID> = []) async -> [BookID: URL] {
         await withTaskGroup(of: (BookID, URL?).self) { group in
             for book in books {
+                guard !excludedBookIDs.contains(book.id) else { continue }
                 group.addTask {
                     (book.id, await coverURL(for: book))
                 }

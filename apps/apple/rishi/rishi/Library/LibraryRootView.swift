@@ -3,21 +3,10 @@ import TipKit
 
 
 import SwiftUI
-import os.signpost
-
-
-
 private enum LibraryMacCommandNotification {
     static let importBook = Notification.Name("RishiCommand.importBook")
     static let focusSearch = Notification.Name("RishiCommand.focusSearch")
 }
-
-private let librarySignposter = OSSignposter(
-    subsystem: "org.fidexa.rishi",
-    category: "library"
-)
-
-
 
 @MainActor
 public struct LibraryRootView: View {
@@ -34,11 +23,12 @@ public struct LibraryRootView: View {
     private var importTip = ImportBooksTip()
 
     public let onImported:
-        (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)?
+        (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)?
 
     public let sharePackageService: SharePackageService?
     let sharedReadingAPI: SharedReadingAPI?
     let sharedReadingRepair: (@Sendable (BookID) async -> Bool)?
+    private let closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)?
 
     ///
 
@@ -55,9 +45,6 @@ public struct LibraryRootView: View {
     @State private var pendingSharedReadingBook: Book?
     @State private var showSharedReadingSwitchConfirmation = false
     @State private var pendingCreatorInvitation: SharedReadingInvitation?
-    #if DEBUG
-    @State private var e2eFixtureImportStarted = false
-    #endif
     private let externalDocumentPickerPresented: Binding<Bool>?
 
     private var documentPickerPresented: Binding<Bool> {
@@ -67,8 +54,25 @@ public struct LibraryRootView: View {
     private func refreshLibraryAndPrewarm(_ vm: LibraryViewModel) async {
         await vm.refresh()
         guard let sharePackageService else { return }
-        let bookIDs = vm.books.map(\.id)
-        Task { await sharePackageService.prewarm(bookIDs: bookIDs) }
+        await sharePackageService.prewarm(bookIDs: vm.books.map(\.id))
+    }
+
+    private func handleImportBookCommand() {
+        #if canImport(UIKit)
+        documentPickerPresented.wrappedValue = true
+        #endif
+    }
+
+    @MainActor
+    private func handleImportedAndMarkReaderOpen(_ outcomes: [ImportCoordinator.ImportOutcome]) {
+        guard onImported?(outcomes) == true else { return }
+        let successes = outcomes.compactMap(\.book)
+        let openedBook = successes.count == 1
+            ? successes.first
+            : successes.first(where: { $0.formatType == .epub || $0.formatType == .pdf })
+        if let openedBook {
+            vm.markImportReaderOpenRequested(bookID: openedBook.id)
+        }
     }
 
     init(
@@ -76,12 +80,13 @@ public struct LibraryRootView: View {
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
-        onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
+        onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)? =
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
         sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
+        closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil,
         onShowChats: (() -> Void)? = nil
     ) {
  
@@ -93,6 +98,7 @@ public struct LibraryRootView: View {
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
         self.sharedReadingRepair = sharedReadingRepair
+        self.closeReaderBeforeBookDeletion = closeReaderBeforeBookDeletion
         self.externalPath = nil
         self.externalDocumentPickerPresented = documentPickerPresented
     }
@@ -103,12 +109,13 @@ public struct LibraryRootView: View {
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
-        onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? =
+        onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Bool)? =
             nil,
         documentPickerPresented: Binding<Bool>? = nil,
         sharePackageService: SharePackageService? = nil,
         sharedReadingAPI: SharedReadingAPI? = nil,
         sharedReadingRepair: (@Sendable (BookID) async -> Bool)? = nil,
+        closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil,
         onShowChats: (() -> Void)? = nil
     ) {
        
@@ -120,103 +127,99 @@ public struct LibraryRootView: View {
         self.sharePackageService = sharePackageService
         self.sharedReadingAPI = sharedReadingAPI
         self.sharedReadingRepair = sharedReadingRepair
+        self.closeReaderBeforeBookDeletion = closeReaderBeforeBookDeletion
         self.externalPath = path
         self.externalDocumentPickerPresented = documentPickerPresented
     }
 
     public var body: some View {
         @Bindable var vm = vm
-        return libraryContent(vm: vm)
+        let content = libraryContent(vm: vm)
        
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
 
             Task {
-                await refreshLibraryAndPrewarm(vm)
-                onImported?(outcomes)
+                handleImportedAndMarkReaderOpen(outcomes)
+                await vm.refresh()
             }
         }
 
 #if canImport(UIKit)
         .sheet(isPresented: documentPickerPresented) {
             DocumentPickerView { urls in
-                Log.event(
-                    "library.import.picker.completed",
-                    data: [
-                        "count": String(urls.count),
-                        "files": urls.map(\.lastPathComponent).joined(separator: ",")
-                    ]
-                )
                 documentPickerPresented.wrappedValue = false
                 Task {
-                    let outcomes = await vm.importPicked(urls)
-                    Log.event(
-                        "library.import.picker.outcomes",
-                        data: [
-                            "count": String(outcomes.count),
-                            "successes": String(outcomes.filter { $0.book != nil }.count),
-                            "failures": String(outcomes.filter { $0.error != nil }.count)
-                        ]
+                    let singleSelection = ImportCoordinator.filterSupported(urls).count == 1
+                    let onSingleRegistration: (@MainActor @Sendable (ImportCoordinator.ImportOutcome) -> Void)?
+                    if singleSelection {
+                        onSingleRegistration = { outcome in
+                            let didOpen = onImported?([outcome]) ?? false
+                            if didOpen, let book = outcome.book {
+                                vm.markImportReaderOpenRequested(bookID: book.id)
+                            }
+                        }
+                    } else {
+                        onSingleRegistration = nil
+                    }
+                    let outcomes = await vm.importPicked(
+                        urls,
+                        onSingleRegistration: onSingleRegistration
                     )
-                    await refreshLibraryAndPrewarm(vm)
-                    onImported?(outcomes)
+                    if !singleSelection {
+                        handleImportedAndMarkReaderOpen(outcomes)
+                    }
                 }
             }
         }
 #endif
         .alert(item: $vm.importError) { failure in
             Alert(
-                title: Text("Import Failed"),
+                title: Text(failure.title),
                 message: Text(failure.message),
                 dismissButton: .default(Text("OK"))
             )
         }
+        .alert("Deletion failed", isPresented: Binding(
+            get: { vm.deletionError != nil },
+            set: { if !$0 { vm.clearDeletionError() } }
+        )) {
+            Button("OK", role: .cancel) { vm.clearDeletionError() }
+        } message: {
+            Text(vm.deletionError ?? "The book is still in your library.")
+        }
         .task {
-
-            let state = librarySignposter.beginInterval("library.first-paint")
-            defer {
-                librarySignposter.endInterval("library.first-paint", state)
+            vm.onManagedBookReady = nil
+            if let sharePackageService {
+                vm.onManagedBookReady = { bookID in
+                    Task { await sharePackageService.prewarm(bookIDs: [bookID]) }
+                }
             }
-            await refreshLibraryAndPrewarm(vm)
-            #if DEBUG
-            await importE2EFixtureIfNeeded(vm)
-            #endif
+            await vm.observeImportEvents()
         }
         .onReceive(NotificationCenter.default.publisher(for: SharePackageService.libraryDidChange)) { _ in
             Task { await refreshLibraryAndPrewarm(vm) }
         }
+        return addingLibraryCommandNotifications(to: content, vm: vm)
+    }
 
+    private func addingLibraryCommandNotifications<Content: View>(
+        to content: Content,
+        vm: LibraryViewModel
+    ) -> some View {
+        content
         .onReceive(
             NotificationCenter.default.publisher(
                 for: LibraryMacCommandNotification.importBook
             )
-        ) { _ in
-            #if canImport(UIKit)
-                documentPickerPresented.wrappedValue = true
-            #endif
-        }
+        ) { _ in handleImportBookCommand() }
         .onReceive(
             NotificationCenter.default.publisher(
                 for: LibraryMacCommandNotification.focusSearch
             )
         ) { _ in
-
             vm.searchText = ""
         }
     }
-
-    #if DEBUG
-    @MainActor
-    private func importE2EFixtureIfNeeded(_ vm: LibraryViewModel) async {
-        guard RishiE2EConfiguration.isRealAuth,
-              let fixtureURL = RishiE2EConfiguration.fixtureURL,
-              !e2eFixtureImportStarted,
-              vm.books.isEmpty else { return }
-        e2eFixtureImportStarted = true
-        let outcomes = await vm.importPicked([fixtureURL])
-        await refreshLibraryAndPrewarm(vm)
-        onImported?(outcomes)
-    }
-    #endif
 
     
     
@@ -230,7 +233,9 @@ public struct LibraryRootView: View {
             positionLookup: { bookID in vm.position(for: bookID) },
             coverURL: { book in vm.coverURLs[book.id] },
             onOpen: onOpenBook,
-            onDelete: { book in Task { await vm.delete(book) } },
+            onDelete: { book in
+                Task { await vm.delete(book, closePresentedReader: closeReaderBeforeBookDeletion) }
+            },
             selectionMode: selectionMode,
             selectedBookIDs: selectedBookIDs,
             onBeginSelection: { book in
@@ -285,8 +290,7 @@ public struct LibraryRootView: View {
                                 guard let fixtureURL = RishiE2EConfiguration.fixtureURL else { return }
                                 Task {
                                     let outcomes = await vm.importPicked([fixtureURL])
-                                    await refreshLibraryAndPrewarm(vm)
-                                    onImported?(outcomes)
+                                    handleImportedAndMarkReaderOpen(outcomes)
                                 }
                             }
                             .accessibilityIdentifier("e2e-import-shared-reading-book")
@@ -564,7 +568,8 @@ enum LibraryRootPreviewFixtures {
             currentUserId: { userId },
             importCoordinator: ImportCoordinator(
                 storage: storage,
-                currentUserId: { capturedUserId }
+                currentUserId: { capturedUserId },
+                lifecycle: nil
             ),
             positionLoader: PositionLoader(positionStore: positionStore),
             coverResolver: BookCoverResolver(storage: storage),
@@ -591,7 +596,8 @@ enum LibraryRootPreviewFixtures {
         let capturedUserId = userId
         return ImportCoordinator(
             storage: storage,
-            currentUserId: { capturedUserId }
+            currentUserId: { capturedUserId },
+            lifecycle: nil
         )
     }
 }

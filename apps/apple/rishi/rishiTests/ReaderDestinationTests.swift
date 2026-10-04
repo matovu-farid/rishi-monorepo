@@ -105,6 +105,43 @@ struct ReaderDestinationTests {
         #expect(source.contains("didScheduleReaderIndexBackfill = true"))
     }
 
+    @Test("source invalidation awaits reader voice cleanup before removing the leased reader")
+    func sourceInvalidationDrainsReaderVoiceBeforeLeaseRemoval() throws {
+        let hostURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rishi/Reader/ReaderDestinationView.swift")
+        let host = try String(contentsOf: hostURL, encoding: .utf8)
+        let invalidationStart = try #require(host.range(of: "for await _ in lease.invalidation"))
+        let invalidationEnd = try #require(host.range(of: "break", range: invalidationStart.lowerBound..<host.endIndex))
+        let invalidation = host[invalidationStart.lowerBound..<invalidationEnd.lowerBound]
+        let cleanup = try #require(invalidation.range(of: "await cleanup.perform()"))
+        let removal = try #require(invalidation.range(of: "self.lease = nil"))
+
+        #expect(cleanup.lowerBound < removal.lowerBound)
+
+        let readerURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rishi/Reader/ReaderDestination.swift")
+        let reader = try String(contentsOf: readerURL, encoding: .utf8)
+        #expect(reader.contains("sourceInvalidationCleanup.register"))
+        #expect(reader.contains("await voiceEntry.endForReader()"))
+    }
+
+    @Test("source invalidation runs cleanup for every reader identity sharing the lease")
+    @MainActor
+    func sourceInvalidationCleanupComposesReaderEntries() async {
+        let cleanup = ReaderSourceInvalidationCleanup()
+        var endedEntries: [Int] = []
+        cleanup.register { endedEntries.append(1) }
+        cleanup.register { endedEntries.append(2) }
+
+        await cleanup.perform()
+
+        #expect(endedEntries == [1, 2])
+    }
+
     @Test("reader exit ends voice instead of parking it")
     func readerExitEndsVoiceSession() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
@@ -115,6 +152,193 @@ struct ReaderDestinationTests {
 
         #expect(source.contains("await voiceEntry.endForReader()"))
         #expect(!source.contains("await voicePresenter.parkSession()"))
+    }
+
+    @Test("message dirty mark completes under the source admission held across a committed upsert")
+    func committedMessageDirtyMarkIsSourceAdmitted() async throws {
+        let source = BookSourceAccessPermit()
+        let effects = BookSourceEffectAuthority()
+        effects.register(source)
+        let commitGate = ReaderCommitGate()
+        let message = Message(conversationId: UUID(), role: .user, content: "Hello")
+        let base = CommitThenInvalidateMessageStore(source: source, effects: effects)
+        let dirtyIDs = ReaderDirtyIDRecorder()
+        let store = ReaderSourceAdmittedMessageStore(
+            base: base,
+            source: source,
+            effects: effects,
+            onCommitted: { id in
+                await dirtyIDs.record(id)
+                await commitGate.wait()
+            }
+        )
+
+        let write = Task { try await store.upsert(message) }
+        await commitGate.waitUntilEntered()
+        let drained = ReaderDrainRecorder()
+        let drain = Task {
+            await effects.drain(source)
+            await drained.mark()
+        }
+        await Task.yield()
+        #expect(await !drained.value)
+        await commitGate.open()
+        try await write.value
+        await drain.value
+
+        #expect(try await base.message(message.id) == message)
+        #expect(await dirtyIDs.values == [message.id])
+        #expect(await drained.value)
+    }
+
+    @Test("reader index backfill drains both source revisions until the shared indexing task finishes")
+    func readerIndexBackfillWaitsForActualTaskWithStaleStatusAndPromotedRevision() async throws {
+        let ownerID = UUID()
+        let bookID = UUID()
+        let selectedRevision = UUID()
+        let promotedRevision = UUID()
+        let generation: UInt64 = 7
+        let book = Book(id: bookID, userId: ownerID, title: "Backfill", formatType: .epub, fileURL: "Books/backfill.epub")
+        let selectedReadingPermit = BookReadingPermit(
+            ownerID: ownerID,
+            accountGeneration: generation,
+            bookID: bookID,
+            contentRevision: selectedRevision
+        )
+        let selectedSourcePermit = BookSourceAccessPermit()
+        let selectedEffects = BookSourceEffectAuthority()
+        selectedEffects.register(selectedSourcePermit)
+        let selectedOwner = try BookSourceOwner(
+            url: URL(fileURLWithPath: "/tmp/backfill.epub"),
+            access: .account(selectedReadingPermit),
+            sourceAccessPermit: selectedSourcePermit,
+            effectAuthority: selectedEffects
+        )
+        let selectedLease = BookSourceLease(owner: selectedOwner, cachePolicy: .transient)
+        let managedVersion = ManagedFileVersion(
+            byteCount: 1,
+            modificationDate: .now,
+            fileIdentifier: nil,
+            materializationRevision: promotedRevision
+        )
+        let managedPermit = BookSourceAccessPermit()
+        let managedEffects = BookSourceEffectAuthority()
+        managedEffects.register(managedPermit)
+        let managedOwner = try BookSourceOwner(
+            url: URL(fileURLWithPath: "/tmp/backfill-managed.epub"),
+            access: .account(BookReadingPermit(
+                ownerID: ownerID,
+                accountGeneration: generation,
+                bookID: bookID,
+                contentRevision: promotedRevision
+            )),
+            sourceAccessPermit: managedPermit,
+            effectAuthority: managedEffects
+        )
+        let managedLease = BookSourceLease(
+            owner: managedOwner,
+            cachePolicy: .managed(bookID: bookID, version: managedVersion)
+        )
+        let managed = ManagedBookSource(
+            bookID: bookID,
+            url: managedOwner.url,
+            fingerprint: BookFileFingerprint(
+                bookID: bookID,
+                ownerID: ownerID,
+                sha256: "digest",
+                version: managedVersion
+            ),
+            accountGeneration: generation
+        )
+        let search = ReaderBackfillSearch()
+        let scheduled = ReaderIndexScheduleGate()
+        let completion = ReaderIndexCompletionGate()
+        let indexing = ReaderBackfillIndexingHook(search: search, scheduled: scheduled, completion: completion)
+
+        let backfill = Task {
+            await ReaderIndexBackfillFence.scheduleAndDrain(
+                book: book,
+                sourceLease: selectedLease,
+                resolveManagedSource: { managed },
+                acquireManagedSource: { managedLease },
+                indexingHook: indexing,
+            )
+        }
+        await scheduled.waitUntilScheduled()
+
+        selectedEffects.closeAdmission(selectedSourcePermit)
+        managedEffects.closeAdmission(managedPermit)
+        let selectedDrained = ReaderDrainRecorder()
+        let managedDrained = ReaderDrainRecorder()
+        let selectedDrainStarted = ReaderDrainStarted()
+        let managedDrainStarted = ReaderDrainStarted()
+        let selectedDrain = Task {
+            await selectedDrainStarted.mark()
+            await selectedEffects.drain(selectedSourcePermit)
+            await selectedDrained.mark()
+        }
+        let managedDrain = Task {
+            await managedDrainStarted.mark()
+            await managedEffects.drain(managedPermit)
+            await managedDrained.mark()
+        }
+        await selectedDrainStarted.waitUntilStarted()
+        await managedDrainStarted.waitUntilStarted()
+        await selectedDrain.value
+        #expect(await search.status(bookId: bookID) == .staleIndexing)
+        #expect(await selectedDrained.value)
+        #expect(await !managedDrained.value)
+
+        await completion.open()
+        await backfill.value
+        await selectedDrain.value
+        await managedDrain.value
+
+        #expect(await selectedDrained.value)
+        #expect(await managedDrained.value)
+    }
+
+    @Test("reader backfill does not hold a transient source while managed readiness is pending")
+    func readerIndexBackfillDoesNotBlockSourceDrainDuringManagedWait() async throws {
+        let ownerID = UUID()
+        let book = Book(userId: ownerID, title: "Waiting", formatType: .epub, fileURL: "Books/waiting.epub")
+        let sourcePermit = BookSourceAccessPermit()
+        let effects = BookSourceEffectAuthority()
+        effects.register(sourcePermit)
+        let owner = try BookSourceOwner(
+            url: URL(fileURLWithPath: "/tmp/waiting.epub"),
+            access: .account(BookReadingPermit(
+                ownerID: ownerID,
+                accountGeneration: 2,
+                bookID: book.id,
+                contentRevision: UUID()
+            )),
+            sourceAccessPermit: sourcePermit,
+            effectAuthority: effects
+        )
+        let lease = BookSourceLease(owner: owner, cachePolicy: .transient)
+        let readiness = ReaderManagedReadinessGate()
+        let indexing = ReaderBackfillIndexingHook(
+            search: ReaderBackfillSearch(),
+            scheduled: ReaderIndexScheduleGate(),
+            completion: ReaderIndexCompletionGate()
+        )
+        let backfill = Task {
+            await ReaderIndexBackfillFence.scheduleAndDrain(
+                book: book,
+                sourceLease: lease,
+                resolveManagedSource: { try await readiness.waitThenFail() },
+                acquireManagedSource: { throw BookSourceRegistryError.unavailable },
+                indexingHook: indexing
+            )
+        }
+        await readiness.waitUntilEntered()
+
+        effects.closeAdmission(sourcePermit)
+        await effects.drain(sourcePermit)
+        await readiness.fail()
+        await backfill.value
+        #expect(await !indexing.scheduled.didSchedule)
     }
 
     @Test("reader exit tears down shared playback and preserves platform-specific local host behavior")
@@ -227,4 +451,167 @@ struct ReaderDestinationTests {
         #expect(noCredits.blockReason(for: .narration) == .trialExhausted)
         #expect(noCredits.blockReason(for: .voiceChat) == .trialExhausted)
     }
+}
+
+private actor ReaderCommitGate {
+    private var isOpen = false
+    private var hasEntered = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        hasEntered = true
+        let pendingEntryWaiters = entryWaiters
+        entryWaiters.removeAll()
+        pendingEntryWaiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            if isOpen { continuation.resume() } else { waiters.append(continuation) }
+        }
+    }
+
+    func waitUntilEntered() async {
+        if hasEntered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+}
+
+private actor ReaderDrainRecorder {
+    private(set) var value = false
+    func mark() { value = true }
+}
+
+private actor ReaderDrainStarted {
+    private var hasStarted = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func mark() {
+        hasStarted = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func waitUntilStarted() async {
+        if hasStarted { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+private actor ReaderDirtyIDRecorder {
+    private(set) var values: [MessageID] = []
+    func record(_ id: MessageID) { values.append(id) }
+}
+
+private actor ReaderBackfillSearch: BookSearch {
+    private var currentStatus: BookSearchStatus = .notIndexed
+
+    func search(queryText: String, bookId: UUID) async throws -> [BookSearchHit] { [] }
+    func status(bookId: UUID) async -> BookSearchStatus { currentStatus }
+    func setStatus(_ status: BookSearchStatus) { currentStatus = status }
+}
+
+private actor ReaderIndexScheduleGate {
+    private var isScheduled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markScheduled() {
+        isScheduled = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func waitUntilScheduled() async {
+        if isScheduled { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    var didSchedule: Bool { isScheduled }
+}
+
+private actor ReaderManagedReadinessGate {
+    private var hasEntered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitThenFail() async throws -> ManagedBookSource {
+        hasEntered = true
+        let pending = entryWaiters
+        entryWaiters.removeAll()
+        pending.forEach { $0.resume() }
+        await withCheckedContinuation { releaseContinuation = $0 }
+        throw BookSourceRegistryError.unavailable
+    }
+
+    func waitUntilEntered() async {
+        if hasEntered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func fail() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private actor ReaderIndexCompletionGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            if isOpen { continuation.resume() } else { waiters.append(continuation) }
+        }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+}
+
+private struct ReaderBackfillIndexingHook: AwaitableBookIndexingHook {
+    let search: ReaderBackfillSearch
+    let scheduled: ReaderIndexScheduleGate
+    let completion: ReaderIndexCompletionGate
+
+    func scheduleIndexing(for book: Book, fileURL: URL) async {
+        await search.setStatus(.staleIndexing)
+        await scheduled.markScheduled()
+    }
+
+    func scheduleIndexingAndWait(for book: Book, fileURL: URL) async {
+        await scheduleIndexing(for: book, fileURL: fileURL)
+        await completion.wait()
+    }
+}
+
+private actor CommitThenInvalidateMessageStore: MessageStore {
+    private let source: BookSourceAccessPermit
+    private let effects: BookSourceEffectAuthority
+    private var stored: [MessageID: Message] = [:]
+
+    init(source: BookSourceAccessPermit, effects: BookSourceEffectAuthority) {
+        self.source = source
+        self.effects = effects
+    }
+
+    func messages(for conversationId: ConversationID) async throws -> [Message] {
+        stored.values.filter { $0.conversationId == conversationId }
+    }
+    func message(_ id: MessageID) async throws -> Message? { stored[id] }
+    func upsert(_ message: Message) async throws {
+        stored[message.id] = message
+        effects.closeAdmission(source)
+    }
+    func delete(_ id: MessageID) async throws { stored.removeValue(forKey: id) }
 }

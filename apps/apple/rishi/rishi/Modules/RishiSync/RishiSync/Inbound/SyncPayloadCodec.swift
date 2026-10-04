@@ -1,5 +1,14 @@
 import Foundation
 
+public struct InboundBookFileMetadata: Sendable, Equatable {
+    public let sha256: String?
+    public let byteCount: Int64?
+
+    public init(sha256: String?, byteCount: Int64?) {
+        self.sha256 = sha256
+        self.byteCount = byteCount
+    }
+}
 
 /// Single source of truth for re-decoding a `SyncOpaqueJSON.data` blob into
 /// a concrete RishiCore model and vice-versa.
@@ -14,6 +23,11 @@ import Foundation
 ///   1. Bumping `RishiSync.wireFormat` to `sync-v2`.
 ///   2. Adding a decoder fallback that still accepts sync-v1.
 enum SyncPayloadCodec {
+
+    struct DecodedBookPayload: Sendable, Equatable {
+        let book: Book
+        let remoteFile: InboundBookFileMetadata
+    }
 
     enum CodecError: Error, Sendable, Equatable {
         case unsupportedKind(String)
@@ -110,23 +124,34 @@ enum SyncPayloadCodec {
         fallbackAddedAt: Date,
         fallbackUserId: UserID = UUID()
     ) throws -> Book {
+        try decodeBookPayload(payload, fallbackAddedAt: fallbackAddedAt, fallbackUserId: fallbackUserId).book
+    }
+
+    static func decodeBookPayload(
+        _ payload: SyncOpaqueJSON,
+        fallbackAddedAt: Date,
+        fallbackUserId: UserID = UUID()
+    ) throws -> DecodedBookPayload {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
             let wire = try decoder.decode(WireBook.self, from: payload.data)
-            return Book(
-                id: wire.id,
-                userId: wire.userId ?? fallbackUserId,
-                title: wire.title,
-                author: wire.author,
-                formatType: wire.formatType,
-                addedAt: wire.addedAt ?? wire.createdAt ?? fallbackAddedAt,
-                openedAt: wire.openedAt,
-                fileURL: wire.fileURL ?? "",
-                coverPath: wire.coverPath,
-                positionId: wire.positionId,
-                conversationId: wire.conversationId,
-                chapterIndexContentVersion: wire.chapterIndexContentVersion
+            return DecodedBookPayload(
+                book: Book(
+                    id: wire.id,
+                    userId: wire.userId ?? fallbackUserId,
+                    title: wire.title,
+                    author: wire.author,
+                    formatType: wire.formatType,
+                    addedAt: wire.addedAt ?? wire.createdAt ?? fallbackAddedAt,
+                    openedAt: wire.openedAt,
+                    fileURL: wire.fileURL ?? "",
+                    coverPath: wire.coverPath,
+                    positionId: wire.positionId,
+                    conversationId: wire.conversationId,
+                    chapterIndexContentVersion: wire.chapterIndexContentVersion
+                ),
+                remoteFile: InboundBookFileMetadata(sha256: wire.fileHash, byteCount: wire.fileSize.map(Int64.init))
             )
         } catch {
             throw CodecError.decodeFailed(kind: "book", underlying: String(describing: error))

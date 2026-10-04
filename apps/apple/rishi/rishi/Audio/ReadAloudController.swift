@@ -502,7 +502,12 @@ final class ReadAloudController {
             }
         )
         let isPDF = publication.manifest.conforms(to: .pdf)
-        let paragraphMap = isPDF ? PDFNarrationParagraphMap(documentURL: vm.documentURL) : nil
+        let paragraphMap = isPDF ? PDFNarrationParagraphMap(
+            documentURL: vm.documentURL,
+            sourceLifetime: vm.sourceLifetime,
+            sourceEffects: vm.sourceEffects,
+            sourceAccessPermit: vm.sourceAccessPermit
+        ) : nil
         let tokenizerFactory = makeReadiumTokenizerFactory(
             granularity: granularity,
             selectionText: selectionText,
@@ -1036,10 +1041,16 @@ final class ReadAloudController {
               let base = currentLocator,
               let readerViewModel else { return nil }
         let documentURL = readerViewModel.documentURL
+        let sourceLifetime = readerViewModel.sourceLifetime
         let publicationBox = PDFPublicationSendableBox(publication)
         return await Task.detached(priority: .userInitiated) {
             let publication = publicationBox.publication
-            let paragraphMap = PDFNarrationParagraphMap(documentURL: documentURL)
+            let paragraphMap = PDFNarrationParagraphMap(
+                documentURL: documentURL,
+                sourceLifetime: sourceLifetime,
+                sourceEffects: readerViewModel.sourceEffects,
+                sourceAccessPermit: readerViewModel.sourceAccessPermit
+            )
             let tokenizer = CustomTTSTokenizer.tokenizePDF(
                 defaultLanguage: publication.metadata.language,
                 paragraphMap: paragraphMap

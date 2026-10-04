@@ -58,26 +58,32 @@ struct ReaderDestinationView: View {
                     bookStore: services.library.bookStore,
                     readinessKey: sharedReadingContext?.join.response.sessionId
                 ) { book in
-                    ReaderDestination(
-                        vm: ReaderViewModel.make(
-                            book: book,
-                            userId: userId,
-                            positionStore: services.library.positionStore
-                        ),
-                        dependencies: ReaderDestinationDependencies.make(services: services),
-                        userId: userId,
-                        onRequestPaywall: onRequestPaywall,
-                        startReaderTour: startReaderTour,
-                        pdfViewMode: pdfViewMode,
-                        readerWindowCloseHandle: readerWindowCloseHandle,
-                        sharedReadingCoordinator: sharedReadingContext?.coordinator ?? sharedReadingCoordinator,
-                        sharedReadingJoin: sharedReadingContext?.join ?? sharedReadingJoin,
-                        sharedReadingPeerMesh: sharedReadingContext?.peerMesh ?? sharedReadingPeerMesh,
-                        sharedReadingLocalUserID: sharedReadingContext?.localUserID ?? sharedReadingLocalUserID,
-                        onCopyShareLink: sharedCopyShareLinkAction,
-                        sharedReadingMoreMenuContent: sharedReadingContext.map { context in
-                            AnyView(
-                                SharedReadingReaderMenuContent(
+                    ReaderSourceLeaseHost(book: book, registry: services.library.bookSourceRegistry) { leasedBook, lease, invalidationCleanup in
+                        if let dependencies = try? ReaderDestinationDependencies.make(services: services, book: leasedBook, sourceLease: lease) {
+                            ReaderDestination(
+                                vm: ReaderViewModel.make(
+                                    book: leasedBook,
+                                    userId: userId,
+                                    positionStore: dependencies.positionStore,
+                                    sourceLease: lease,
+                                    unpackedCache: dependencies.epubUnpackedCache
+                                ),
+                                dependencies: dependencies,
+                                sourceLease: lease,
+                                sourceInvalidationCleanup: invalidationCleanup,
+                                userId: userId,
+                                onRequestPaywall: onRequestPaywall,
+                                startReaderTour: startReaderTour,
+                                pdfViewMode: pdfViewMode,
+                                readerWindowCloseHandle: readerWindowCloseHandle,
+                                sharedReadingCoordinator: sharedReadingContext?.coordinator ?? sharedReadingCoordinator,
+                                sharedReadingJoin: sharedReadingContext?.join ?? sharedReadingJoin,
+                                sharedReadingPeerMesh: sharedReadingContext?.peerMesh ?? sharedReadingPeerMesh,
+                                sharedReadingLocalUserID: sharedReadingContext?.localUserID ?? sharedReadingLocalUserID,
+                                onCopyShareLink: sharedCopyShareLinkAction,
+                                sharedReadingMoreMenuContent: sharedReadingContext.map { context in
+                                    AnyView(
+                                        SharedReadingReaderMenuContent(
                                     hasInvitation: context.runtime.invitation != nil,
                                     onInvite: { presentSharedInvitation() },
                                     onManageReaders: {
@@ -92,14 +98,14 @@ struct ReaderDestinationView: View {
                                             leaveSharedReader(context)
                                         }
                                     }
-                                )
+                                        )
+                                    )
+                                },
+                                onFirstContentReady: {
+                                    guard let sharedReadingContext else { return }
+                                    sharedReaderContentReadySessionID = sharedReadingContext.join.response.sessionId
+                                }
                             )
-                        },
-                        onFirstContentReady: {
-                            guard let sharedReadingContext else { return }
-                            sharedReaderContentReadySessionID = sharedReadingContext.join.response.sessionId
-                        }
-                    )
                     // The transient tour request is consumed when this
                     // destination appears. Recreate the destination subtree
                     // after that flag resolves so its @State coordinator,
@@ -120,6 +126,11 @@ struct ReaderDestinationView: View {
                                 }
                             }
                             #endif
+                        }
+                    }
+                        } else {
+                            ContentUnavailableView("Reader unavailable", systemImage: "book.closed", description: Text("This book is no longer available to read."))
+                                .onAppear { invalidationCleanup.register {} }
                         }
                     }
                 }
@@ -292,6 +303,107 @@ struct ReaderDestinationView: View {
         let sharedSessionID = sharedReadingContext?.join.response.sessionId ?? "normal"
         return "\(startReaderTour)-\(sharedSessionID)"
     }
+}
+
+@MainActor
+final class ReaderSourceInvalidationCleanup {
+    typealias Action = @MainActor () async -> Void
+
+    private var actions: [Action] = []
+    private var isPerforming = false
+    private var didFinish = false
+    private var readinessWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func register(_ action: @escaping Action) {
+        guard !didFinish else {
+            Task { await action() }
+            return
+        }
+        actions.append(action)
+        let pending = readinessWaiters
+        readinessWaiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func perform() async {
+        if didFinish { return }
+        if isPerforming {
+            await withCheckedContinuation { finishWaiters.append($0) }
+            return
+        }
+        isPerforming = true
+        while true {
+            if actions.isEmpty {
+                await withCheckedContinuation { readinessWaiters.append($0) }
+            }
+            let pending = actions
+            actions.removeAll()
+            for action in pending { await action() }
+            if actions.isEmpty {
+                didFinish = true
+                isPerforming = false
+                let waiters = finishWaiters
+                finishWaiters.removeAll()
+                waiters.forEach { $0.resume() }
+                return
+            }
+        }
+    }
+}
+
+private struct ReaderSourceLeaseHost<Content: View>: View {
+    let book: Book
+    let registry: BookSourceRegistry
+    @ViewBuilder let content: (Book, BookSourceLease, ReaderSourceInvalidationCleanup) -> Content
+    @State private var lease: BookSourceLease?
+    @State private var errorMessage: String?
+    @State private var attempt = 0
+    @State private var invalidationCleanup = ReaderSourceInvalidationCleanup()
+
+    var body: some View {
+        Group {
+            if let lease {
+                content(book, lease, invalidationCleanup)
+            } else if let errorMessage {
+                ContentUnavailableView {
+                    Label("Book source unavailable", systemImage: "doc.questionmark")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Retry") { attempt += 1 }
+                }
+            } else {
+                ProgressView("Opening book…")
+            }
+        }
+        .task(id: loadKey) {
+            do {
+                lease = nil
+                errorMessage = nil
+                invalidationCleanup = ReaderSourceInvalidationCleanup()
+                lease = try await registry.acquireReadableSource(for: book)
+            } catch {
+                lease = nil
+                errorMessage = "The selected file may have moved or its access may have expired."
+            }
+        }
+        .task(id: lease?.sourceAccessPermit.sourceInstanceID) {
+            guard let lease else { return }
+            let cleanup = invalidationCleanup
+            for await _ in lease.invalidation {
+                guard !Task.isCancelled,
+                      self.lease?.sourceAccessPermit == lease.sourceAccessPermit else { return }
+                await cleanup.perform()
+                guard self.lease?.sourceAccessPermit == lease.sourceAccessPermit else { return }
+                self.lease = nil
+                errorMessage = "The file changed or became unavailable. Retry or reselect the book to continue."
+                break
+            }
+        }
+    }
+
+    private var loadKey: String { "\(book.id)-\(attempt)" }
 }
 
 private actor ReaderDestinationPreviewPositionStore: PositionStore {

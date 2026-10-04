@@ -2,6 +2,41 @@
 import Foundation
 import Testing
 
+private struct CatalogBookStore: BookStore {
+    let values: [Book]
+
+    func books(for userId: UserID) async throws -> [Book] {
+        values.filter { $0.userId == userId }
+    }
+    func book(_ id: BookID) async throws -> Book? { values.first { $0.id == id } }
+    func upsert(_ book: Book) async throws {}
+    func delete(_ id: BookID) async throws {}
+}
+
+private struct EmptyCatalogPositionStore: PositionStore {
+    func position(for bookId: BookID) async throws -> Position? { nil }
+    func upsert(_ position: Position) async throws {}
+    func delete(_ id: PositionID) async throws {}
+}
+
+private actor TransientCatalogSourceResolver: BookSourceResolving {
+    private let lease: BookSourceLease
+    private(set) var acquisitionCount = 0
+
+    init(lease: BookSourceLease) { self.lease = lease }
+
+    func acquireReadableSource(for book: Book) async throws -> BookSourceLease {
+        acquisitionCount += 1
+        return lease
+    }
+
+    func managedSource(for book: Book) async throws -> ManagedBookSource? { nil }
+
+    func awaitManagedSource(for book: Book) async throws -> ManagedBookSource {
+        throw BookSourceRegistryError.managedSourceUnavailable
+    }
+}
+
 @Suite("CarPlay catalog")
 struct CarPlayCatalogTests {
     private let currentUserID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
@@ -55,7 +90,7 @@ struct CarPlayCatalogTests {
         #expect(snapshot.sections.map(\.kind) == [.continueListening, .library])
         #expect(snapshot.sections[0].rows.map(\.id) == [newest.id, older.id])
         #expect(snapshot.sections[1].rows.map(\.id) == [
-            alpha.id, sameLowerID.id, sameHigherID.id, newest.id, older.id, zulu.id
+            alpha.id, newest.id, older.id, sameLowerID.id, sameHigherID.id, zulu.id
         ])
     }
 
@@ -71,8 +106,8 @@ struct CarPlayCatalogTests {
             positions: [
                 Position(bookId: inProgress.id, locator: "start", percentComplete: 0.5)
             ],
-            coverDataByBookID: [inProgress.id: coverData],
-            perSectionCap: 10
+            perSectionCap: 10,
+            coverDataByBookID: [inProgress.id: coverData]
         )
 
         #expect(snapshot.sections[0].rows.first(where: { $0.id == inProgress.id })?.coverData == coverData)
@@ -161,6 +196,54 @@ struct CarPlayCatalogTests {
         #expect(snapshot.sections[0].rows.map(\.id) == [books[3].id, books[2].id])
         #expect(snapshot.sections[1].rows.map(\.id) == [books[0].id, books[1].id])
         #expect(snapshot.sections.allSatisfy { $0.rows.count <= 2 })
+    }
+
+    @Test("catalog includes a readable transient EPUB without a managed destination")
+    @MainActor
+    func includesReadableTransientSource() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("carplay-catalog-\(UUID().uuidString)")
+        let sourceURL = URL.temporaryDirectory.appendingPathComponent("carplay-source-\(UUID().uuidString).epub")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sourceURL)
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: sourceURL)
+
+        let book = makeBook("000000000501", title: "Waiting for managed copy")
+        let account = CarPlayAccountSnapshot(userID: currentUserID, generation: 9)
+        let permit = BookSourceAccessPermit()
+        let effects = BookSourceEffectAuthority()
+        effects.register(permit)
+        let readingPermit = BookReadingPermit(
+            ownerID: currentUserID,
+            accountGeneration: account.generation,
+            bookID: book.id,
+            contentRevision: UUID()
+        )
+        let owner = try BookSourceOwner(
+            url: sourceURL,
+            access: .account(readingPermit),
+            sourceAccessPermit: permit,
+            effectAuthority: effects
+        )
+        let lease = BookSourceLease(owner: owner, cachePolicy: .transient)
+        let resolver = TransientCatalogSourceResolver(lease: lease)
+        let bookStore = CatalogBookStore(values: [book])
+        let storage = BookFileStorage(rootURL: root, bookStore: bookStore, coverExtractors: [:])
+        let loader = CarPlayCatalogLoader(
+            bookStore: bookStore,
+            positionStore: EmptyCatalogPositionStore(),
+            bookFileStorage: storage,
+            sourceResolver: resolver,
+            accountSnapshot: { account }
+        )
+
+        let snapshot = try await loader.load(perSectionCap: 10)
+
+        #expect(snapshot?.sections[1].rows.map(\.id) == [book.id])
+        #expect(await resolver.acquisitionCount == 1)
+        #expect(!FileManager.default.fileExists(atPath: storage.absoluteFileURL(for: book).path))
     }
 
     @Test("empty positions do not create continue listening rows")

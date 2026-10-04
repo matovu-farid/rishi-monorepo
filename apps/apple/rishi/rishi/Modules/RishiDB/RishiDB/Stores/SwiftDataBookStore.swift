@@ -102,6 +102,9 @@ public final class SwiftDataBookStore: BookStore, Sendable {
                     try Self.deleteAll(context, of: ChapterSummaryEntity.self, matching: #Predicate { $0.indexID == indexID })
                 }
                 try Self.deleteAll(context, of: ChapterIndexEntity.self, matching: #Predicate { $0.bookID == id })
+                try Self.deleteAll(context, of: BookFileFingerprintEntity.self, matching: #Predicate { $0.bookID == id })
+                try Self.deleteAll(context, of: PendingBookMaterializationEntity.self, matching: #Predicate { $0.bookID == id })
+                try Self.deleteAll(context, of: BookReadingAuthorizationEntity.self, matching: #Predicate { $0.bookID == id })
                 try Self.deleteAll(context, of: BookEntity.self, matching: #Predicate { $0.id == id })
             }
         } catch {
@@ -124,6 +127,11 @@ public final class SwiftDataBookStore: BookStore, Sendable {
                 try Self.deleteAll(context, of: ChapterSummaryEntity.self, matching: #Predicate { $0.indexID == indexID })
             }
             try Self.deleteAll(context, of: ChapterIndexEntity.self, matching: #Predicate { $0.bookID == id })
+            try Self.deleteAll(context, of: BookFileFingerprintEntity.self, matching: #Predicate { $0.bookID == id })
+            // Keep the attempt's owner/token/staging path until the inbound
+            // tombstone's captured filesystem cleanup succeeds. The cleaner
+            // removes this row by owner+token CAS afterward.
+            try Self.deleteAll(context, of: BookReadingAuthorizationEntity.self, matching: #Predicate { $0.bookID == id })
             try Self.deleteAll(context, of: BookEntity.self, matching: #Predicate { $0.id == id })
             return true
         }

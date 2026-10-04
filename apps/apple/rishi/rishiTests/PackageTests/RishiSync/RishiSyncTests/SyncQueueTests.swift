@@ -109,4 +109,20 @@ struct SyncQueueTests {
             SyncQueueItem(entityId: other, kind: .book),
         ])
     }
+
+    @Test("claimEligible skips blocked parents without consuming unrelated work")
+    func claimEligiblePreservesBlockedItems() async {
+        let queue = SyncQueue(metadataStore: StubMetadataStore())
+        let blocked = SyncQueueItem(entityId: UUID(), kind: .position)
+        let ready = SyncQueueItem(entityId: UUID(), kind: .conversation)
+        await queue.enqueue(blocked)
+        await queue.enqueue(ready)
+
+        let snapshot = await queue.snapshot()
+        let claimed = await queue.claimEligible(items: [ready])
+
+        #expect(snapshot == [blocked, ready])
+        #expect(claimed == [ready])
+        #expect(await queue.snapshot() == [blocked])
+    }
 }

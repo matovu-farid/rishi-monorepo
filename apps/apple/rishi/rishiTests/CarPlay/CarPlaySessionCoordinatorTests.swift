@@ -3,6 +3,18 @@ import CarPlay
 import Testing
 @testable import rishi
 
+private struct CarPlayNoopChunkSource: TTSChunkSource {
+    func stream(request: TTSStreamRequest) async -> AsyncThrowingStream<TTSChunk, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+}
+
+private final class CarPlayNoopPresenceStore: TTSPresenceStore, @unchecked Sendable {
+    func read() -> TTSPresenceSnapshot? { nil }
+    func write(_ snapshot: TTSPresenceSnapshot) {}
+    func clear() {}
+}
+
 @Suite("CarPlay session state")
 @MainActor
 struct CarPlaySessionCoordinatorTests {
@@ -68,7 +80,7 @@ struct CarPlaySessionCoordinatorTests {
 
         #expect(observed.count == 2)
         #expect(observed[0]?.userID == userID)
-        #expect(observed.last == nil)
+        #expect(observed[1] == nil)
 
         dependencies.removeCarPlayAccountChangeObserver(token)
         await dependencies.replaceUserId(userID)
@@ -82,10 +94,10 @@ struct CarPlaySessionCoordinatorTests {
             ttsEngine: FakeTTSEngine(state: state, script: .holds),
             ttsState: state,
             ttsSettingsStore: InMemoryTTSSettingsStore(),
-            ttsPrewarmer: TTSPrewarmer(source: ControllerNoopChunkSource()),
+            ttsPrewarmer: TTSPrewarmer(source: CarPlayNoopChunkSource()),
             ttsPresence: TTSPresenceController(
                 state: state,
-                store: ControllerNoopPresenceStore()
+                store: CarPlayNoopPresenceStore()
             ),
             coordinator: AudioSessionCoordinator(configurator: FakeAudioSessionConfigurator()),
             nowPlayingController: NowPlayingController(

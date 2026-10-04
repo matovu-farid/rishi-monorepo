@@ -61,6 +61,10 @@ struct SilentPushHandlerTests {
         func upsert(_ message: Message) async throws {}
         func delete(_ id: MessageID) async throws {}
     }
+    private actor StubChapterIndexPersistence: ChapterIndexPersistence {
+        func chapterIndex(bookID: BookID, contentVersion: String) async throws -> ChapterIndex? { nil }
+        func upsertChapterIndex(_ index: ChapterIndex) async throws {}
+    }
 
     // MARK: - URLProtocol counter
 
@@ -113,6 +117,12 @@ struct SilentPushHandlerTests {
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, bookmarkStore: StubBookmarkStore(), metadataStore: metadata)
         let conversationStore = StubConversationStore()
         let messageStore = StubMessageStore()
+        let chapterIndexUploader = ChapterIndexUploader(
+            workerClient: client,
+            bookStore: bookStore,
+            persistence: StubChapterIndexPersistence(),
+            metadataStore: metadata
+        )
         let conversationsFetcher = ConversationsFetcher(workerClient: client, metadataStore: metadata)
         let messagesFetcher = MessagesFetcher(workerClient: client, metadataStore: metadata)
         return SyncEngine(
@@ -126,6 +136,7 @@ struct SilentPushHandlerTests {
                 conversationUploader: conversationUploader,
                 messageUploader: messageUploader,
                 bookmarkUploader: bookmarkUploader,
+                chapterIndexUploader: chapterIndexUploader,
                 fetcher: fetcher,
                 applier: applier,
                 conversationsFetcher: conversationsFetcher,

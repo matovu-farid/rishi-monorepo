@@ -33,10 +33,13 @@ final class AppDependencies {
     nonisolated private static let accountGenerationKey = "rishi.account.generation"
     private(set) var accountGeneration: UInt64 =
         (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
+    private(set) var activeAccountIdentity: LibraryAccountIdentity?
 
     private var bootstrapTask: Task<Void, Never>?
+    private var launchEntitlementRefreshTask: Task<Result<EntitlementSnapshot, Error>?, Never>?
     private var identityRequestToken: UInt64 = 0
     var pendingAccountChange: AccountChangeTransaction?
+    private var accountDeletionCleanupTransaction: AccountChangeTransaction?
     private var synchronousAccountTransitionFences: [UUID: @MainActor () -> Void] = [:]
     private var postSharedReadingDrainHandlers: [UUID: @MainActor (UUID) async -> Void] = [:]
     private var carPlayAccountChangeObservers: [UUID: (CarPlayAccountSnapshot?) -> Void] = [:]
@@ -73,6 +76,7 @@ final class AppDependencies {
         skipAccountFence: Bool = false
     ) async -> Bool {
         guard forceTransition || userIdBox.value != newValue else { return true }
+        guard accountDeletionCleanupTransaction == nil else { return false }
         let transaction: AccountChangeTransaction?
         if skipAccountFence {
             transaction = nil
@@ -85,7 +89,18 @@ final class AppDependencies {
 
         guard let spotlight = services?.systemIntegration.spotlight else {
             guard identityRequestToken == requestToken else { return false }
+            if let newValue, let library = services?.library {
+                do {
+                    try await library.bookMaterializationCoordinator.authorizeAccount(ownerID: newValue, generation: accountGeneration)
+                } catch {
+                    Log.error("library.import.account-authorization.failed", error: error)
+                    return false
+                }
+                guard identityRequestToken == requestToken,
+                      library.bookImportLifecycle.activateAccount(ownerID: newValue, generation: accountGeneration) else { return false }
+            }
             userIdBox.value = newValue
+            activeAccountIdentity = newValue.map { LibraryAccountIdentity(userID: $0, generation: accountGeneration) }
             notifyCarPlayAccountChange()
             return true
         }
@@ -95,8 +110,19 @@ final class AppDependencies {
             if let newValue {
                 guard (try? await RishiAppIntentRuntime.validatedPersistedIdentity()) == newValue,
                       self.identityRequestToken == requestToken else { return false }
+                if let library = self.services?.library {
+                    do {
+                        try await library.bookMaterializationCoordinator.authorizeAccount(ownerID: newValue, generation: self.accountGeneration)
+                    } catch {
+                        Log.error("library.import.account-authorization.failed", error: error)
+                        return false
+                    }
+                    guard self.identityRequestToken == requestToken,
+                          library.bookImportLifecycle.activateAccount(ownerID: newValue, generation: self.accountGeneration) else { return false }
+                }
             }
             self.userIdBox.value = newValue
+            self.activeAccountIdentity = newValue.map { LibraryAccountIdentity(userID: $0, generation: self.accountGeneration) }
             self.notifyCarPlayAccountChange()
             return true
         }
@@ -116,14 +142,30 @@ final class AppDependencies {
     /// Invalidates identity work synchronously, then begins the owner drain.
     /// The returned transaction is safe to await from a later Task.
     func beginAccountChange() throws -> AccountChangeTransaction {
+        guard accountDeletionCleanupTransaction == nil else {
+            throw AccountDeletionCoordinatorError.accountChangedDuringDeletion
+        }
+        let outgoingAccount = userIdBox.value
+        activeAccountIdentity = nil
+        let outgoingGeneration = accountGeneration
+        let outgoingAccountMutationPermit = outgoingAccount.map {
+            AccountMutationPermit(ownerID: $0, accountGeneration: outgoingGeneration)
+        }
         for fence in synchronousAccountTransitionFences.values { fence() }
+        if let outgoingAccountMutationPermit {
+            services?.library.scopedMutationStore.closeAdmission(for: outgoingAccountMutationPermit)
+        }
         identityRequestToken &+= 1
         incrementAccountGeneration()
-        let services = services
+        let services = self.services
+        let activationToken = outgoingAccount.map { ownerID in
+            services?.library.bookImportLifecycle.activationToken(ownerID: ownerID, generation: accountGeneration)
+                ?? BookImportActivationToken(ownerID: ownerID, generation: accountGeneration, transitionEpoch: 0)
+        }
         let postSharedReadingDrainHandlers = self.postSharedReadingDrainHandlers
         let drain = Task { @MainActor in
             guard let services else { return }
-            if let outgoingAccount = self.userIdBox.value {
+            if let outgoingAccount {
                 await services.sharedReadingSessionRegistry.drain(accountID: outgoingAccount)
                 // The registry has completed local close and its bounded
                 // remote leave window. Only now may UI routers release their
@@ -133,13 +175,62 @@ final class AppDependencies {
                 }
             }
             await services.audio.playbackOwner.stopForAccountChange()
+            if let outgoingAccountMutationPermit {
+                try? await services.library.scopedMutationStore.revoke(outgoingAccountMutationPermit)
+            }
+            if let outgoingAccount {
+                await services.library.bookImportLifecycle.drainAccount(outgoingAccount, generation: outgoingGeneration)
+            }
         }
         let transaction = AccountChangeTransaction(
             expectedAccountGeneration: accountGeneration,
+            outgoingAccountID: outgoingAccount,
+            outgoingAccountGeneration: outgoingGeneration,
+            activationToken: activationToken,
+            outgoingAccountMutationPermit: outgoingAccountMutationPermit,
             drain: drain
         )
         pendingAccountChange = transaction
         return transaction
+    }
+
+    /// A failed server deletion leaves the local identity signed in. Reopen
+    /// its active generation and discard only the completed transition token
+    /// that deletion just drained.
+    func restoreOwnerAfterDeletionFailure(_ token: BookImportActivationToken) async {
+        guard userIdBox.value == token.ownerID, accountGeneration == token.generation else { return }
+        if let mutations = services?.library.scopedMutationStore {
+            do {
+                try await mutations.activate(AccountMutationPermit(ownerID: token.ownerID, accountGeneration: token.generation))
+            } catch {
+                Log.error("account.mutation-authorization.restore.failed", error: error)
+                return
+            }
+        }
+        if let lifecycle = services?.library.bookImportLifecycle, !lifecycle.activateAccount(token) { return }
+        activeAccountIdentity = LibraryAccountIdentity(userID: token.ownerID, generation: token.generation)
+        if pendingAccountChange?.activationToken == token {
+            pendingAccountChange = nil
+        }
+    }
+
+    /// Reserves global account cleanup after the server deletion succeeds.
+    /// Identity transitions stay closed while purge operations suspend.
+    func beginAccountDeletionCleanup(_ transaction: AccountChangeTransaction) -> Bool {
+        guard accountDeletionCleanupTransaction == nil,
+              accountGeneration == transaction.expectedAccountGeneration,
+              userIdBox.value == transaction.outgoingAccountID,
+              pendingAccountChange === transaction else { return false }
+        accountDeletionCleanupTransaction = transaction
+        return true
+    }
+
+    /// Called synchronously immediately before the sign-out action. Both run
+    /// on MainActor, so no other transition can interleave between release and
+    /// the sign-out closure's start.
+    func endAccountDeletionCleanup(_ transaction: AccountChangeTransaction) {
+        guard accountDeletionCleanupTransaction === transaction else { return }
+        accountDeletionCleanupTransaction = nil
     }
 
     @discardableResult
@@ -234,6 +325,13 @@ final class AppDependencies {
             )
             let built = await Self.makeServices(userIdBox: self.userIdBox)
             self.services = built
+            if self.pendingAccountChange == nil, let userID = self.userIdBox.value {
+                self.activeAccountIdentity = LibraryAccountIdentity(userID: userID, generation: self.accountGeneration)
+            }
+            _ = self.installSynchronousAccountTransitionFence { [weak self, lifecycle = built.library.bookImportLifecycle] in
+                guard let self, let ownerID = self.userIdBox.value else { return }
+                lifecycle.fenceAccount(ownerID: ownerID, generation: self.accountGeneration)
+            }
             #if DEBUG
             if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1",
                let userID = self.userIdBox.value {
@@ -245,6 +343,20 @@ final class AppDependencies {
             Self.signposter.endInterval("cold-launch.bootstrap", state)
         }
         bootstrapTask = task
+        await task.value
+    }
+
+    func refreshEntitlementsAtLaunch() async {
+        guard let coordinator = services?.billing.entitlementRefreshCoordinator else { return }
+        if let launchEntitlementRefreshTask {
+            await launchEntitlementRefreshTask.value
+            return
+        }
+
+        let task = Task {
+            await coordinator.refreshIfSignedIn(reason: .launch)
+        }
+        launchEntitlementRefreshTask = task
         await task.value
     }
 
@@ -292,31 +404,50 @@ extension BootstrappedServices {
                 _ = try await workerClient.send(DeleteUserEndpoint())
             },
             purgeLocal: { [self] in
-                var cleanupError: Error?
-                await systemIntegration.spotlight.clearForAccountDeletion()
-                await audio.playbackOwner.stopForAccountChange()
-                await voice.presenter.requestEnd()
-                await sharedReadingSessionRegistry.drain(accountID: userId)
-                await sync.engine.resetForAccountSwitch()
-                do { try library.bookFileStorage.purgeAll() }
-                catch { cleanupError = error }
-                do { try await library.dbStore.purgeAll() }
-                catch { cleanupError = cleanupError ?? error }
-                if let metadataStore = sync.metadataStore as? SwiftDataSyncMetadataStore {
-                    do { try await metadataStore.resetAll() }
-                    catch { cleanupError = cleanupError ?? error }
-                }
-                await dataUseConsentStore.revoke(for: userId.uuidString)
-                await audio.ttsSettingsStore.remove(userId: userId)
-                await onboarding.trialState.remove(userId: userId)
-                await billing.entitlementService.clearSnapshotCache(for: userId.uuidString)
-                await billing.entitlementService.clearCache()
-                await MainActor.run { billing.entitlementReconciler.reset() }
-                if let cleanupError { throw cleanupError }
+                let generation = (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
+                try await purgeAccountLocally(userID: userId, outgoingGeneration: generation)
             },
+            purgeLocalForGeneration: { [self] generation in try await purgeAccountLocally(userID: userId, outgoingGeneration: generation) },
+            currentAccountGeneration: {
+                (UserDefaults.standard.object(forKey: "rishi.account.generation") as? NSNumber)?.uint64Value ?? 0
+            },
+            reactivateLocalOwner: { token in await AppDependencies.shared.restoreOwnerAfterDeletionFailure(token) },
+            beginAccountDeletionCleanup: { AppDependencies.shared.beginAccountDeletionCleanup($0) },
+            endAccountDeletionCleanup: { AppDependencies.shared.endAccountDeletionCleanup($0) },
             signOut: signOut,
             beginAccountChange: { try AppDependencies.shared.beginAccountChange() }
         )
+    }
+
+    private func purgeAccountLocally(userID: UUID, outgoingGeneration: UInt64) async throws -> BookImportActivationToken {
+        var cleanupError: Error?
+        let activationToken = library.bookImportLifecycle.fenceAccount(ownerID: userID, generation: outgoingGeneration)
+        let accountMutationPermit = AccountMutationPermit(ownerID: userID, accountGeneration: outgoingGeneration)
+        library.scopedMutationStore.closeAdmission(for: accountMutationPermit)
+        await systemIntegration.spotlight.clearForAccountDeletion()
+        await audio.playbackOwner.stopForAccountChange()
+        await voice.presenter.requestEnd()
+        await sharedReadingSessionRegistry.drain(accountID: userID)
+        await sync.engine.resetForAccountSwitch()
+        do { try await library.scopedMutationStore.revoke(accountMutationPermit) }
+        catch { cleanupError = error }
+        await library.bookImportLifecycle.drainAccount(userID, generation: outgoingGeneration)
+        do { try library.bookFileStorage.purgeAll() }
+        catch { cleanupError = error }
+        do { try await library.dbStore.purgeAll() }
+        catch { cleanupError = cleanupError ?? error }
+        if let metadataStore = sync.metadataStore as? SwiftDataSyncMetadataStore {
+            do { try await metadataStore.resetAll() }
+            catch { cleanupError = cleanupError ?? error }
+        }
+        await dataUseConsentStore.revoke(for: userID.uuidString)
+        await audio.ttsSettingsStore.remove(userId: userID)
+        await onboarding.trialState.remove(userId: userID)
+        await billing.entitlementService.clearSnapshotCache(for: userID.uuidString)
+        await billing.entitlementService.clearCache()
+        await MainActor.run { billing.entitlementReconciler.reset() }
+        if let cleanupError { throw cleanupError }
+        return activationToken
     }
 }
 
@@ -357,6 +488,7 @@ struct ChatRuntime: @unchecked Sendable {
 
 struct LibraryRuntime: @unchecked Sendable {
     let dbStore: RishiDBStore
+    let scopedMutationStore: BookScopedMutationStore
     let bookStore: any BookStore
     let positionStore: any PositionStore
     let highlightStore: any HighlightStore
@@ -366,10 +498,19 @@ struct LibraryRuntime: @unchecked Sendable {
     let sampleBookInstaller: SampleBookInstaller
     let sampleReaderInstaller: SampleReaderInstaller
     let readerSettingsStore: any ReaderSettingsStore
+    let chapterIndexPersistence: any ChapterIndexPersistence
+    let chapterSummarizer: ChapterSummarizer
+    let epubUnpackedCache: EPUBUnpackedCache
     let bookSearch: any BookSearch
     let indexingHook: any BookIndexingHook
     let sharePackageService: SharePackageService
     let sessionBookService: SessionBookService
+    let bookSourceRegistry: BookSourceRegistry
+    let bookImportLifecycle: BookImportLifecycle
+    let bookMaterializationCoordinator: BookMaterializationCoordinator
+    let bookImportEvents: BookImportEvents
+    let currentAccountGeneration: @Sendable () async -> UInt64?
+    let bookImportRecovery: BookImportRecovery
 }
 
 struct SyncRuntime: @unchecked Sendable {

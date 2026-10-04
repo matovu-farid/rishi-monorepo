@@ -1,40 +1,50 @@
 import Foundation
 
-private actor IndexingInFlightClaims {
-    private var bookIDs: Set<UUID> = []
-
-    func claim(_ bookID: UUID) -> Bool {
-        guard bookIDs.insert(bookID).inserted else { return false }
-        return true
+private actor IndexingTaskRegistry {
+    private struct Entry {
+        let id: UUID
+        let task: Task<Void, Never>
     }
 
-    func release(_ bookID: UUID) {
-        bookIDs.remove(bookID)
+    private var tasks: [UUID: Entry] = [:]
+
+    func task(
+        for bookID: UUID,
+        markIndexing: @escaping @Sendable () async -> Void,
+        operation: @escaping @Sendable () async -> Void
+    ) async -> Task<Void, Never> {
+        if let existing = tasks[bookID] { return existing.task }
+
+        // The actor can re-enter while the sidecar write is awaited. Check
+        // again after it returns so simultaneous readers still join one task.
+        await markIndexing()
+        if let existing = tasks[bookID] { return existing.task }
+
+        let id = UUID()
+        let task = Task.detached(priority: .background) { await operation() }
+        tasks[bookID] = Entry(id: id, task: task)
+        Task { [weak self] in
+            await task.value
+            await self?.remove(bookID: bookID, id: id)
+        }
+        return task
+    }
+
+    private func remove(bookID: UUID, id: UUID) {
+        guard tasks[bookID]?.id == id else { return }
+        tasks.removeValue(forKey: bookID)
     }
 }
 
-
-
-/// Production `BookIndexingHook` conformer that wires `IndexBuilder`
-/// (Plan 25-05) to a per-format `PerBookTextExtractor` (Plan 25-11). One
-/// instance is constructed in `AppDependencies.buildServices` and passed to
-/// `BookFileStorage` so every import schedules a detached background index
-/// build.
-///
-/// Routing:
-///   - `fileURL.pathExtension.lowercased()` -> `extractors[ext]`.
-///   - Unknown extension -> log `rag.index.no_extractor` and return.
-///
-/// Lifetime: the hook itself returns immediately after spawning a
-/// `Task.detached(priority: .background)` — the extraction + embedding + USearch
-/// + SwiftData writes happen in that detached task. `IndexBuilder` writes
-/// `index.status.json` (`.indexing` -> `.ready` or `.failed`) so the cold-start
-/// sentinel in `USearchBookSearch.search` covers the in-flight window.
-public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendable {
+/// Production `BookIndexingHook` conformer that wires `IndexBuilder` to a
+/// per-format `PerBookTextExtractor`. Fire-and-forget import callers use
+/// `scheduleIndexing`; reader callers can join the actual task through
+/// `scheduleIndexingAndWait` and retain a source admission through persistence.
+public final class RishiSearchIndexingHook: AwaitableBookIndexingHook, @unchecked Sendable {
     private let builder: IndexBuilder
     private let extractors: [String: any PerBookTextExtractor]
     private let onIndexReady: (@Sendable (UUID) async -> Void)?
-    private let inFlightClaims = IndexingInFlightClaims()
+    private let inFlightTasks = IndexingTaskRegistry()
 
     public init(
         builder: IndexBuilder,
@@ -47,76 +57,60 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
     }
 
     public func scheduleIndexing(for book: Book, fileURL: URL) async {
+        _ = await startIndexing(for: book, fileURL: fileURL)
+    }
+
+    public func scheduleIndexingAndWait(for book: Book, fileURL: URL) async {
+        guard let task = await startIndexing(for: book, fileURL: fileURL) else { return }
+        await task.value
+    }
+
+    private func startIndexing(for book: Book, fileURL: URL) async -> Task<Void, Never>? {
         let ext = fileURL.pathExtension.lowercased()
-        let bookId = book.id
-        let builder = self.builder
-        let onIndexReady = self.onIndexReady
+        let bookID = book.id
         guard let extractor = extractors[ext] else {
             Log.event("rag.index.no_extractor", level: .warning, data: [
-                "bookId": bookId.uuidString,
+                "bookId": bookID.uuidString,
                 "ext": ext,
             ])
-            // No extractor means we will never call buildIndex, so the status
-            // sidecar would stay missing (.notIndexed) and the reader would
-            // re-schedule indexing on every open. Mark .failed (terminal) so
-            // shouldBackfillIndex skips it and the chip stops polling.
-            await builder.markFailed(bookId: bookId, reason: "no extractor for .\(ext)")
-            return
+            // No extractor means no build task will exist to move the sidecar
+            // out of .notIndexed. Record a terminal failure synchronously.
+            await builder.markFailed(bookId: bookID, reason: "no extractor for .\(ext)")
+            return nil
         }
-        guard await inFlightClaims.claim(bookId) else {
-            Log.event("rag.index.coalesced", level: .info, data: [
-                "bookId": bookId.uuidString,
-                "ext": ext,
-            ])
-            return
-        }
-        let inFlightClaims = self.inFlightClaims
-        // Detached — returns immediately. CONTEXT.md: indexing is non-blocking,
-        // failures surface via `index.status.json` (IndexBuilder writes the
-        // sidecar). We log scheduling so the cold-start window is observable.
-        Log.event("rag.index.scheduled", level: .info, data: [
-            "bookId": bookId.uuidString,
-            "ext": ext,
-        ])
-        await builder.markIndexing(bookId: bookId)
-        Task.detached(priority: .background) {
-            do {
-                let paragraphs = try await extractor.extractParagraphs(from: fileURL)
-                guard !paragraphs.isEmpty else {
-                    Log.event("rag.index.empty_paragraphs", level: .warning, data: [
-                        "bookId": bookId.uuidString,
+
+        let builder = self.builder
+        let onIndexReady = self.onIndexReady
+        return await inFlightTasks.task(
+            for: bookID,
+            markIndexing: { await builder.markIndexing(bookId: bookID) },
+            operation: {
+                do {
+                    let paragraphs = try await extractor.extractParagraphs(from: fileURL)
+                    if paragraphs.isEmpty {
+                        Log.event("rag.index.empty_paragraphs", level: .warning, data: [
+                            "bookId": bookID.uuidString,
+                        ])
+                    }
+                    // Empty books still persist a valid ready index. For all
+                    // inputs, returning from buildIndex means persistence and
+                    // the terminal status write have completed.
+                    try await builder.buildIndex(bookId: bookID, paragraphs: paragraphs)
+                    await onIndexReady?(bookID)
+                    Log.event("rag.index.scheduled.done", level: .info, data: [
+                        "bookId": bookID.uuidString,
+                        "paragraphs": String(paragraphs.count),
                     ])
-                    // IndexBuilder still records `.ready` if we call it with
-                    // an empty list (degenerate but valid). Call it so the
-                    // sidecar moves out of `.notIndexed` and the cold-start
-                    // sentinel doesn't stick.
-                    try await builder.buildIndex(bookId: bookId, paragraphs: [])
-                    await inFlightClaims.release(bookId)
-                    await onIndexReady?(bookId)
-                    return
+                } catch {
+                    Log.event("rag.index.scheduled.failed", level: .error, data: [
+                        "bookId": bookID.uuidString,
+                        "error": String(describing: error),
+                    ])
+                    // The throw happened before buildIndex could write the
+                    // sidecar, so mark a terminal result before task completion.
+                    await builder.markFailed(bookId: bookID, reason: String(describing: error))
                 }
-                try await builder.buildIndex(bookId: bookId, paragraphs: paragraphs)
-                await inFlightClaims.release(bookId)
-                await onIndexReady?(bookId)
-                Log.event("rag.index.scheduled.done", level: .info, data: [
-                    "bookId": bookId.uuidString,
-                    "paragraphs": String(paragraphs.count),
-                ])
-            } catch {
-                Log.event("rag.index.scheduled.failed", level: .error, data: [
-                    "bookId": bookId.uuidString,
-                    "error": String(describing: error),
-                ])
-                // The throw happened before buildIndex could write the sidecar,
-                // so status would be stuck at .notIndexed. Mark .failed
-                // (terminal) so shouldBackfillIndex skips it (no reader-open
-                // thrash) and the chip stops polling.
-                await builder.markFailed(
-                    bookId: bookId,
-                    reason: String(describing: error)
-                )
-                await inFlightClaims.release(bookId)
             }
-        }
+        )
     }
 }

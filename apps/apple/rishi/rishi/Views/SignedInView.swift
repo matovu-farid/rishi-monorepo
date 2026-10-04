@@ -27,6 +27,8 @@ struct SignedInContentDependencies {
     @MainActor
     static func make(
         services: BootstrappedServices,
+        accountIdentity: LibraryAccountIdentity,
+        currentAccountIdentity: @escaping @MainActor () -> LibraryAccountIdentity?,
         onSignedOut: @escaping @MainActor @Sendable () -> Void
     ) -> Self {
         let deleteAccount: @Sendable (UUID) async throws -> Void = { userId in
@@ -48,6 +50,13 @@ struct SignedInContentDependencies {
                 readerDefaults: services.settings.readerDefaults,
                 syncEngine: services.sync.engine,
                 sharePackageService: services.library.sharePackageService,
+                bookSourceRegistry: services.library.bookSourceRegistry,
+                bookImportLifecycle: services.library.bookImportLifecycle,
+                bookMaterializationCoordinator: services.library.bookMaterializationCoordinator,
+                bookImportEvents: services.library.bookImportEvents,
+                currentAccountGeneration: services.library.currentAccountGeneration,
+                accountIdentity: accountIdentity,
+                currentAccountIdentity: currentAccountIdentity,
                 sharedReadingAPI: services.sharedReadingAPI,
                 sharedReadingSessionRegistry: services.sharedReadingSessionRegistry,
                 sessionBookService: services.library.sessionBookService,
@@ -104,7 +113,10 @@ struct SignedInView: View {
     }
 
     var body: some View {
-        if let services, let user {
+        if let services, let user,
+           let appDependencies,
+           let accountIdentity = appDependencies.activeAccountIdentity,
+           accountIdentity.userID == user.id {
 #if targetEnvironment(macCatalyst)
             let editUsername: @MainActor () -> Void = { showUsernameEditor = true }
 #else
@@ -113,20 +125,23 @@ struct SignedInView: View {
             SignedInContent(
                 dependencies: SignedInContentDependencies.make(
                     services: services,
+                    accountIdentity: accountIdentity,
+                    currentAccountIdentity: { [weak appDependencies] in appDependencies?.activeAccountIdentity },
                     onSignedOut: { signOut() }
                 ),
                 user: user,
                 onLibraryReadyForTrial: onLibraryReadyForTrial
             )
+            .id(accountIdentity)
             .macCommandDispatch(readerDefaults: services.settings.readerDefaults)
             .readerPrefsMenuPublisher(
                 services: services,
                 user: user,
                 onSignedOut: { signOut() },
-                account: appDependencies?.macAccountMenu,
+                account: appDependencies.macAccountMenu,
                 onEditUsername: editUsername
             )
-            .accountDeletionAlerts(account: appDependencies?.macAccountMenu)
+            .accountDeletionAlerts(account: appDependencies.macAccountMenu)
 #if targetEnvironment(macCatalyst)
             .sheet(isPresented: $showUsernameEditor) {
                 UsernameEditorView(username: user.username) { username in
@@ -344,6 +359,7 @@ private struct SignedInContentPreviewHost: View {
             }
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
         }
+        .task { await libraryVM.refresh() }
     }
 }
 

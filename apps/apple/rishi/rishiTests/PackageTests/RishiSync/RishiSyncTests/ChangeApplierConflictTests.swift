@@ -64,11 +64,22 @@ struct ChangeApplierConflictTests {
 
     private actor StubBookStore: BookStore {
         var rows: [BookID: Book] = [:]
+        var rejectNextConditionalDelete = false
         func seed(_ book: Book) { rows[book.id] = book }
+        func rejectNextDelete() { rejectNextConditionalDelete = true }
         func books(for userId: UserID) async throws -> [Book] { Array(rows.values) }
         func book(_ id: BookID) async throws -> Book? { rows[id] }
         func upsert(_ book: Book) async throws { rows[book.id] = book }
         func delete(_ id: BookID) async throws { rows[id] = nil }
+        func deleteIfUnchanged(_ id: BookID, matching expected: Book?) async throws -> Bool {
+            if rejectNextConditionalDelete {
+                rejectNextConditionalDelete = false
+                return false
+            }
+            guard rows[id] == expected else { return false }
+            rows[id] = nil
+            return true
+        }
         func count() -> Int { rows.count }
     }
 
@@ -111,6 +122,130 @@ struct ChangeApplierConflictTests {
         func snapshot() -> [BookID] { ids }
     }
 
+    private actor FingerprintPersistProbe {
+        private var answers: [Bool]
+        private(set) var calls = 0
+        init(answers: [Bool]) { self.answers = answers }
+        func persist() -> Bool {
+            calls += 1
+            return answers.isEmpty ? false : answers.removeFirst()
+        }
+    }
+
+    private actor RetireProbe {
+        private(set) var sawLiveBook = false
+        func record(_ value: Bool) { sawLiveBook = value }
+    }
+
+    private actor BookCleanupSequence {
+        private(set) var events: [String] = []
+        func append(_ event: String) { events.append(event) }
+    }
+
+    private actor OwnerDeletionAdmission {
+        private(set) var ownerID: UserID
+        private var activeOperations = 0
+        private var switchRequested = false
+        private var switchRequestWaiter: CheckedContinuation<Void, Never>?
+        private var drainWaiter: CheckedContinuation<Void, Never>?
+
+        init(ownerID: UserID) { self.ownerID = ownerID }
+
+        func withAdmission(ownerID: UserID, operation: @Sendable (UInt64) async throws -> Void) async throws {
+            guard self.ownerID == ownerID else { throw Issue269TestFailure.ownerChanged }
+            activeOperations += 1
+            defer {
+                activeOperations -= 1
+                if activeOperations == 0 {
+                    drainWaiter?.resume()
+                    drainWaiter = nil
+                }
+            }
+            try await operation(41)
+        }
+
+        func switchOwner(to newOwner: UserID) async {
+            switchRequested = true
+            switchRequestWaiter?.resume()
+            switchRequestWaiter = nil
+            if activeOperations > 0 {
+                await withCheckedContinuation { drainWaiter = $0 }
+            }
+            ownerID = newOwner
+        }
+
+        func waitUntilSwitchRequested() async {
+            guard !switchRequested else { return }
+            await withCheckedContinuation { switchRequestWaiter = $0 }
+        }
+    }
+
+    private actor CleanupGate {
+        private var entered = false
+        private var entryWaiter: CheckedContinuation<Void, Never>?
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+        func enterAndWait() async {
+            entered = true
+            entryWaiter?.resume()
+            entryWaiter = nil
+            await withCheckedContinuation { releaseWaiter = $0 }
+        }
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entryWaiter = $0 }
+        }
+        func release() {
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
+    private actor PendingDeletionPersistence: BookImportPersistence {
+        private var pending: PendingBookMaterialization?
+        private var deleteAnswers: [Bool]
+        init(pending: PendingBookMaterialization, deleteAnswers: [Bool] = [true]) {
+            self.pending = pending
+            self.deleteAnswers = deleteAnswers
+        }
+        func pendingMaterialization(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? {
+            guard let pending else { return nil }
+            return pending.token.bookID == bookID && pending.token.ownerID == ownerID ? pending : nil
+        }
+        func pendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID) async throws -> PendingBookMaterialization? {
+            guard let pending else { return nil }
+            return pending.token.bookID == bookID && pending.token.ownerID == ownerID ? pending : nil
+        }
+        func deletePendingMaterializationForDeletionCleanup(bookID: BookID, ownerID: UserID, expectedToken: BookMaterializationToken) async throws -> Bool {
+            guard let pending, pending.token.bookID == bookID,
+                  pending.token.ownerID == ownerID, pending.token == expectedToken else { return false }
+            let answer = deleteAnswers.isEmpty ? false : deleteAnswers.removeFirst()
+            if answer { self.pending = nil }
+            return answer
+        }
+        func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration { fatalError("unused") }
+        func joinOrRetryPending(ownerID: UserID, sha256: String, newSource: PendingBookMaterialization, retiredAttempt: RetiredBookMaterializationAttempt?) async throws -> BookRegistration? { fatalError("unused") }
+        func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool { false }
+        func recordPrepared(token: BookMaterializationToken, artifacts: VerifiedBookArtifacts) async throws -> Bool { false }
+        func claimPromotion(token: BookMaterializationToken, preparedFileIdentifier: String, promotionRevision: UUID) async throws -> Bool { false }
+        func recordPromoted(token: BookMaterializationToken, preparedFileIdentifier: String, destinationFileIdentifier: String, promotionRevision: UUID) async throws -> Bool { false }
+        func commitManaged(token: BookMaterializationToken, fingerprint: BookFileFingerprint) async throws -> Bool { false }
+        func patchCover(bookID: BookID, token: BookMaterializationToken, relativePath: String) async throws -> Bool { false }
+        func adoptRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID, verifiedArtifacts: VerifiedBookArtifacts) async throws -> BookMaterializationToken? { nil }
+        func quarantineRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64, newAttemptID: UUID) async throws -> BookMaterializationToken? { nil }
+        func reauthorizeWaitingRecovery(expectedToken: BookMaterializationToken, currentOwnerID: UserID, currentGeneration: UInt64) async throws -> BookMaterializationToken? { nil }
+        func refreshSourceBookmark(token: BookMaterializationToken, refreshedData: Data) async throws -> Bool { false }
+        func reauthorizeReadyManagedSource(bookID: BookID, ownerID: UserID, generation: UInt64, fingerprint: BookFileFingerprint) async throws -> Bool { false }
+        func pendingMaterializationForRecovery(bookID: BookID, ownerID: UserID, currentGeneration: UInt64) async throws -> PendingBookMaterialization? {
+            guard let pending else { return nil }
+            return pending.token.bookID == bookID && pending.token.ownerID == ownerID ? pending : nil
+        }
+        func fingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? { nil }
+        func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
+        func recordServerAcceptance(bookID: BookID, ownerID: UserID, expectedGeneration: UInt64, expectedContentRevision: UUID, acceptance: BookServerAcceptance) async throws -> Bool { false }
+        func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws {}
+        func setBookReadingAuthorization(bookID: BookID, ownerID: UserID, generation: UInt64, contentRevision: UUID, tombstoned: Bool) async throws {}
+    }
+
     // MARK: - Helpers
 
     private func makeApplier(
@@ -119,7 +254,13 @@ struct ChangeApplierConflictTests {
         highlightStore: any HighlightStore,
         metadata: any SyncMetadataStore,
         currentUserId: @escaping @Sendable () async -> UserID? = { nil },
-        bookMaterialCleanup: (@Sendable (Book) async throws -> Void)? = nil
+        bookMaterialCleanup: (@Sendable (Book) async throws -> Void)? = nil,
+        bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)? = nil,
+        prepareBookMaterialCleanup: (@Sendable (BookID, UserID) async throws -> (@Sendable () async throws -> Void))? = nil,
+        withBookDeletionAdmission: (@Sendable (UserID, @Sendable (UInt64) async throws -> Void) async throws -> Void)? = nil,
+        restoreBookAfterFailedRetirement: (@Sendable (Book, UInt64?) async -> Bool)? = nil,
+        scheduleBookRecovery: (@Sendable (UserID, UInt64) async -> Void)? = nil,
+        retireAndDrainBook: (@Sendable (BookID) async throws -> Void)? = nil
     ) -> ChangeApplier {
         ChangeApplier(
             bookStore: bookStore,
@@ -128,9 +269,400 @@ struct ChangeApplierConflictTests {
             bookmarkStore: StubBookmarkStore(),
             metadataStore: metadata,
             currentUserId: currentUserId,
-            bookMaterialCleanup: bookMaterialCleanup
+            bookMaterialCleanup: bookMaterialCleanup,
+            bookMaterialCleanupByID: bookMaterialCleanupByID,
+            prepareBookMaterialCleanup: prepareBookMaterialCleanup,
+            withBookDeletionAdmission: withBookDeletionAdmission,
+            restoreBookAfterFailedRetirement: restoreBookAfterFailedRetirement,
+            scheduleBookRecovery: scheduleBookRecovery,
+            retireAndDrainBook: retireAndDrainBook,
+            retireAndDrainBookForGeneration: { bookID, _, generation in
+                try await retireAndDrainBook?(bookID)
+                if withBookDeletionAdmission != nil { #expect(generation == 41) }
+            }
         )
     }
+
+    @Test("Remote book tombstone retires and drains source before deleting the local row")
+    func remoteTombstoneRetiresBeforeDeletingBook() async throws {
+        let book = Book(
+            id: UUID(), userId: UUID(), title: "Managed", author: "Author",
+            formatType: .pdf, addedAt: Date(), fileURL: "Books/book.pdf"
+        )
+        let books = StubBookStore()
+        await books.seed(book)
+        let observedLiveRow = RetireProbe()
+        let applier = makeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: StubMetadata(),
+            retireAndDrainBook: { bookID in
+                await observedLiveRow.record(try await books.book(bookID) != nil)
+            }
+        )
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )
+
+        let result = await applier.apply([change])
+
+        #expect(result.applied == 1)
+        #expect(await observedLiveRow.sawLiveBook)
+        #expect(try await books.book(book.id) == nil)
+    }
+
+    @Test("Inbound deletion drains first and removes the pending attempt staging directory")
+    func inboundDeletionCleansPendingStagingAfterDrain() async throws {
+        let ownerID = UUID()
+        let book = Book(id: UUID(), userId: ownerID, title: "Pending", formatType: .epub, fileURL: "Books/\(UUID().uuidString)/pending.epub")
+        let books = StubBookStore()
+        await books.seed(book)
+        let attemptID = UUID()
+        let token = BookMaterializationToken(ownerID: ownerID, accountGeneration: 4, bookID: book.id, attemptID: attemptID)
+        let pending = PendingBookMaterialization(
+            token: token,
+            sourceKind: .securityScopedOriginal,
+            sourceBookmark: Data([1]),
+            ownedSourceRelativePath: nil,
+            sourceVersion: ManagedFileVersion(byteCount: 10, modificationDate: Date(), fileIdentifier: "source", materializationRevision: UUID()),
+            expectedSHA256: String(repeating: "a", count: 64),
+            expectedByteCount: 10,
+            stagingRelativePath: "Imports/\(attemptID.uuidString)/content.partial",
+            destinationRelativePath: book.fileURL,
+            phase: .copying
+        )
+        let root = URL.temporaryDirectory.appendingPathComponent("ChangeApplier-PendingDelete-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stagingDirectory = root.appendingPathComponent("Imports/\(attemptID.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        let stagingFile = stagingDirectory.appendingPathComponent("content.partial")
+        try Data("staging".utf8).write(to: stagingFile)
+        let storage = BookFileStorage(
+            rootURL: root,
+            bookStore: books,
+            coverExtractors: [:],
+            fingerprintPersistence: PendingDeletionPersistence(pending: pending)
+        )
+        let sequence = BookCleanupSequence()
+        let applier = makeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: StubMetadata(),
+            prepareBookMaterialCleanup: { bookID, ownerID in
+                await sequence.append("capture")
+                let cleanup = try await storage.prepareDeletionCleanup(bookID: bookID, ownerID: ownerID)
+                return {
+                    await sequence.append("cleanup")
+                    try await cleanup()
+                }
+            },
+            retireAndDrainBook: { _ in await sequence.append("drained") }
+        )
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )
+
+        let result = await applier.apply([change])
+
+        #expect(result.applied == 1)
+        #expect(await sequence.events == ["drained", "capture", "cleanup"])
+        #expect(!FileManager.default.fileExists(atPath: stagingDirectory.path))
+        #expect(try await books.book(book.id) == nil)
+    }
+
+    @Test("Account transition waits for admitted inbound deletion through cleanup and ack")
+    func accountTransitionWaitsForDeletionAdmission() async throws {
+        let ownerID = UUID()
+        let nextOwnerID = UUID()
+        let book = Book(id: UUID(), userId: ownerID, title: "Admitted", formatType: .epub, fileURL: "Books/admitted.epub")
+        let books = StubBookStore()
+        await books.seed(book)
+        let admission = OwnerDeletionAdmission(ownerID: ownerID)
+        let cleanupGate = CleanupGate()
+        let metadata = StubMetadata()
+        let applier = makeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: metadata,
+            prepareBookMaterialCleanup: { _, _ in
+                { await cleanupGate.enterAndWait() }
+            },
+            withBookDeletionAdmission: { owner, operation in
+                try await admission.withAdmission(ownerID: owner, operation: operation)
+            },
+            retireAndDrainBook: { _ in }
+        )
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )
+
+        let applyTask = Task { await applier.apply([change], expectedUserId: ownerID) }
+        await cleanupGate.waitUntilEntered()
+        let switchTask = Task { await admission.switchOwner(to: nextOwnerID) }
+        await admission.waitUntilSwitchRequested()
+
+        #expect(await admission.ownerID == ownerID)
+        #expect((await metadata.acknowledgedTombstones()).isEmpty)
+
+        await cleanupGate.release()
+        let result = await applyTask.value
+        await switchTask.value
+
+        #expect(result.applied == 1)
+        #expect(await admission.ownerID == nextOwnerID)
+        #expect((await metadata.acknowledgedTombstones()).contains { $0.0 == book.id && $0.1 == .book })
+    }
+
+    @Test("Inbound deletion CAS failure keeps managed and attempt staging files")
+    func inboundDeletionCASFailureKeepsMaterial() async throws {
+        let ownerID = UUID()
+        let book = Book(id: UUID(), userId: ownerID, title: "Race", formatType: .epub, fileURL: "Books/\(UUID().uuidString)/race.epub")
+        let books = StubBookStore()
+        await books.seed(book)
+        await books.rejectNextDelete()
+        let attemptID = UUID()
+        let token = BookMaterializationToken(ownerID: ownerID, accountGeneration: 5, bookID: book.id, attemptID: attemptID)
+        let pending = PendingBookMaterialization(
+            token: token,
+            sourceKind: .securityScopedOriginal,
+            sourceBookmark: Data([1]),
+            ownedSourceRelativePath: nil,
+            sourceVersion: ManagedFileVersion(byteCount: 10, modificationDate: Date(), fileIdentifier: "source", materializationRevision: UUID()),
+            expectedSHA256: String(repeating: "b", count: 64),
+            expectedByteCount: 10,
+            stagingRelativePath: "Imports/\(attemptID.uuidString)/content.partial",
+            destinationRelativePath: book.fileURL,
+            phase: .ready
+        )
+        let root = URL.temporaryDirectory.appendingPathComponent("ChangeApplier-PendingDeleteRace-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stagingDirectory = root.appendingPathComponent("Imports/\(attemptID.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        let stagingFile = stagingDirectory.appendingPathComponent("content.partial")
+        try Data("staging".utf8).write(to: stagingFile)
+        let managedFile = root.appendingPathComponent(book.fileURL)
+        try FileManager.default.createDirectory(at: managedFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("managed".utf8).write(to: managedFile)
+        let storage = BookFileStorage(
+            rootURL: root,
+            bookStore: books,
+            coverExtractors: [:],
+            fingerprintPersistence: PendingDeletionPersistence(pending: pending)
+        )
+        let sequence = BookCleanupSequence()
+        let applier = makeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: StubMetadata(),
+            prepareBookMaterialCleanup: { bookID, ownerID in
+                await sequence.append("capture")
+                let cleanup = try await storage.prepareDeletionCleanup(bookID: bookID, ownerID: ownerID)
+                return {
+                    await sequence.append("cleanup")
+                    try await cleanup()
+                }
+            },
+            retireAndDrainBook: { _ in await sequence.append("drained") }
+        )
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )
+
+        let result = await applier.apply([change])
+
+        #expect(result.applied == 0)
+        #expect(!result.errors.isEmpty)
+        #expect(await sequence.events == ["drained", "capture"])
+        #expect(FileManager.default.fileExists(atPath: stagingFile.path))
+        #expect(FileManager.default.fileExists(atPath: managedFile.path))
+        #expect(try await books.book(book.id) == book)
+    }
+
+    @Test("CAS failure with an unfinished import reports that source recovery is required")
+    func inboundDeletionCopyingCASFailureIsExplicitlyRecoverable() async throws {
+        let ownerID = UUID()
+        let book = Book(id: UUID(), userId: ownerID, title: "Copying", formatType: .epub, fileURL: "Books/copying.epub")
+        let books = StubBookStore()
+        await books.seed(book)
+        await books.rejectNextDelete()
+        let metadata = StubMetadata()
+        let recoverySchedule = BookCleanupSequence()
+        let applier = makeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: metadata,
+            withBookDeletionAdmission: { _, operation in try await operation(41) },
+            restoreBookAfterFailedRetirement: { _, generation in
+                #expect(generation == 41)
+                return false // A registered/copying job cannot be reopened as readable.
+            },
+            scheduleBookRecovery: { owner, generation in
+                #expect(owner == ownerID)
+                #expect(generation == 41)
+                await recoverySchedule.append("scheduled")
+            },
+            retireAndDrainBook: { _ in }
+        )
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )
+
+        let result = await applier.apply([change], expectedUserId: ownerID)
+
+        #expect(result.applied == 0)
+        #expect(result.errors.contains { $0.contains("source recovery is required") })
+        #expect(await recoverySchedule.events == ["scheduled"])
+        #expect(try await books.book(book.id) == book)
+        #expect((await metadata.acknowledgedTombstones()).isEmpty)
+    }
+
+    @Test("Failure preparing deletion cleanup restores a still-live managed source")
+    func inboundDeletionCleanupPreparationFailureRestoresLiveBook() async throws {
+        let ownerID = UUID()
+        let book = Book(id: UUID(), userId: ownerID, title: "Cleanup failure", formatType: .pdf, fileURL: "Books/live.pdf")
+        let books = StubBookStore()
+        await books.seed(book)
+        let restoreProbe = RetireProbe()
+        let applier = makeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: StubMetadata(),
+            prepareBookMaterialCleanup: { _, _ in throw Issue269TestFailure.unexpectedMaterialization },
+            withBookDeletionAdmission: { _, operation in try await operation(41) },
+            restoreBookAfterFailedRetirement: { liveBook, generation in
+                #expect(liveBook == book)
+                #expect(generation == 41)
+                await restoreProbe.record(true)
+                return true
+            },
+            retireAndDrainBook: { _ in }
+        )
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: book.id,
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(),
+            deleted: true
+        )
+
+        let result = await applier.apply([change], expectedUserId: ownerID)
+
+        #expect(result.applied == 0)
+        #expect(await restoreProbe.sawLiveBook)
+        #expect(try await books.book(book.id) == book)
+    }
+
+    @Test("Conflicting inbound file digest cannot replace a local managed book")
+    func conflictingRemoteDigestDoesNotReplaceLocalBook() async throws {
+        let ownerID = UUID()
+        let bookID = UUID()
+        let local = Book(
+            id: bookID, userId: ownerID, title: "Local title", author: "Author",
+            formatType: .epub, fileURL: "Books/local/current.epub"
+        )
+        let remote = Book(
+            id: bookID, userId: ownerID, title: "Remote title", author: "Author",
+            formatType: .epub, fileURL: "Books/remote/replacement.epub"
+        )
+        let books = StubBookStore()
+        await books.seed(local)
+        let applier = ChangeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: StubMetadata(),
+            currentUserId: { ownerID },
+            bookMaterializer: { _, _, _ in throw Issue269TestFailure.unexpectedMaterialization },
+            managedFingerprintLookup: { _ in
+                BookFileFingerprint(
+                    bookID: bookID,
+                    ownerID: ownerID,
+                    sha256: String(repeating: "a", count: 64),
+                    version: ManagedFileVersion(byteCount: 12, modificationDate: Date(), fileIdentifier: "local", materializationRevision: UUID())
+                )
+            }
+        )
+        let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "remote-key", fileHash: String(repeating: "b", count: 64), fileSize: 13)
+        let change = SyncChange(kind: SyncEntityKind.book.rawValue, id: bookID, payload: payload, updatedAt: Date(), deleted: false)
+
+        let result = await applier.apply([change], expectedUserId: ownerID)
+
+        #expect(result.conflicts == 1)
+        #expect(try await books.book(bookID) == local)
+    }
+
+    @Test("Matching inbound metadata patches retain the existing local destination")
+    func inboundMetadataPatchPreservesLocalDestination() async throws {
+        let ownerID = UUID()
+        let bookID = UUID()
+        let local = Book(
+            id: bookID, userId: ownerID, title: "Before", author: "Author",
+            formatType: .epub, openedAt: Date(timeIntervalSince1970: 50), fileURL: "Books/local/current.epub"
+        )
+        let remote = Book(
+            id: bookID, userId: ownerID, title: "After", author: "Author",
+            formatType: .pdf, fileURL: "Books/remote/other.pdf"
+        )
+        let digest = String(repeating: "c", count: 64)
+        let books = StubBookStore()
+        await books.seed(local)
+        let applier = ChangeApplier(
+            bookStore: books,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: StubMetadata(),
+            currentUserId: { ownerID },
+            managedFingerprintLookup: { _ in
+                BookFileFingerprint(
+                    bookID: bookID,
+                    ownerID: ownerID,
+                    sha256: digest,
+                    version: ManagedFileVersion(byteCount: 9, modificationDate: Date(), fileIdentifier: "local", materializationRevision: UUID())
+                )
+            }
+        )
+        let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: nil, fileHash: digest, fileSize: 9)
+        let change = SyncChange(kind: SyncEntityKind.book.rawValue, id: bookID, payload: payload, updatedAt: Date(), deleted: false)
+
+        let result = await applier.apply([change], expectedUserId: ownerID)
+
+        let patched = try #require(await books.book(bookID))
+        #expect(result.applied == 1)
+        #expect(patched.title == "After")
+        #expect(patched.fileURL == local.fileURL)
+        #expect(patched.formatType == local.formatType)
+        #expect(patched.openedAt == local.openedAt)
+    }
+
+    private enum Issue269TestFailure: Error { case unexpectedMaterialization, ownerChanged }
 
     private func positionChange(_ position: Position, at: Date) throws -> SyncChange {
         let payload = try SyncPayloadCodec.encodePosition(position)
@@ -501,10 +1033,12 @@ struct ChangeApplierConflictTests {
         #expect(result.applied == 1)
         let stored = await highlightStore.snapshot()
         #expect(stored.isEmpty)
-        let forgotten = await metadata.forgotten()
-        #expect(forgotten.count == 1)
-        #expect(forgotten[0].0 == local.id)
-        #expect(forgotten[0].1 == .highlight)
+        // Remote tombstones retain a clean metadata barrier so an older
+        // cursor cannot resurrect the deleted highlight.
+        let acknowledged = await metadata.acknowledgedTombstones()
+        #expect(acknowledged.count == 1)
+        #expect(acknowledged[0].0 == local.id)
+        #expect(acknowledged[0].1 == .highlight)
     }
 
     @Test("Book: deleted=true tombstone → bookStore.delete + retained metadata barrier")
@@ -546,6 +1080,65 @@ struct ChangeApplierConflictTests {
         #expect(acknowledged.first?.0 == book.id)
         #expect(acknowledged.first?.1 == .book)
     }
+
+    @Test("verified inbound Book is retried until its fingerprint is persisted")
+    func inboundBookRetriesUntilFingerprintIsPersisted() async throws {
+        let ownerID = UUID()
+        let bookID = UUID()
+        let digest = String(repeating: "a", count: 64)
+        let remote = Book(id: bookID, userId: ownerID, title: "Remote", formatType: .epub, fileURL: "books/remote.epub")
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: bookID,
+            payload: try SyncPayloadCodec.encodeBook(remote, r2Key: "books/remote.epub", fileHash: digest, fileSize: 8),
+            updatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            deleted: false
+        )
+        let managed = Book(id: bookID, userId: ownerID, title: "Remote", formatType: .epub, fileURL: "books/managed.epub")
+        let fingerprint = BookFileFingerprint(
+            bookID: bookID,
+            ownerID: ownerID,
+            sha256: digest,
+            version: ManagedFileVersion(byteCount: 8, modificationDate: Date(timeIntervalSince1970: 1_800_000_000), fileIdentifier: "managed", materializationRevision: UUID())
+        )
+        let verified = VerifiedDownloadedBook(book: managed, fingerprint: fingerprint)
+        let persistence = FingerprintPersistProbe(answers: [false, true])
+        let bookStore = StubBookStore()
+        let metadata = StubMetadata()
+        let applier = ChangeApplier(
+            bookStore: bookStore,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: metadata,
+            currentUserId: { ownerID },
+            bookMaterializer: { _, _, remoteFile in
+                guard remoteFile?.sha256 == digest, remoteFile?.byteCount == 8 else {
+                    throw SwiftDataTestFailure.invalidRemoteMetadata
+                }
+                return verified
+            },
+            bookFingerprintPersister: { _, candidate in
+                guard candidate == fingerprint else { return false }
+                return await persistence.persist()
+            }
+        )
+
+        let first = await applier.apply([change], expectedUserId: ownerID)
+        #expect(first.applied == 0)
+        #expect(!first.errors.isEmpty)
+        #expect(await bookStore.count() == 1)
+        #expect((await metadata.cleaned()).isEmpty)
+
+        let retry = await applier.apply([change], expectedUserId: ownerID)
+        #expect(retry.applied == 1)
+        #expect(retry.errors.isEmpty)
+        #expect(await bookStore.count() == 1)
+        #expect((await metadata.cleaned()).count == 1)
+        #expect(await persistence.calls == 2)
+    }
+
+    private enum SwiftDataTestFailure: Error { case invalidRemoteMetadata }
 
     @Test("Book: remote tombstone wins over a stale local live mutation")
     func remoteBookDeleteClearsStaleDirtyLocalCopy() async throws {

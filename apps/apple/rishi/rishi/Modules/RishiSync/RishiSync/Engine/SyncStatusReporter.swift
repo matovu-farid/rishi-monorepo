@@ -29,7 +29,8 @@ struct SyncStatusReporter: Sendable {
             lastSyncedAt: now.lastSyncedAt,
             pendingCount: now.pendingCount,
             isRunning: running,
-            lastError: running ? nil : now.lastError
+            lastError: running ? nil : now.lastError,
+            lastCompletedWaveID: now.lastCompletedWaveID
         ))
     }
 
@@ -41,7 +42,8 @@ struct SyncStatusReporter: Sendable {
             lastSyncedAt: now.lastSyncedAt,
             pendingCount: count,
             isRunning: now.isRunning,
-            lastError: now.lastError
+            lastError: now.lastError,
+            lastCompletedWaveID: now.lastCompletedWaveID
         ))
     }
 
@@ -53,7 +55,8 @@ struct SyncStatusReporter: Sendable {
             lastSyncedAt: error == nil ? (completedAt ?? Date()) : previous.lastSyncedAt,
             pendingCount: pending,
             isRunning: false,
-            lastError: error
+            lastError: error,
+            lastCompletedWaveID: previous.lastCompletedWaveID
         ))
     }
 }

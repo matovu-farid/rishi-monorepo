@@ -11,10 +11,9 @@ import UIKit
 /// SwiftUI's first-party `.fileImporter(...)` is available but the UIKit
 /// path is preferred per FEATURES.md "Files app integration" because:
 ///   - returns multiple URLs in one call (multi-select)
-///   - explicit `asCopy: true` semantics — the system hands us a URL into a
-///     temp copy in the app's container, so we never have to maintain a
-///     long-lived security-scoped resource on the user's original file
-///     (PITFALLS Pitfall 36 / file-import gotcha).
+///   - `asCopy: false` so registration can read the selected original while
+///     the app materializes its managed copy in the background. The import
+///     coordinator retains the security-scoped source for that lifetime.
 public struct DocumentPickerView: UIViewControllerRepresentable {
 
     public let onPicked: @MainActor ([URL]) -> Void
@@ -32,7 +31,7 @@ public struct DocumentPickerView: UIViewControllerRepresentable {
             .epub,
             .pdf,
         ]
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
         picker.allowsMultipleSelection = true
         picker.shouldShowFileExtensions = true
         picker.delegate = context.coordinator

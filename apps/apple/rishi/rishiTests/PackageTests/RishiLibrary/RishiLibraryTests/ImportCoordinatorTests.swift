@@ -16,6 +16,61 @@ struct ImportCoordinatorTests {
         }
     }
 
+    private actor BlockingImportStorage: BookImportingStorage {
+        private let book: Book
+        private var started = false
+        private var startWaiters: [CheckedContinuation<Void, Never>] = []
+        private var released = false
+        private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+        private(set) var importCount = 0
+
+        init(book: Book) { self.book = book }
+
+        func importBook(from sourceURL: URL, ownerId: UserID, expectedContentHash: String?) async throws -> Book {
+            importCount += 1
+            started = true
+            let pending = startWaiters
+            startWaiters.removeAll()
+            pending.forEach { $0.resume() }
+            if !released {
+                await withCheckedContinuation { releaseWaiters.append($0) }
+            }
+            return book
+        }
+
+        func waitUntilStarted() async {
+            if started { return }
+            await withCheckedContinuation { startWaiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            let pending = releaseWaiters
+            releaseWaiters.removeAll()
+            pending.forEach { $0.resume() }
+        }
+    }
+
+    private actor GenerationRecordingStorage: BookImportingStorage {
+        private let book: Book
+        private(set) var receivedGeneration: UInt64?
+
+        init(book: Book) { self.book = book }
+
+        func importBook(from sourceURL: URL, ownerId: UserID, expectedContentHash: String?) async throws -> Book { book }
+
+        func importBook(from sourceURL: URL, ownerId: UserID, expectedContentHash: String?, accountGeneration: UInt64) async throws -> Book {
+            receivedGeneration = accountGeneration
+            return book
+        }
+    }
+
+    private actor DrainCompletion {
+        private var completed = false
+        func mark() { completed = true }
+        func value() -> Bool { completed }
+    }
+
     static func makeRoot() -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ImportCoordinator-\(UUID().uuidString)", isDirectory: true)
@@ -82,6 +137,65 @@ struct ImportCoordinatorTests {
         }
 
         #expect(await recorder.ids == [importedID])
+    }
+
+    @Test("account drain waits for a picker copy and rejects later imports")
+    func accountFenceWaitsForPickerImport() async throws {
+        let userID = UUID()
+        let book = Book(userId: userID, title: "Blocked", formatType: .pdf, fileURL: "Books/blocked.pdf")
+        let storage = BlockingImportStorage(book: book)
+        let registry = BookSourceRegistry(currentGeneration: { 31 }, currentOwnerID: { userID }, managedURL: { _ in nil })
+        let lifecycle = BookImportLifecycle(sourceRegistry: registry, currentAccountGeneration: { 31 })
+        let root = Self.makeRoot()
+        let source = root.appendingPathComponent("blocked.pdf")
+        try Data("selected source".utf8).write(to: source)
+        let coordinator = ImportCoordinator(
+            storage: storage,
+            currentUserId: { userID },
+            lifecycle: lifecycle
+        )
+
+        let importTask = Task { await coordinator.importBooks([source]) }
+        await storage.waitUntilStarted()
+        lifecycle.fenceAccount(ownerID: userID, generation: 31)
+        let drained = DrainCompletion()
+        let drainTask = Task {
+            await lifecycle.drainAccount(userID, generation: 31)
+            await drained.mark()
+        }
+        await Task.yield()
+        #expect(await !drained.value())
+        #expect(lifecycle.admitOwnerOperation(ownerID: userID, generation: 31) == nil)
+        #expect(lifecycle.admitOwnerOperation(ownerID: userID, generation: 32) == nil)
+
+        let rejected = await coordinator.importBooks([source])
+        #expect(rejected.first?.error == "account_revoked")
+        #expect(await storage.importCount == 1)
+
+        await storage.release()
+        #expect((await importTask.value).first?.book?.id == book.id)
+        await drainTask.value
+        #expect(await drained.value())
+    }
+
+    @Test("picker storage receives the generation admitted before import starts")
+    func forwardsCapturedGeneration() async throws {
+        let userID = UUID()
+        let generation: UInt64 = 41
+        let book = Book(userId: userID, title: "Captured", formatType: .pdf, fileURL: "Books/captured.pdf")
+        let storage = GenerationRecordingStorage(book: book)
+        let registry = BookSourceRegistry(currentGeneration: { generation }, currentOwnerID: { userID }, managedURL: { _ in nil })
+        let lifecycle = BookImportLifecycle(sourceRegistry: registry, currentAccountGeneration: { generation })
+        let coordinator = ImportCoordinator(storage: storage, currentUserId: { userID }, lifecycle: lifecycle)
+        let root = Self.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("captured.pdf")
+        try Data("selected".utf8).write(to: source)
+
+        let outcomes = await coordinator.importBooks([source])
+
+        #expect(outcomes.first?.book?.id == book.id)
+        #expect(await storage.receivedGeneration == generation)
     }
 
     @Test("Missing user yields outcomes flagged 'no_user' with no DB writes")

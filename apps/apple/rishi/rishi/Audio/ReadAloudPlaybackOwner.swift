@@ -19,6 +19,7 @@ protocol ReadAloudPlaybackOwnering: AnyObject {
     func install(controller: ReadAloudController, host: UUID) async
     func release(host: UUID) async
     func stop(host: UUID) async
+    func stop(reader: ReaderViewModel) async -> Bool
     func stopForAccountChange() async
     func setVolume(_ volume: Float) async
 }
@@ -57,6 +58,7 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
     private(set) var activeController: ReadAloudController?
     private(set) var activeHost: UUID?
     private var activeReader: ReaderViewModel?
+    private var sourceInvalidationTask: Task<Void, Never>?
     private(set) var watchBookTitle: String?
     private var startGeneration: UInt64 = 0
     private(set) var generation: UInt64 = 0
@@ -142,6 +144,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         playbackHost = host
         synchronizeRemoteCommandPolicy()
         activeReader = nil
+        sourceInvalidationTask?.cancel()
+        sourceInvalidationTask = nil
         watchBookTitle = nil
         generation &+= 1
     }
@@ -201,6 +205,7 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
 
         activeController = controller
         activeReader = reader
+        observeSourceInvalidation(for: reader)
         activeHost = host
         playbackHost = host
         synchronizeRemoteCommandPolicy()
@@ -231,6 +236,7 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
                   activeController === controller else { return false }
             activeController = previousController
             activeReader = previousReader
+            observeSourceInvalidation(for: previousReader)
             activeHost = previousHost
             playbackHost = previousPlaybackHost
             synchronizeRemoteCommandPolicy()
@@ -271,6 +277,19 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
             guard let self, self.activeHost == host else { return }
             await self.stopAndClear()
             self.generation &+= 1
+        }
+    }
+
+    /// Stops only the playback session that still retains this reader. The
+    /// active reader identity remains authoritative after its scene host has
+    /// detached, so source revocation can drain old audio without affecting a
+    /// newer reader or playback session.
+    func stop(reader: ReaderViewModel) async -> Bool {
+        await lifecycleQueue.enqueue { [weak self] in
+            guard let self, self.activeReader === reader else { return false }
+            await self.stopAndClear()
+            self.generation &+= 1
+            return true
         }
     }
 
@@ -338,6 +357,8 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
 
     private func stopAndClear() async {
         startGeneration &+= 1
+        sourceInvalidationTask?.cancel()
+        sourceInvalidationTask = nil
         remotePlaybackSession?.revoke()
         remotePlaybackSession = nil
         guard let activeController else {
@@ -360,5 +381,18 @@ final class ReadAloudPlaybackOwner: ReadAloudPlaybackOwnering {
         playbackHost = nil
         synchronizeRemoteCommandPolicy()
         watchBookTitle = nil
+    }
+
+    private func observeSourceInvalidation(for reader: ReaderViewModel?) {
+        sourceInvalidationTask?.cancel()
+        sourceInvalidationTask = nil
+        guard let reader, let invalidation = reader.sourceInvalidation else { return }
+        sourceInvalidationTask = Task { @MainActor [weak self, weak reader] in
+            for await _ in invalidation {
+                guard !Task.isCancelled, let self, let reader else { return }
+                _ = await self.stop(reader: reader)
+                return
+            }
+        }
     }
 }

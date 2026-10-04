@@ -293,6 +293,10 @@ struct rishiApp: App {
         reason: EntitlementRefreshCoordinator.RefreshReason
     ) async {
         guard deps.services != nil else { return }
+        if case .launch = reason {
+            await deps.refreshEntitlementsAtLaunch()
+            return
+        }
         await deps.services!.billing.entitlementRefreshCoordinator.refreshIfSignedIn(reason: reason)
     }
 }

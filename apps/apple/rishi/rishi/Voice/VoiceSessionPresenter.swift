@@ -373,8 +373,20 @@ final class VoiceSessionPresenter {
         initialQuote: String? = nil,
         bookContext: BookContextSnapshot? = nil,
         currentPageProvider: CurrentPageContextProvider? = nil,
-        readerSessionIdentity: ReaderSessionIdentity? = nil
+        readerSessionIdentity: ReaderSessionIdentity? = nil,
+        readerConversationLookup: ConversationLookup? = nil,
+        readerMessageStore: (any MessageStore)? = nil,
+        readerDirtyHook: (any VoiceTranscriptDirtyHook)? = nil,
+        readerChapterIndexCoordinatorFactory: RealtimeVoiceSession.ChapterIndexCoordinatorFactory? = nil,
+        readerChapterIndexContentVersionProvider: (@Sendable (BookID) async -> String?)? = nil,
+        disableChapterIndex: Bool = false
     ) async -> VoiceStartOutcome {
+
+        let effectiveConversationLookup = readerConversationLookup ?? conversationLookup
+        let effectiveMessageStore = readerMessageStore ?? messageStore
+        let effectiveDirtyHook = readerDirtyHook ?? dirtyHook
+        let effectiveChapterCoordinatorFactory = disableChapterIndex ? nil : (readerChapterIndexCoordinatorFactory ?? chapterIndexCoordinatorFactory)
+        let effectiveChapterContentVersionProvider = disableChapterIndex ? nil : (readerChapterIndexContentVersionProvider ?? chapterIndexContentVersionProvider)
 
         guard !isStarting else { return .alreadyStarting }
         guard !isPresenting else { return .alreadyLive }
@@ -544,7 +556,7 @@ final class VoiceSessionPresenter {
         }
 
         let conversationTask = Task { @MainActor in
-            try await conversationLookup.findOrCreate(userId: userId, bookId: bookId)
+            try await effectiveConversationLookup.findOrCreate(userId: userId, bookId: bookId)
         }
         defer { conversationTask.cancel() }
         startupTrace.mark("conversation_lookup_started")
@@ -576,9 +588,9 @@ final class VoiceSessionPresenter {
         }
 
         let chapterDependenciesProvider: (@Sendable (BookID) async -> (ChapterIndexCoordinator?, String?))? =
-            chapterIndexCoordinatorFactory.map { coordinatorFactory in
+            effectiveChapterCoordinatorFactory.map { coordinatorFactory in
                 { @Sendable bookId in
-                    let contentVersion = await self.chapterIndexContentVersionProvider?(bookId)
+                    let contentVersion = await effectiveChapterContentVersionProvider?(bookId)
                     let coordinator: ChapterIndexCoordinator? = if let contentVersion {
                         await coordinatorFactory(bookId, contentVersion)
                     } else {
@@ -657,8 +669,8 @@ final class VoiceSessionPresenter {
             },
             responderFactory: responderFactory,
             chapterIndexResponderFactory: responderFactory == nil ? effectiveChapterIndexResponderFactory : nil,
-            chapterIndexCoordinatorFactory: chapterIndexCoordinatorFactory,
-            chapterIndexContentVersionProvider: chapterIndexContentVersionProvider,
+            chapterIndexCoordinatorFactory: effectiveChapterCoordinatorFactory,
+            chapterIndexContentVersionProvider: effectiveChapterContentVersionProvider,
             currentPageProvider: currentPageProvider,
             readerSessionIdentity: readerSessionIdentity,
             embedderPrewarm: embedderPrewarm
@@ -775,8 +787,8 @@ final class VoiceSessionPresenter {
             // transcriptStream() is single-consumer — ping activity from the
             // bridge (sole consumer) rather than a parallel stream reader.
             let bridge = VoiceTranscriptBridge(
-                messageStore: messageStore,
-                dirtyHook: dirtyHook,
+                messageStore: effectiveMessageStore,
+                dirtyHook: effectiveDirtyHook,
                 onActivity: {
                     await session.notifyVoiceActivity()
                 }

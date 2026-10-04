@@ -32,6 +32,10 @@ public final class ChangeApplier: Sendable {
         var description: String { "conditional sync acknowledgement failed" }
     }
 
+    private struct BookRetirementRecoveryRequired: Error, CustomStringConvertible {
+        var description: String { "book remains listed after retirement but source recovery is required; remote tombstone remains unacknowledged" }
+    }
+
     public struct ApplyResult: Sendable, Equatable {
         public var applied: Int = 0
         public var skipped: Int = 0
@@ -48,9 +52,21 @@ public final class ChangeApplier: Sendable {
     private let metadataStore: any SyncMetadataStore
     private let currentUserId: @Sendable () async -> UserID?
     private let accountIsActive: @Sendable () async -> Bool
-    private let bookMaterializer: (@Sendable (Book, String?) async throws -> Book)?
+    private let bookMaterializer: (@Sendable (Book, String?, InboundBookFileMetadata?) async throws -> VerifiedDownloadedBook)?
+    private let bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint) async -> Bool)?
     private let bookMaterialCleanup: (@Sendable (Book) async throws -> Void)?
     private let bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)?
+    private let prepareBookMaterialCleanup: (@Sendable (BookID, UserID) async throws -> (@Sendable () async throws -> Void))?
+    private let withBookDeletionAdmission: (@Sendable (UserID, @Sendable (UInt64) async throws -> Void) async throws -> Void)?
+    private let restoreBookAfterFailedRetirement: (@Sendable (Book, UInt64?) async -> Bool)?
+    private let scheduleBookRecovery: (@Sendable (UserID, UInt64) async -> Void)?
+    private let retireAndDrainBook: (@Sendable (BookID) async throws -> Void)?
+    private let retireAndDrainBookForGeneration: (@Sendable (BookID, UserID, UInt64) async throws -> Void)?
+    private let activateBook: (@Sendable (BookID) async -> Void)?
+    private let managedFingerprintLookup: (@Sendable (Book) async -> BookFileFingerprint?)?
+    private let bookContentDigestLookup: (@Sendable (Book) async -> String?)?
+    private let hasPendingBookMaterialization: (@Sendable (Book) async -> Bool)?
+    private let bookServerAcceptancePersister: (@Sendable (Book, BookFileFingerprint, BookServerAcceptance) async -> Bool)?
 
     public init(
         bookStore: any BookStore,
@@ -61,9 +77,21 @@ public final class ChangeApplier: Sendable {
         metadataStore: any SyncMetadataStore,
         currentUserId: @escaping @Sendable () async -> UserID? = { nil },
         accountIsActive: @escaping @Sendable () async -> Bool = { true },
-        bookMaterializer: (@Sendable (Book, String?) async throws -> Book)? = nil,
+        bookMaterializer: (@Sendable (Book, String?, InboundBookFileMetadata?) async throws -> VerifiedDownloadedBook)? = nil,
+        bookFingerprintPersister: (@Sendable (Book, BookFileFingerprint) async -> Bool)? = nil,
         bookMaterialCleanup: (@Sendable (Book) async throws -> Void)? = nil,
-        bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)? = nil
+        bookMaterialCleanupByID: (@Sendable (BookID) async throws -> Void)? = nil,
+        prepareBookMaterialCleanup: (@Sendable (BookID, UserID) async throws -> (@Sendable () async throws -> Void))? = nil,
+        withBookDeletionAdmission: (@Sendable (UserID, @Sendable (UInt64) async throws -> Void) async throws -> Void)? = nil,
+        restoreBookAfterFailedRetirement: (@Sendable (Book, UInt64?) async -> Bool)? = nil,
+        scheduleBookRecovery: (@Sendable (UserID, UInt64) async -> Void)? = nil,
+        retireAndDrainBook: (@Sendable (BookID) async throws -> Void)? = nil,
+        retireAndDrainBookForGeneration: (@Sendable (BookID, UserID, UInt64) async throws -> Void)? = nil,
+        activateBook: (@Sendable (BookID) async -> Void)? = nil,
+        managedFingerprintLookup: (@Sendable (Book) async -> BookFileFingerprint?)? = nil,
+        bookContentDigestLookup: (@Sendable (Book) async -> String?)? = nil,
+        hasPendingBookMaterialization: (@Sendable (Book) async -> Bool)? = nil,
+        bookServerAcceptancePersister: (@Sendable (Book, BookFileFingerprint, BookServerAcceptance) async -> Bool)? = nil
     ) {
         self.bookStore = bookStore
         self.positionStore = positionStore
@@ -74,8 +102,20 @@ public final class ChangeApplier: Sendable {
         self.currentUserId = currentUserId
         self.accountIsActive = accountIsActive
         self.bookMaterializer = bookMaterializer
+        self.bookFingerprintPersister = bookFingerprintPersister
         self.bookMaterialCleanup = bookMaterialCleanup
         self.bookMaterialCleanupByID = bookMaterialCleanupByID
+        self.prepareBookMaterialCleanup = prepareBookMaterialCleanup
+        self.withBookDeletionAdmission = withBookDeletionAdmission
+        self.restoreBookAfterFailedRetirement = restoreBookAfterFailedRetirement
+        self.scheduleBookRecovery = scheduleBookRecovery
+        self.retireAndDrainBook = retireAndDrainBook
+        self.retireAndDrainBookForGeneration = retireAndDrainBookForGeneration
+        self.activateBook = activateBook
+        self.managedFingerprintLookup = managedFingerprintLookup
+        self.bookContentDigestLookup = bookContentDigestLookup
+        self.hasPendingBookMaterialization = hasPendingBookMaterialization
+        self.bookServerAcceptancePersister = bookServerAcceptancePersister
     }
 
     public func apply(_ changes: [SyncChange], expectedUserId: UserID? = nil) async -> ApplyResult {
@@ -336,37 +376,31 @@ public final class ChangeApplier: Sendable {
         let entityId = change.id
         let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: entityId, kind: .book)
         if change.deleted {
-            // A server tombstone is authoritative for this closed identity.
-            // If this device imported the same deterministic ID before it
-            // learned about the remote delete, do not leave that stale live
-            // row dirty forever; remove it and retain the local barrier.
-            let expectedLocal = try await bookStore.book(change.id)
-            try await ensureAccount(expectedUserId)
-            guard try await bookStore.deleteIfUnchanged(change.id, matching: expectedLocal) else {
-                try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
-                throw ConditionalAcknowledgementFailed()
+            // Resolve owner only to acquire admission; the canonical row is
+            // re-read after admission before lifecycle retirement begins.
+            let candidate = try await bookStore.book(change.id)
+            let deletionOwner = candidate?.userId ?? expectedUserId
+            if let deletionOwner, let withBookDeletionAdmission {
+                try await withBookDeletionAdmission(deletionOwner) { generation in
+                    try await self.applyBookTombstone(
+                        change,
+                        expectedDirtyAt: expectedDirtyAt,
+                        expectedUserId: expectedUserId,
+                        admittedOwnerID: deletionOwner,
+                        admittedGeneration: generation
+                    )
+                }
+            } else {
+                try await applyBookTombstone(
+                    change,
+                    expectedDirtyAt: expectedDirtyAt,
+                    expectedUserId: expectedUserId,
+                    admittedOwnerID: deletionOwner,
+                    admittedGeneration: nil
+                )
             }
             searchableDataApplied = true
-            // Clean only after the conditional row delete succeeds. If this
-            // fails, the next retry still addresses material by ID even when
-            // the row is already gone, and acknowledgement remains blocked.
-            if let bookMaterialCleanupByID {
-                try await bookMaterialCleanupByID(change.id)
-            } else if let expectedLocal, let bookMaterialCleanup {
-                try await bookMaterialCleanup(expectedLocal)
-            }
-            try await ensureAccount(expectedUserId)
-            guard try await metadataStore.acknowledgeTombstoneIfUnchanged(
-                entityId: change.id,
-                kind: .book,
-                expectedDirtyAt: expectedDirtyAt,
-                lastSyncedAt: change.updatedAt,
-                remoteEtag: nil
-            ) else {
-                throw ConditionalAcknowledgementFailed()
-            }
             result.applied += 1
-            searchableDataApplied = true
             return
         }
         if expectedDirtyAt != nil {
@@ -379,17 +413,12 @@ public final class ChangeApplier: Sendable {
             result.conflicts += 1
             return
         }
-        let remote = try SyncPayloadCodec.decodeBook(
+        let decoded = try SyncPayloadCodec.decodeBookPayload(
             change.payload,
             fallbackAddedAt: change.updatedAt,
             fallbackUserId: await currentUserId() ?? UUID()
         )
-        let r2Key = try SyncPayloadCodec.decodeBookR2Key(change.payload)
-        let materialized = if let bookMaterializer, r2Key != nil {
-            try await bookMaterializer(remote, r2Key)
-        } else {
-            remote
-        }
+        let remote = decoded.book
         let embeddedPosition = try SyncPayloadCodec.decodeBookPosition(
             change.payload,
             bookId: remote.id,
@@ -411,12 +440,105 @@ public final class ChangeApplier: Sendable {
                 return
             }
         }
+        let r2Key = try SyncPayloadCodec.decodeBookR2Key(change.payload)
+        let existingLocal = try await bookStore.book(change.id)
+        let activeOwnerID = await currentUserId()
+        if let existingLocal, existingLocal.userId != activeOwnerID {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
+            result.conflicts += 1
+            return
+        }
+        let existingFingerprint: BookFileFingerprint? = if let existingLocal, let managedFingerprintLookup {
+            await managedFingerprintLookup(existingLocal)
+        } else {
+            nil
+        }
+        let existingDigest: String? = if let existingLocal, let bookContentDigestLookup {
+            await bookContentDigestLookup(existingLocal)
+        } else {
+            existingFingerprint?.sha256
+        }
+        if let expectedSHA = decoded.remoteFile.sha256,
+           let existingDigest,
+           expectedSHA.caseInsensitiveCompare(existingDigest) != .orderedSame {
+            try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
+            result.conflicts += 1
+            return
+        }
+        // Existing local bytes are never replaced by a metadata pull. For
+        // source-readable imports, a missing fingerprint means the local
+        // attempt still owns its canonical destination; only a later verified
+        // download can establish managed readiness.
+        let hasPendingImport = if let existingLocal, let hasPendingBookMaterialization {
+            await hasPendingBookMaterialization(existingLocal)
+        } else {
+            false
+        }
+        let shouldDownload = existingLocal == nil || (existingFingerprint == nil && !hasPendingImport)
+        if shouldDownload, bookMaterializer != nil, r2Key != nil {
+            try await retireAndDrainBook?(change.id)
+        }
+        let verifiedDownload: VerifiedDownloadedBook? = if shouldDownload, let bookMaterializer, r2Key != nil {
+            try await bookMaterializer(remote, r2Key, decoded.remoteFile)
+        } else {
+            nil
+        }
+        let localPathPreservingPatch: Book = if let existingLocal {
+            Book(
+                id: remote.id,
+                userId: existingLocal.userId,
+                title: remote.title,
+                author: remote.author,
+                formatType: existingLocal.formatType,
+                addedAt: existingLocal.addedAt,
+                openedAt: existingLocal.openedAt,
+                fileURL: existingLocal.fileURL,
+                coverPath: existingLocal.coverPath,
+                positionId: existingLocal.positionId,
+                conversationId: existingLocal.conversationId,
+                chapterIndexContentVersion: existingLocal.chapterIndexContentVersion
+            )
+        } else {
+            remote
+        }
+        let materialized = verifiedDownload?.book ?? localPathPreservingPatch
         try await ensureAccount(expectedUserId)
         guard try await metadataStore.dirtyAt(entityId: entityId, kind: .book) == expectedDirtyAt else {
             try await metadataStore.recordRemoteSeen(entityId: entityId, kind: .book, updatedAt: change.updatedAt)
             throw ConditionalAcknowledgementFailed()
         }
         try await bookStore.upsert(materialized)
+        if let verifiedDownload {
+            guard let bookFingerprintPersister,
+                  await bookFingerprintPersister(materialized, verifiedDownload.fingerprint) else {
+                throw ConditionalAcknowledgementFailed()
+            }
+            if let expectedHash = decoded.remoteFile.sha256,
+               expectedHash.caseInsensitiveCompare(verifiedDownload.fingerprint.sha256) == .orderedSame,
+               let operationID = change.operationId.flatMap(UUID.init(uuidString:)),
+               let bookServerAcceptancePersister {
+                let acceptance = BookServerAcceptance(
+                    sha256: verifiedDownload.fingerprint.sha256,
+                    acceptedOperationID: operationID,
+                    acceptedAt: change.updatedAt
+                )
+                _ = await bookServerAcceptancePersister(materialized, verifiedDownload.fingerprint, acceptance)
+            }
+        } else if let expectedHash = decoded.remoteFile.sha256,
+                  let existingFingerprint,
+                  expectedHash.caseInsensitiveCompare(existingFingerprint.sha256) == .orderedSame,
+                  let operationID = change.operationId.flatMap(UUID.init(uuidString:)),
+                  let bookServerAcceptancePersister {
+            let acceptance = BookServerAcceptance(
+                sha256: existingFingerprint.sha256,
+                acceptedOperationID: operationID,
+                acceptedAt: change.updatedAt
+            )
+            _ = await bookServerAcceptancePersister(materialized, existingFingerprint, acceptance)
+        }
+        if verifiedDownload != nil, let activateBook {
+            await activateBook(change.id)
+        }
         searchableDataApplied = true
         if let position = embeddedPosition {
             if let local = try await positionStore.position(for: position.bookId),
@@ -453,6 +575,103 @@ public final class ChangeApplier: Sendable {
         // NOTE: File bytes pull-side is deferred to 07-04. The engine sees
         // the new book row and schedules a /api/sync/download-url + GET into
         // BookFileStorage on the next foreground sweep.
+    }
+
+    private func applyBookTombstone(
+        _ change: SyncChange,
+        expectedDirtyAt: Date?,
+        expectedUserId: UserID?,
+        admittedOwnerID: UserID?,
+        admittedGeneration: UInt64?
+    ) async throws {
+        try await ensureAccount(expectedUserId)
+        // Hold the admitted owner operation before fencing/draining this
+        // book. Account transition drains wait for the lease through cleanup
+        // and tombstone acknowledgement.
+        if let admittedOwnerID, let admittedGeneration, let retireAndDrainBookForGeneration {
+            try await retireAndDrainBookForGeneration(change.id, admittedOwnerID, admittedGeneration)
+        } else {
+            try await retireAndDrainBook?(change.id)
+        }
+        let expectedLocal: Book?
+        do {
+            expectedLocal = try await bookStore.book(change.id)
+        } catch {
+            _ = await restoreIfBookStillLive(change.id, generation: admittedGeneration)
+            throw error
+        }
+        if let expectedLocal, expectedLocal.userId != admittedOwnerID {
+            throw ConditionalAcknowledgementFailed()
+        }
+        if let expectedUserId, let admittedOwnerID, expectedUserId != admittedOwnerID {
+            throw AccountSwitched()
+        }
+        try await ensureAccount(expectedUserId)
+
+        // Capture the owner-bound attempt cleanup before the row disappears,
+        // but defer all filesystem and pending-record deletion until the row
+        // CAS succeeds. A retry can recapture by ID and admitted owner.
+        let cleanupOwnerID = expectedLocal?.userId ?? admittedOwnerID
+        let cleanupAction: (@Sendable () async throws -> Void)?
+        do {
+            if let prepareBookMaterialCleanup, let cleanupOwnerID {
+                cleanupAction = try await prepareBookMaterialCleanup(change.id, cleanupOwnerID)
+            } else {
+                cleanupAction = nil
+            }
+            try await ensureAccount(expectedUserId)
+            guard try await bookStore.deleteIfUnchanged(change.id, matching: expectedLocal) else {
+                try await ensureAccount(expectedUserId)
+                try await metadataStore.recordRemoteSeen(entityId: change.id, kind: .book, updatedAt: change.updatedAt)
+                throw ConditionalAcknowledgementFailed()
+            }
+        } catch {
+            // If CAS did not remove the row, restore through the coordinator,
+            // which rechecks the canonical row and tombstone before reopening.
+            if let _ = try? await bookStore.book(change.id),
+               await restoreIfBookStillLive(change.id, generation: admittedGeneration) == false {
+                throw BookRetirementRecoveryRequired()
+            }
+            throw error
+        }
+
+        if let cleanupAction {
+            try await cleanupAction()
+        } else if let expectedLocal, let bookMaterialCleanup {
+            try await bookMaterialCleanup(expectedLocal)
+        } else if let bookMaterialCleanupByID {
+            try await bookMaterialCleanupByID(change.id)
+        }
+        try await ensureAccount(expectedUserId)
+        guard try await metadataStore.acknowledgeTombstoneIfUnchanged(
+            entityId: change.id,
+            kind: .book,
+            expectedDirtyAt: expectedDirtyAt,
+            lastSyncedAt: change.updatedAt,
+            remoteEtag: nil
+        ) else {
+            throw ConditionalAcknowledgementFailed()
+        }
+    }
+
+    private func restoreIfBookStillLive(_ bookID: BookID, generation: UInt64?) async -> Bool? {
+        let liveBook: Book
+        do {
+            guard let value = try await bookStore.book(bookID) else { return nil }
+            liveBook = value
+        } catch {
+            return nil
+        }
+        if let restoreBookAfterFailedRetirement {
+            let restored = await restoreBookAfterFailedRetirement(liveBook, generation)
+            if !restored, let generation { await scheduleBookRecovery?(liveBook.userId, generation) }
+            return restored
+        } else {
+            await activateBook?(bookID)
+            let restored = activateBook != nil
+            if !restored, let generation { await scheduleBookRecovery?(liveBook.userId, generation) }
+            return restored
+        }
     }
 
     private func ensureAccount(_ expectedUserId: UserID?) async throws {
