@@ -22,6 +22,10 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
     }
 
     public func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration {
+        try await reserveRegistration(book: book, job: job, candidate: candidate, excludedBookIDs: [])
+    }
+
+    public func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?, excludedBookIDs: Set<BookID>) async throws -> BookRegistration {
         do {
         return try await dbStore.write { context in
             guard job.token.bookID == book.id, job.token.ownerID == book.userId,
@@ -32,8 +36,14 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             }
             try Self.requireAccount(context, ownerID: book.userId, generation: job.token.accountGeneration)
 
+            guard !excludedBookIDs.contains(book.id) else { throw PersistenceError.bookIDOccupied }
+            if let authorization = try Self.readingEntity(context, bookID: book.id) {
+                let existingBook = try Self.bookEntity(context, id: book.id)
+                guard !authorization.tombstoned, existingBook != nil else { throw PersistenceError.bookIDOccupied }
+            }
+
             if let candidate {
-                guard candidate.ownerID == book.userId, candidate.sha256 == job.expectedSHA256,
+                guard !excludedBookIDs.contains(candidate.bookID), candidate.ownerID == book.userId, candidate.sha256 == job.expectedSHA256,
                       let candidateBook = try Self.bookEntity(context, id: candidate.bookID),
                       candidateBook.userId == candidate.ownerID,
                       let candidateValue = candidateBook.bookValue,
@@ -65,9 +75,18 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
                 return BookRegistration(book: candidateValue, token: nil, disposition: .alreadyManaged)
             }
 
-            if let pending = try Self.pendingEntities(context, ownerID: book.userId).first(where: {
-                $0.expectedSHA256 == job.expectedSHA256
-            }) {
+            var eligiblePending: PendingBookMaterializationEntity?
+            for pending in try Self.pendingEntities(context, ownerID: book.userId) {
+                guard pending.expectedSHA256 == job.expectedSHA256,
+                      !excludedBookIDs.contains(pending.bookID),
+                      let existingBook = try Self.bookEntity(context, id: pending.bookID),
+                      existingBook.userId == book.userId,
+                      let authorization = try Self.readingEntity(context, bookID: pending.bookID),
+                      authorization.ownerID == book.userId, !authorization.revoked, !authorization.tombstoned else { continue }
+                eligiblePending = pending
+                break
+            }
+            if let pending = eligiblePending {
                 guard let existingJob = pending.value,
                       let existingBook = try Self.bookEntity(context, id: pending.bookID),
                       existingBook.userId == book.userId,
@@ -245,16 +264,28 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             try Self.requireLiveBook(context, token: token)
             guard let book = try Self.bookEntity(context, id: token.bookID), book.fileURL == value.destinationRelativePath else { return false }
 
-            if let existing = try Self.fingerprintEntity(context, bookID: token.bookID) {
+            let priorFingerprint = try Self.fingerprintEntity(context, bookID: token.bookID)
+            if let reading = try Self.readingEntity(context, bookID: token.bookID) {
+                guard reading.ownerID == token.ownerID, !reading.revoked, !reading.tombstoned else { return false }
+                if let priorDigest = reading.verifiedContentDigest ?? priorFingerprint?.sha256,
+                   priorDigest.caseInsensitiveCompare(fingerprint.sha256) != .orderedSame {
+                    reading.contentRevision = Self.rotatedReadingRevision(after: reading.contentRevision)
+                }
+                reading.verifiedContentDigest = fingerprint.sha256.lowercased()
+            }
+
+            if let existing = priorFingerprint {
                 guard existing.ownerID == token.ownerID else { throw PersistenceError.fingerprintOwnerMismatch }
+                let acceptance = fingerprint.serverAcceptance
+                    ?? (existing.sha256 == fingerprint.sha256 ? existing.value.serverAcceptance : nil)
                 existing.sha256 = fingerprint.sha256
                 existing.byteCount = fingerprint.version.byteCount
                 existing.modificationDate = fingerprint.version.modificationDate
                 existing.fileIdentifier = fingerprint.version.fileIdentifier
                 existing.materializationRevision = fingerprint.version.materializationRevision
-                existing.serverAcceptanceSHA256 = fingerprint.serverAcceptance?.sha256
-                existing.acceptedOperationID = fingerprint.serverAcceptance?.acceptedOperationID
-                existing.acceptedAt = fingerprint.serverAcceptance?.acceptedAt
+                existing.serverAcceptanceSHA256 = acceptance?.sha256
+                existing.acceptedOperationID = acceptance?.acceptedOperationID
+                existing.acceptedAt = acceptance?.acceptedAt
             } else {
                 context.insert(BookFileFingerprintEntity(fingerprint))
             }
@@ -500,6 +531,24 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
         }
     }
 
+    public func pendingMaterializationsForDeletionCleanup(ownerID: UserID) async throws -> [PendingBookMaterialization] {
+        try await dbStore.read { context in
+            try Self.pendingEntities(context, ownerID: ownerID).compactMap { entity in
+                guard let value = entity.value, value.token.ownerID == ownerID,
+                      value.token.bookID == entity.bookID else { return nil }
+                return value
+            }
+        }
+    }
+
+    public func isBookPermanentlyDeleted(bookID: BookID, ownerID: UserID) async throws -> Bool {
+        try await dbStore.read { context in
+            guard let authorization = try Self.readingEntity(context, bookID: bookID),
+                  authorization.ownerID == ownerID else { return false }
+            return authorization.revoked && authorization.tombstoned
+        }
+    }
+
     /// Drops retained attempt metadata only after the caller has removed the
     /// captured managed/staging files. Token CAS preserves a newer retry.
     public func deletePendingMaterializationForDeletionCleanup(
@@ -548,19 +597,26 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
     }
 
     public func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
+        false
+    }
+
+    public func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedGeneration: UInt64, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool {
         try await dbStore.write { context in
             guard fingerprint.version == expectedVersion,
                   let managedFileRootURL, managedFileRootURL.isFileURL,
                   let book = try Self.bookEntity(context, id: fingerprint.bookID),
                   book.userId == fingerprint.ownerID,
                   book.fileURL == expectedRelativePath,
-                  let account = try Self.accountEntity(context, ownerID: fingerprint.ownerID), !account.revoked else { return false }
+                  let account = try Self.accountEntity(context, ownerID: fingerprint.ownerID), !account.revoked,
+                  account.accountGenerationBits == Int64(bitPattern: expectedGeneration) else { return false }
 
             let reading = try Self.readingEntity(context, bookID: fingerprint.bookID)
+            let priorFingerprint = try Self.fingerprintEntity(context, bookID: fingerprint.bookID)
             if let reading {
                 guard reading.ownerID == fingerprint.ownerID,
                       !reading.revoked, !reading.tombstoned,
-                      account.accountGenerationBits == reading.accountGenerationBits else { return false }
+                      account.accountGenerationBits == reading.accountGenerationBits,
+                      reading.accountGenerationBits == Int64(bitPattern: expectedGeneration) else { return false }
             }
 
             let rootPath = managedFileRootURL.standardizedFileURL.path.hasSuffix("/")
@@ -584,18 +640,21 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
                 context.insert(BookReadingAuthorizationEntity(
                     bookID: fingerprint.bookID,
                     ownerID: fingerprint.ownerID,
-                    generation: UInt64(bitPattern: account.accountGenerationBits),
+                    generation: expectedGeneration,
                     contentRevision: expectedVersion.materializationRevision,
                     verifiedContentDigest: fingerprint.sha256.lowercased(),
                     tombstoned: false
                 ))
             } else if let reading {
+                if let priorDigest = reading.verifiedContentDigest ?? priorFingerprint?.sha256,
+                   priorDigest.caseInsensitiveCompare(fingerprint.sha256) != .orderedSame {
+                    reading.contentRevision = Self.rotatedReadingRevision(after: reading.contentRevision)
+                }
                 reading.verifiedContentDigest = fingerprint.sha256.lowercased()
-                reading.contentRevision = expectedVersion.materializationRevision
             }
 
             let acceptance: BookServerAcceptance?
-            if let existing = try Self.fingerprintEntity(context, bookID: fingerprint.bookID),
+            if let existing = priorFingerprint,
                existing.ownerID == fingerprint.ownerID,
                existing.sha256 == fingerprint.sha256 {
                 acceptance = existing.value.serverAcceptance
@@ -630,6 +689,166 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
     /// the locally verified reading authorization still identify this exact
     /// content revision. A late upload response cannot bless a newer file or
     /// a different account generation.
+    public func readingPermit(bookID: BookID, ownerID: UserID, generation: UInt64) async throws -> BookReadingPermit? {
+        try await dbStore.read { context in
+            guard let account = try Self.accountEntity(context, ownerID: ownerID), !account.revoked,
+                  account.accountGenerationBits == Int64(bitPattern: generation),
+                  let book = try Self.bookEntity(context, id: bookID), book.userId == ownerID,
+                  let reading = try Self.readingEntity(context, bookID: bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  reading.accountGenerationBits == Int64(bitPattern: generation) else { return nil }
+            return BookReadingPermit(ownerID: ownerID, accountGeneration: generation, bookID: bookID, contentRevision: reading.contentRevision)
+        }
+    }
+
+    public func readingPermit(
+        forManagedFingerprint expectedFingerprint: BookFileFingerprint,
+        expectedRelativePath: String,
+        generation: UInt64
+    ) async throws -> BookReadingPermit? {
+        try await dbStore.read { context in
+            let ownerID = expectedFingerprint.ownerID
+            let bookID = expectedFingerprint.bookID
+            guard let account = try Self.accountEntity(context, ownerID: ownerID), !account.revoked,
+                  account.accountGenerationBits == Int64(bitPattern: generation),
+                  let book = try Self.bookEntity(context, id: bookID), book.userId == ownerID,
+                  book.fileURL == expectedRelativePath,
+                  !expectedRelativePath.hasPrefix("/"),
+                  !expectedRelativePath.split(separator: "/").contains(".."),
+                  let stored = try Self.fingerprintEntity(context, bookID: bookID),
+                  stored.ownerID == ownerID,
+                  stored.sha256.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  stored.byteCount == expectedFingerprint.version.byteCount,
+                  stored.modificationDate == expectedFingerprint.version.modificationDate,
+                  stored.fileIdentifier == expectedFingerprint.version.fileIdentifier,
+                  stored.materializationRevision == expectedFingerprint.version.materializationRevision,
+                  let reading = try Self.readingEntity(context, bookID: bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  reading.accountGenerationBits == Int64(bitPattern: generation),
+                  reading.verifiedContentDigest?.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame else { return nil }
+
+            if let pending = try Self.pendingEntity(context, bookID: bookID) {
+                guard pending.ownerID == ownerID,
+                      pending.accountGenerationBits == Int64(bitPattern: generation),
+                      Self.readyJob(pending, matches: expectedFingerprint, relativePath: expectedRelativePath) else { return nil }
+            }
+
+            guard let managedFileRootURL, managedFileRootURL.isFileURL else { return nil }
+            let root = managedFileRootURL.standardizedFileURL
+            let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            let managedURL = root.appendingPathComponent(expectedRelativePath).standardizedFileURL
+            guard managedURL.path.hasPrefix(rootPath),
+                  try managedFileVersionInspector.managedFileVersion(
+                    at: managedURL,
+                    materializationRevision: expectedFingerprint.version.materializationRevision
+                  ) == expectedFingerprint.version else { return nil }
+
+            return BookReadingPermit(
+                ownerID: ownerID,
+                accountGeneration: generation,
+                bookID: bookID,
+                contentRevision: reading.contentRevision
+            )
+        }
+    }
+
+    public func recordServerAcceptance(
+        permit: BookReadingPermit,
+        expectedFingerprint: BookFileFingerprint,
+        acceptance: BookServerAcceptance
+    ) async throws -> Bool {
+        try await dbStore.write { context in
+            let bookID = permit.bookID
+            let ownerID = permit.ownerID
+            let expectedGeneration = permit.accountGeneration
+            guard expectedFingerprint.bookID == bookID,
+                  expectedFingerprint.ownerID == ownerID,
+                  acceptance.sha256.count == 64,
+                  acceptance.sha256.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  let account = try Self.accountEntity(context, ownerID: ownerID),
+                  !account.revoked,
+                  account.accountGenerationBits == Int64(bitPattern: expectedGeneration),
+                  let book = try Self.bookEntity(context, id: bookID), book.userId == ownerID,
+                  let reading = try Self.readingEntity(context, bookID: bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  reading.accountGenerationBits == Int64(bitPattern: expectedGeneration),
+                  reading.contentRevision == permit.contentRevision,
+                  reading.verifiedContentDigest?.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  let fingerprint = try Self.fingerprintEntity(context, bookID: bookID),
+                  fingerprint.ownerID == ownerID,
+                  fingerprint.sha256.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  fingerprint.byteCount == expectedFingerprint.version.byteCount,
+                  fingerprint.modificationDate == expectedFingerprint.version.modificationDate,
+                  fingerprint.fileIdentifier == expectedFingerprint.version.fileIdentifier,
+                  fingerprint.materializationRevision == expectedFingerprint.version.materializationRevision else { return false }
+            guard let managedFileRootURL, managedFileRootURL.isFileURL,
+                  !book.fileURL.hasPrefix("/"),
+                  !book.fileURL.split(separator: "/").contains("..") else { return false }
+            let root = managedFileRootURL.standardizedFileURL
+            let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            let managedURL = root.appendingPathComponent(book.fileURL).standardizedFileURL
+            guard managedURL.path.hasPrefix(rootPath),
+                  try managedFileVersionInspector.managedFileVersion(
+                    at: managedURL,
+                    materializationRevision: expectedFingerprint.version.materializationRevision
+                  ) == expectedFingerprint.version else { return false }
+            if let pending = try Self.pendingEntity(context, bookID: bookID) {
+                guard Self.readyJob(pending, matches: expectedFingerprint, relativePath: book.fileURL) else { return false }
+            }
+            fingerprint.serverAcceptanceSHA256 = acceptance.sha256.lowercased()
+            fingerprint.acceptedOperationID = acceptance.acceptedOperationID
+            fingerprint.acceptedAt = acceptance.acceptedAt
+            return true
+        }
+    }
+
+    public func recordServerAcceptance(
+        accountPermit: AccountMutationPermit,
+        expectedFingerprint: BookFileFingerprint,
+        acceptance: BookServerAcceptance
+    ) async throws -> Bool {
+        try await dbStore.write { context in
+            let ownerID = accountPermit.ownerID
+            let generation = accountPermit.accountGeneration
+            let bookID = expectedFingerprint.bookID
+            guard expectedFingerprint.ownerID == ownerID,
+                  acceptance.sha256.count == 64,
+                  acceptance.sha256.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  let account = try Self.accountEntity(context, ownerID: ownerID), !account.revoked,
+                  account.accountGenerationBits == Int64(bitPattern: generation),
+                  let book = try Self.bookEntity(context, id: bookID), book.userId == ownerID,
+                  let reading = try Self.readingEntity(context, bookID: bookID),
+                  reading.ownerID == ownerID, !reading.revoked, !reading.tombstoned,
+                  reading.accountGenerationBits == Int64(bitPattern: generation),
+                  reading.verifiedContentDigest?.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  let fingerprint = try Self.fingerprintEntity(context, bookID: bookID),
+                  fingerprint.ownerID == ownerID,
+                  fingerprint.sha256.caseInsensitiveCompare(expectedFingerprint.sha256) == .orderedSame,
+                  fingerprint.byteCount == expectedFingerprint.version.byteCount,
+                  fingerprint.modificationDate == expectedFingerprint.version.modificationDate,
+                  fingerprint.fileIdentifier == expectedFingerprint.version.fileIdentifier,
+                  fingerprint.materializationRevision == expectedFingerprint.version.materializationRevision,
+                  let managedFileRootURL, managedFileRootURL.isFileURL,
+                  !book.fileURL.hasPrefix("/"),
+                  !book.fileURL.split(separator: "/").contains("..") else { return false }
+            let root = managedFileRootURL.standardizedFileURL
+            let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            let managedURL = root.appendingPathComponent(book.fileURL).standardizedFileURL
+            guard managedURL.path.hasPrefix(rootPath),
+                  try managedFileVersionInspector.managedFileVersion(
+                    at: managedURL,
+                    materializationRevision: expectedFingerprint.version.materializationRevision
+                  ) == expectedFingerprint.version else { return false }
+            if let pending = try Self.pendingEntity(context, bookID: bookID) {
+                guard Self.readyJob(pending, matches: expectedFingerprint, relativePath: book.fileURL) else { return false }
+            }
+            fingerprint.serverAcceptanceSHA256 = acceptance.sha256.lowercased()
+            fingerprint.acceptedOperationID = acceptance.acceptedOperationID
+            fingerprint.acceptedAt = acceptance.acceptedAt
+            return true
+        }
+    }
+
     public func recordServerAcceptance(
         bookID: BookID,
         ownerID: UserID,
@@ -762,6 +981,12 @@ public final class SwiftDataBookImportPersistence: BookImportPersistence, Sendab
             && job.destinationRelativePath == relativePath
             && job.destinationFileIdentifier == fingerprint.version.fileIdentifier
             && job.promotionRevision == fingerprint.version.materializationRevision
+    }
+
+    private static func rotatedReadingRevision(after revision: UUID) -> UUID {
+        var next = UUID()
+        while next == revision { next = UUID() }
+        return next
     }
 
     private static func replace(_ entity: PendingBookMaterializationEntity, with value: PendingBookMaterialization) {

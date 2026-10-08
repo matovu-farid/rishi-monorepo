@@ -112,6 +112,31 @@ public final class ReaderViewModel: @unchecked Sendable {
     /// asynchronous location callback without treating it as a generic swipe.
     public var onExplicitPageForwardNavigation: ((Locator, UUID) -> Void)?
 
+    @ObservationIgnored private var navigationCallbackOwner: UUID?
+
+    /// Installs one destination's complete callback group atomically.
+    @MainActor
+    public func installNavigationCallbacks(
+        owner: UUID,
+        onUserNavigation: @escaping (Locator) -> Void,
+        onUserNavigationForTTSPagePrefetch: @escaping (Locator) -> Void,
+        onExplicitPageForwardNavigation: @escaping (Locator, UUID) -> Void
+    ) {
+        navigationCallbackOwner = owner
+        self.onUserNavigation = onUserNavigation
+        self.onUserNavigationForTTSPagePrefetch = onUserNavigationForTTSPagePrefetch
+        self.onExplicitPageForwardNavigation = onExplicitPageForwardNavigation
+    }
+
+    @MainActor
+    public func clearNavigationCallbacks(ifOwner owner: UUID) {
+        guard navigationCallbackOwner == owner else { return }
+        navigationCallbackOwner = nil
+        onUserNavigation = nil
+        onUserNavigationForTTSPagePrefetch = nil
+        onExplicitPageForwardNavigation = nil
+    }
+
     /// Supplies the navigator's live visible locator when a caller needs to
     /// start read-aloud immediately after a page turn. Readium may deliver
     /// `locationDidChange` asynchronously while a page animation is still
@@ -555,6 +580,10 @@ public final class ReaderViewModel: @unchecked Sendable {
         sourceEffects: (any BookSourceEffectAdmitting)?,
         sourceAccessPermit: BookSourceAccessPermit?
     ) async -> [String] {
+        // Readium accepts an unknown href here, but its content sequence keeps
+        // retrying the failed PDF resource. Reject unavailable resources before
+        // constructing that iterator so best-effort helpers can return promptly.
+        guard publication.readingOrder.firstIndexWithHREF(locator.href) != nil else { return [] }
         guard let content = publication.content(from: locator) else { return [] }
 
         let tokenizer = CustomTTSTokenizer.tokenizePDF(

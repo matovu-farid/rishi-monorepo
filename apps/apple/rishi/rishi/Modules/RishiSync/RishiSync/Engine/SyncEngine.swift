@@ -312,7 +312,8 @@ public actor SyncEngine {
         let generation = accountGeneration
         for attempt in 0..<2 {
             do {
-                try await metadataStore.markDirty(entityId: bookId, kind: .book)
+                let disposition = try await metadataStore.markDirtyIfAdmitted(entityId: bookId, kind: .book)
+                guard disposition == .pending else { return false }
                 guard generation == accountGeneration, !resetInProgress else {
                     return false
                 }
@@ -371,15 +372,30 @@ public actor SyncEngine {
     /// Persists a book deletion before its local row/file is removed. The
     /// caller must not destroy local material until this succeeds: the
     /// metadata tombstone is the durable hand-off to the outbound queue.
-    public func markBookDeleted(_ bookId: BookID) async throws {
+    public func isBookDeleted(_ bookId: BookID) async throws -> Bool {
+        try await metadataStore.isTombstone(entityId: bookId, kind: .book)
+    }
+
+    public func markBookDeleted(_ bookId: BookID, canonicalMutation: (@Sendable () async throws -> Void)? = nil) async throws {
         do {
-            try await metadataStore.markTombstone(entityId: bookId, kind: .book)
+            if let canonicalMutation {
+                try await metadataStore.applyLocalBookTombstone(bookId, mutation: canonicalMutation)
+            } else {
+                try await metadataStore.markTombstone(entityId: bookId, kind: .book)
+            }
             await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
             await statusReporter.refreshPendingCount(on: status)
             Log.event("sync.book.delete.queued", level: .info, data: [
                 "book_id": bookId.uuidString,
             ])
             requestSync()
+        } catch SyncMetadataError.savedBookTombstone {
+            // The metadata save is the irreversible boundary. A failed native
+            // follow-up must still hand the durable tombstone to sync.
+            await queue.enqueue(SyncQueueItem(entityId: bookId, kind: .book))
+            await statusReporter.refreshPendingCount(on: status)
+            requestSync()
+            throw SyncMetadataError.savedBookTombstone(bookId)
         } catch {
             Log.error("sync.markBookDeleted.failed", error: error)
             throw error

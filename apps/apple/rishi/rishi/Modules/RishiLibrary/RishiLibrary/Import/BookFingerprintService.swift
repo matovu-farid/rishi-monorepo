@@ -14,6 +14,9 @@ struct BookFingerprintService: Sendable {
     private let persistence: (any BookImportPersistence)?
     private let versionInspector: any ManagedFileVersionInspecting
     private let isTombstoned: (@Sendable (BookID) async -> Bool)?
+    private let currentGeneration: @Sendable () async -> UInt64?
+    private let isRetired: (@Sendable (Book, UInt64) async -> Bool)?
+    private let isSourceAvailable: (@Sendable (Book) async -> Bool)?
     private let hashFile: @Sendable (URL) throws -> String
     private let sourceProbe: CoordinatedSourceProbe
 
@@ -23,6 +26,9 @@ struct BookFingerprintService: Sendable {
         persistence: (any BookImportPersistence)? = nil,
         versionInspector: any ManagedFileVersionInspecting = FileManagedFileVersionInspector(),
         isTombstoned: (@Sendable (BookID) async -> Bool)? = nil,
+        currentGeneration: @escaping @Sendable () async -> UInt64? = { nil },
+        isRetired: (@Sendable (Book, UInt64) async -> Bool)? = nil,
+        isSourceAvailable: (@Sendable (Book) async -> Bool)? = nil,
         hashFile: @escaping @Sendable (URL) throws -> String = { url in
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
@@ -36,6 +42,9 @@ struct BookFingerprintService: Sendable {
         self.persistence = persistence
         self.versionInspector = versionInspector
         self.isTombstoned = isTombstoned
+        self.currentGeneration = currentGeneration
+        self.isRetired = isRetired
+        self.isSourceAvailable = isSourceAvailable
         self.hashFile = hashFile
         self.sourceProbe = CoordinatedSourceProbe()
     }
@@ -46,6 +55,9 @@ struct BookFingerprintService: Sendable {
     }
 
     func matchingCandidate(ownerID: UserID, byteCount: Int64, sha256: String) async throws -> BookImportCandidateSnapshot? {
+        let capturedGeneration = await currentGeneration()
+        var sawRetiredMatch = false
+        var sawUnavailableMatch = false
         let books = try await bookStore.books(for: ownerID)
         for book in books {
             guard book.userId == ownerID,
@@ -106,7 +118,8 @@ struct BookFingerprintService: Sendable {
                 guard try versionInspector.managedFileVersion(at: url, materializationRevision: actualVersion.materializationRevision) == actualVersion else { continue }
                 if let persistence {
                     let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: ownerID, sha256: digest, version: actualVersion)
-                    guard (try? await persistence.cacheManagedFingerprint(fingerprint, expectedRelativePath: book.fileURL, expectedVersion: actualVersion)) == true else { continue }
+                    guard let capturedGeneration,
+                          (try? await persistence.cacheManagedFingerprint(fingerprint, expectedGeneration: capturedGeneration, expectedRelativePath: book.fileURL, expectedVersion: actualVersion)) == true else { continue }
                 }
             }
 
@@ -115,6 +128,26 @@ struct BookFingerprintService: Sendable {
                   current.userId == ownerID, current.fileURL == book.fileURL,
                   await isTombstoned?(book.id) != true,
                   try versionInspector.managedFileVersion(at: url, materializationRevision: actualVersion.materializationRevision) == actualVersion else { continue }
+            guard await currentGeneration() == capturedGeneration else { throw BookFileStorage.StorageError.sourceUnreadable }
+            if let generation = capturedGeneration, await isRetired?(current, generation) == true {
+                sawRetiredMatch = true
+                continue
+            }
+            if let isSourceAvailable, !(await isSourceAvailable(current)) {
+                if let generation = capturedGeneration, await isRetired?(current, generation) == true { sawRetiredMatch = true }
+                else { sawUnavailableMatch = true }
+                continue
+            }
+            guard await currentGeneration() == capturedGeneration,
+                  let latest = try await bookStore.book(book.id), latest == current,
+                  await isTombstoned?(book.id) != true,
+                  try versionInspector.managedFileVersion(at: url, materializationRevision: actualVersion.materializationRevision) == actualVersion else {
+                throw BookFileStorage.StorageError.sourceUnreadable
+            }
+            if let generation = capturedGeneration, await isRetired?(current, generation) == true {
+                sawRetiredMatch = true
+                continue
+            }
             return BookImportCandidateSnapshot(
                 bookID: book.id,
                 ownerID: ownerID,
@@ -125,6 +158,8 @@ struct BookFingerprintService: Sendable {
                 absoluteURL: url
             )
         }
+        if sawRetiredMatch { throw BookImportFailure.deletionInProgress }
+        if sawUnavailableMatch { throw BookFileStorage.StorageError.sourceUnreadable }
         return nil
     }
 
@@ -148,6 +183,7 @@ struct BookFingerprintService: Sendable {
     }
 
     func verifyAndCacheManagedFile(for book: Book, expectedSHA256: String? = nil, expectedByteCount: Int64? = nil) async -> VerifiedManagedFile? {
+        let capturedGeneration = await currentGeneration()
         guard let url = managedURL(for: book), FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
             let pending: PendingBookMaterialization?
@@ -224,7 +260,9 @@ struct BookFingerprintService: Sendable {
             )
             var persisted = false
             if let persistence {
-                persisted = (try? await persistence.cacheManagedFingerprint(fingerprint, expectedRelativePath: book.fileURL, expectedVersion: result.version)) == true
+                if let capturedGeneration {
+                    persisted = (try? await persistence.cacheManagedFingerprint(fingerprint, expectedGeneration: capturedGeneration, expectedRelativePath: book.fileURL, expectedVersion: result.version)) == true
+                }
             }
             return VerifiedManagedFile(fingerprint: fingerprint, fingerprintPersisted: persisted)
         } catch {

@@ -125,7 +125,11 @@ struct ReaderDestinationTests {
             .deletingLastPathComponent()
             .appendingPathComponent("rishi/Reader/ReaderDestination.swift")
         let reader = try String(contentsOf: readerURL, encoding: .utf8)
-        #expect(reader.contains("sourceInvalidationCleanup.register"))
+        #expect(reader.contains("await attachment.registerCleanup()"))
+        let attachmentURL = readerURL.deletingLastPathComponent().appendingPathComponent("ReaderSourceAttachment.swift")
+        let attachment = try String(contentsOf: attachmentURL, encoding: .utf8)
+        #expect(attachment.contains("cleanup.register(action)"))
+        #expect(attachment.contains("await voiceEntry.endForReader()"))
         #expect(reader.contains("await voiceEntry.endForReader()"))
     }
 
@@ -191,6 +195,45 @@ struct ReaderDestinationTests {
         #expect(await drained.value)
     }
 
+    @Test("reader backfill joins canceled real indexing until the entered extractor unwinds")
+    @MainActor
+    func readerBackfillCancellationWaitsForRealHook() async throws {
+        let fixture = try await ReaderDeletionFixture.make()
+        let registry = fixture.registry
+        let owner = fixture.owner
+        let generation = fixture.generation
+        let source = try await registry.acquireReadableSource(for: fixture.book)
+        let extractor = ReaderBackfillCancellationExtractor()
+        let hook = RishiSearchIndexingHook(
+            builder: IndexBuilder(rootURL: fixture.root, embedder: IdentityEmbedder()),
+            extractors: ["epub": extractor],
+            acquireSource: { book in
+                BookIndexingSource(identity: .init(ownerID: owner, generation: generation, bookID: book.id),
+                                   lease: try await registry.acquireReadableSource(for: book))
+            }
+        )
+        let completed = RishiSearchIndexingHookTests.CompletionRecorder()
+        let backfill = Task {
+            await ReaderIndexBackfillFence.scheduleAndDrain(
+                book: fixture.book, sourceLease: source,
+                resolveManagedSource: { try await registry.awaitManagedSource(for: fixture.book) },
+                acquireManagedSource: { try await registry.acquireReadableSource(for: fixture.book) },
+                indexingHook: hook
+            )
+            await completed.markCompleted()
+        }
+        #expect(await RishiSearchIndexingHookTests.waitUntil { await extractor.entered })
+        registry.fenceBookSynchronously(ownerID: owner, generation: generation, bookID: fixture.book.id)
+        hook.cancelBook(ownerID: owner, generation: generation, bookID: fixture.book.id)
+        #expect(await !completed.completed)
+        await extractor.release()
+        #expect(await RishiSearchIndexingHookTests.waitUntil { await completed.completed })
+        await backfill.value
+        await hook.drainBook(ownerID: owner, generation: generation, bookID: fixture.book.id)
+        #expect(await extractor.observedCancellation)
+        #expect(!FileManager.default.fileExists(atPath: BookIndexLocator(rootURL: fixture.root).vectorsURL(fixture.book.id).path))
+    }
+
     @Test("reader index backfill drains both source revisions until the shared indexing task finishes")
     func readerIndexBackfillWaitsForActualTaskWithStaleStatusAndPromotedRevision() async throws {
         let ownerID = UUID()
@@ -248,7 +291,7 @@ struct ReaderDestinationTests {
                 sha256: "digest",
                 version: managedVersion
             ),
-            accountGeneration: generation
+            readingPermit: selectedReadingPermit
         )
         let search = ReaderBackfillSearch()
         let scheduled = ReaderIndexScheduleGate()
@@ -614,4 +657,19 @@ private actor CommitThenInvalidateMessageStore: MessageStore {
         effects.closeAdmission(source)
     }
     func delete(_ id: MessageID) async throws { stored.removeValue(forKey: id) }
+}
+
+private actor ReaderBackfillCancellationExtractor: PerBookTextExtractor {
+    private let gate = RishiSearchIndexingHookTests.RishiReaderLoadGate()
+    private(set) var entered = false
+    private(set) var observedCancellation = false
+
+    func extractParagraphs(from _: URL) async throws -> [(page: Int, text: String)] {
+        entered = true
+        await gate.wait()
+        observedCancellation = Task.isCancelled
+        return [(1, "entered read")]
+    }
+
+    func release() async { await gate.open() }
 }

@@ -20,6 +20,7 @@ public enum BookMaterializationPhase: String, Sendable, Codable, CaseIterable {
 
 public enum BookSourceKind: String, Sendable, Codable, CaseIterable {
     case securityScopedOriginal, ownedStaging
+    case sampleRepair
 }
 
 public struct VerifiedBookArtifacts: Sendable, Codable, Equatable {

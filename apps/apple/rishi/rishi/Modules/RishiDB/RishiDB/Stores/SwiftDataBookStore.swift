@@ -58,6 +58,11 @@ public final class SwiftDataBookStore: BookStore, Sendable {
         ])
         do {
             try await dbStore.write { context in
+                if let authorization = try context.fetch(FetchDescriptor<BookReadingAuthorizationEntity>(
+                    predicate: #Predicate { $0.bookID == book.id }
+                )).first, authorization.tombstoned {
+                    throw RishiError.persistence("Permanently deleted Book identity cannot be upserted")
+                }
                 var descriptor = FetchDescriptor<BookEntity>(predicate: #Predicate { $0.id == book.id })
                 descriptor.fetchLimit = 1
                 if let existing = try context.fetch(descriptor).first {
@@ -133,6 +138,52 @@ public final class SwiftDataBookStore: BookStore, Sendable {
             // removes this row by owner+token CAS afterward.
             try Self.deleteAll(context, of: BookReadingAuthorizationEntity.self, matching: #Predicate { $0.bookID == id })
             try Self.deleteAll(context, of: BookEntity.self, matching: #Predicate { $0.id == id })
+            return true
+        }
+    }
+
+    /// Logical deletion is a finite DB turn. Keep a permanent deny record and
+    /// the import attempt until genuine source drainage allows file cleanup.
+    public func deletePermanentlyIfUnchanged(_ id: BookID, matching expected: Book?, accountPermit: AccountMutationPermit) async throws -> Bool {
+        try await dbStore.write { context in
+            let ownerID = accountPermit.ownerID
+            let account = try context.fetch(FetchDescriptor<AccountMutationAuthorizationEntity>(
+                predicate: #Predicate { $0.ownerID == ownerID }
+            )).first
+            guard let account, !account.revoked,
+                  UInt64(bitPattern: account.accountGenerationBits) == accountPermit.accountGeneration else {
+                throw RishiError.persistence("Permanent Book deletion account authority changed")
+            }
+            let entity = try context.fetch(FetchDescriptor<BookEntity>(predicate: #Predicate { $0.id == id })).first
+            guard entity?.bookValue == expected,
+                  entity == nil || entity?.userId == ownerID else { return false }
+            let authorization = try context.fetch(FetchDescriptor<BookReadingAuthorizationEntity>(
+                predicate: #Predicate { $0.bookID == id }
+            )).first
+            if let authorization {
+                // Current account authority and the canonical owner/CAS above
+                // authorize deletion even before this Book was opened in the
+                // new generation. Advancing a deny record grants no reading.
+                guard authorization.ownerID == ownerID else { return false }
+                authorization.accountGenerationBits = Int64(bitPattern: accountPermit.accountGeneration)
+                authorization.revoked = true
+                authorization.tombstoned = true
+            } else {
+                context.insert(BookReadingAuthorizationEntity(
+                    bookID: id, ownerID: ownerID, generation: accountPermit.accountGeneration,
+                    contentRevision: UUID(), revoked: true, tombstoned: true
+                ))
+            }
+            try Self.deleteAll(context, of: PositionEntity.self, matching: #Predicate { $0.bookId == id })
+            try Self.deleteAll(context, of: HighlightEntity.self, matching: #Predicate { $0.bookId == id })
+            try Self.deleteAll(context, of: BookmarkEntity.self, matching: #Predicate { $0.bookId == id })
+            let indexIDs = try context.fetch(FetchDescriptor<ChapterIndexEntity>(predicate: #Predicate { $0.bookID == id })).map(\.id)
+            for indexID in indexIDs {
+                try Self.deleteAll(context, of: ChapterSummaryEntity.self, matching: #Predicate { $0.indexID == indexID })
+            }
+            try Self.deleteAll(context, of: ChapterIndexEntity.self, matching: #Predicate { $0.bookID == id })
+            try Self.deleteAll(context, of: BookFileFingerprintEntity.self, matching: #Predicate { $0.bookID == id })
+            if let entity { context.delete(entity) }
             return true
         }
     }

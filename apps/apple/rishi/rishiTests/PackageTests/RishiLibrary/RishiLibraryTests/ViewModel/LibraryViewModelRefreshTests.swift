@@ -14,14 +14,31 @@ import Foundation
 private final class SlowPositionStore: PositionStore, @unchecked Sendable {
     let perReadDelay: Duration
     let positions: [BookID: Position]
+    let concurrencyProbe: PositionReadConcurrencyProbe?
+    let overlapBarrier: HydrationOverlapBarrier?
 
-    init(perReadDelay: Duration, positions: [BookID: Position] = [:]) {
+    init(
+        perReadDelay: Duration,
+        positions: [BookID: Position] = [:],
+        concurrencyProbe: PositionReadConcurrencyProbe? = nil,
+        overlapBarrier: HydrationOverlapBarrier? = nil
+    ) {
         self.perReadDelay = perReadDelay
         self.positions = positions
+        self.concurrencyProbe = concurrencyProbe
+        self.overlapBarrier = overlapBarrier
     }
 
     func position(for bookId: BookID) async throws -> Position? {
-        try await Task.sleep(for: perReadDelay)
+        await overlapBarrier?.arriveAndWait(for: .positions)
+        await concurrencyProbe?.beginRead()
+        do {
+            try await Task.sleep(for: perReadDelay)
+        } catch {
+            await concurrencyProbe?.endRead()
+            throw error
+        }
+        await concurrencyProbe?.endRead()
         return positions[bookId]
     }
 
@@ -29,14 +46,68 @@ private final class SlowPositionStore: PositionStore, @unchecked Sendable {
     func delete(_ id: PositionID) async throws {}
 }
 
+private actor PositionReadConcurrencyProbe {
+    private var activeReads = 0
+    private(set) var maximumConcurrentReads = 0
+
+    func beginRead() {
+        activeReads += 1
+        maximumConcurrentReads = max(maximumConcurrentReads, activeReads)
+    }
+
+    func endRead() {
+        activeReads -= 1
+    }
+}
+
+private actor HydrationOverlapBarrier {
+    enum Branch: Hashable { case positions, covers }
+
+    private var started: Set<Branch> = []
+    private var released = false
+    private var startedWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func arriveAndWait(for branch: Branch) async {
+        started.insert(branch)
+        if started.count == 2 {
+            let waiters = startedWaiters
+            startedWaiters.removeAll()
+            waiters.forEach { $0.resume(returning: true) }
+        }
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitForBothBranches() async -> Bool {
+        if started.count == 2 { return true }
+        if released { return false }
+        return await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let allStarted = started.count == 2
+        let pendingStarts = startedWaiters
+        startedWaiters.removeAll()
+        pendingStarts.forEach { $0.resume(returning: allStarted) }
+        let pendingWork = releaseWaiters
+        releaseWaiters.removeAll()
+        pendingWork.forEach { $0.resume() }
+    }
+}
+
 private final class SlowCoverExtractor: CoverExtractor, @unchecked Sendable {
     let delay: Duration
+    let overlapBarrier: HydrationOverlapBarrier?
 
-    init(delay: Duration) {
+    init(delay: Duration, overlapBarrier: HydrationOverlapBarrier? = nil) {
         self.delay = delay
+        self.overlapBarrier = overlapBarrier
     }
 
     func extractCover(from _: URL) async -> Data? {
+        await overlapBarrier?.arriveAndWait(for: .covers)
         try? await Task.sleep(for: delay)
         return Data([0, 1, 2])
     }
@@ -46,17 +117,31 @@ private actor SuspendedBookStore: BookStore {
     private let store = InMemoryBookStore()
     private var suspendNextRead = false
     private var readStarted = false
-    private var readStartedWaiter: CheckedContinuation<Void, Never>?
-    private var readRelease: CheckedContinuation<Void, Never>?
+    private var readReleased = false
+    private var captureNextSnapshot = false
+    private var failSuspendedRead = false
     private var failNextRead = false
     private(set) var readCount = 0
 
-    func suspendNext() { suspendNextRead = true }
+    func suspendNext(capturingSnapshot: Bool = false, failOnRelease: Bool = false) {
+        suspendNextRead = true
+        readReleased = false
+        captureNextSnapshot = capturingSnapshot
+        failSuspendedRead = failOnRelease
+    }
     func failNext() { failNextRead = true }
-    func releaseRead() { readRelease?.resume(); readRelease = nil }
-    func waitForRead() async {
-        if readStarted { return }
-        await withCheckedContinuation { readStartedWaiter = $0 }
+    func releaseRead() { readReleased = true }
+    @discardableResult
+    func waitForRead() async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !readStarted {
+            if Task.isCancelled || ContinuousClock.now >= deadline {
+                Issue.record("snapshot read did not enter before the deadline")
+                return false
+            }
+            do { try await Task.sleep(for: .milliseconds(5)) } catch { return false }
+        }
+        return true
     }
 
     func books(for userId: UserID) async throws -> [Book] {
@@ -67,11 +152,20 @@ private actor SuspendedBookStore: BookStore {
         }
         if suspendNextRead {
             suspendNextRead = false
+            let snapshot = captureNextSnapshot ? try await store.books(for: userId) : nil
+            let failOnRelease = failSuspendedRead
+            captureNextSnapshot = false
+            failSuspendedRead = false
             readStarted = true
-            readStartedWaiter?.resume()
-            readStartedWaiter = nil
-            await withCheckedContinuation { readRelease = $0 }
-            readStarted = false
+            defer { readStarted = false }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while !readReleased {
+                try Task.checkCancellation()
+                guard ContinuousClock.now < deadline else { throw TestReadFailure.timedOut }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            if failOnRelease { throw TestReadFailure.failed }
+            if let snapshot { return snapshot }
         }
         return try await store.books(for: userId)
     }
@@ -83,7 +177,7 @@ private actor SuspendedBookStore: BookStore {
     }
 }
 
-private enum TestReadFailure: Error { case failed }
+private enum TestReadFailure: Error { case failed, timedOut }
 
 @MainActor
 @Suite("LibraryViewModel.refresh — concurrent position fan-out (F-P0-03)")
@@ -96,8 +190,13 @@ struct LibraryViewModelRefreshTests {
         root: URL? = nil,
         coverExtractors: [String: any CoverExtractor] = [:],
         deleteBook: (@Sendable (Book) async throws -> Void)? = nil,
+        beforeDelete: @escaping @Sendable (Book) async throws -> BookDeletionRetirementWitness? = { _ in nil },
+        onDelete: (@Sendable (BookID) async throws -> Void)? = nil,
+        rollback: @escaping @Sendable (Book, BookDeletionRetirementWitness?) async -> BookDeletionRollbackResult = { _, _ in .existingReady },
         accountIdentity: LibraryAccountIdentity? = nil,
-        currentIdentity: @escaping @MainActor () -> LibraryAccountIdentity? = { nil }
+        currentIdentity: @escaping @MainActor () -> LibraryAccountIdentity? = { nil },
+        bookImportEvents: BookImportEvents? = nil,
+        currentAccountGeneration: @escaping @Sendable () async -> UInt64? = { nil }
     ) -> LibraryViewModel {
         let root = root ?? URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("VMRefresh-\(UUID().uuidString)", isDirectory: true)
@@ -115,7 +214,12 @@ struct LibraryViewModelRefreshTests {
             importCoordinator: ImportCoordinator(storage: storage, currentUserId: { userId }),
             positionLoader: PositionLoader(positionStore: positionStore),
             coverResolver: BookCoverResolver(storage: storage),
-            deleteBook: deleteBook ?? { book in try await storage.delete(book) }
+            deleteBook: deleteBook ?? { book in try await storage.delete(book) },
+            beforeBookDeleted: beforeDelete,
+            restoreBookAfterFailedRetirement: rollback,
+            onBookDeleted: onDelete,
+            bookImportEvents: bookImportEvents,
+            currentAccountGeneration: currentAccountGeneration
         )
     }
 
@@ -221,6 +325,52 @@ struct LibraryViewModelRefreshTests {
         #expect(await store.readCount == 2)
     }
 
+    @Test("accepted import registration during the initial read queues a trailing snapshot")
+    func importRegistrationDuringInitialReadRunsTrailingSnapshot() async throws {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        let identity = LibraryAccountIdentity(userID: userId, generation: 17)
+        await store.suspendNext()
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { identity },
+            currentAccountGeneration: { identity.generation }
+        )
+        let initialLoad = Task {
+            await vm.loadInitialSnapshotAndSyncIfNeeded(
+                accountIdentity: identity,
+                consentGranted: false,
+                autoSync: true,
+                sync: {}
+            )
+        }
+        await store.waitForRead()
+
+        let imported = Book(userId: userId, title: "Imported", formatType: .pdf, fileURL: "imported.pdf")
+        try await store.upsert(imported)
+        let token = BookMaterializationToken(
+            ownerID: userId,
+            accountGeneration: identity.generation,
+            bookID: imported.id,
+            attemptID: UUID()
+        )
+        await vm.applyImportEvent(BookImportEvent(
+            ownerID: userId,
+            accountGeneration: identity.generation,
+            token: token,
+            kind: .registered(imported)
+        ))
+        await store.releaseRead()
+
+        #expect(await initialLoad.value == .success)
+        #expect(vm.books.map(\.id) == [imported.id])
+        #expect(vm.loadReadiness == .success(identity))
+        #expect(await store.readCount == 2)
+    }
+
     @Test("successful deletion during a snapshot queues a trailing snapshot")
     func deletionDuringLoadRunsTrailingRead() async throws {
         let userId = UUID()
@@ -252,6 +402,78 @@ struct LibraryViewModelRefreshTests {
         #expect(await store.readCount == 2)
     }
 
+    @Test("stale pre-begin and pending reads cannot publish or fail after terminal deletion; trailing reads remain usable", arguments: [false, true], [false, true])
+    func staleReadAfterDeletionTerminal(_ failRead: Bool, _ failDeletion: Bool) async throws {
+        // Exercise both a read started before confirmation and one admitted while pending.
+        for readDuringPending in [false, true] {
+            let owner = UUID()
+            let book = Book(userId: owner, title: "Delete", formatType: .pdf, fileURL: "delete.pdf")
+            let other = Book(userId: owner, title: "Keep", formatType: .pdf, fileURL: "keep.pdf")
+            let store = SuspendedBookStore()
+            try await store.upsert(book)
+            try await store.upsert(other)
+            let terminalReached = RefreshCompletion()
+            let deletionFinished = RefreshCompletion()
+            let loadFinished = RefreshCompletion()
+            let vm = Self.makeVM(
+                userId: owner, bookStore: store,
+                positionStore: SlowPositionStore(perReadDelay: .zero),
+                deleteBook: { book in
+                    try await store.delete(book.id)
+                    await terminalReached.finish()
+                },
+                onDelete: { _ in if failDeletion { throw TestReadFailure.failed } },
+                rollback: { _, _ in await terminalReached.finish(); return .existingReady }
+            )
+            await vm.refresh()
+            var operation: LibraryViewModel.BookDeletionOperation?
+            if readDuringPending { operation = try #require(vm.beginDeletion(book)) }
+            await store.suspendNext(capturingSnapshot: true, failOnRelease: failRead)
+            let refresh = Task { await vm.refresh(); await loadFinished.finish() }
+            var deletion: Task<Void, Never>?
+            do {
+                try #require(await store.waitForRead())
+                if !readDuringPending { operation = try #require(vm.beginDeletion(book)) }
+                let admitted = try #require(operation)
+                deletion = Task { await vm.completeDeletion(admitted); await deletionFinished.finish() }
+                try await terminalReached.wait()
+                // Success and rollback both reach their terminal UI before the held read resumes.
+                try await waitForTerminalPresentation(vm, book: book, failure: failDeletion)
+                let expectedError = vm.deletionError
+                #expect(vm.books.contains { $0.id == book.id } == failDeletion)
+                #expect(vm.books.contains { $0.id == other.id })
+                await store.releaseRead()
+                try await loadFinished.wait()
+                try await deletionFinished.wait()
+                #expect(vm.books.contains { $0.id == book.id } == failDeletion)
+                #expect(vm.books.contains { $0.id == other.id })
+                #expect(vm.deletionError == expectedError)
+                #expect(vm.loadReadiness == .success(nil))
+                #expect(await store.readCount == 3)
+                let added = Book(userId: owner, title: "Trailing usable", formatType: .pdf, fileURL: "added.pdf")
+                try await store.upsert(added)
+                await vm.refresh()
+                #expect(vm.books.contains { $0.id == added.id })
+                #expect(await store.readCount == 4)
+                #expect(vm.loadReadiness == .success(nil))
+            } catch {
+                await store.releaseRead()
+                refresh.cancel()
+                deletion?.cancel()
+                throw error
+            }
+        }
+    }
+
+    private func waitForTerminalPresentation(_ vm: LibraryViewModel, book: Book, failure: Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while failure ? vm.deletionError == nil : vm.books.contains(where: { $0.id == book.id }) {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw TestReadFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     @Test("local first snapshot loads without consent and does not start sync")
     func consentDenialStillLoadsLocalSnapshot() async throws {
         let userId = UUID()
@@ -277,6 +499,69 @@ struct LibraryViewModelRefreshTests {
         #expect(result == .success)
         #expect(vm.books.map(\.id) == [book.id])
         #expect(!syncStarted)
+    }
+
+    @Test("initial snapshot read failure propagates without starting sync")
+    func initialSnapshotFailurePropagates() async {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        await store.failNext()
+        let identity = LibraryAccountIdentity(userID: userId, generation: 19)
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { identity }
+        )
+        var syncStarted = false
+
+        let result = await vm.loadInitialSnapshotAndSyncIfNeeded(
+            accountIdentity: identity,
+            consentGranted: true,
+            autoSync: true,
+            sync: { syncStarted = true }
+        )
+
+        #expect(result == .failure)
+        #expect(!syncStarted)
+        #expect(await store.readCount == 1)
+    }
+
+    @Test("canceled initial sync waiter still refreshes the account snapshot")
+    func canceledInitialSyncWaiterRefreshesSnapshot() async throws {
+        let userId = UUID()
+        let store = SuspendedBookStore()
+        let identity = LibraryAccountIdentity(userID: userId, generation: 13)
+        let vm = Self.makeVM(
+            userId: userId,
+            bookStore: store,
+            positionStore: SlowPositionStore(perReadDelay: .zero),
+            accountIdentity: identity,
+            currentIdentity: { identity }
+        )
+        let syncStarted = AsyncSignal()
+        let waveFinished = AsyncSignal()
+        let load = Task {
+            await vm.loadInitialSnapshotAndSyncIfNeeded(
+                accountIdentity: identity,
+                consentGranted: true,
+                autoSync: true,
+                sync: {
+                    await syncStarted.signal()
+                    await waveFinished.wait()
+                }
+            )
+        }
+        await syncStarted.wait()
+        load.cancel()
+        let syncedBook = Book(userId: userId, title: "Synced", formatType: .pdf, fileURL: "synced.pdf")
+        try await store.upsert(syncedBook)
+        await waveFinished.signal()
+
+        #expect(await load.value == .cancelled)
+        #expect(vm.books.map(\.id) == [syncedBook.id])
+        #expect(await store.readCount == 2)
     }
 
     @Test("consent changing during a shared initial read reuses the load and starts one sync")
@@ -336,17 +621,18 @@ struct LibraryViewModelRefreshTests {
             try await bookStore.upsert(b)
             positions[b.id] = Position(bookId: b.id, locator: "loc:\(i)", percentComplete: 0.5)
         }
-        // 100 ms per read × 10 books = 1000 ms serial. Parallel target: < 300 ms.
-        let positionStore = SlowPositionStore(perReadDelay: .milliseconds(100), positions: positions)
+        let concurrencyProbe = PositionReadConcurrencyProbe()
+        let positionStore = SlowPositionStore(
+            perReadDelay: .milliseconds(100),
+            positions: positions,
+            concurrencyProbe: concurrencyProbe
+        )
         let vm = Self.makeVM(userId: userId, bookStore: bookStore, positionStore: positionStore)
 
-        let clock = ContinuousClock()
-        let elapsed = await clock.measure { await vm.refresh() }
-
-        // Serial would take >= 1000 ms; with parallel fan-out we expect < 300 ms
-        // even under heavy CI load. (Single 100ms sleep + scheduling overhead.)
-        #expect(elapsed < .milliseconds(300),
-                "refresh() took \(elapsed) — expected < 300ms via concurrent fan-out (serial would be ~1000ms)")
+        await vm.refresh()
+        await vm.waitForHydration()
+        #expect(vm.positionsByBookId.count == 10)
+        #expect(await concurrencyProbe.maximumConcurrentReads > 1)
         #expect(vm.books.count == 10)
     }
 
@@ -367,6 +653,7 @@ struct LibraryViewModelRefreshTests {
         )
         try Data([7]).write(to: sourceURL)
 
+        let overlapBarrier = HydrationOverlapBarrier()
         let book = Book(
             userId: userId,
             title: "Overlap",
@@ -374,10 +661,10 @@ struct LibraryViewModelRefreshTests {
             fileURL: relativeFile
         )
         try await bookStore.upsert(book)
-        let position = Position(bookId: book.id, locator: "loc", percentComplete: 0.5)
         let positionStore = SlowPositionStore(
-            perReadDelay: .milliseconds(200),
-            positions: [book.id: position]
+            perReadDelay: .zero,
+            positions: [book.id: Position(bookId: book.id, locator: "loc", percentComplete: 0.5)],
+            overlapBarrier: overlapBarrier
         )
         let vm = Self.makeVM(
             userId: userId,
@@ -385,15 +672,21 @@ struct LibraryViewModelRefreshTests {
             positionStore: positionStore,
             root: root,
             coverExtractors: [
-                "pdf": SlowCoverExtractor(delay: .milliseconds(200))
+                "pdf": SlowCoverExtractor(delay: .zero, overlapBarrier: overlapBarrier)
             ]
         )
 
-        let elapsed = await ContinuousClock().measure {
-            await vm.refresh()
+        await vm.refresh()
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(2))
+            await overlapBarrier.release()
         }
+        let bothBranchesStarted = await overlapBarrier.waitForBothBranches()
+        watchdog.cancel()
+        await overlapBarrier.release()
+        await vm.waitForHydration()
 
-        #expect(elapsed < .milliseconds(360), "refresh took (elapsed); position and cover work should overlap")
+        #expect(bothBranchesStarted, "position and cover hydration should start before either branch is released")
         #expect(vm.position(for: book.id)?.bookId == book.id)
         #expect(vm.coverURLs[book.id] != nil)
     }
@@ -416,6 +709,7 @@ struct LibraryViewModelRefreshTests {
         let vm = Self.makeVM(userId: userId, bookStore: bookStore, positionStore: positionStore)
 
         await vm.refresh()
+        await vm.waitForHydration()
 
         for b in books {
             let mapped = vm.position(for: b.id)
@@ -447,6 +741,7 @@ struct LibraryViewModelRefreshTests {
         let vm = Self.makeVM(userId: userId, bookStore: bookStore, positionStore: positionStore)
 
         await vm.refresh()
+        await vm.waitForHydration()
 
         #expect(vm.books.count == 6)
         // Three even-indexed books have positions; three odd-indexed books do not.
@@ -525,5 +820,18 @@ private actor RefreshEventRecorder {
 
     func record() {
         count += 1
+    }
+}
+
+private actor RefreshCompletion {
+    private var finished = false
+    func finish() { finished = true }
+    func wait() async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !finished {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw TestReadFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(5))
+        }
     }
 }

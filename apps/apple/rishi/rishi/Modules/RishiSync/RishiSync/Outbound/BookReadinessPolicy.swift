@@ -6,6 +6,7 @@ import Foundation
 public struct BookReadinessPolicy: Sendable {
     public enum Decision: Sendable, Equatable {
         case eligible
+        case discard
         case blocked
         case dependency(SyncQueueItem)
     }
@@ -49,7 +50,9 @@ public struct BookReadinessPolicy: Sendable {
         let ownerID = await currentUserID()
         switch item.kind {
         case .book:
-            if try await metadataStore.isTombstone(entityId: item.entityId, kind: .book) { return .eligible }
+            if try await metadataStore.isTombstone(entityId: item.entityId, kind: .book) {
+                return try await metadataStore.dirtyAt(entityId: item.entityId, kind: .book) == nil ? .discard : .eligible
+            }
             guard let book = try await bookStore.book(item.entityId), book.userId == ownerID else { return .blocked }
             guard try await sourceResolver.managedSource(for: book) != nil else { return .blocked }
             return .eligible

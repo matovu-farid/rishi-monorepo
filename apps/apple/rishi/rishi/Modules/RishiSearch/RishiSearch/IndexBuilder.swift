@@ -63,6 +63,7 @@ public actor IndexBuilder {
     /// chunk counts are written later by `buildIndex(bookId:paragraphs:)`
     /// once extraction has produced paragraph rows.
     public func markIndexing(bookId: UUID) async {
+        guard !Task.isCancelled else { return }
         let status = BookSearchStatus.indexing(chunksDone: 0, chunksTotal: 0)
         try? locator.ensureBookDir(bookId)
         try? IndexStatusStore(url: locator.statusURL(bookId)).write(status)
@@ -83,6 +84,7 @@ public actor IndexBuilder {
         bookId: UUID,
         paragraphs: [(page: Int, text: String)]
     ) async throws {
+        try Task.checkCancellation()
         try locator.ensureBookDir(bookId)
         let statusStore = IndexStatusStore(url: locator.statusURL(bookId))
         let total = paragraphs.count
@@ -90,6 +92,7 @@ public actor IndexBuilder {
         do {
             try statusStore.write(.indexing(chunksDone: 0, chunksTotal: total))
             await progress(bookId, .indexing(chunksDone: 0, chunksTotal: total))
+            try Task.checkCancellation()
 
             // Wipe prior chunks.db + SQLite sidecars + vectors.hnsw for
             // idempotent rebuilds.
@@ -120,6 +123,7 @@ public actor IndexBuilder {
 
             for batch in paragraphs.chunked(into: batchSize) {
                 for para in batch {
+                    try Task.checkCancellation()
                     let chunkId = nextChunkId
                     nextChunkId += 1
 
@@ -144,15 +148,19 @@ public actor IndexBuilder {
                     }
 
                     for input in embedInputs {
+                        try Task.checkCancellation()
                         let vec = try await embedder.embed(input)
+                        try Task.checkCancellation()
                         try index.add(key: chunkId, vector: vec)
                     }
                     // One chunks.db row per ORIGINAL paragraph, carrying the
                     // full pre-subdivision text so the tool result returns
                     // a coherent paragraph (not a sentence fragment).
+                    try Task.checkCancellation()
                     try await chunks.append(chunks: [
                         (chunkId: chunkId, page: para.page, text: para.text),
                     ])
+                    try Task.checkCancellation()
                     done += 1
                 }
                 try statusStore.write(.indexing(chunksDone: done, chunksTotal: total))
@@ -160,7 +168,9 @@ public actor IndexBuilder {
                 try Task.checkCancellation()
             }
 
+            try Task.checkCancellation()
             try index.save(path: locator.vectorsURL(bookId).path)
+            try Task.checkCancellation()
             try statusStore.write(.ready)
             await progress(bookId, .ready)
             Log.event(
@@ -171,7 +181,10 @@ public actor IndexBuilder {
                     "chunks": String(total),
                 ]
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            guard !Task.isCancelled else { throw CancellationError() }
             let reason = String(describing: error)
             try? statusStore.write(.failed(reason: reason))
             await progress(bookId, .failed(reason: reason))
@@ -199,6 +212,7 @@ public actor IndexBuilder {
     /// Uses the same `BookIndexLocator` + `IndexStatusStore` the build path
     /// uses, so the sidecar lands at the canonical `index.status.json` path.
     public func markFailed(bookId: UUID, reason: String) async {
+        guard !Task.isCancelled else { return }
         try? locator.ensureBookDir(bookId)
         let statusStore = IndexStatusStore(url: locator.statusURL(bookId))
         try? statusStore.write(.failed(reason: reason))

@@ -1,6 +1,6 @@
 import Foundation
 
-private final class BookSourceRegistryFence: @unchecked Sendable {
+final class BookSourceRegistryFence: @unchecked Sendable {
     struct Key: Hashable {
         let ownerID: UserID
         let generation: UInt64
@@ -85,12 +85,13 @@ private final class BookSourceRegistryFence: @unchecked Sendable {
         matching.forEach { $0.invalidation.invalidate() }
     }
 
-    func activateBook(ownerID: UserID, generation: UInt64, bookID: BookID) -> Bool {
+    func activateBook(ownerID: UserID, generation: UInt64, bookID: BookID, reopenRetiredBookFence: Bool = true) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard !transitioningOwners.contains(ownerID),
               !owners.contains(Key(ownerID: ownerID, generation: generation)) else { return false }
         let key = BookKey(ownerID: ownerID, generation: generation, bookID: bookID)
-        retiredBooks.remove(key)
+        guard reopenRetiredBookFence || !retiredBooks.contains(key) else { return false }
+        if reopenRetiredBookFence { retiredBooks.remove(key) }
         bookAttemptEpochs[key, default: 0] &+= 1
         return true
     }
@@ -99,6 +100,23 @@ private final class BookSourceRegistryFence: @unchecked Sendable {
         let key = BookKey(ownerID: ownerID, generation: generation, bookID: bookID)
         lock.lock(); defer { lock.unlock() }
         return bookAttemptEpochs[key, default: 0]
+    }
+
+    /// Linearizes recovery failure publication against synchronous retry and
+    /// retirement fences. The commit closure must not suspend or acquire this lock.
+    func commitRecoveryFailureIfCurrent(
+        _ permit: BookImportRecoverySourceFailurePermit,
+        commit: () -> Bool
+    ) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let key = BookKey(ownerID: permit.ownerID, generation: permit.generation, bookID: permit.bookID)
+        guard permit.token.ownerID == permit.ownerID,
+              permit.token.bookID == permit.bookID,
+              bookAttemptEpochs[key, default: 0] == permit.attemptEpoch,
+              !transitioningOwners.contains(permit.ownerID),
+              !owners.contains(Key(ownerID: permit.ownerID, generation: permit.generation)),
+              !retiredBooks.contains(key) else { return false }
+        return commit()
     }
 
     func isFenced(ownerID: UserID, generation: UInt64) -> Bool {
@@ -138,6 +156,14 @@ private final class BookSourceRegistryFence: @unchecked Sendable {
     func unregister(_ permit: BookSourceAccessPermit) { remove(permit) }
 }
 
+struct BookImportRecoverySourceFailurePermit: Sendable, Equatable {
+    let ownerID: UserID
+    let generation: UInt64
+    let bookID: BookID
+    let token: BookMaterializationToken
+    let attemptEpoch: UInt64
+}
+
 public enum BookSourceRegistryError: Error, Sendable, Equatable {
     case unavailable
     case accountRevoked
@@ -162,6 +188,7 @@ public actor BookSourceRegistry: BookSourceResolving {
     private struct ManagedWaiter {
         let book: Book
         let generation: UInt64
+        let attemptEpoch: UInt64
         let continuation: CheckedContinuation<ManagedBookSource, Error>
     }
 
@@ -180,21 +207,31 @@ public actor BookSourceRegistry: BookSourceResolving {
     private let managedURL: @Sendable (Book) -> URL?
     private let currentGeneration: @Sendable () async -> UInt64
     private let currentOwnerID: @Sendable () async -> UserID?
+    private let startSecurityScope: @Sendable (URL) -> Bool
+    private let stopSecurityScope: @Sendable (URL) -> Void
+    private let backfillManagedFingerprintIfNeeded: @Sendable (Book) async -> Bool
     private var entries: [BookID: Entry] = [:]
     private var activeTransientLeaseCounts: [BookMaterializationToken: Int] = [:]
     private var waiters: [UUID: ManagedWaiter] = [:]
     private var terminalFailures: [BookKey: TerminalFailure] = [:]
+    private var managedFingerprintBackfills: [BookKey: Task<Bool, Never>] = [:]
     private nonisolated let synchronousFence = BookSourceRegistryFence()
 
     public init(
         persistence: (any BookImportPersistence)? = nil,
         currentGeneration: @escaping @Sendable () async -> UInt64,
         currentOwnerID: @escaping @Sendable () async -> UserID? = { nil },
+        startSecurityScope: @escaping @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopSecurityScope: @escaping @Sendable (URL) -> Void = { $0.stopAccessingSecurityScopedResource() },
+        backfillManagedFingerprintIfNeeded: @escaping @Sendable (Book) async -> Bool = { _ in false },
         managedURL: @escaping @Sendable (Book) -> URL?
     ) {
         self.persistence = persistence
         self.currentGeneration = currentGeneration
         self.currentOwnerID = currentOwnerID
+        self.startSecurityScope = startSecurityScope
+        self.stopSecurityScope = stopSecurityScope
+        self.backfillManagedFingerprintIfNeeded = backfillManagedFingerprintIfNeeded
         self.managedURL = managedURL
     }
 
@@ -202,7 +239,7 @@ public actor BookSourceRegistry: BookSourceResolving {
         for book: Book,
         url: URL,
         accountGeneration: UInt64,
-        contentRevision: UUID,
+        readingPermit suppliedReadingPermit: BookReadingPermit? = nil,
         token: BookMaterializationToken? = nil,
         requiresSecurityScope: Bool = true,
         observeChanges: Bool = true,
@@ -212,13 +249,29 @@ public actor BookSourceRegistry: BookSourceResolving {
         guard await currentOwnerID() == book.userId, await currentGeneration() == accountGeneration else {
             throw BookSourceRegistryError.accountRevoked
         }
+        let readingPermit: BookReadingPermit
+        if let suppliedReadingPermit {
+            readingPermit = suppliedReadingPermit
+        } else if let persistedPermit = try await persistence?.readingPermit(
+            bookID: book.id,
+            ownerID: book.userId,
+            generation: accountGeneration
+        ) {
+            readingPermit = persistedPermit
+        } else {
+            throw BookSourceOwnerError.readingAuthorityUnavailable
+        }
+        guard readingPermit.ownerID == book.userId,
+              readingPermit.accountGeneration == accountGeneration,
+              readingPermit.bookID == book.id else {
+            throw BookSourceOwnerError.readingAuthorityUnavailable
+        }
         guard !synchronousFence.isOwnerTransitioning(book.userId) else { throw BookSourceRegistryError.accountRevoked }
         let bookKey = BookKey(ownerID: book.userId, generation: accountGeneration, bookID: book.id)
         terminalFailures.removeValue(forKey: bookKey)
         let permit = BookSourceAccessPermit()
         let authority = BookSourceEffectAuthority()
         authority.register(permit)
-        let readingPermit = BookReadingPermit(ownerID: book.userId, accountGeneration: accountGeneration, bookID: book.id, contentRevision: contentRevision)
         let lifetime = BookSourceOwnerLifetime()
         let invalidation = BookSourceInvalidationSignal()
         do {
@@ -231,7 +284,15 @@ public actor BookSourceRegistry: BookSourceResolving {
         }
         let owner: BookSourceOwner
         do {
-            owner = try BookSourceOwner(url: url, access: .account(readingPermit), sourceAccessPermit: permit, effectAuthority: authority, lifetime: lifetime, invalidation: invalidation, usesSecurityScope: requiresSecurityScope, onRelease: { [weak fence = synchronousFence] in
+            let startScope = startSecurityScope
+            let stopScope = stopSecurityScope
+            let stopOwnerScope: (@Sendable () -> Void)?
+            if requiresSecurityScope {
+                stopOwnerScope = { stopScope(url) }
+            } else {
+                stopOwnerScope = nil
+            }
+            owner = try BookSourceOwner(url: url, access: .account(readingPermit), sourceAccessPermit: permit, effectAuthority: authority, lifetime: lifetime, invalidation: invalidation, usesSecurityScope: requiresSecurityScope, startAccessing: startScope, stopAccessing: stopOwnerScope, onRelease: { [weak fence = synchronousFence] in
                 fence?.release(permit)
                 onOwnerReleased?()
             })
@@ -278,7 +339,7 @@ public actor BookSourceRegistry: BookSourceResolving {
             let permit = BookSourceAccessPermit()
             let authority = BookSourceEffectAuthority()
             authority.register(permit)
-            let readingPermit = BookReadingPermit(ownerID: book.userId, accountGeneration: managed.accountGeneration, bookID: book.id, contentRevision: managed.fingerprint.version.materializationRevision)
+            let readingPermit = managed.readingPermit
             let lifetime = BookSourceOwnerLifetime()
             let invalidation = BookSourceInvalidationSignal()
             do {
@@ -352,7 +413,8 @@ public actor BookSourceRegistry: BookSourceResolving {
         token: BookMaterializationToken,
         permit: BookSourceAccessPermit
     ) -> Bool {
-        guard var entry = entries[bookID], entry.ownerID == ownerID,
+        guard !Task.isCancelled,
+              var entry = entries[bookID], entry.ownerID == ownerID,
               entry.generation == generation, entry.token == token,
               entry.owner.sourceAccessPermit == permit,
               entry.isPreview == false, !entry.invalidated, !entry.isPublished else { return false }
@@ -394,14 +456,54 @@ public actor BookSourceRegistry: BookSourceResolving {
               !synchronousFence.isFenced(ownerID: book.userId, generation: generation),
               !synchronousFence.isBookRetired(ownerID: book.userId, generation: generation, bookID: book.id) else { return nil }
         let ownerIDIsCurrent = await currentOwnerID() == book.userId
-        guard ownerIDIsCurrent,
-              let fingerprint = try await persistence.fingerprint(bookID: book.id, ownerID: book.userId),
-              fingerprint.bookID == book.id,
-              fingerprint.ownerID == book.userId,
-              let url = managedURL(book),
+        guard ownerIDIsCurrent else { return nil }
+        var storedFingerprint = try await persistence.fingerprint(bookID: book.id, ownerID: book.userId)
+        guard let url = managedURL(book),
               !book.fileURL.hasPrefix("/"),
               !book.fileURL.split(separator: "/").contains(".."),
-              FileManager.default.fileExists(atPath: url.path),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        if storedFingerprint == nil {
+            guard await currentOwnerID() == book.userId, await currentGeneration() == generation,
+                  !synchronousFence.isOwnerTransitioning(book.userId),
+                  !synchronousFence.isFenced(ownerID: book.userId, generation: generation),
+                  !synchronousFence.isBookRetired(ownerID: book.userId, generation: generation, bookID: book.id) else { return nil }
+            let key = BookKey(ownerID: book.userId, generation: generation, bookID: book.id)
+            let backfill: Task<Bool, Never>
+            let startedBackfill: Bool
+            if let existing = managedFingerprintBackfills[key] {
+                backfill = existing
+                startedBackfill = false
+            } else {
+                let verify = backfillManagedFingerprintIfNeeded
+                backfill = Task {
+                    do {
+                        if try await persistence.fingerprint(bookID: book.id, ownerID: book.userId) != nil { return true }
+                    } catch {
+                        return false
+                    }
+                    return await verify(book)
+                }
+                managedFingerprintBackfills[key] = backfill
+                startedBackfill = true
+            }
+            let backfilled = await backfill.value
+            if startedBackfill {
+                managedFingerprintBackfills.removeValue(forKey: key)
+                Log.event("library.source.fingerprint_backfill", level: .info, data: [
+                    "book_id": book.id.uuidString,
+                    "persisted": String(backfilled)
+                ])
+            }
+            guard backfilled,
+                  await currentOwnerID() == book.userId, await currentGeneration() == generation,
+                  !synchronousFence.isOwnerTransitioning(book.userId),
+                  !synchronousFence.isFenced(ownerID: book.userId, generation: generation),
+                  !synchronousFence.isBookRetired(ownerID: book.userId, generation: generation, bookID: book.id) else { return nil }
+            storedFingerprint = try await persistence.fingerprint(bookID: book.id, ownerID: book.userId)
+        }
+        guard let fingerprint = storedFingerprint,
+              fingerprint.bookID == book.id,
+              fingerprint.ownerID == book.userId,
               let observed = try CoordinatedSourceProbe.version(at: url, revision: fingerprint.version.materializationRevision),
               observed == fingerprint.version else { return nil }
         // A ready managed import survives same-owner sign-out/sign-in, but its
@@ -413,6 +515,13 @@ public actor BookSourceRegistry: BookSourceResolving {
             generation: generation,
             fingerprint: fingerprint
         ) else { return nil }
+        guard let readingPermit = try await persistence.readingPermit(
+            forManagedFingerprint: fingerprint,
+            expectedRelativePath: book.fileURL,
+            generation: generation
+        ), readingPermit.ownerID == book.userId,
+           readingPermit.accountGeneration == generation,
+           readingPermit.bookID == book.id else { return nil }
         if let job = try await persistence.pendingMaterialization(bookID: book.id, ownerID: book.userId) {
             guard job.phase == .ready,
                   job.token.accountGeneration == generation,
@@ -424,7 +533,23 @@ public actor BookSourceRegistry: BookSourceResolving {
               !synchronousFence.isOwnerTransitioning(book.userId),
               !synchronousFence.isFenced(ownerID: book.userId, generation: generation),
               !synchronousFence.isBookRetired(ownerID: book.userId, generation: generation, bookID: book.id) else { return nil }
-        return ManagedBookSource(bookID: book.id, url: url, fingerprint: fingerprint, accountGeneration: generation)
+        return ManagedBookSource(bookID: book.id, url: url, fingerprint: fingerprint, readingPermit: readingPermit)
+    }
+
+    /// Allows reads of artwork already owned by a canonical library row. This
+    /// intentionally does not establish authority to read the managed book.
+    public func allowsArtworkRead(for book: Book, generation: UInt64) async -> Bool {
+        guard await currentOwnerID() == book.userId,
+              await currentGeneration() == generation,
+              !synchronousFence.isOwnerTransitioning(book.userId),
+              !synchronousFence.isFenced(ownerID: book.userId, generation: generation),
+              !synchronousFence.isBookRetired(ownerID: book.userId, generation: generation, bookID: book.id)
+        else { return false }
+        guard await currentOwnerID() == book.userId,
+              await currentGeneration() == generation else { return false }
+        return !synchronousFence.isOwnerTransitioning(book.userId)
+            && !synchronousFence.isFenced(ownerID: book.userId, generation: generation)
+            && !synchronousFence.isBookRetired(ownerID: book.userId, generation: generation, bookID: book.id)
     }
 
     public func awaitManagedSource(for book: Book) async throws -> ManagedBookSource {
@@ -468,7 +593,12 @@ public actor BookSourceRegistry: BookSourceResolving {
                     continuation.resume(throwing: failure)
                     return
                 }
-                waiters[waiterID] = ManagedWaiter(book: book, generation: generation, continuation: continuation)
+                waiters[waiterID] = ManagedWaiter(
+                    book: book,
+                    generation: generation,
+                    attemptEpoch: synchronousFence.bookAttemptEpoch(ownerID: book.userId, generation: generation, bookID: book.id),
+                    continuation: continuation
+                )
                 Task { await self.recheckManagedWaiter(waiterID) }
             }
         } onCancel: {
@@ -526,6 +656,61 @@ public actor BookSourceRegistry: BookSourceResolving {
             waiters.removeValue(forKey: id)
             waiter.continuation.resume(throwing: error)
         }
+    }
+
+    /// Completes waiters for the recovery epoch authorized by a live lifecycle claim.
+    /// A ready managed source or a superseding fence/attempt always wins.
+    @discardableResult
+    func failRecoveryWaiters(
+        for book: Book,
+        permit: BookImportRecoverySourceFailurePermit,
+        error: Error = BookSourceRegistryError.unavailable
+    ) async -> Bool {
+        guard book.userId == permit.ownerID, book.id == permit.bookID,
+              permit.token.ownerID == permit.ownerID, permit.token.bookID == permit.bookID,
+              await currentOwnerID() == permit.ownerID,
+              await currentGeneration() == permit.generation,
+              currentRecoveryEpochMatches(permit) else { return false }
+
+        if let source = try? await managedSource(for: book) {
+            managedSourceBecameReady(source)
+            return false
+        }
+        guard await currentOwnerID() == permit.ownerID,
+              await currentGeneration() == permit.generation else { return false }
+        return synchronousFence.commitRecoveryFailureIfCurrent(permit) {
+            guard entries[book.id].map({
+                $0.ownerID == permit.ownerID && $0.generation == permit.generation && $0.isPublished && !$0.invalidated
+            }) != true else { return false }
+
+            terminalFailures[BookKey(ownerID: permit.ownerID, generation: permit.generation, bookID: permit.bookID)] = TerminalFailure(
+                error: error,
+                attemptEpoch: permit.attemptEpoch
+            )
+            let matching = waiters.filter {
+                $0.value.book.userId == permit.ownerID && $0.value.generation == permit.generation
+                    && $0.value.book.id == permit.bookID && $0.value.attemptEpoch <= permit.attemptEpoch
+            }
+            for (id, waiter) in matching {
+                waiters.removeValue(forKey: id)
+                waiter.continuation.resume(throwing: error)
+            }
+            return true
+        }
+    }
+
+    nonisolated func bookAttemptEpochSynchronously(ownerID: UserID, generation: UInt64, bookID: BookID) -> UInt64 {
+        synchronousFence.bookAttemptEpoch(ownerID: ownerID, generation: generation, bookID: bookID)
+    }
+
+    private func currentRecoveryEpochMatches(_ permit: BookImportRecoverySourceFailurePermit) -> Bool {
+        permit.attemptEpoch == synchronousFence.bookAttemptEpoch(
+            ownerID: permit.ownerID,
+            generation: permit.generation,
+            bookID: permit.bookID
+        ) && !synchronousFence.isOwnerTransitioning(permit.ownerID)
+            && !synchronousFence.isFenced(ownerID: permit.ownerID, generation: permit.generation)
+            && !synchronousFence.isBookRetired(ownerID: permit.ownerID, generation: permit.generation, bookID: permit.bookID)
     }
 
     public func retireSource(ownerID: UserID, generation: UInt64, bookID: BookID, error: Error = BookSourceRegistryError.unavailable) {
@@ -591,6 +776,13 @@ public actor BookSourceRegistry: BookSourceResolving {
     @discardableResult
     public nonisolated func activateBookSynchronously(ownerID: UserID, generation: UInt64, bookID: BookID) -> Bool {
         synchronousFence.activateBook(ownerID: ownerID, generation: generation, bookID: bookID)
+    }
+
+    /// Advances attempt-local failure epochs without clearing a permanent
+    /// deletion fence. Retry uses this after the persisted token CAS.
+    @discardableResult
+    public nonisolated func advanceBookAttemptSynchronously(ownerID: UserID, generation: UInt64, bookID: BookID) -> Bool {
+        synchronousFence.activateBook(ownerID: ownerID, generation: generation, bookID: bookID, reopenRetiredBookFence: false)
     }
 
     public func drain(ownerID: UserID, generation: UInt64) async {

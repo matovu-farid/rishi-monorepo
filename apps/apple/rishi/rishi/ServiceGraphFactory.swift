@@ -167,6 +167,32 @@ enum ServiceGraphFactory {
             ? .enabled
             : .disabled
         let chapterIndexGenerationDispatcher = ChapterIndexGenerationDispatcher()
+        let syncMetadataStore: SwiftDataSyncMetadataStore
+        do {
+            syncMetadataStore = try await SyncMetadataStoreBootstrap.makeStore()
+        } catch {
+            fatalError("Failed to initialize sync metadata store: \(error)")
+        }
+        let managedFingerprintStorage = BookFileStorage(
+            rootURL: documentsURL,
+            bookStore: bookStore,
+            coverExtractors: [:],
+            isTombstoned: { bookId in
+                (try? await syncMetadataStore.isTombstone(entityId: bookId, kind: .book)) ?? false
+            },
+            fingerprintPersistence: bookImportPersistence,
+            fingerprintAccountGeneration: fingerprintAccountGeneration
+        )
+        let bookSourceRegistry = BookSourceRegistry(
+            persistence: bookImportPersistence,
+            currentGeneration: { await fingerprintAccountGeneration() ?? 0 },
+            currentOwnerID: { await userIdBox.value },
+            backfillManagedFingerprintIfNeeded: { book in
+                guard (try? await syncMetadataStore.isTombstone(entityId: book.id, kind: .book)) == false else { return false }
+                return await managedFingerprintStorage.cacheVerifiedManagedFile(for: book)?.fingerprintPersisted == true
+            },
+            managedURL: { book in documentsURL.appendingPathComponent(book.fileURL) }
+        )
         let indexingHook = RishiSearchIndexingHook(
             builder: indexBuilder,
             extractors: [
@@ -175,23 +201,48 @@ enum ServiceGraphFactory {
             ],
             onIndexReady: { bookID in
                 await chapterIndexGenerationDispatcher.refresh(bookID)
+            },
+            acquireSource: { requested in
+                guard await userIdBox.value == requested.userId,
+                      let generation = await fingerprintAccountGeneration(),
+                      let canonical = try await bookStore.book(requested.id),
+                      canonical.userId == requested.userId,
+                      canonical.fileURL == requested.fileURL,
+                      canonical.formatType == requested.formatType,
+                      try await syncMetadataStore.isTombstone(entityId: requested.id, kind: .book) == false,
+                      let managed = try await bookSourceRegistry.managedSource(for: canonical),
+                      managed.accountGeneration == generation else { throw CancellationError() }
+                let lease = try await bookSourceRegistry.acquireReadableSource(for: canonical)
+                guard await userIdBox.value == requested.userId,
+                      await fingerprintAccountGeneration() == generation,
+                      try await bookStore.book(requested.id) == canonical,
+                      try await syncMetadataStore.isTombstone(entityId: requested.id, kind: .book) == false,
+                      lease.access == .account(managed.readingPermit),
+                      lease.cachePolicy == .managed(bookID: requested.id, version: managed.fingerprint.version),
+                      lease.url.standardizedFileURL == managed.url.standardizedFileURL,
+                      await userIdBox.value == requested.userId,
+                      await fingerprintAccountGeneration() == generation else { throw CancellationError() }
+                return BookIndexingSource(
+                    identity: BookIndexingIdentity(ownerID: requested.userId, generation: generation, bookID: requested.id),
+                    lease: lease
+                )
             }
-        )
-        let syncMetadataStore: SwiftDataSyncMetadataStore
-        do {
-            syncMetadataStore = try SyncMetadataStoreBootstrap.makeStore()
-        } catch {
-            fatalError("Failed to initialize sync metadata store: \(error)")
-        }
-        let bookSourceRegistry = BookSourceRegistry(
-            persistence: bookImportPersistence,
-            currentGeneration: { await fingerprintAccountGeneration() ?? 0 },
-            currentOwnerID: { await userIdBox.value },
-            managedURL: { book in documentsURL.appendingPathComponent(book.fileURL) }
         )
         let bookImportLifecycle = BookImportLifecycle(
             sourceRegistry: bookSourceRegistry,
-            currentAccountGeneration: { await fingerprintAccountGeneration() }
+            currentAccountGeneration: { await fingerprintAccountGeneration() },
+            cancelOwnerWork: { ownerID, generation in
+                indexingHook.cancelOwner(ownerID: ownerID, generation: generation)
+            },
+            drainOwnerWork: { ownerID, generation in
+                await indexingHook.drainOwner(ownerID: ownerID, generation: generation)
+            },
+            cancelBookWork: { ownerID, generation, bookID in
+                indexingHook.cancelBook(ownerID: ownerID, generation: generation, bookID: bookID)
+            },
+            drainBookWork: { ownerID, generation, bookID in
+                await indexingHook.drainBook(ownerID: ownerID, generation: generation, bookID: bookID)
+            }
         )
         let bookImportEvents = BookImportEvents()
         let bookMaterializationCoordinator = BookMaterializationCoordinator(
@@ -205,18 +256,6 @@ enum ServiceGraphFactory {
                 (try? await syncMetadataStore.isTombstone(entityId: bookId, kind: .book)) ?? false
             },
             events: bookImportEvents
-        )
-        let bookImportRecovery = BookImportRecovery(
-            rootURL: documentsURL,
-            bookStore: bookStore,
-            persistence: bookImportPersistence,
-            lifecycle: bookImportLifecycle,
-            prepareOwnedSourceCleanup: { token in
-                await bookSourceRegistry.prepareOwnedSourceCleanup(for: token)
-            },
-            resume: { book, token in
-                _ = try await bookMaterializationCoordinator.resumeRecovered(book: book, token: token)
-            }
         )
         let bookFileStorage = BookFileStorage(
             rootURL: documentsURL,
@@ -236,6 +275,79 @@ enum ServiceGraphFactory {
             fingerprintPersistence: bookImportPersistence,
             fingerprintAccountGeneration: fingerprintAccountGeneration,
             materializationCoordinator: bookMaterializationCoordinator
+        )
+        let finishDeletedBookCleanup: @Sendable (BookID, UserID, UInt64, @Sendable () async throws -> Void) async throws -> Void = { bookID, ownerID, generation, cleanup in
+            guard await userIdBox.value == ownerID,
+                  await fingerprintAccountGeneration() == generation,
+                  let admission = bookImportLifecycle.admitOwnerOperation(ownerID: ownerID, generation: generation) else {
+                throw CancellationError()
+            }
+            defer { admission.release() }
+            guard try await syncMetadataStore.isTombstone(entityId: bookID, kind: .book),
+                  try await bookImportPersistence.isBookPermanentlyDeleted(bookID: bookID, ownerID: ownerID),
+                  try await bookStore.book(bookID) == nil,
+                  await userIdBox.value == ownerID,
+                  await fingerprintAccountGeneration() == generation else { throw CancellationError() }
+            try await cleanup()
+        }
+        let bookImportRecovery = BookImportRecovery(
+            rootURL: documentsURL,
+            bookStore: bookStore,
+            persistence: bookImportPersistence,
+            lifecycle: bookImportLifecycle,
+            prepareOwnedSourceCleanup: { token in
+                await bookSourceRegistry.prepareOwnedSourceCleanup(for: token)
+            },
+            isBookTombstoned: { bookID in
+                try await syncMetadataStore.isTombstone(entityId: bookID, kind: .book)
+            },
+            prepareDeletedBookCleanup: { bookID, ownerID in
+                guard await userIdBox.value == ownerID,
+                      let generation = await fingerprintAccountGeneration() else { throw CancellationError() }
+                let cleanup = try await bookFileStorage.prepareDeletionCleanup(bookID: bookID, ownerID: ownerID)
+                return {
+                    try await finishDeletedBookCleanup(bookID, ownerID, generation, cleanup)
+                }
+            },
+            resume: { book, token in
+                _ = try await bookMaterializationCoordinator.resumeRecovered(book: book, token: token)
+            },
+            resumeRollbackRecovered: { book, token, lease in
+                try await bookMaterializationCoordinator.resumeRecovered(
+                    book: book, token: token, provisionalRollbackLease: lease
+                )
+            },
+            verifyReadyManagedSource: { book, token in
+                guard token.bookID == book.id, token.ownerID == book.userId,
+                      await fingerprintAccountGeneration() == token.accountGeneration else { return false }
+                do {
+                    guard let pending = try await bookImportPersistence.pendingMaterialization(
+                        bookID: book.id, ownerID: book.userId
+                    ), pending.token == token, pending.phase == .ready,
+                    let expected = try await bookImportPersistence.fingerprint(
+                        bookID: book.id, ownerID: book.userId
+                    ),
+                    let managed = try await bookSourceRegistry.managedSource(for: book),
+                    let lease = try? await bookSourceRegistry.acquireReadableSource(for: book) else { return false }
+                    defer { withExtendedLifetime(lease) {} }
+                    let leasedVersion = try CoordinatedSourceProbe.version(
+                        at: lease.url, revision: expected.version.materializationRevision
+                    )
+                    guard case let .managed(leasedBookID, leasedCacheVersion) = lease.cachePolicy,
+                          leasedBookID == book.id,
+                          leasedCacheVersion == expected.version,
+                          lease.url.standardizedFileURL == managed.url.standardizedFileURL,
+                          lease.access == .account(managed.readingPermit),
+                          managed.fingerprint == expected,
+                          leasedVersion == expected.version,
+                          await fingerprintAccountGeneration() == token.accountGeneration,
+                          let effectAdmission = try? lease.effectAuthority.admit(lease.sourceAccessPermit) else { return false }
+                    defer { effectAdmission.release() }
+                    return true
+                } catch {
+                    return false
+                }
+            }
         )
         if let ownerID = await userIdBox.value,
            let generation = await fingerprintAccountGeneration() {
@@ -273,15 +385,12 @@ enum ServiceGraphFactory {
             },
             managedSourceProvider: { book in
                 guard let source = try await bookSourceRegistry.managedSource(for: book) else { return nil }
-                return BookUploadSource(url: source.url, fingerprint: source.fingerprint)
+                return BookUploadSource(url: source.url, fingerprint: source.fingerprint, readingPermit: source.readingPermit)
             },
-            currentGeneration: fingerprintAccountGeneration,
-            persistServerAcceptance: { book, generation, fingerprint, acceptance in
+            persistServerAcceptance: { permit, fingerprint, acceptance in
                 (try? await bookImportPersistence.recordServerAcceptance(
-                    bookID: book.id,
-                    ownerID: book.userId,
-                    expectedGeneration: generation,
-                    expectedContentRevision: fingerprint.version.materializationRevision,
+                    permit: permit,
+                    expectedFingerprint: fingerprint,
                     acceptance: acceptance
                 )) == true
             }
@@ -335,10 +444,42 @@ enum ServiceGraphFactory {
             }
             return try? Keychain.load(.userId)
         }
+        let isCurrentAccountPermit: @Sendable (AccountMutationPermit) async -> Bool = { permit in
+            guard await userIdBox.value == permit.ownerID,
+                  await fingerprintAccountGeneration() == permit.accountGeneration else { return false }
+            return bookImportLifecycle.admits(ownerID: permit.ownerID, generation: permit.accountGeneration)
+        }
+        let admitAccountOperation: @Sendable (AccountMutationPermit) async -> BookImportOperationLease? = { permit in
+            guard await isCurrentAccountPermit(permit),
+                  let lease = bookImportLifecycle.admitOwnerOperation(ownerID: permit.ownerID, generation: permit.accountGeneration) else { return nil }
+            guard await isCurrentAccountPermit(permit) else { lease.release(); return nil }
+            return lease
+        }
+        let abortBookSourceReplacement: @Sendable (BookSourceReplacementToken) async -> Void = { token in
+            // Cleanup must finish even when the sync wave requesting it has
+            // already been canceled. Authority still belongs to this token.
+            let cleanup = Task.detached {
+                let permit = AccountMutationPermit(ownerID: token.ownerID, accountGeneration: token.generation)
+                do {
+                    guard let lease = await admitAccountOperation(permit) else { throw CancellationError() }
+                    defer { lease.release() }
+                    try await syncMetadataStore.withLiveBookIdentity(token.bookID) {
+                        guard await isCurrentAccountPermit(permit) else { throw CancellationError() }
+                        bookImportLifecycle.abortBookSourceReplacement(token, restoreSource: true)
+                    }
+                } catch {
+                    bookImportLifecycle.abortBookSourceReplacement(token, restoreSource: false)
+                }
+            }
+            await cleanup.value
+        }
         let bookDownloadCoordinator = BookDownloadCoordinator(
             workerClient: workerClient,
             fileStorage: bookFileStorage,
-            userIdProvider: syncUserIdProvider
+            userIdProvider: syncUserIdProvider,
+            metadataStore: syncMetadataStore,
+            isCurrentAccountPermit: isCurrentAccountPermit,
+            admitAccountOperation: admitAccountOperation
         )
         let changeApplier = ChangeApplier(
             bookStore: bookStore,
@@ -349,16 +490,40 @@ enum ServiceGraphFactory {
             metadataStore: syncMetadataStore,
             currentUserId: { await userIdBox.value },
             accountIsActive: { await userIdBox.value != nil },
-            bookMaterializer: { book, r2Key, remoteFile in
+            bookMaterializerWithAuthority: { book, r2Key, remoteFile, accountPermit in
                 try await bookDownloadCoordinator.downloadAndMaterializeVerified(
                     book,
                     r2Key: r2Key,
                     expectedRemoteSHA256: remoteFile?.sha256,
-                    expectedRemoteByteCount: remoteFile?.byteCount
+                    expectedRemoteByteCount: remoteFile?.byteCount,
+                    accountPermit: accountPermit
                 )
             },
-            bookFingerprintPersister: { book, fingerprint in
-                await bookFileStorage.persistVerifiedFingerprint(fingerprint, for: book)
+            isCurrentAccountPermit: isCurrentAccountPermit,
+            admitAccountOperation: admitAccountOperation,
+            prepareBookSourceReplacement: { bookID, permit in
+                guard await isCurrentAccountPermit(permit) else { throw CancellationError() }
+                let token = try await bookImportLifecycle.prepareBookSourceReplacement(
+                    ownerID: permit.ownerID, generation: permit.accountGeneration, bookID: bookID,
+                    onFailure: abortBookSourceReplacement
+                )
+                guard await isCurrentAccountPermit(permit) else {
+                    bookImportLifecycle.abortBookSourceReplacement(token, restoreSource: false)
+                    throw CancellationError()
+                }
+                return token
+            },
+            completeBookSourceReplacement: { token in
+                let permit = AccountMutationPermit(ownerID: token.ownerID, accountGeneration: token.generation)
+                guard await isCurrentAccountPermit(permit),
+                      bookImportLifecycle.completeBookSourceReplacement(token) else {
+                    throw BookImportPromotionError.retired
+                }
+            },
+            abortBookSourceReplacement: abortBookSourceReplacement,
+            bookFingerprintPersister: { book, fingerprint, capturedGeneration in
+                guard let capturedGeneration else { return false }
+                return await bookFileStorage.persistVerifiedFingerprint(fingerprint, for: book, expectedGeneration: capturedGeneration)
             },
             prepareBookMaterialCleanup: { bookID, ownerID in
                 try await bookFileStorage.prepareDeletionCleanup(bookID: bookID, ownerID: ownerID)
@@ -400,13 +565,37 @@ enum ServiceGraphFactory {
                 guard await userIdBox.value == ownerID,
                       await fingerprintAccountGeneration() == generation else { throw CancellationError() }
             },
-            activateBook: { bookID in
-                guard let ownerID = await userIdBox.value,
-                      let generation = await fingerprintAccountGeneration() else { return }
-                _ = bookSourceRegistry.activateBookSynchronously(ownerID: ownerID, generation: generation, bookID: bookID)
+            retireBookForDeletion: { bookID, permit in
+                guard await isCurrentAccountPermit(permit) else { throw CancellationError() }
+                return bookImportLifecycle.retireBookForNonLocalDeletion(
+                    ownerID: permit.ownerID, generation: permit.accountGeneration, bookID: bookID
+                )
+            },
+            deferBookDeletionCleanup: { witness, cleanup in
+                Task.detached(priority: .utility) {
+                    await bookImportLifecycle.waitForRetiredBookDeletion(witness: witness)
+                    do {
+                        try await finishDeletedBookCleanup(witness.bookID, witness.ownerID, witness.generation, cleanup)
+                    } catch {
+                        Log.error("book.deletion.cleanup_failed", error: error)
+                    }
+                }
+            },
+            activateBookWithAuthority: { bookID, permit in
+                guard await isCurrentAccountPermit(permit) else { return }
+                _ = bookSourceRegistry.advanceBookAttemptSynchronously(ownerID: permit.ownerID, generation: permit.accountGeneration, bookID: bookID)
             },
             managedFingerprintLookup: { book in
                 try? await bookSourceRegistry.managedSource(for: book)?.fingerprint
+            },
+            bookReadingPermitLookup: { book in
+                guard let generation = await fingerprintAccountGeneration() else { return nil }
+                return try? await bookImportPersistence.readingPermit(bookID: book.id, ownerID: book.userId, generation: generation)
+            },
+            bookAccountPermitLookup: {
+                guard let ownerID = await userIdBox.value,
+                      let generation = await fingerprintAccountGeneration() else { return nil }
+                return AccountMutationPermit(ownerID: ownerID, accountGeneration: generation)
             },
             bookContentDigestLookup: { book in
                 if let fingerprint = try? await bookImportPersistence.fingerprint(bookID: book.id, ownerID: book.userId) {
@@ -420,13 +609,17 @@ enum ServiceGraphFactory {
             hasPendingBookMaterialization: { book in
                 (try? await bookImportPersistence.pendingMaterialization(bookID: book.id, ownerID: book.userId)) != nil
             },
-            bookServerAcceptancePersister: { book, fingerprint, acceptance in
-                guard let generation = await fingerprintAccountGeneration() else { return false }
+            bookServerAcceptancePersister: { permit, fingerprint, acceptance in
                 return (try? await bookImportPersistence.recordServerAcceptance(
-                    bookID: book.id,
-                    ownerID: book.userId,
-                    expectedGeneration: generation,
-                    expectedContentRevision: fingerprint.version.materializationRevision,
+                    permit: permit,
+                    expectedFingerprint: fingerprint,
+                    acceptance: acceptance
+                )) == true
+            },
+            newBookServerAcceptancePersister: { accountPermit, fingerprint, acceptance in
+                (try? await bookImportPersistence.recordServerAcceptance(
+                    accountPermit: accountPermit,
+                    expectedFingerprint: fingerprint,
                     acceptance: acceptance
                 )) == true
             }
@@ -863,7 +1056,7 @@ enum ServiceGraphFactory {
         )
     }
 
-    
+
 
     nonisolated static func openPersistenceStore(
         at dbURL: URL

@@ -1,5 +1,9 @@
 import Foundation
 
+public enum BookImportFailure: Error, Sendable, Equatable {
+    case deletionInProgress
+}
+
 /// Result of registering a selected book while its original file remains a
 /// readable source. A copying registration is immediately usable by the
 /// reader; managed materialization can finish in the background.

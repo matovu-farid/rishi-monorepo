@@ -14,9 +14,9 @@ struct SyncMetadataStoreTests {
 
     @Test("SyncEntityKind raw values are pinned to sync-v2 wire format")
     func entityKindRawValuesPinned() {
-        // sync-v2 (Phase 37-08) adds the additive `bookmark` kind.
+        // Keep the complete sync-v2 wire list, including chapter-index projection rows.
         let kinds = SyncEntityKind.allCases.map(\.rawValue).sorted()
-        #expect(kinds == ["book", "bookmark", "conversation", "highlight", "message", "position"])
+        #expect(kinds == ["book", "bookmark", "chapter_index", "conversation", "highlight", "message", "position"])
     }
 
     @Test("Empty DB returns 0 pending + nil cursors")
@@ -266,8 +266,10 @@ struct SyncMetadataStoreTests {
             lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
             remoteEtag: nil
         )
-        #expect(try await store.isTombstone(entityId: id, kind: .book) == false)
-        #expect(try await store.dirtyAt(entityId: id, kind: .book) == nil)
+        // Ordinary clean cannot acknowledge or reopen a permanently deleted BookID.
+        #expect(try await store.isTombstone(entityId: id, kind: .book))
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) != nil)
+        #expect(try await store.pendingCount() == 1)
     }
 
     @Test("acknowledged book tombstones remain as clean barriers for re-import")
@@ -289,6 +291,103 @@ struct SyncMetadataStoreTests {
         #expect(try await store.pendingCount() == 0)
         #expect(try await store.dirtyAt(entityId: id, kind: .book) == nil)
         #expect(try await store.isTombstone(entityId: id, kind: .book))
+    }
+
+    @Test("ordinary writers cannot erase pending or acknowledged native book tombstones", arguments: ["dirty", "clean", "conditionalClean", "operationClean", "forget"], [false, true])
+    func ordinaryWritersPreserveBookTombstone(_ writer: String, _ acknowledged: Bool) async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markTombstone(entityId: id, kind: .book)
+        let operation = try #require(await store.operationId(entityId: id, kind: .book))
+        let dirtyAt = try #require(await store.dirtyAt(entityId: id, kind: .book))
+        let acknowledgedAt = Date(timeIntervalSince1970: 1_700_000_020)
+        if acknowledged {
+            #expect(try await store.acknowledgeTombstoneIfCurrent(
+                entityId: id, kind: .book, expectedDirtyAt: dirtyAt,
+                expectedOperationId: operation, lastSyncedAt: acknowledgedAt, remoteEtag: "deleted"
+            ))
+        }
+        let expectedDirtyAt = try await store.dirtyAt(entityId: id, kind: .book)
+        let expectedOperation = try await store.operationId(entityId: id, kind: .book)
+        let expectedCursor = try await store.lastSyncedAt(entityId: id, kind: .book)
+        let later = acknowledgedAt.addingTimeInterval(100)
+        switch writer {
+        case "dirty": try await store.markDirty(entityId: id, kind: .book)
+        case "clean": try await store.markClean(entityId: id, kind: .book, lastSyncedAt: later, remoteEtag: "live")
+        case "conditionalClean":
+            #expect(try await store.markCleanIfUnchanged(
+                entityId: id, kind: .book, expectedDirtyAt: expectedDirtyAt,
+                lastSyncedAt: later, remoteEtag: "live"
+            ) == false)
+        case "operationClean":
+            #expect(try await store.markCleanIfCurrent(
+                entityId: id, kind: .book, expectedDirtyAt: expectedDirtyAt,
+                expectedOperationId: operation, lastSyncedAt: later, remoteEtag: "live"
+            ) == false)
+        default: try await store.forget(entityId: id, kind: .book)
+        }
+        #expect(try await store.isTombstone(entityId: id, kind: .book))
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) == expectedDirtyAt)
+        #expect(try await store.operationId(entityId: id, kind: .book) == expectedOperation)
+        #expect(try await store.lastSyncedAt(entityId: id, kind: .book) == expectedCursor)
+        #expect(try await store.pendingCount() == (acknowledged ? 0 : 1))
+        let mutations = SyncMetadataMutationCounter()
+        await #expect(throws: SyncMetadataError.bookIdentityClosed(id)) {
+            try await store.withLiveBookIdentity(id) { await mutations.increment() }
+        }
+        #expect(await mutations.count == 0)
+    }
+
+    @Test("legacy raw UUID book tombstones survive ordinary writers and forget")
+    func legacyBookTombstoneStaysClosed() async throws {
+        let container = try SyncMetadataStoreBootstrap.makeContainer(inMemory: true)
+        let id = UUID()
+        let operation = UUID()
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_021)
+        let context = ModelContext(container)
+        context.insert(SyncMetadataRow(
+            entityId: id.uuidString, entityType: SyncEntityKind.book.rawValue,
+            dirtyAt: timestamp, operationId: operation, dirty: true, tombstone: true
+        ))
+        try context.save()
+        let store = SwiftDataSyncMetadataStore(container: container)
+        try await store.markDirty(entityId: id, kind: .book)
+        try await store.markClean(entityId: id, kind: .book, lastSyncedAt: Date(), remoteEtag: nil)
+        try await store.forget(entityId: id, kind: .book)
+        #expect(try await store.isTombstone(entityId: id, kind: .book))
+        #expect(try await store.dirtyAt(entityId: id, kind: .book) == timestamp)
+        #expect(try await store.operationId(entityId: id, kind: .book) == operation)
+        #expect(try context.fetch(FetchDescriptor<SyncMetadataRow>()).count == 1)
+    }
+
+    @Test("highlight tombstones retain ordinary restore and forget semantics")
+    func nonBookRestoreRemainsAvailable() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        try await store.markTombstone(entityId: id, kind: .highlight)
+        try await store.markDirty(entityId: id, kind: .highlight)
+        #expect(try await store.isTombstone(entityId: id, kind: .highlight) == false)
+        try await store.markTombstone(entityId: id, kind: .highlight)
+        try await store.markClean(entityId: id, kind: .highlight, lastSyncedAt: Date(), remoteEtag: "restored")
+        #expect(try await store.isTombstone(entityId: id, kind: .highlight) == false)
+        try await store.markTombstone(entityId: id, kind: .highlight)
+        let dirtyAt = try #require(await store.dirtyAt(entityId: id, kind: .highlight))
+        #expect(try await store.markCleanIfUnchanged(
+            entityId: id, kind: .highlight, expectedDirtyAt: dirtyAt, lastSyncedAt: Date(), remoteEtag: nil
+        ))
+        #expect(try await store.isTombstone(entityId: id, kind: .highlight) == false)
+        try await store.markTombstone(entityId: id, kind: .highlight)
+        let nextDirtyAt = try #require(await store.dirtyAt(entityId: id, kind: .highlight))
+        let operation = try #require(await store.operationId(entityId: id, kind: .highlight))
+        #expect(try await store.markCleanIfCurrent(
+            entityId: id, kind: .highlight, expectedDirtyAt: nextDirtyAt,
+            expectedOperationId: operation, lastSyncedAt: Date(), remoteEtag: nil
+        ))
+        #expect(try await store.isTombstone(entityId: id, kind: .highlight) == false)
+        try await store.markTombstone(entityId: id, kind: .highlight)
+        try await store.forget(entityId: id, kind: .highlight)
+        #expect(try await store.isTombstone(entityId: id, kind: .highlight) == false)
+        #expect(try await store.pendingCount() == 0)
     }
 
     @Test("resetAll removes persisted cursors and dirty rows")
@@ -358,4 +457,9 @@ struct SyncMetadataStoreTests {
         #expect(try await store.cursorState(for: .recovery) == nil)
         #expect(try await store.recoveryState() == nil)
     }
+}
+
+private actor SyncMetadataMutationCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }

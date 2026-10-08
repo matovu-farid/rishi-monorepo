@@ -1748,6 +1748,10 @@ final class ReadAloudController {
         playbackGeneration &+= 1
     }
 
+    #if DEBUG
+    var playbackGenerationForRecoveryTests: UInt64 { playbackGeneration }
+    #endif
+
     private func isCurrentPlaybackGeneration(_ generation: UInt64) -> Bool {
         playbackGeneration == generation
     }

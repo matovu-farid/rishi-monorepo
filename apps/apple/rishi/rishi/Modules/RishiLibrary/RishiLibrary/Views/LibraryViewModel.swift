@@ -37,9 +37,40 @@ public final class LibraryViewModel {
     enum RefreshReason: Equatable { case appearance, mutation }
     public enum LoadResult: Equatable, Sendable { case success, failure, cancelled }
 
+    /// An exact, owner-scoped deletion attempt. Only this view model creates it.
+    public struct BookDeletionOperation: Sendable {
+        fileprivate let id: UUID
+        fileprivate let book: Book
+        fileprivate let owner: UserID
+        fileprivate let accountIdentity: LibraryAccountIdentity?
+        fileprivate let ownerEpoch: UInt64
+    }
+
+    private enum CanonicalDeletionObservation {
+        case unread
+        case absent
+        case present(Book)
+    }
+
+    private struct PendingDeletion {
+        let operation: BookDeletionOperation
+        let position: Position?
+        let coverURL: URL?
+        let previouslyPersistedTombstone: Bool
+        var completionStarted = false
+        var canonical: CanonicalDeletionObservation = .unread
+    }
+
+    private struct FailedDeletionPresentation {
+        let book: Book
+        let position: Position?
+        let coverURL: URL?
+        let retainWhenCanonicallyAbsent: Bool
+    }
+
     private enum HydrationResult: Sendable {
         case positions([BookID: Position])
-        case covers([BookID: URL])
+        case coversFinished
     }
 
     public private(set) var books: [Book] = []
@@ -95,20 +126,34 @@ public final class LibraryViewModel {
     private let deleteBook: @Sendable (Book) async throws -> Void
     /// Fences and drains work that may still read or materialize this book.
     /// Production wiring also closes any presented reader before returning.
-    private let beforeBookDeleted: @Sendable (Book) async throws -> Void
+    private let beforeBookDeleted: @Sendable (Book) async throws -> BookDeletionRetirementWitness?
     /// Confirms that no tombstone was committed and restores the current live
     /// managed source admission after a failed retirement. False keeps the
     /// book fenced and retryable.
-    private let restoreBookAfterFailedRetirement: @Sendable (Book, BookMaterializationToken?) async -> Bool
+    private let restoreBookAfterFailedRetirement: @Sendable (Book, BookDeletionRetirementWitness?) async -> BookDeletionRollbackResult
     private let onBookDeleted: (@Sendable (BookID) async throws -> Void)?
+    public enum DeletionCommitOutcome: Sendable {
+        case committed(deferredCleanup: @Sendable () async -> Void)
+        case savedNeedsReconciliation(reconcile: @Sendable () async -> Bool, deferredCleanup: @Sendable () async -> Void)
+    }
+    private let logicalBookDeletion: (@Sendable (Book, BookDeletionRetirementWitness?) async throws -> DeletionCommitOutcome)?
+    private let isBookTombstoned: (@Sendable (BookID) async throws -> Bool)?
 
     private var searchTask: Task<Void, Never>? = nil
     private var hydrationTask: Task<Void, Never>? = nil
     private var publicationRevision: UInt64 = 0
     private var bookSnapshotRevision: UInt64 = 0
     private var publishedOwnerId: UserID?
+    private var publishedAccountIdentity: LibraryAccountIdentity?
+    private var ownerEpoch: UInt64 = 0
+    private var pendingDeletions: [BookID: PendingDeletion] = [:]
+    private var failedDeletionPresentations: [BookID: FailedDeletionPresentation] = [:]
     private var pendingManagedBookIDs: Set<BookID> = []
     private var pendingCoverBookIDs: Set<BookID> = []
+    private var coverResultsPublishedForSnapshot: Set<BookID> = []
+    private var coverPublicationWaiters: [BookID: [CheckedContinuation<Void, Never>]] = [:]
+    private var gridVisibleBookIDs: Set<BookID> = []
+    private var readingNowVisibleBookIDs: Set<BookID> = []
     private var importEventTokens: [BookID: BookMaterializationToken] = [:]
     private var retiredImportTokens: Set<BookMaterializationToken> = []
     /// A deletion is an immediate publication fence. It also covers events
@@ -131,9 +176,11 @@ public final class LibraryViewModel {
         positionLoader: PositionLoader,
         coverResolver: BookCoverResolver,
         deleteBook: @escaping @Sendable (Book) async throws -> Void,
-        beforeBookDeleted: @escaping @Sendable (Book) async throws -> Void = { _ in },
-        restoreBookAfterFailedRetirement: @escaping @Sendable (Book, BookMaterializationToken?) async -> Bool = { _, _ in false },
+        beforeBookDeleted: @escaping @Sendable (Book) async throws -> BookDeletionRetirementWitness? = { _ in nil },
+        restoreBookAfterFailedRetirement: @escaping @Sendable (Book, BookDeletionRetirementWitness?) async -> BookDeletionRollbackResult = { _, _ in .refused },
         onBookDeleted: (@Sendable (BookID) async throws -> Void)? = nil,
+        logicalBookDeletion: (@Sendable (Book, BookDeletionRetirementWitness?) async throws -> DeletionCommitOutcome)? = nil,
+        isBookTombstoned: (@Sendable (BookID) async throws -> Bool)? = nil,
         bookImportEvents: BookImportEvents? = nil,
         currentAccountGeneration: @escaping @Sendable () async -> UInt64? = { nil },
         validatesRegistrationEvent: (@Sendable (BookImportEvent) async -> Bool)? = nil,
@@ -154,6 +201,8 @@ public final class LibraryViewModel {
         self.beforeBookDeleted = beforeBookDeleted
         self.restoreBookAfterFailedRetirement = restoreBookAfterFailedRetirement
         self.onBookDeleted = onBookDeleted
+        self.logicalBookDeletion = logicalBookDeletion
+        self.isBookTombstoned = isBookTombstoned
     }
 
     /// Compatibility initializer for callers that still provide raw storage.
@@ -226,6 +275,7 @@ public final class LibraryViewModel {
         await refresh()
         let succeeded = outcomes.compactMap(\.book).count
         let failed = outcomes.filter { $0.error != nil }.count
+        let retiring = outcomes.filter { $0.failureReason == .deletionInProgress }.count
         if succeeded == 0 {
             Log.event(
                 "library.import.picked.no_books",
@@ -235,11 +285,17 @@ public final class LibraryViewModel {
                     "errors": outcomes.compactMap(\.error).joined(separator: " | ")
                 ]
             )
-            importError = ImportFailure(message: "Couldn't import the selected file. Please choose a valid EPUB or PDF.")
+            if retiring == failed && retiring > 0 {
+                importError = ImportFailure(message: "This book is still being deleted. Try importing it again when deletion finishes.")
+            } else if retiring > 0 {
+                importError = ImportFailure(message: "Some books are still being deleted. Try importing those again when deletion finishes. Other selected files could not be imported.")
+            } else {
+                importError = ImportFailure(message: "Couldn't import the selected file. Please choose a valid EPUB or PDF.")
+            }
         } else if failed > 0 {
             importError = ImportFailure(
                 title: "Some Files Could Not Be Imported",
-                message: "Imported \(succeeded) of \(outcomes.count) selected files. Try importing the remaining files again."
+                message: retiring > 0 ? "Imported \(succeeded) of \(outcomes.count) selected files. Some books are still being deleted; try importing those again when deletion finishes." : "Imported \(succeeded) of \(outcomes.count) selected files. Try importing the remaining files again."
             )
         }
         return outcomes
@@ -247,8 +303,9 @@ public final class LibraryViewModel {
 
     /// Reloads books for the current user and re-derives readingNow + filteredBooks.
     /// Silent on errors (logged via RishiLogging) — the UI shows empty state.
-    public func refresh() async {
-        _ = await refresh(reason: .mutation)
+    @discardableResult
+    public func refresh() async -> LoadResult {
+        await refresh(reason: .mutation)
     }
 
     func refresh(reason: RefreshReason) async -> LoadResult {
@@ -288,54 +345,100 @@ public final class LibraryViewModel {
         hydrationTask?.cancel()
         hydrationTask = nil
         guard let userId = currentUserId() else {
-            publishedOwnerId = nil
-            books = []
-            readingNow = []
-            filteredBooks = []
-            positionsByBookId = [:]
-            coverURLs = [:]
-            pendingManagedBookIDs = []
-            pendingCoverBookIDs = []
-            importEventTokens = [:]
-            retiredImportTokens = []
-            locallyDeletedBookIDs = []
+            adoptOwner(nil)
             return .cancelled
         }
         guard boundIdentityIsCurrent, boundAccountIdentity?.userID == nil || boundAccountIdentity?.userID == userId else { return .cancelled }
-        if publishedOwnerId != userId {
-            // BookIDs can collide across owners. Never retain the previous
-            // account's reading or cover state while the new base list loads.
-            publishedOwnerId = userId
-            books = []
-            readingNow = []
-            filteredBooks = []
-            positionsByBookId = [:]
-            coverURLs = [:]
-            pendingManagedBookIDs = []
-            pendingCoverBookIDs = []
-            importEventTokens = [:]
-            retiredImportTokens = []
-            locallyDeletedBookIDs = []
-        }
+        adoptOwner(userId)
         do {
-            let loaded = try await bookStore.books(for: userId)
+            let candidates = try await bookStore.books(for: userId)
+            var loaded: [Book] = []
+            for book in candidates {
+                if let isBookTombstoned, try await isBookTombstoned(book.id) { continue }
+                guard isCurrent(revision: revision, owner: userId) else { return .cancelled }
+                loaded.append(book)
+            }
             guard isCurrent(revision: revision, owner: userId) else { return .cancelled }
             let loadedIDs = Set(loaded.map(\.id))
             retiredImportTokens.formUnion(importEventTokens.values.filter { !loadedIDs.contains($0.bookID) })
-            self.books = loaded
-            self.positionsByBookId = positionsByBookId.filter { loadedIDs.contains($0.key) }
-            self.coverURLs = coverURLs.filter { loadedIDs.contains($0.key) }
+            // Readiness and attempt retirement use canonical rows, even when
+            // a pending deletion temporarily hides one from every surface.
             pendingManagedBookIDs.formIntersection(loadedIDs)
             pendingCoverBookIDs.formIntersection(loadedIDs)
             importEventTokens = importEventTokens.filter { loadedIDs.contains($0.key) }
-            self.readingNow = Self.deriveReadingNow(books: loaded, positions: positionsByBookId)
-            self.filteredBooks = LibrarySearchFilter.filter(books: loaded, query: searchText)
-            startHydration(books: loaded, owner: userId, revision: revision)
+            let canonicalByID = Dictionary(loaded.map { ($0.id, $0) }, uniquingKeysWith: { _, newer in newer })
+            for id in Array(pendingDeletions.keys) {
+                pendingDeletions[id]?.canonical = canonicalByID[id].map(CanonicalDeletionObservation.present) ?? .absent
+            }
+            var visible = loaded
+            for (id, fallback) in failedDeletionPresentations {
+                if let canonical = canonicalByID[id] {
+                    if canonical != fallback.book {
+                        failedDeletionPresentations[id] = nil
+                        positionsByBookId[id] = nil
+                        coverURLs[id] = nil
+                    }
+                } else if fallback.retainWhenCanonicallyAbsent {
+                    visible.append(fallback.book)
+                } else {
+                    failedDeletionPresentations[id] = nil
+                }
+            }
+            visible.removeAll { pendingDeletions[$0.id] != nil }
+            visible.sort { $0.addedAt > $1.addedAt }
+            let visibleIDs = Set(visible.map(\.id))
+            self.books = visible
+            self.positionsByBookId = positionsByBookId.filter { visibleIDs.contains($0.key) }
+            self.coverURLs = coverURLs.filter { visibleIDs.contains($0.key) }
+            gridVisibleBookIDs.formIntersection(visibleIDs)
+            readingNowVisibleBookIDs.formIntersection(visibleIDs)
+            updateLibraryProjections()
+            startHydration(books: visible, owner: userId, revision: revision)
             return .success
         } catch {
+            guard isCurrent(revision: revision, owner: userId) else { return .cancelled }
             Log.error("library.refresh.failed", error: error)
-            return boundIdentityIsCurrent ? .failure : .cancelled
+            return .failure
         }
+    }
+
+    private func adoptOwner(_ owner: UserID?) {
+        let identity = owner == nil ? nil : (boundAccountIdentity ?? currentAccountIdentity())
+        guard publishedOwnerId != owner || publishedAccountIdentity != identity else { return }
+        ownerEpoch &+= 1
+        publishedOwnerId = owner
+        publishedAccountIdentity = identity
+        books = []
+        readingNow = []
+        filteredBooks = []
+        positionsByBookId = [:]
+        coverURLs = [:]
+        pendingManagedBookIDs = []
+        pendingCoverBookIDs = []
+        coverResultsPublishedForSnapshot = []
+        resumeCoverPublicationWaiters()
+        gridVisibleBookIDs = []
+        readingNowVisibleBookIDs = []
+        importEventTokens = [:]
+        retiredImportTokens = []
+        locallyDeletedBookIDs = []
+        pendingDeletions = [:]
+        failedDeletionPresentations = [:]
+        deletionError = nil
+    }
+
+    private func updateLibraryProjections() {
+        readingNow = Self.deriveReadingNow(books: books, positions: positionsByBookId)
+        filteredBooks = LibrarySearchFilter.filter(books: books, query: searchText)
+    }
+
+    private func invalidateDeletionPublication() {
+        cancelSearchDebounce()
+        publicationRevision &+= 1
+        bookSnapshotRevision &+= 1
+        hydrationTask?.cancel()
+        hydrationTask = nil
+        if snapshotLoadTask != nil { mutationInvalidationPending = true }
     }
 
     private var boundIdentityIsCurrent: Bool {
@@ -350,14 +453,15 @@ public final class LibraryViewModel {
         autoSync: Bool,
         sync: () async -> Void
     ) async -> LoadResult {
-        guard accountIdentity == boundAccountIdentity,
-              await refresh(reason: .appearance) == .success,
-              !Task.isCancelled,
-              boundIdentityIsCurrent else { return .cancelled }
+        guard accountIdentity == boundAccountIdentity else { return .cancelled }
+        let initialResult = await refresh(reason: .appearance)
+        guard !Task.isCancelled, boundIdentityIsCurrent else { return .cancelled }
+        guard initialResult == .success else { return initialResult }
         if consentGranted && autoSync {
             await sync()
-            guard !Task.isCancelled, boundIdentityIsCurrent else { return .cancelled }
-            return await refresh(reason: .mutation)
+            guard boundIdentityIsCurrent else { return .cancelled }
+            let result = await refresh(reason: .mutation)
+            return Task.isCancelled ? .cancelled : result
         }
         return .success
     }
@@ -368,6 +472,11 @@ public final class LibraryViewModel {
     public func observeImportEvents() async {
         guard let bookImportEvents else { return }
         let stream = await bookImportEvents.stream()
+        // Completion hints are not replayed. Register first so imports that
+        // finish during this snapshot read remain buffered, then recover any
+        // artwork persisted while the library observer was absent.
+        guard !Task.isCancelled else { return }
+        await refresh()
         for await event in stream {
             guard !Task.isCancelled else { return }
             await applyImportEvent(event)
@@ -411,6 +520,9 @@ public final class LibraryViewModel {
             // This row was already durably registered before its event was
             // emitted. Invalidate reads/hydration that began before that CAS
             // so an older empty snapshot cannot erase it or retire its token.
+            if snapshotLoadTask != nil {
+                mutationInvalidationPending = true
+            }
             publicationRevision &+= 1
             bookSnapshotRevision &+= 1
             cancelSearchDebounce()
@@ -465,60 +577,225 @@ public final class LibraryViewModel {
         await hydrationTask?.value
     }
 
+    func waitForCoverResolution(_ bookID: BookID) async {
+        if coverResultsPublishedForSnapshot.contains(bookID) { return }
+        await withCheckedContinuation { continuation in
+            if coverResultsPublishedForSnapshot.contains(bookID) {
+                continuation.resume()
+            } else {
+                coverPublicationWaiters[bookID, default: []].append(continuation)
+            }
+        }
+    }
+
+    private func markCoverResolutionPublished(_ bookID: BookID) {
+        coverResultsPublishedForSnapshot.insert(bookID)
+        coverPublicationWaiters.removeValue(forKey: bookID)?.forEach { $0.resume() }
+    }
+
+    private func resumeCoverPublicationWaiters() {
+        let waiters = coverPublicationWaiters.values.flatMap { $0 }
+        coverPublicationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
     func waitForImportEventRefresh() async {
         await importRefreshTask?.value
     }
 
-    /// Deletes the book on-disk + in the store; updates local state in place.
-    public func delete(
-        _ book: Book,
+    /// Called by each visible book surface. Separate sets make repeated and
+    /// cross-surface reports idempotent while preserving priority until the
+    /// book leaves every surface.
+    public func setGridBookVisible(_ bookID: BookID, visible: Bool) {
+        updateVisibility(bookID, visible: visible, in: &gridVisibleBookIDs)
+    }
+
+    public func setReadingNowBookVisible(_ bookID: BookID, visible: Bool) {
+        updateVisibility(bookID, visible: visible, in: &readingNowVisibleBookIDs)
+    }
+
+    var prioritizedCoverBookIDs: Set<BookID> {
+        gridVisibleBookIDs.union(readingNowVisibleBookIDs)
+    }
+
+    private func updateVisibility(_ bookID: BookID, visible: Bool, in surface: inout Set<BookID>) {
+        if visible { surface.insert(bookID) } else { surface.remove(bookID) }
+    }
+
+    /// Hides the confirmed book synchronously; source retirement stays separate.
+    public func beginDeletion(_ book: Book) -> BookDeletionOperation? {
+        guard boundIdentityIsCurrent, let owner = currentUserId(),
+              book.userId == owner,
+              boundAccountIdentity?.userID == nil || boundAccountIdentity?.userID == owner else { return nil }
+        adoptOwner(owner)
+        guard pendingDeletions[book.id] == nil else { return nil }
+        let failedPresentation = failedDeletionPresentations.removeValue(forKey: book.id)
+        let previousFailure = failedPresentation?.book == book ? failedPresentation : nil
+        let operation = BookDeletionOperation(
+            id: UUID(), book: book, owner: owner,
+            accountIdentity: boundAccountIdentity ?? currentAccountIdentity(), ownerEpoch: ownerEpoch
+        )
+        pendingDeletions[book.id] = PendingDeletion(
+            operation: operation,
+            position: positionsByBookId[book.id] ?? previousFailure?.position,
+            coverURL: coverURLs[book.id] ?? previousFailure?.coverURL,
+            previouslyPersistedTombstone: previousFailure?.retainWhenCanonicallyAbsent == true
+        )
+        deletionError = nil
+        locallyDeletedBookIDs.insert(book.id)
+        invalidateDeletionPublication()
+        books.removeAll { $0.id == book.id }
+        positionsByBookId[book.id] = nil
+        coverURLs[book.id] = nil
+        gridVisibleBookIDs.remove(book.id)
+        readingNowVisibleBookIDs.remove(book.id)
+        updateLibraryProjections()
+        return operation
+    }
+
+    private func ownsDeletion(_ operation: BookDeletionOperation) -> Bool {
+        guard pendingDeletions[operation.book.id]?.operation.id == operation.id,
+              ownerEpoch == operation.ownerEpoch, publishedOwnerId == operation.owner,
+              currentUserId() == operation.owner, boundIdentityIsCurrent else { return false }
+        return (boundAccountIdentity ?? currentAccountIdentity()) == operation.accountIdentity
+    }
+
+    /// Recheck synchronous ownership after the generation lookup suspends.
+    private func admitsDeletionStage(_ operation: BookDeletionOperation) async -> Bool {
+        guard ownsDeletion(operation) else { return false }
+        if let identity = operation.accountIdentity {
+            guard await currentAccountGeneration() == identity.generation else { return false }
+        }
+        return ownsDeletion(operation)
+    }
+
+    public func completeDeletion(
+        _ operation: BookDeletionOperation,
         closePresentedReader: (@MainActor (Book) async -> Void)? = nil
     ) async {
-        deletionError = nil
-        cancelSearchDebounce()
-        publicationRevision &+= 1
-        bookSnapshotRevision &+= 1
-        hydrationTask?.cancel()
-        hydrationTask = nil
-        locallyDeletedBookIDs.insert(book.id)
-        var tombstonePersisted = false
+        guard await admitsDeletionStage(operation),
+              pendingDeletions[operation.book.id]?.completionStarted == false else { return }
+        pendingDeletions[operation.book.id]?.completionStarted = true
+        let book = operation.book
+        var tombstonePersisted = pendingDeletions[book.id]?.previouslyPersistedTombstone == true
+        var retirementWitness: BookDeletionRetirementWitness?
+        var committedOutcome: DeletionCommitOutcome?
+        defer {
+            if let committedOutcome {
+                // Capture only immutable values and service-owned actions.
+                // Reader teardown and physical lifetime never delay persistence.
+                Task { @MainActor in
+                    let cleanup: @Sendable () async -> Void
+                    switch committedOutcome {
+                    case .committed(let action): cleanup = action
+                    case .savedNeedsReconciliation(let reconcile, let action):
+                        guard await reconcile() else { return }
+                        cleanup = action
+                    }
+                    await closePresentedReader?(book)
+                    await cleanup()
+                }
+            }
+        }
         do {
-            // The local publication fence above is synchronous. Close and
-            // drain reader/copy work before writing a tombstone or removing
-            // either managed bytes or the Book row.
-            await closePresentedReader?(book)
-            try await beforeBookDeleted(book)
-            // Persist the tombstone first. If this fails, keep the local book
-            // intact so a later retry cannot lose the deletion remotely.
-            try await onBookDeleted?(book.id)
-            tombstonePersisted = true
-            try await deleteBook(book)
+            // Each await can replace the account. Already-entered retirement
+            // finishes normally, but no obsolete attempt enters the next stage.
+            if logicalBookDeletion == nil { await closePresentedReader?(book) }
+            guard await admitsDeletionStage(operation) else { return }
+            retirementWitness = try await beforeBookDeleted(book)
+            guard await admitsDeletionStage(operation) else { return }
+            if let logicalBookDeletion {
+                committedOutcome = try await logicalBookDeletion(book, retirementWitness)
+                tombstonePersisted = true
+            } else {
+                try await onBookDeleted?(book.id)
+                tombstonePersisted = true
+                guard await admitsDeletionStage(operation) else { return }
+                try await deleteBook(book)
+            }
+            guard await admitsDeletionStage(operation) else { return }
+            invalidateDeletionPublication()
+            pendingDeletions[book.id] = nil
+            failedDeletionPresentations[book.id] = nil
             if let token = importEventTokens.removeValue(forKey: book.id) {
                 retiredImportTokens.insert(token)
             }
             pendingManagedBookIDs.remove(book.id)
             pendingCoverBookIDs.remove(book.id)
-            books.removeAll { existing in existing.id == book.id }
+            books.removeAll { $0.id == book.id }
             positionsByBookId[book.id] = nil
             coverURLs[book.id] = nil
-            readingNow = Self.deriveReadingNow(books: books, positions: positionsByBookId)
-            filteredBooks = LibrarySearchFilter.filter(books: books, query: searchText)
+            updateLibraryProjections()
             await refresh(reason: .mutation)
         } catch {
+            guard await admitsDeletionStage(operation) else { return }
+            var rollback: BookDeletionRollbackResult = .refused
             if !tombstonePersisted {
-                if await restoreBookAfterFailedRetirement(book, importEventTokens[book.id]) {
-                    locallyDeletedBookIDs.remove(book.id)
-                }
-                deletionError = "Couldn't save this deletion. The book remains in your library; try again."
-            } else {
-                // Keep the source fence after the durable tombstone. The row
-                // remains visible for local cleanup retry but cannot start
-                // new managed consumers.
+                rollback = await restoreBookAfterFailedRetirement(book, retirementWitness)
+                guard await admitsDeletionStage(operation) else { return }
+            }
+            guard let pending = pendingDeletions[book.id] else { return }
+            invalidateDeletionPublication()
+            pendingDeletions[book.id] = nil
+            if rollback.didRestoreBook { locallyDeletedBookIDs.remove(book.id) }
+            restoreDeletionPresentation(pending, tombstonePersisted: tombstonePersisted, didRollback: rollback.didRestoreBook)
+            if tombstonePersisted {
                 deletionError = "Deletion was saved, but local cleanup failed. The book is fenced for retry."
+            } else if rollback.didRestoreBook {
+                deletionError = "Couldn't save this deletion. The book remains in your library; try again."
+            } else if case .conflict = rollback {
+                deletionError = "This book could not be restored because another file occupies its managed location. Keep the book in the library and resolve the file conflict before trying again."
+            } else {
+                deletionError = "Couldn't safely restore this book after the deletion failed. It remains fenced; retry recovery after checking your account and storage."
             }
             Log.error("library.delete.failed", error: error)
+            updateLibraryProjections()
             startHydrationForCurrentBooks()
         }
+    }
+
+    private func restoreDeletionPresentation(
+        _ pending: PendingDeletion, tombstonePersisted: Bool, didRollback: Bool
+    ) {
+        let original = pending.operation.book
+        let restored: Book
+        let useOriginalCaches: Bool
+        switch pending.canonical {
+        case .present(let canonical):
+            restored = canonical
+            useOriginalCaches = canonical == original
+        case .absent:
+            guard tombstonePersisted || didRollback else { return }
+            restored = original
+            useOriginalCaches = true
+        case .unread:
+            restored = original
+            useOriginalCaches = true
+        }
+        // Do not overwrite another book imported while this attempt drained.
+        if let current = books.first(where: { $0.id == original.id }), current != original {
+            return
+        }
+        books.removeAll { $0.id == original.id }
+        books.append(restored)
+        books.sort { $0.addedAt > $1.addedAt }
+        if useOriginalCaches {
+            positionsByBookId[original.id] = pending.position
+            coverURLs[original.id] = pending.coverURL
+            failedDeletionPresentations[original.id] = FailedDeletionPresentation(
+                book: restored, position: pending.position, coverURL: pending.coverURL,
+                retainWhenCanonicallyAbsent: tombstonePersisted
+            )
+        }
+    }
+
+    /// Compatibility entry point for callers that do not split confirmation.
+    public func delete(
+        _ book: Book,
+        closePresentedReader: (@MainActor (Book) async -> Void)? = nil
+    ) async {
+        guard let operation = beginDeletion(book) else { return }
+        await completeDeletion(operation, closePresentedReader: closePresentedReader)
     }
 
     public func clearDeletionError() {
@@ -580,7 +857,15 @@ public final class LibraryViewModel {
 
     private func startHydration(books snapshot: [Book], owner: UserID, revision: UInt64) {
         hydrationTask?.cancel()
+        coverResultsPublishedForSnapshot.subtract(snapshot.map(\.id))
+        // An image can be committed while its completion hint is missed.
+        // Admit persisted artwork through the resolver's independent artwork
+        // policy without asserting that managed book bytes are ready.
+        let recoverableArtworkIDs = Set(snapshot.compactMap { book in
+            book.userId == owner && book.coverPath != nil ? book.id : nil
+        })
         let pendingIDs = pendingManagedBookIDs.union(pendingCoverBookIDs)
+            .subtracting(recoverableArtworkIDs)
         hydrationTask = Task { @MainActor [weak self, positionLoader = self.positionLoader, coverResolver = self.coverResolver] in
             let snapshotIDs = Set(snapshot.map(\.id))
             await withTaskGroup(of: HydrationResult.self) { group in
@@ -588,32 +873,49 @@ public final class LibraryViewModel {
                     .positions(await positionLoader.positions(for: snapshot))
                 }
                 group.addTask {
-                    .covers(await coverResolver.coverURLs(for: snapshot, excluding: pendingIDs))
+                    await coverResolver.resolveCoverURLs(
+                        for: snapshot,
+                        excluding: pendingIDs,
+                        prioritizedBookIDs: { [weak self] in
+                            guard let self else { return [] }
+                            return self.prioritizedCoverBookIDs
+                        },
+                        onResolved: { [weak self] bookID, url in
+                            guard let self, !Task.isCancelled,
+                                  snapshotIDs.contains(bookID),
+                                  self.isCurrent(revision: revision, owner: owner),
+                                  recoverableArtworkIDs.contains(bookID)
+                                    || (!self.pendingManagedBookIDs.contains(bookID)
+                                        && !self.pendingCoverBookIDs.contains(bookID)),
+                                  !self.locallyDeletedBookIDs.contains(bookID) else { return }
+                            // Subscript assignment removes the key for nil,
+                            // explicitly resolving only this book while
+                            // retaining untouched/imported covers.
+                            self.coverURLs[bookID] = url ?? self.failedDeletionPresentations[bookID]?.coverURL
+                            self.markCoverResolutionPublished(bookID)
+                            self.importInstrumentation.recordLatest(
+                                .coverHydrationCompleted,
+                                bookID: bookID,
+                                cacheState: url == nil ? .miss : .hit
+                            )
+                        }
+                    )
+                    return .coversFinished
                 }
                 for await result in group {
                     guard let self, !Task.isCancelled,
                           self.isCurrent(revision: revision, owner: owner) else { continue }
                     switch result {
                     case .positions(let positions):
-                        var next = self.positionsByBookId.filter { !snapshotIDs.contains($0.key) }
+                        var next = self.positionsByBookId.filter {
+                            !snapshotIDs.contains($0.key) || self.failedDeletionPresentations[$0.key] != nil
+                        }
                         for (bookID, position) in positions where snapshotIDs.contains(bookID) {
                             next[bookID] = position
                         }
                         self.positionsByBookId = next
                         self.readingNow = Self.deriveReadingNow(books: self.books, positions: next)
-                    case .covers(let covers):
-                        var next = self.coverURLs.filter { !snapshotIDs.contains($0.key) }
-                        for (bookID, url) in covers where snapshotIDs.contains(bookID) {
-                            next[bookID] = url
-                        }
-                        self.coverURLs = next
-                        for book in snapshot where !pendingIDs.contains(book.id) {
-                            self.importInstrumentation.recordLatest(
-                                .coverHydrationCompleted,
-                                bookID: book.id,
-                                cacheState: covers[book.id] == nil ? .miss : .hit
-                            )
-                        }
+                    case .coversFinished: break
                     }
                 }
             }
@@ -622,6 +924,7 @@ public final class LibraryViewModel {
 
     private func isCurrent(revision: UInt64, owner: UserID) -> Bool {
         bookSnapshotRevision == revision && currentUserId() == owner && boundIdentityIsCurrent
+            && publishedAccountIdentity == (boundAccountIdentity ?? currentAccountIdentity())
     }
 
     /// The Reading-Now shelf shows at most this many books — the most

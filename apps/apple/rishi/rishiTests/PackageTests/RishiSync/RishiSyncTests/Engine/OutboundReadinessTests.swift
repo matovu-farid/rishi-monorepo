@@ -82,7 +82,7 @@ struct OutboundReadinessTests {
                 version: ManagedFileVersion(byteCount: 3, modificationDate: .distantPast, fileIdentifier: nil, materializationRevision: UUID()),
                 serverAcceptance: BookServerAcceptance(sha256: "abc", acceptedOperationID: UUID(), acceptedAt: .distantPast)
             )
-            return ManagedBookSource(bookID: book.id, url: URL(fileURLWithPath: "/managed/book"), fingerprint: fingerprint, accountGeneration: 1)
+            return ManagedBookSource(bookID: book.id, url: URL(fileURLWithPath: "/managed/book"), fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: 1, bookID: book.id, contentRevision: fingerprint.version.materializationRevision))
         }
         func awaitManagedSource(for book: Book) async throws -> ManagedBookSource {
             guard let source = try await managedSource(for: book) else { throw CancellationError() }

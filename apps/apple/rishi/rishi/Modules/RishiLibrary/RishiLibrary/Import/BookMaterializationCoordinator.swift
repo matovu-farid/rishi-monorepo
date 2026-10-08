@@ -3,6 +3,11 @@ import Darwin
 import Foundation
 
 public struct BookMaterializationCoordinator: Sendable {
+    public enum SampleRepairActivationResult: Sendable {
+        case repaired(BookFileFingerprint)
+        case alreadyManaged(BookFileFingerprint)
+    }
+
     public enum MaterializationError: Error, Sendable {
         case staleAttempt
         case missingFileProvenance
@@ -18,9 +23,25 @@ public struct BookMaterializationCoordinator: Sendable {
     private let currentGeneration: @Sendable () async -> UInt64?
     private let isTombstoned: @Sendable (BookID) async -> Bool
     private let copier: CoordinatedBookCopier
+    private let copySelectedSource: @Sendable (
+        BookMaterializationToken,
+        BookSourceLease,
+        URL,
+        String,
+        Int64,
+        ManagedFileVersion
+    ) async throws -> StagedBookArtifact
     private let events: BookImportEvents?
     private let importInstrumentation: BookImportInstrumentation
     private let reprobeSelectedSource: @Sendable (URL, UUID) async throws -> (sha256: String, byteCount: Int64, version: ManagedFileVersion)
+    private let beforeRepairPromotion: @Sendable (URL) throws -> Void
+    private let startSelectedSourceScope: @Sendable (URL) -> Bool
+    private let stopSelectedSourceScope: @Sendable (URL) -> Void
+    private let beforeRetryRegisteredPublication: @Sendable () async -> Void
+    private let afterSampleRepairReservation: @Sendable (BookMaterializationToken) async -> Void
+    private let beforeSampleRepairCompletionAdmission: @Sendable (BookMaterializationToken) async -> Void
+    private let afterSampleRepairPrepared: @Sendable (BookMaterializationToken) async -> Void
+    private let afterSampleRepairRename: @Sendable (BookMaterializationToken) async -> Void
 
     public init(
         rootURL: URL,
@@ -31,8 +52,24 @@ public struct BookMaterializationCoordinator: Sendable {
         currentGeneration: @escaping @Sendable () async -> UInt64?,
         isTombstoned: @escaping @Sendable (BookID) async -> Bool = { _ in false },
         copier: CoordinatedBookCopier = CoordinatedBookCopier(),
+        copySelectedSource: (@Sendable (
+            BookMaterializationToken,
+            BookSourceLease,
+            URL,
+            String,
+            Int64,
+            ManagedFileVersion
+        ) async throws -> StagedBookArtifact)? = nil,
         events: BookImportEvents? = nil,
         reprobeSelectedSource: (@Sendable (URL, UUID) async throws -> (sha256: String, byteCount: Int64, version: ManagedFileVersion))? = nil,
+        beforeRepairPromotion: @escaping @Sendable (URL) throws -> Void = { _ in },
+        startSelectedSourceScope: @escaping @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopSelectedSourceScope: @escaping @Sendable (URL) -> Void = { $0.stopAccessingSecurityScopedResource() },
+        beforeRetryRegisteredPublication: @escaping @Sendable () async -> Void = {},
+        afterSampleRepairReservation: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in },
+        beforeSampleRepairCompletionAdmission: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in },
+        afterSampleRepairPrepared: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in },
+        afterSampleRepairRename: @escaping @Sendable (BookMaterializationToken) async -> Void = { _ in },
         importInstrumentation: BookImportInstrumentation = .shared
     ) {
         self.rootURL = rootURL.standardizedFileURL
@@ -43,8 +80,25 @@ public struct BookMaterializationCoordinator: Sendable {
         self.currentGeneration = currentGeneration
         self.isTombstoned = isTombstoned
         self.copier = copier
+        self.copySelectedSource = copySelectedSource ?? { _, source, stagingURL, expectedSHA256, expectedByteCount, sourceVersion in
+            try await copier.copy(
+                source: source,
+                to: stagingURL,
+                expectedSHA256: expectedSHA256,
+                expectedByteCount: expectedByteCount,
+                sourceVersion: sourceVersion
+            )
+        }
         self.events = events
         self.importInstrumentation = importInstrumentation
+        self.beforeRepairPromotion = beforeRepairPromotion
+        self.startSelectedSourceScope = startSelectedSourceScope
+        self.stopSelectedSourceScope = stopSelectedSourceScope
+        self.beforeRetryRegisteredPublication = beforeRetryRegisteredPublication
+        self.afterSampleRepairReservation = afterSampleRepairReservation
+        self.beforeSampleRepairCompletionAdmission = beforeSampleRepairCompletionAdmission
+        self.afterSampleRepairPrepared = afterSampleRepairPrepared
+        self.afterSampleRepairRename = afterSampleRepairRename
         self.reprobeSelectedSource = reprobeSelectedSource ?? { url, revision in
             let result = try await CoordinatedSourceProbe().probe(url, materializationRevision: revision)
             return (result.sha256, result.byteCount, result.version)
@@ -93,7 +147,8 @@ public struct BookMaterializationCoordinator: Sendable {
         token: BookMaterializationToken,
         requiringTransientPermit sourcePermit: BookSourceAccessPermit? = nil
     ) async -> Bool {
-        guard token.bookID == book.id, token.ownerID == book.userId,
+        guard !Task.isCancelled,
+              token.bookID == book.id, token.ownerID == book.userId,
               await currentGeneration() == token.accountGeneration,
               lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration) else { return false }
         if let sourcePermit {
@@ -105,11 +160,13 @@ public struct BookMaterializationCoordinator: Sendable {
                 permit: sourcePermit
             ) else { return false }
         }
-        importInstrumentation.record(.bookRegistered, attemptID: token.attemptID)
-        await events?.publish(BookImportEvent(
+        guard !Task.isCancelled else { return false }
+        let event = BookImportEvent(
             ownerID: token.ownerID, accountGeneration: token.accountGeneration,
             token: token, kind: .registered(book)
-        ))
+        )
+        guard await events?.publishIfNotCancelled(event) ?? true else { return false }
+        importInstrumentation.record(.bookRegistered, attemptID: token.attemptID)
         return true
     }
 
@@ -209,7 +266,7 @@ public struct BookMaterializationCoordinator: Sendable {
             await sourceRegistry.managedSourceBecameReady(managed)
             _ = try await sourceRegistry.registerSource(
                 for: liveBook, url: managed.url, accountGeneration: generation,
-                contentRevision: managed.fingerprint.version.materializationRevision,
+                readingPermit: managed.readingPermit,
                 token: nil, requiresSecurityScope: false, observeChanges: false
             )
             return true
@@ -218,6 +275,380 @@ public struct BookMaterializationCoordinator: Sendable {
             await lifecycle.drainBook(ownerID: requestedBook.userId, generation: generation, bookID: requestedBook.id)
             return false
         }
+    }
+
+    /// Local deletion rollback requires proof from that exact deletion. A
+    /// parked repair restores Book-level admission but never revives its token.
+    public func restoreBookAfterFailedRetirement(
+        book requestedBook: Book,
+        witness: BookDeletionRetirementWitness?,
+        expectedGeneration: UInt64? = nil
+    ) async -> Bool {
+        guard !Task.isCancelled,
+              let witness,
+              witness.ownerID == requestedBook.userId, witness.bookID == requestedBook.id,
+              let generation = await currentGeneration(), generation == witness.generation,
+              expectedGeneration == nil || expectedGeneration == generation,
+              lifecycle.admits(ownerID: requestedBook.userId, generation: generation),
+              await isTombstoned(requestedBook.id) == false,
+              let liveBook = try? await bookStore.book(requestedBook.id), liveBook == requestedBook else { return false }
+        let job: PendingBookMaterialization?
+        do { job = try await persistence.pendingMaterialization(bookID: requestedBook.id, ownerID: requestedBook.userId) }
+        catch { return false }
+
+        if let job, job.phase != .ready {
+            guard job.sourceKind == .sampleRepair,
+                  job.token.ownerID == requestedBook.userId,
+                  job.token.accountGeneration == generation,
+                  await persistence.parkSampleRepair(book: liveBook, token: job.token) == .parked,
+                  let parked = try? await persistence.pendingMaterialization(bookID: requestedBook.id, ownerID: requestedBook.userId),
+                  parked.token == job.token, parked.phase == .paused,
+                  await currentGeneration() == generation,
+                  await isTombstoned(requestedBook.id) == false,
+                  (try? await bookStore.book(requestedBook.id)) == liveBook else { return false }
+            return lifecycle.restoreBookFenceAfterFailedRetirement(witness: witness, parkedRepairToken: job.token)
+        }
+
+        guard job == nil || job?.token.accountGeneration == generation,
+              job == nil || witness.retiredToken == nil || job?.token == witness.retiredToken,
+              await currentGeneration() == generation,
+              await isTombstoned(requestedBook.id) == false,
+              await lifecycle.restoreBookAfterFailedRetirement(witness: witness) else { return false }
+        do {
+            guard let managed = try await sourceRegistry.managedSource(for: liveBook) else { throw MaterializationError.staleAttempt }
+            await sourceRegistry.managedSourceBecameReady(managed)
+            _ = try await sourceRegistry.registerSource(
+                for: liveBook, url: managed.url, accountGeneration: generation,
+                readingPermit: managed.readingPermit, token: nil,
+                requiresSecurityScope: false, observeChanges: false
+            )
+            return true
+        } catch {
+            lifecycle.retireBook(ownerID: requestedBook.userId, generation: generation, bookID: requestedBook.id)
+            await lifecycle.drainBook(ownerID: requestedBook.userId, generation: generation, bookID: requestedBook.id)
+            return false
+        }
+    }
+
+    /// Restores a Book after the exact local tombstone write failed. Simple
+    /// unprepared repairs are parked by exact-token CAS; staged repairs keep
+    /// the deletion witness live while targeted recovery runs under a lease.
+    public func restoreBookAfterFailedRetirement(
+        book requestedBook: Book,
+        witness: BookDeletionRetirementWitness?,
+        expectedGeneration: UInt64? = nil,
+        recoverStartedSampleRepair: @escaping @Sendable (
+            Book, BookMaterializationToken, BookImportProvisionalRollbackLease
+        ) async -> BookDeletionRollbackResult = { _, _, _ in .refused }
+    ) async -> BookDeletionRollbackResult {
+        guard let witness,
+              witness.ownerID == requestedBook.userId,
+              witness.bookID == requestedBook.id,
+              let generation = await currentGeneration(),
+              generation == witness.generation,
+              expectedGeneration == nil || expectedGeneration == generation,
+              lifecycle.isCurrentDeletionRetirementWitness(witness),
+              await isTombstoned(requestedBook.id) == false,
+              let liveBook = try? await bookStore.book(requestedBook.id),
+              liveBook == requestedBook,
+              await currentGeneration() == generation,
+              lifecycle.isCurrentDeletionRetirementWitness(witness) else { return .refused }
+
+        let job: PendingBookMaterialization?
+        do {
+            job = try await persistence.pendingMaterialization(bookID: requestedBook.id, ownerID: requestedBook.userId)
+        } catch {
+            return .refused
+        }
+        guard await currentGeneration() == generation,
+              await isTombstoned(requestedBook.id) == false,
+              (try? await bookStore.book(requestedBook.id)) == liveBook,
+              lifecycle.isCurrentDeletionRetirementWitness(witness) else { return .refused }
+
+        guard let job else {
+            return await restoreBookAfterFailedRetirement(
+                book: requestedBook, witness: witness, expectedGeneration: generation
+            ) ? .existingReady : .refused
+        }
+
+        if job.phase == .ready,
+           (witness.retiredToken == job.token || witness.retiredToken == nil) {
+            return await restoreBookAfterFailedRetirement(
+                book: requestedBook, witness: witness, expectedGeneration: generation
+            ) ? .existingReady : .refused
+        }
+        guard job.sourceKind == .sampleRepair,
+              job.token.ownerID == requestedBook.userId,
+              job.token.accountGeneration == generation,
+              job.token.bookID == requestedBook.id else { return .refused }
+
+        if job.phase == .ready {
+            return await recoverSampleRepairWithRollbackLease(
+                book: liveBook, token: job.token, witness: witness, generation: generation,
+                recover: recoverStartedSampleRepair
+            )
+        }
+
+        let hasPreparedArtifact = job.preparedFileIdentifier != nil
+            || job.destinationFileIdentifier != nil
+            || job.promotionRevision != nil
+        let isUnpreparedCopy = job.phase == .copying && !hasPreparedArtifact
+        let canParkUnprepared = !hasPreparedArtifact
+            && (job.phase == .registered || isUnpreparedCopy || job.phase == .paused)
+        if canParkUnprepared {
+            guard await isSafeRetryDestination(job, book: liveBook) else { return .conflict(job.token) }
+            guard lifecycle.isCurrentDeletionRetirementWitness(witness),
+                  await persistence.parkSampleRepair(book: liveBook, token: job.token) == .parked,
+                  await currentGeneration() == generation,
+                  await isTombstoned(requestedBook.id) == false,
+                  (try? await bookStore.book(requestedBook.id)) == liveBook,
+                  lifecycle.isCurrentDeletionRetirementWitness(witness),
+                  let parked = try? await persistence.pendingMaterialization(
+                    bookID: requestedBook.id, ownerID: requestedBook.userId
+                  ), parked.token == job.token, parked.phase == .paused,
+                  parked.sourceKind == .sampleRepair,
+                  parked.token.ownerID == requestedBook.userId,
+                  parked.token.accountGeneration == generation,
+                  parked.destinationRelativePath == liveBook.fileURL,
+                  parked.expectedSHA256.caseInsensitiveCompare(job.expectedSHA256) == .orderedSame,
+                  parked.expectedByteCount == job.expectedByteCount else { return .refused }
+
+            if isUnpreparedCopy {
+                let stagingURL = rootURL.appendingPathComponent(job.stagingRelativePath).standardizedFileURL
+                guard isContained(stagingURL),
+                      let latest = try? await persistence.pendingMaterialization(
+                        bookID: requestedBook.id, ownerID: requestedBook.userId
+                      ), latest.token == job.token, latest.phase == .paused,
+                      latest.preparedFileIdentifier == nil,
+                      latest.destinationFileIdentifier == nil,
+                      latest.promotionRevision == nil else { return .refused }
+                try? FileManager.default.removeItem(at: stagingURL)
+            }
+            guard await currentGeneration() == generation,
+                  await isTombstoned(requestedBook.id) == false,
+                  (try? await bookStore.book(requestedBook.id)) == liveBook,
+                  lifecycle.isCurrentDeletionRetirementWitness(witness) else { return .refused }
+            guard await isSafeRetryDestination(parked, book: liveBook) else { return .conflict(job.token) }
+            guard !Task.isCancelled,
+                  lifecycle.restoreBookFenceAfterFailedRetirement(witness: witness, parkedRepairToken: job.token) else {
+                return .refused
+            }
+            return .retryablePaused(job.token)
+        }
+
+        return await recoverSampleRepairWithRollbackLease(
+            book: liveBook, token: job.token, witness: witness, generation: generation,
+            recover: recoverStartedSampleRepair
+        )
+    }
+
+    private func recoverSampleRepairWithRollbackLease(
+        book: Book,
+        token: BookMaterializationToken,
+        witness: BookDeletionRetirementWitness,
+        generation: UInt64,
+        recover: @escaping @Sendable (Book, BookMaterializationToken, BookImportProvisionalRollbackLease) async -> BookDeletionRollbackResult
+    ) async -> BookDeletionRollbackResult {
+        guard !Task.isCancelled,
+              let lease = lifecycle.beginProvisionalDeletionRollback(witness: witness) else { return .refused }
+        let result = await recover(book, token, lease)
+        guard result.didRestoreBook,
+              await currentGeneration() == generation,
+              await isTombstoned(book.id) == false,
+              (try? await bookStore.book(book.id)) == book,
+              lifecycle.isCurrentDeletionRetirementWitness(witness),
+              lifecycle.isCurrentProvisionalDeletionRollbackLease(lease) else {
+            lifecycle.abortProvisionalDeletionRollback(lease)
+            return result == .conflict(token) ? result : .refused
+        }
+        let terminalToken: BookMaterializationToken
+        switch result {
+        case let .ready(token), let .retryablePaused(token): terminalToken = token
+        case .conflict, .existingReady, .refused:
+            lifecycle.abortProvisionalDeletionRollback(lease)
+            return result
+        }
+        guard let finalJob = try? await persistence.pendingMaterialization(
+            bookID: book.id, ownerID: book.userId
+        ), finalJob.token == terminalToken,
+        ((result == .ready(terminalToken) && finalJob.phase == .ready)
+            || (result == .retryablePaused(terminalToken) && finalJob.phase == .paused)),
+        finalJob.sourceKind == .sampleRepair,
+        await currentGeneration() == generation,
+        await isTombstoned(book.id) == false,
+        (try? await bookStore.book(book.id)) == book,
+        !Task.isCancelled,
+        lifecycle.isCurrentDeletionRetirementWitness(witness),
+        lifecycle.isCurrentProvisionalDeletionRollbackLease(lease),
+        lifecycle.finalizeProvisionalDeletionRollback(lease, result: result) else {
+            lifecycle.abortProvisionalDeletionRollback(lease)
+            return .refused
+        }
+        return result
+    }
+
+    /// A simple retry may proceed only when its destination is absent or the
+    /// existing bytes already match the exact sample fingerprint. A competing
+    /// destination remains untouched and is surfaced as a conflict.
+    private func isSafeRetryDestination(_ job: PendingBookMaterialization, book: Book) async -> Bool {
+        let destination = rootURL.appendingPathComponent(job.destinationRelativePath).standardizedFileURL
+        guard let generation = await currentGeneration(),
+              generation == job.token.accountGeneration,
+              await isTombstoned(book.id) == false,
+              (try? await bookStore.book(book.id)) == book,
+              job.sourceKind == .sampleRepair,
+              job.token.bookID == book.id,
+              job.token.ownerID == book.userId,
+              job.destinationRelativePath == book.fileURL,
+              isContained(destination),
+              (try? await persistence.readingPermit(
+                bookID: book.id, ownerID: book.userId, generation: job.token.accountGeneration
+              )) != nil,
+              let fingerprint = try? await persistence.sampleRepairFingerprint(
+                bookID: book.id, ownerID: book.userId
+              ),
+              fingerprint.bookID == book.id,
+              fingerprint.ownerID == book.userId,
+              fingerprint.sha256.caseInsensitiveCompare(job.expectedSHA256) == .orderedSame,
+              fingerprint.version.byteCount == job.expectedByteCount else { return false }
+        var metadata = stat()
+        let status = destination.path.withCString { Darwin.lstat($0, &metadata) }
+        guard status == 0 else { return errno == ENOENT }
+        guard (metadata.st_mode & S_IFMT) == S_IFREG,
+              metadata.st_size == job.expectedByteCount,
+              (try? CoordinatedSourceProbe.version(
+                at: destination, revision: fingerprint.version.materializationRevision
+              )) == fingerprint.version,
+              let observedDigest = try? digest(at: destination) else { return false }
+        return observedDigest.caseInsensitiveCompare(job.expectedSHA256) == .orderedSame
+    }
+
+    /// Owns sample-repair reservation through promotion admission. A fresh reservation
+    /// is activated only while the recovery claim excludes competing lifecycle work.
+    public func materializeReservedSampleRepair(
+        request: SampleRepairReservationRequest,
+        sourceURL: URL
+    ) async throws -> SampleRepairActivationResult {
+        let book = request.expectedBook
+        let token = request.job.token
+        guard token.ownerID == book.userId, token.bookID == book.id,
+              let claim = lifecycle.claimBookRecovery(
+                ownerID: token.ownerID, generation: token.accountGeneration,
+                bookID: token.bookID, expectedToken: request.expectedPriorPendingToken
+              ) else { throw MaterializationError.staleAttempt }
+        defer { claim.release() }
+
+        let currentPrior = try await persistence.pendingMaterialization(bookID: book.id, ownerID: book.userId)
+        guard await currentGeneration() == token.accountGeneration,
+              lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
+              await isTombstoned(book.id) == false,
+              let canonicalBeforeReservation = try? await bookStore.book(book.id), canonicalBeforeReservation == book,
+              currentPrior?.token == request.expectedPriorPendingToken,
+              (try? await persistence.readingPermit(
+                bookID: book.id, ownerID: book.userId, generation: token.accountGeneration
+              )) != nil else {
+            throw MaterializationError.staleAttempt
+        }
+
+        let reservation = try await persistence.reserveSampleRepair(request)
+        switch reservation {
+        case .alreadyManaged(let fingerprint):
+            guard fingerprint == request.expectedFingerprint else { throw MaterializationError.staleAttempt }
+            return .alreadyManaged(fingerprint)
+        case .reconciled(let fingerprint):
+            guard fingerprint == request.expectedFingerprint else { throw MaterializationError.staleAttempt }
+            return .alreadyManaged(fingerprint)
+        case .reserved(let registration):
+            await afterSampleRepairReservation(token)
+            guard registration.book == book, registration.token == token,
+                  request.job.sourceKind == .sampleRepair, request.job.phase == .registered,
+                  request.job.expectedSHA256.caseInsensitiveCompare(request.expectedFingerprint.sha256) == .orderedSame,
+                  request.job.expectedByteCount == request.expectedFingerprint.version.byteCount,
+                  request.job.destinationRelativePath == book.fileURL else {
+                await failReservedSampleRepair(book: book, token: token, claim: claim)
+                throw MaterializationError.staleAttempt
+            }
+            guard claim.allowMaterialization(token) else {
+                await failReservedSampleRepair(book: book, token: token, claim: claim)
+                throw MaterializationError.staleAttempt
+            }
+        }
+
+        await claim.drainPriorAttempt()
+        guard await currentGeneration() == token.accountGeneration,
+              lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
+              await isTombstoned(book.id) == false,
+              let canonicalAfterDrain = try? await bookStore.book(book.id), canonicalAfterDrain == book,
+              let current = try? await persistence.pendingMaterialization(bookID: book.id, ownerID: book.userId),
+              current.token == token, current.phase == .registered, current.sourceKind == .sampleRepair,
+              current.expectedSHA256.caseInsensitiveCompare(request.expectedFingerprint.sha256) == .orderedSame,
+              current.destinationRelativePath == book.fileURL,
+              (try? await persistence.readingPermit(
+                bookID: book.id, ownerID: book.userId, generation: token.accountGeneration
+              )) != nil,
+              !FileManager.default.fileExists(atPath: rootURL.appendingPathComponent(book.fileURL).path) else {
+            await failReservedSampleRepair(book: book, token: token, claim: claim)
+            throw MaterializationError.staleAttempt
+        }
+
+        guard lifecycle.activatePromotionAttempt(token) else {
+            await failReservedSampleRepair(book: book, token: token, claim: claim)
+            throw MaterializationError.staleAttempt
+        }
+        guard let failurePermit = claim.sourceFailurePermit(for: token) else {
+            await failReservedSampleRepair(book: book, token: token, claim: claim)
+            throw MaterializationError.staleAttempt
+        }
+        guard let admission = claim.promoteMaterialization(token) else {
+            await failReservedSampleRepair(book: book, token: token, claim: claim, failurePermit: failurePermit)
+            throw MaterializationError.staleAttempt
+        }
+        await beforeSampleRepairCompletionAdmission(token)
+        guard let completionGuard = lifecycle.admitBookMaterialization(token) else {
+            _ = await persistence.parkSampleRepair(book: book, token: token)
+            _ = await lifecycle.failPendingBookSource(book: book, permit: failurePermit)
+            admission.release()
+            throw MaterializationError.staleAttempt
+        }
+        defer { completionGuard.release() }
+        do {
+            let fingerprint = try await materialize(
+                book: book, token: token, sourceURL: sourceURL, repairOnly: true,
+                admission: admission
+            )
+            return .repaired(fingerprint)
+        } catch {
+            await sourceRegistry.discardTransientSource(
+                ownerID: token.ownerID,
+                generation: token.accountGeneration,
+                bookID: token.bookID,
+                token: token
+            )
+            await pauseIfCurrentSampleRepair(token, expectedBook: book)
+            _ = await lifecycle.failPendingBookSource(book: book, permit: failurePermit)
+            await publishFailed(token: token, retryableCode: "materialization_failed")
+            throw error
+        }
+    }
+
+    private func failReservedSampleRepair(
+        book: Book, token: BookMaterializationToken, claim: BookImportRecoveryClaim,
+        failurePermit: BookImportRecoverySourceFailurePermit? = nil
+    ) async {
+        _ = await persistence.parkSampleRepair(book: book, token: token)
+        if let permit = failurePermit ?? claim.sourceFailurePermit(for: token) {
+            _ = await lifecycle.failPendingBookSource(book: book, permit: permit)
+        }
+    }
+
+    private func pauseIfCurrentSampleRepair(_ token: BookMaterializationToken, expectedBook: Book) async {
+        guard await currentGeneration() == token.accountGeneration,
+              lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
+              await isTombstoned(token.bookID) == false,
+              let canonical = try? await bookStore.book(token.bookID), canonical == expectedBook,
+              let pending = try? await persistence.pendingMaterialization(bookID: token.bookID, ownerID: token.ownerID),
+              pending.token == token, pending.sourceKind == .sampleRepair, pending.phase != .ready else { return }
+        _ = try? await persistence.transition(token: token, from: pending.phase, to: .paused)
     }
 
     /// Completes the durable copy and promotion sequence for a reserved Book.
@@ -229,12 +660,14 @@ public struct BookMaterializationCoordinator: Sendable {
         sourceURL: URL,
         publishRegistration: Bool = false,
         reuseRegisteredSource: Bool = false,
+        repairOnly: Bool = false,
         onSourceOwnerReleased: (@Sendable () -> Void)? = nil,
         admission suppliedAdmission: BookImportMaterializationAdmission? = nil
     ) async throws -> BookFileFingerprint {
         // Acquire the canonical per-book attempt while the pre-reservation
         // owner gate is still held, then release the broad registration gate
         // before any suspension or copy work.
+        let repairFailureIsClaimGuarded = repairOnly && suppliedAdmission != nil
         guard let attempt = lifecycle.admitBookMaterialization(token) else {
             suppliedAdmission?.release()
             throw MaterializationError.staleAttempt
@@ -250,7 +683,8 @@ public struct BookMaterializationCoordinator: Sendable {
               lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
               await currentGeneration() == token.accountGeneration,
               let initial = try await persistence.pendingMaterialization(bookID: token.bookID, ownerID: token.ownerID),
-              initial.token == token, initial.phase == .registered else {
+              initial.token == token, initial.phase == .registered,
+              (!repairOnly || initial.sourceKind == .sampleRepair) else {
             throw MaterializationError.staleAttempt
         }
         guard try await persistence.transition(token: token, from: .registered, to: .copying) else {
@@ -260,6 +694,8 @@ public struct BookMaterializationCoordinator: Sendable {
             book: book, token: token, sourceURL: sourceURL,
             publishRegistration: publishRegistration,
             reuseRegisteredSource: reuseRegisteredSource,
+            repairOnly: repairOnly || initial.sourceKind == .sampleRepair,
+            repairFailureIsClaimGuarded: repairFailureIsClaimGuarded,
             onSourceOwnerReleased: onSourceOwnerReleased,
             pending: initial
         )
@@ -292,7 +728,7 @@ public struct BookMaterializationCoordinator: Sendable {
             for: book,
             url: sourceURL,
             accountGeneration: token.accountGeneration,
-            contentRevision: pending.sourceVersion.materializationRevision,
+            readingPermit: try await persistence.readingPermit(bookID: book.id, ownerID: book.userId, generation: token.accountGeneration),
             token: token,
             requiresSecurityScope: requiresSecurityScope,
             observeChanges: true,
@@ -367,6 +803,10 @@ public struct BookMaterializationCoordinator: Sendable {
 
     /// Validates that the current registry can still vend a readable lease for
     /// this canonical book immediately before an early-open callback.
+    public func isBookRetiredForDeletion(ownerID: UserID, generation: UInt64, bookID: BookID) -> Bool {
+        lifecycle.isBookRetiredForDeletion(ownerID: ownerID, generation: generation, bookID: bookID)
+    }
+
     public func isReadableSourceAvailable(for book: Book) async -> Bool {
         guard let lease = try? await sourceRegistry.acquireReadableSource(for: book) else { return false }
         return lease.url.isFileURL && FileManager.default.fileExists(atPath: lease.url.path)
@@ -427,11 +867,11 @@ public struct BookMaterializationCoordinator: Sendable {
         retiredAttempt: RetiredBookMaterializationAttempt,
         sourceURL: URL,
         publishRegistration: Bool = false,
+        requiresSecurityScope: Bool = false,
         onSourceOwnerReleased: (@Sendable () -> Void)? = nil,
         onRegistrationAccepted: (@Sendable () -> Void)? = nil,
         admission suppliedAdmission: BookImportMaterializationAdmission? = nil
     ) async throws -> BookRegistration {
-        let oldToken = retiredAttempt.token
         let registrationAdmission = suppliedAdmission ?? lifecycle.admitBookRegistration(
             ownerID: newSource.token.ownerID,
             generation: newSource.token.accountGeneration,
@@ -442,6 +882,7 @@ public struct BookMaterializationCoordinator: Sendable {
             throw MaterializationError.staleAttempt
         }
         defer { registrationAdmission.release() }
+        let oldToken = retiredAttempt.token
         guard oldToken.bookID == book.id, oldToken.ownerID == book.userId,
               newSource.token.bookID == book.id,
               newSource.token.ownerID == book.userId,
@@ -449,43 +890,200 @@ public struct BookMaterializationCoordinator: Sendable {
               await currentGeneration() == newSource.token.accountGeneration else {
             throw MaterializationError.staleAttempt
         }
-        await lifecycle.drainBook(ownerID: oldToken.ownerID, generation: oldToken.accountGeneration, bookID: oldToken.bookID)
-        guard let attempt = lifecycle.admitBookMaterialization(newSource.token) else {
-            throw MaterializationError.staleAttempt
-        }
-        defer { attempt.release() }
+        let permit = AccountMutationPermit(ownerID: book.userId, accountGeneration: newSource.token.accountGeneration)
+        guard let expectation = try await persistence.retryExpectation(bookID: book.id, ownerID: book.userId, accountPermit: permit),
+              expectation.pending.token == oldToken else { throw MaterializationError.staleAttempt }
         registrationAdmission.release()
-        guard let registration = try await persistence.joinOrRetryPending(
-            ownerID: book.userId,
-            sha256: newSource.expectedSHA256,
-            newSource: newSource,
-            retiredAttempt: retiredAttempt
-        ), registration.disposition == .retried,
-           let token = registration.token,
-           token == newSource.token else {
-            throw MaterializationError.staleAttempt
-        }
-        // The retry CAS now owns the persisted source path. Transfer its
-        // directory before attempting lifecycle activation so a failed
-        // activation leaves the retry available to recovery.
-        onRegistrationAccepted?()
-        guard lifecycle.activatePromotionAttempt(token) else {
-            throw MaterializationError.staleAttempt
-        }
-        _ = try await materialize(
-            book: registration.book,
-            token: token,
-            sourceURL: sourceURL,
-            publishRegistration: publishRegistration,
-            onSourceOwnerReleased: onSourceOwnerReleased
+        let readable = try await retryAndRegisterReadableSource(
+            book: book, accountPermit: permit, retryExpectation: expectation,
+            newSource: newSource, retiredAttempt: retiredAttempt, sourceURL: sourceURL,
+            requiresSecurityScope: requiresSecurityScope, onSourceOwnerReleased: onSourceOwnerReleased,
+            onRegistrationAccepted: onRegistrationAccepted
         )
-        return registration
+        defer { readable.admission.release() }
+        let token = readable.registration.token!
+        _ = try await materialize(book: readable.registration.book, token: token, sourceURL: sourceURL,
+                                  reuseRegisteredSource: true, onSourceOwnerReleased: onSourceOwnerReleased,
+                                  admission: readable.admission)
+        return readable.registration
+    }
+
+    /// Replaces a terminal/paused persisted attempt and publishes the selected
+    /// source only after the exact old token has drained and the strict CAS wins.
+    public func retryAndRegisterReadableSource(
+        book: Book,
+        accountPermit: AccountMutationPermit,
+        retryExpectation: BookImportRetryExpectation,
+        newSource: PendingBookMaterialization,
+        retiredAttempt: RetiredBookMaterializationAttempt,
+        sourceURL: URL,
+        requiresSecurityScope: Bool,
+        onSourceOwnerReleased: (@Sendable () -> Void)? = nil,
+        onRegistrationAccepted: (@Sendable () -> Void)? = nil
+    ) async throws -> (registration: BookRegistration, admission: BookImportMaterializationAdmission) {
+        let oldToken = retiredAttempt.token
+        guard accountPermit.ownerID == book.userId,
+              accountPermit.accountGeneration == newSource.token.accountGeneration,
+              retryExpectation.book == book, retryExpectation.pending.token == oldToken,
+              oldToken.ownerID == book.userId, oldToken.bookID == book.id,
+              newSource.token.ownerID == book.userId, newSource.token.bookID == book.id,
+              newSource.token != oldToken,
+              lifecycle.admits(ownerID: accountPermit.ownerID, generation: accountPermit.accountGeneration),
+              await currentGeneration() == accountPermit.accountGeneration else {
+            throw MaterializationError.staleAttempt
+        }
+
+        guard let claim = lifecycle.claimAttemptRetry(accountPermit: accountPermit, retiring: oldToken) else {
+            throw MaterializationError.staleAttempt
+        }
+        defer { claim.release() }
+        let drained = await claim.drain()
+        try Task.checkCancellation()
+        guard drained.token == oldToken,
+              lifecycle.admits(ownerID: accountPermit.ownerID, generation: accountPermit.accountGeneration),
+              await currentGeneration() == accountPermit.accountGeneration,
+              await isTombstoned(book.id) == false,
+              let currentExpectation = try await persistence.retryExpectation(bookID: book.id, ownerID: book.userId, accountPermit: accountPermit),
+              currentExpectation == retryExpectation else { throw MaterializationError.staleAttempt }
+
+        let didStartSelectedScope = requiresSecurityScope && startSelectedSourceScope(sourceURL)
+        guard !requiresSecurityScope || didStartSelectedScope else { throw BookSourceOwnerError.securityScopeUnavailable }
+        defer { if didStartSelectedScope { stopSelectedSourceScope(sourceURL) } }
+        let selected: (sha256: String, byteCount: Int64, version: ManagedFileVersion)
+        do {
+            selected = try await reprobeSelectedSource(sourceURL, newSource.sourceVersion.materializationRevision)
+        } catch { throw MaterializationError.sourceChanged }
+        try Task.checkCancellation()
+        guard selected.sha256.caseInsensitiveCompare(newSource.expectedSHA256) == .orderedSame,
+              selected.sha256.caseInsensitiveCompare(retryExpectation.pending.expectedSHA256) == .orderedSame,
+              selected.byteCount == newSource.expectedByteCount,
+              selected.byteCount == retryExpectation.pending.expectedByteCount,
+              selected.version == newSource.sourceVersion,
+              lifecycle.admits(ownerID: accountPermit.ownerID, generation: accountPermit.accountGeneration),
+              await currentGeneration() == accountPermit.accountGeneration,
+              await isTombstoned(book.id) == false else { throw MaterializationError.sourceChanged }
+
+        try Task.checkCancellation()
+        guard let registration = try await persistence.retryPendingMaterialization(
+            expected: retryExpectation, accountPermit: accountPermit, newSource: newSource,
+            verifiedSourceSHA256: selected.sha256, verifiedSourceByteCount: selected.byteCount,
+            verifiedSourceVersion: selected.version, retiredAttempt: drained
+        ), registration.disposition == .retried, registration.token == newSource.token else {
+            throw MaterializationError.staleAttempt
+        }
+        onRegistrationAccepted?()
+        if Task.isCancelled {
+            await pause(newSource.token)
+            await sourceRegistry.failPendingSource(ownerID: book.userId, generation: accountPermit.accountGeneration,
+                                                   bookID: book.id, error: CancellationError())
+            throw CancellationError()
+        }
+        guard lifecycle.admits(ownerID: accountPermit.ownerID, generation: accountPermit.accountGeneration),
+              await currentGeneration() == accountPermit.accountGeneration,
+              await isTombstoned(book.id) == false,
+              let admission = claim.activate(newSource.token) else {
+            await pause(newSource.token)
+            await sourceRegistry.failPendingSource(ownerID: book.userId, generation: accountPermit.accountGeneration,
+                                                   bookID: book.id, error: BookSourceRegistryError.unavailable)
+            throw MaterializationError.staleAttempt
+        }
+        do {
+            try await registerRetryReadableSource(book: registration.book, token: newSource.token,
+                                                  sourceURL: sourceURL, requiresSecurityScope: requiresSecurityScope,
+                                                  onSourceOwnerReleased: onSourceOwnerReleased)
+        } catch {
+            admission.release()
+            throw error
+        }
+        if Task.isCancelled {
+            await discardRetryReadableSource(token: newSource.token, error: CancellationError())
+            admission.release()
+            throw CancellationError()
+        }
+        return (registration, admission)
+    }
+
+    private func registerRetryReadableSource(
+        book: Book,
+        token: BookMaterializationToken,
+        sourceURL: URL,
+        requiresSecurityScope: Bool,
+        onSourceOwnerReleased: (@Sendable () -> Void)?
+    ) async throws {
+        let pending: PendingBookMaterialization
+        do {
+            guard await currentGeneration() == token.accountGeneration,
+                  lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
+                  let current = try await persistence.pendingMaterialization(bookID: token.bookID, ownerID: token.ownerID),
+                  current.token == token, current.phase == .registered,
+                  await isTombstoned(book.id) == false else { throw MaterializationError.staleAttempt }
+            pending = current
+            try Task.checkCancellation()
+            guard let permit = try await persistence.readingPermit(bookID: book.id, ownerID: book.userId, generation: token.accountGeneration) else {
+                throw MaterializationError.staleAttempt
+            }
+            let sourcePermit = try await sourceRegistry.registerSource(
+                for: book, url: sourceURL, accountGeneration: token.accountGeneration,
+                readingPermit: permit, token: token, requiresSecurityScope: requiresSecurityScope,
+                observeChanges: true, published: false, onOwnerReleased: onSourceOwnerReleased
+            )
+            do {
+                let observed: (sha256: String, byteCount: Int64, version: ManagedFileVersion)
+                do {
+                    observed = try await reprobeSelectedSource(sourceURL, pending.sourceVersion.materializationRevision)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if Task.isCancelled { throw CancellationError() }
+                    throw MaterializationError.sourceChanged
+                }
+                try Task.checkCancellation()
+                guard observed.sha256.caseInsensitiveCompare(pending.expectedSHA256) == .orderedSame,
+                      observed.byteCount == pending.expectedByteCount,
+                      observed.version == pending.sourceVersion,
+                      lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
+                      await currentGeneration() == token.accountGeneration,
+                      await isTombstoned(book.id) == false else { throw MaterializationError.sourceChanged }
+                try Task.checkCancellation()
+                guard await sourceRegistry.publishTransientSource(ownerID: token.ownerID, generation: token.accountGeneration,
+                                                                  bookID: token.bookID, token: token, permit: sourcePermit) else {
+                    throw MaterializationError.sourceChanged
+                }
+                try Task.checkCancellation()
+                await beforeRetryRegisteredPublication()
+                try Task.checkCancellation()
+                guard await publishRegistered(book, token: token, requiringTransientPermit: sourcePermit) else {
+                    throw MaterializationError.sourceChanged
+                }
+                try Task.checkCancellation()
+            } catch {
+                await discardRetryReadableSource(token: token, error: error)
+                throw error
+            }
+        } catch {
+            if (try? await persistence.pendingMaterialization(bookID: token.bookID, ownerID: token.ownerID))?.token == token {
+                await discardRetryReadableSource(token: token, error: error)
+            }
+            throw error
+        }
+    }
+
+    private func discardRetryReadableSource(token: BookMaterializationToken, error: Error) async {
+        await sourceRegistry.discardTransientSource(ownerID: token.ownerID, generation: token.accountGeneration,
+                                                    bookID: token.bookID, token: token)
+        await pause(token)
+        await sourceRegistry.failPendingSource(ownerID: token.ownerID, generation: token.accountGeneration,
+                                               bookID: token.bookID, error: error)
     }
 
     /// Resumes an attempt that `BookImportRecovery` adopted after validating
     /// its persisted inode and digest provenance.
-    public func resumeRecovered(book: Book, token: BookMaterializationToken) async throws -> BookFileFingerprint {
-        guard let attempt = lifecycle.admitBookMaterialization(token) else {
+    public func resumeRecovered(
+        book: Book,
+        token: BookMaterializationToken,
+        provisionalRollbackLease: BookImportProvisionalRollbackLease? = nil
+    ) async throws -> BookFileFingerprint {
+        guard let attempt = lifecycle.admitBookMaterialization(token, provisionalRollbackLease: provisionalRollbackLease) else {
             throw MaterializationError.staleAttempt
         }
         defer { attempt.release() }
@@ -497,6 +1095,7 @@ public struct BookMaterializationCoordinator: Sendable {
 
         switch pending.phase {
         case .registered, .copying:
+            guard pending.sourceKind != .sampleRepair else { throw MaterializationError.staleAttempt }
             let sourceURL = try await resolveSourceURL(for: pending, token: token)
             if pending.phase != .copying {
                 guard try await persistence.transition(token: token, from: pending.phase, to: .copying) else {
@@ -517,6 +1116,7 @@ public struct BookMaterializationCoordinator: Sendable {
                 let resumed = Self.copy(pending, phase: resumedPhase)
                 return try await resumeStagedPromotion(book: book, token: token, pending: resumed)
             }
+            guard pending.sourceKind != .sampleRepair else { throw MaterializationError.staleAttempt }
             let sourceURL = try await resolveSourceURL(for: pending, token: token)
             guard try await persistence.transition(token: token, from: .paused, to: .copying) else {
                 throw MaterializationError.staleAttempt
@@ -572,6 +1172,8 @@ public struct BookMaterializationCoordinator: Sendable {
         sourceURL: URL,
         publishRegistration: Bool = false,
         reuseRegisteredSource: Bool = false,
+        repairOnly: Bool = false,
+        repairFailureIsClaimGuarded: Bool = false,
         onSourceOwnerReleased: (@Sendable () -> Void)? = nil,
         requiresSecurityScope: Bool = false,
         pending initial: PendingBookMaterialization
@@ -580,35 +1182,37 @@ public struct BookMaterializationCoordinator: Sendable {
             throw MaterializationError.staleAttempt
         }
         defer { operation.release() }
-        if !reuseRegisteredSource {
-            _ = try await sourceRegistry.registerSource(
-                for: book,
-                url: sourceURL,
-                accountGeneration: token.accountGeneration,
-                contentRevision: initial.sourceVersion.materializationRevision,
-                token: token,
-                requiresSecurityScope: requiresSecurityScope,
-                observeChanges: false,
-                onOwnerReleased: onSourceOwnerReleased
-            )
-            if publishRegistration {
-                _ = await publishRegistered(book, token: token)
-            }
-        }
-        let source = try await sourceRegistry.acquireReadableSource(for: book)
-        if reuseRegisteredSource,
-           (source.url.standardizedFileURL != sourceURL.standardizedFileURL || source.cachePolicy != .transient) {
-            throw MaterializationError.staleAttempt
-        }
         let stagingURL = rootURL.appendingPathComponent(initial.stagingRelativePath).standardizedFileURL
-        guard isContained(stagingURL) else { throw MaterializationError.staleAttempt }
+        var recordedPreparedArtifact = false
         do {
-            let staged = try await copier.copy(
-                source: source,
-                to: stagingURL,
-                expectedSHA256: initial.expectedSHA256,
-                expectedByteCount: initial.expectedByteCount,
-                sourceVersion: initial.sourceVersion
+            guard isContained(stagingURL) else { throw MaterializationError.staleAttempt }
+            if !reuseRegisteredSource {
+                _ = try await sourceRegistry.registerSource(
+                    for: book,
+                    url: sourceURL,
+                    accountGeneration: token.accountGeneration,
+                    readingPermit: try await persistence.readingPermit(bookID: book.id, ownerID: book.userId, generation: token.accountGeneration),
+                    token: token,
+                    requiresSecurityScope: requiresSecurityScope,
+                    observeChanges: false,
+                    onOwnerReleased: onSourceOwnerReleased
+                )
+                if publishRegistration {
+                    _ = await publishRegistered(book, token: token)
+                }
+            }
+            let source = try await sourceRegistry.acquireReadableSource(for: book)
+            if reuseRegisteredSource,
+               (source.url.standardizedFileURL != sourceURL.standardizedFileURL || source.cachePolicy != .transient) {
+                throw MaterializationError.staleAttempt
+            }
+            let staged = try await copySelectedSource(
+                token,
+                source,
+                stagingURL,
+                initial.expectedSHA256,
+                initial.expectedByteCount,
+                initial.sourceVersion
             )
             guard let preparedID = staged.version.fileIdentifier, !preparedID.isEmpty else {
                 throw MaterializationError.missingFileProvenance
@@ -625,16 +1229,39 @@ public struct BookMaterializationCoordinator: Sendable {
             guard try await persistence.recordPrepared(token: token, artifacts: artifacts) else {
                 throw MaterializationError.staleAttempt
             }
+            recordedPreparedArtifact = true
+            if repairOnly {
+                await afterSampleRepairPrepared(token)
+                try Task.checkCancellation()
+            }
+            try Task.checkCancellation()
             let fingerprint = try await lifecycle.withPromotionPermit(token: token) {
-                try await self.promote(book: book, token: token, sourceURL: source.url, sourceVersion: initial.sourceVersion, artifact: staged)
+                try await self.promote(book: book, token: token, sourceURL: source.url, sourceVersion: initial.sourceVersion, artifact: staged, repairOnly: repairOnly)
             }
             await publishManagedReady(book: book, generation: token.accountGeneration, fingerprint: fingerprint)
             return fingerprint
         } catch {
-            await pause(token)
-            await sourceRegistry.failPendingSource(ownerID: token.ownerID, generation: token.accountGeneration, bookID: token.bookID, error: error)
-            try? FileManager.default.removeItem(at: stagingURL)
-            await publishFailed(token: token, retryableCode: "materialization_failed")
+            if !repairFailureIsClaimGuarded {
+                await pause(token)
+                await sourceRegistry.failPendingSource(ownerID: token.ownerID, generation: token.accountGeneration, bookID: token.bookID, error: error)
+                await publishFailed(token: token, retryableCode: "materialization_failed")
+            }
+            if isContained(stagingURL) {
+                if !repairOnly {
+                    try? FileManager.default.removeItem(at: stagingURL)
+                } else if !recordedPreparedArtifact,
+                          let current = try? await persistence.pendingMaterialization(
+                            bookID: token.bookID, ownerID: token.ownerID
+                          ), current.token == token, current.sourceKind == .sampleRepair,
+                          current.phase == .copying,
+                          current.preparedFileIdentifier == nil,
+                          current.destinationFileIdentifier == nil,
+                          current.promotionRevision == nil {
+                    // The copy has unwound, and this exact attempt still owns
+                    // an unverified partial. Never remove a prepared artifact.
+                    try? FileManager.default.removeItem(at: stagingURL)
+                }
+            }
             throw error
         }
     }
@@ -667,9 +1294,11 @@ public struct BookMaterializationCoordinator: Sendable {
                     throw MaterializationError.missingFileProvenance
                 }
                 let revision = UUID()
+                try Task.checkCancellation()
                 guard try await self.persistence.claimPromotion(token: token, preparedFileIdentifier: preparedID, promotionRevision: revision) else {
                     throw MaterializationError.staleAttempt
                 }
+                try Task.checkCancellation()
                 promotionRevision = revision
             }
             guard let promotionRevision else { throw MaterializationError.missingFileProvenance }
@@ -683,12 +1312,26 @@ public struct BookMaterializationCoordinator: Sendable {
                     throw MaterializationError.missingFileProvenance
                 }
                 try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let status = stagingURL.path.withCString { sourcePath in
-                    destinationURL.path.withCString { destinationPath in Darwin.rename(sourcePath, destinationPath) }
+                let status: Int32
+                if pending.sourceKind == .sampleRepair {
+                    try self.beforeRepairPromotion(destinationURL)
+                    try Task.checkCancellation()
+                    status = stagingURL.path.withCString { sourcePath in
+                        destinationURL.path.withCString { destinationPath in Darwin.renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL)) }
+                    }
+                } else {
+                    status = stagingURL.path.withCString { sourcePath in
+                        destinationURL.path.withCString { destinationPath in Darwin.rename(sourcePath, destinationPath) }
+                    }
                 }
                 guard status == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                if pending.sourceKind == .sampleRepair {
+                    await self.afterSampleRepairRename(token)
+                    try Task.checkCancellation()
+                }
             }
 
+            try Task.checkCancellation()
             guard try self.verifiedDestination(destinationURL, expectedID: preparedID, revision: promotionRevision, pending: pending),
                   try await self.persistence.recordPromoted(token: token, preparedFileIdentifier: preparedID, destinationFileIdentifier: preparedID, promotionRevision: promotionRevision) else {
                 // A prior crash may already have committed this CAS. Re-read
@@ -715,6 +1358,7 @@ public struct BookMaterializationCoordinator: Sendable {
     }
 
     private func commitVerifiedDestination(book: Book, token: BookMaterializationToken, pending: PendingBookMaterialization) async throws -> BookFileFingerprint {
+        try Task.checkCancellation()
         let destinationURL = rootURL.appendingPathComponent(pending.destinationRelativePath).standardizedFileURL
         guard isContained(destinationURL), let expectedID = pending.destinationFileIdentifier,
               let revision = pending.promotionRevision,
@@ -723,6 +1367,7 @@ public struct BookMaterializationCoordinator: Sendable {
             throw MaterializationError.missingFileProvenance
         }
         let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: book.userId, sha256: pending.expectedSHA256, version: finalVersion)
+        try Task.checkCancellation()
         guard try await persistence.commitManaged(token: token, fingerprint: fingerprint) else {
             if let existing = try await persistence.fingerprint(bookID: book.id, ownerID: book.userId),
                existing == fingerprint { return existing }
@@ -736,7 +1381,7 @@ public struct BookMaterializationCoordinator: Sendable {
         await sourceRegistry.managedSourceBecameReady(managed)
         _ = try? await sourceRegistry.registerSource(
             for: book, url: managed.url, accountGeneration: generation,
-            contentRevision: fingerprint.version.materializationRevision,
+            readingPermit: managed.readingPermit,
             token: nil, requiresSecurityScope: false, observeChanges: false
         )
         guard await currentGeneration() == generation,
@@ -753,6 +1398,20 @@ public struct BookMaterializationCoordinator: Sendable {
         ))
     }
 
+    func publishReconciledManagedReady(book: Book, generation: UInt64, fingerprint: BookFileFingerprint) async -> Bool {
+        await publishManagedReady(book: book, generation: generation, fingerprint: fingerprint)
+        guard await currentGeneration() == generation,
+              lifecycle.admits(ownerID: book.userId, generation: generation),
+              let managed = try? await sourceRegistry.managedSource(for: book),
+              managed.fingerprint == fingerprint else { return false }
+        do {
+            let lease = try await sourceRegistry.acquireReadableSource(for: book)
+            return lease.url.standardizedFileURL == managed.url.standardizedFileURL
+        } catch {
+            return false
+        }
+    }
+
     private func publishFailed(token: BookMaterializationToken, retryableCode: String) async {
         guard await currentGeneration() == token.accountGeneration,
               lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration) else { return }
@@ -763,6 +1422,12 @@ public struct BookMaterializationCoordinator: Sendable {
     }
 
     private func verifiedDestination(_ url: URL, expectedID: String, revision: UUID, pending: PendingBookMaterialization) throws -> Bool {
+        var metadata = stat()
+        let status = url.path.withCString { Darwin.lstat($0, &metadata) }
+        guard status == 0 else {
+            if errno == ENOENT { return false }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         guard let version = try CoordinatedSourceProbe.version(at: url, revision: revision) else { return false }
         guard version.fileIdentifier == expectedID, version.byteCount == pending.expectedByteCount else { return false }
         let actualDigest = try digest(at: url)
@@ -797,6 +1462,8 @@ public struct BookMaterializationCoordinator: Sendable {
             let url = rootURL.appendingPathComponent(relativePath).standardizedFileURL
             guard isContained(url) else { throw MaterializationError.staleAttempt }
             return url
+        case .sampleRepair:
+            throw MaterializationError.staleAttempt
         }
     }
 
@@ -818,7 +1485,8 @@ public struct BookMaterializationCoordinator: Sendable {
         token: BookMaterializationToken,
         sourceURL: URL,
         sourceVersion: ManagedFileVersion,
-        artifact: StagedBookArtifact
+        artifact: StagedBookArtifact,
+        repairOnly: Bool
     ) async throws -> BookFileFingerprint {
         guard lifecycle.admits(ownerID: token.ownerID, generation: token.accountGeneration),
               await currentGeneration() == token.accountGeneration,
@@ -840,9 +1508,11 @@ public struct BookMaterializationCoordinator: Sendable {
             throw MaterializationError.missingFileProvenance
         }
         let promotionRevision = UUID()
+        try Task.checkCancellation()
         guard try await persistence.claimPromotion(token: token, preparedFileIdentifier: preparedFileIdentifier, promotionRevision: promotionRevision) else {
             throw MaterializationError.staleAttempt
         }
+        try Task.checkCancellation()
 
         let destinationURL = rootURL.appendingPathComponent(pending.destinationRelativePath).standardizedFileURL
         let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
@@ -850,11 +1520,26 @@ public struct BookMaterializationCoordinator: Sendable {
             throw MaterializationError.staleAttempt
         }
         try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let status = artifact.url.path.withCString { sourcePath in
-            destinationURL.path.withCString { destinationPath in Darwin.rename(sourcePath, destinationPath) }
+        if repairOnly {
+            try beforeRepairPromotion(destinationURL)
+            try Task.checkCancellation()
+        }
+        let status: Int32
+        if repairOnly {
+            status = artifact.url.path.withCString { sourcePath in
+                destinationURL.path.withCString { destinationPath in Darwin.renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL)) }
+            }
+        } else {
+            status = artifact.url.path.withCString { sourcePath in
+                destinationURL.path.withCString { destinationPath in Darwin.rename(sourcePath, destinationPath) }
+            }
         }
         guard status == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        if repairOnly {
+            await afterSampleRepairRename(token)
+            try Task.checkCancellation()
         }
 
         guard let finalVersion = try CoordinatedSourceProbe.version(at: destinationURL, revision: promotionRevision),
@@ -863,6 +1548,7 @@ public struct BookMaterializationCoordinator: Sendable {
               try digest(at: destinationURL) == pending.expectedSHA256.lowercased() else {
             throw MaterializationError.promotedContentMismatch
         }
+        try Task.checkCancellation()
         guard try await persistence.recordPromoted(
             token: token,
             preparedFileIdentifier: preparedFileIdentifier,
@@ -872,6 +1558,7 @@ public struct BookMaterializationCoordinator: Sendable {
             throw MaterializationError.staleAttempt
         }
         let fingerprint = BookFileFingerprint(bookID: book.id, ownerID: book.userId, sha256: pending.expectedSHA256, version: finalVersion)
+        try Task.checkCancellation()
         guard try await persistence.commitManaged(token: token, fingerprint: fingerprint) else {
             throw MaterializationError.staleAttempt
         }

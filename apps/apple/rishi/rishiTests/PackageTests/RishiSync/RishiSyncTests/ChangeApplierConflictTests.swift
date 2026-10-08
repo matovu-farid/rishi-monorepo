@@ -132,9 +132,68 @@ struct ChangeApplierConflictTests {
         }
     }
 
+    private actor InboundAccountPermitProbe {
+        private var generation: UInt64 = 1
+        private var captured: AccountMutationPermit?
+        func permit(ownerID: UserID) -> AccountMutationPermit {
+            let value = AccountMutationPermit(ownerID: ownerID, accountGeneration: generation)
+            captured = value
+            return value
+        }
+        func advanceGeneration() { generation += 1 }
+        func currentGeneration() -> UInt64 { generation }
+        func capturedPermit() -> AccountMutationPermit? { captured }
+    }
+
+    private actor CommitStageProbe {
+        private var events: [String] = []
+        func record(_ stage: String) { events.append(stage) }
+        func snapshot() -> [String] { events }
+    }
+
     private actor RetireProbe {
         private(set) var sawLiveBook = false
         func record(_ value: Bool) { sawLiveBook = value }
+    }
+
+    private final class SearchableNotificationProbe: @unchecked Sendable {
+        struct Snapshot {
+            let delivered: Bool
+            let deliveredOnMainThread: Bool
+            let applyHadReturnedAtDelivery: Bool
+            let applyReturned: Bool
+        }
+
+        private let lock = NSLock()
+        private var delivered = false
+        private var deliveredOnMainThread = false
+        private var applyHadReturnedAtDelivery = false
+        private var applyReturned = false
+
+        func recordDelivery() {
+            lock.lock()
+            delivered = true
+            deliveredOnMainThread = Thread.isMainThread
+            applyHadReturnedAtDelivery = applyReturned
+            lock.unlock()
+        }
+
+        func markApplyReturned() {
+            lock.lock()
+            applyReturned = true
+            lock.unlock()
+        }
+
+        func snapshot() -> Snapshot {
+            lock.lock()
+            defer { lock.unlock() }
+            return Snapshot(
+                delivered: delivered,
+                deliveredOnMainThread: deliveredOnMainThread,
+                applyHadReturnedAtDelivery: applyHadReturnedAtDelivery,
+                applyReturned: applyReturned
+            )
+        }
     }
 
     private actor BookCleanupSequence {
@@ -182,21 +241,28 @@ struct ChangeApplierConflictTests {
 
     private actor CleanupGate {
         private var entered = false
-        private var entryWaiter: CheckedContinuation<Void, Never>?
-        private var releaseWaiter: CheckedContinuation<Void, Never>?
-        func enterAndWait() async {
+        private var released = false
+
+        func enterAndWait() async throws {
             entered = true
-            entryWaiter?.resume()
-            entryWaiter = nil
-            await withCheckedContinuation { releaseWaiter = $0 }
+            while !released {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(10))
+            }
         }
-        func waitUntilEntered() async {
-            guard !entered else { return }
-            await withCheckedContinuation { entryWaiter = $0 }
+
+        func waitUntilEntered(timeout: Duration = .seconds(2)) async -> Bool {
+            let deadline = ContinuousClock.now + timeout
+            while !entered {
+                guard !Task.isCancelled, ContinuousClock.now < deadline else { return false }
+                do { try await Task.sleep(for: .milliseconds(10)) }
+                catch { return false }
+            }
+            return true
         }
+
         func release() {
-            releaseWaiter?.resume()
-            releaseWaiter = nil
+            released = true
         }
     }
 
@@ -241,7 +307,6 @@ struct ChangeApplierConflictTests {
         }
         func fingerprint(bookID: BookID, ownerID: UserID) async throws -> BookFileFingerprint? { nil }
         func cacheManagedFingerprint(_ fingerprint: BookFileFingerprint, expectedRelativePath: String, expectedVersion: ManagedFileVersion) async throws -> Bool { false }
-        func recordServerAcceptance(bookID: BookID, ownerID: UserID, expectedGeneration: UInt64, expectedContentRevision: UUID, acceptance: BookServerAcceptance) async throws -> Bool { false }
         func setAccountAuthorization(ownerID: UserID, generation: UInt64?) async throws {}
         func setBookReadingAuthorization(bookID: BookID, ownerID: UserID, generation: UInt64, contentRevision: UUID, tombstoned: Bool) async throws {}
     }
@@ -395,8 +460,9 @@ struct ChangeApplierConflictTests {
             positionStore: StubPositionStore(),
             highlightStore: StubHighlightStore(),
             metadata: metadata,
+            currentUserId: { ownerID },
             prepareBookMaterialCleanup: { _, _ in
-                { await cleanupGate.enterAndWait() }
+                { try await cleanupGate.enterAndWait() }
             },
             withBookDeletionAdmission: { owner, operation in
                 try await admission.withAdmission(ownerID: owner, operation: operation)
@@ -412,7 +478,12 @@ struct ChangeApplierConflictTests {
         )
 
         let applyTask = Task { await applier.apply([change], expectedUserId: ownerID) }
-        await cleanupGate.waitUntilEntered()
+        guard await cleanupGate.waitUntilEntered() else {
+            await cleanupGate.release()
+            let earlyResult = await applyTask.value
+            Issue.record("inbound deletion did not reach cleanup; early apply result: \(earlyResult)")
+            return
+        }
         let switchTask = Task { await admission.switchOwner(to: nextOwnerID) }
         await admission.waitUntilSwitchRequested()
 
@@ -512,6 +583,7 @@ struct ChangeApplierConflictTests {
             positionStore: StubPositionStore(),
             highlightStore: StubHighlightStore(),
             metadata: metadata,
+            currentUserId: { ownerID },
             withBookDeletionAdmission: { _, operation in try await operation(41) },
             restoreBookAfterFailedRetirement: { _, generation in
                 #expect(generation == 41)
@@ -553,6 +625,7 @@ struct ChangeApplierConflictTests {
             positionStore: StubPositionStore(),
             highlightStore: StubHighlightStore(),
             metadata: StubMetadata(),
+            currentUserId: { ownerID },
             prepareBookMaterialCleanup: { _, _ in throw Issue269TestFailure.unexpectedMaterialization },
             withBookDeletionAdmission: { _, operation in try await operation(41) },
             restoreBookAfterFailedRetirement: { liveBook, generation in
@@ -576,6 +649,45 @@ struct ChangeApplierConflictTests {
         #expect(result.applied == 0)
         #expect(await restoreProbe.sawLiveBook)
         #expect(try await books.book(book.id) == book)
+    }
+
+    @Test("searchable-data notifications are delivered on MainActor before apply returns")
+    func searchableDataNotificationUsesMainActorAndPrecedesApplyReturn() async throws {
+        let ownerID = UUID()
+        let probe = SearchableNotificationProbe()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .rishiSearchableDataDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            probe.recordDelivery()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let highlight = Highlight(
+            bookId: UUID(), locatorStart: "epubcfi(/6/2)", locatorEnd: "epubcfi(/6/4)",
+            color: .yellow, text: "Searchable passage"
+        )
+        let applier = makeApplier(
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: StubMetadata(),
+            currentUserId: { ownerID }
+        )
+
+        let result = await applier.apply(
+            [try highlightChange(highlight, at: Date(timeIntervalSince1970: 2_000_000_000))],
+            expectedUserId: ownerID
+        )
+        probe.markApplyReturned()
+
+        #expect(result.applied == 1)
+        let delivery = probe.snapshot()
+        #expect(delivery.delivered)
+        #expect(delivery.deliveredOnMainThread)
+        #expect(!delivery.applyHadReturnedAtDelivery)
+        #expect(delivery.applyReturned)
     }
 
     @Test("Conflicting inbound file digest cannot replace a local managed book")
@@ -1118,7 +1230,7 @@ struct ChangeApplierConflictTests {
                 }
                 return verified
             },
-            bookFingerprintPersister: { _, candidate in
+            bookFingerprintPersister: { _, candidate, _ in
                 guard candidate == fingerprint else { return false }
                 return await persistence.persist()
             }
@@ -1136,6 +1248,149 @@ struct ChangeApplierConflictTests {
         #expect(await bookStore.count() == 1)
         #expect((await metadata.cleaned()).count == 1)
         #expect(await persistence.calls == 2)
+    }
+
+    @Test("new inbound acceptance rejects the captured account generation after relogin")
+    func newInboundAcceptanceUsesCapturedAccountPermit() async throws {
+        let ownerID = UUID()
+        let bookID = UUID()
+        let digest = String(repeating: "a", count: 64)
+        let remote = Book(id: bookID, userId: ownerID, title: "Remote", formatType: .epub, fileURL: "books/remote.epub")
+        let operationID = UUID()
+        let change = SyncChange(
+            kind: SyncEntityKind.book.rawValue,
+            id: bookID,
+            operationId: operationID,
+            payload: try SyncPayloadCodec.encodeBook(remote, r2Key: "books/remote.epub", fileHash: digest, fileSize: 8),
+            updatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            deleted: false
+        )
+        let managed = Book(id: bookID, userId: ownerID, title: "Remote", formatType: .epub, fileURL: "books/managed.epub")
+        let fingerprint = BookFileFingerprint(
+            bookID: bookID,
+            ownerID: ownerID,
+            sha256: digest,
+            version: ManagedFileVersion(byteCount: 8, modificationDate: Date(timeIntervalSince1970: 1_800_000_000), fileIdentifier: "managed", materializationRevision: UUID())
+        )
+        let state = InboundAccountPermitProbe()
+        let bookStore = StubBookStore()
+        let metadata = StubMetadata()
+        let applier = ChangeApplier(
+            bookStore: bookStore,
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            bookmarkStore: StubBookmarkStore(),
+            metadataStore: metadata,
+            currentUserId: { ownerID },
+            bookMaterializer: { _, _, _ in
+                await state.advanceGeneration()
+                return VerifiedDownloadedBook(book: managed, fingerprint: fingerprint)
+            },
+            bookFingerprintPersister: { _, candidate, capturedGeneration in
+                candidate == fingerprint && capturedGeneration == 1
+            },
+            bookAccountPermitLookup: { await state.permit(ownerID: ownerID) },
+            newBookServerAcceptancePersister: { permit, candidate, _ in
+                guard candidate == fingerprint else { return false }
+                let currentGeneration = await state.currentGeneration()
+                return permit.accountGeneration == currentGeneration
+            }
+        )
+
+        let result = await applier.apply([change], expectedUserId: ownerID)
+
+        #expect(result.applied == 0)
+        #expect(!result.errors.isEmpty)
+        #expect((await metadata.cleaned()).isEmpty)
+        #expect(await state.capturedPermit()?.accountGeneration == 1)
+        #expect(await state.currentGeneration() == 2)
+    }
+
+    @Test("authority materializer retains the original permit for both existing and absent books", arguments: [false, true])
+    func staleAuthorityResponseNeverBeginsCanonicalCommit(existing: Bool) async throws {
+        let owner = UUID()
+        let remote = Book(userId: owner, title: "Remote", formatType: .epub, fileURL: "Books/remote.epub")
+        let local = Book(id: remote.id, userId: owner, title: "Local", formatType: .epub, fileURL: "Books/local.epub")
+        let digest = String(repeating: "c", count: 64)
+        let fingerprint = BookFileFingerprint(bookID: remote.id, ownerID: owner, sha256: digest,
+            version: ManagedFileVersion(byteCount: 8, modificationDate: Date(), fileIdentifier: "verified", materializationRevision: UUID()))
+        let account = InboundAccountPermitProbe()
+        let stages = CommitStageProbe()
+        let books = StubBookStore()
+        if existing { await books.seed(local) }
+        let positions = StubPositionStore()
+        let metadata = StubMetadata()
+        let applier = ChangeApplier(bookStore: books, positionStore: positions,
+            highlightStore: StubHighlightStore(), bookmarkStore: StubBookmarkStore(), metadataStore: metadata,
+            currentUserId: { owner },
+            bookMaterializerWithAuthority: { _, _, _, captured in
+                #expect(captured.ownerID == owner)
+                #expect(captured.accountGeneration == 1)
+                await stages.record("response-g1")
+                await account.advanceGeneration()
+                return VerifiedDownloadedBook(book: remote, fingerprint: fingerprint)
+            },
+            isCurrentAccountPermit: { captured in
+                let current = await account.currentGeneration()
+                return captured.ownerID == owner && captured.accountGeneration == current
+            },
+            admitAccountOperation: { _ in await stages.record("admission"); return nil },
+            bookFingerprintPersister: { _, _, _ in await stages.record("fingerprint"); return true },
+            activateBookWithAuthority: { _, _ in await stages.record("activation") },
+            bookAccountPermitLookup: { await account.permit(ownerID: owner) },
+            newBookServerAcceptancePersister: { _, _, _ in await stages.record("acceptance"); return true }
+        )
+        let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "owned/remote", position: Position(bookId: remote.id, locator: "epub-v1:remote", percentComplete: 0.8), fileHash: digest, fileSize: 8)
+        let result = await applier.apply([SyncChange(kind: SyncEntityKind.book.rawValue, id: remote.id, operationId: UUID(), payload: payload, updatedAt: Date(), deleted: false)], expectedUserId: owner)
+        #expect(result.applied == 0)
+        #expect(!result.errors.isEmpty)
+        #expect(try await books.book(remote.id) == (existing ? local : nil))
+        #expect((await positions.snapshot()).isEmpty)
+        #expect((await metadata.cleaned()).isEmpty)
+        #expect(await stages.snapshot() == ["response-g1"])
+        #expect(await account.capturedPermit()?.accountGeneration == 1)
+        #expect(await account.currentGeneration() == 2)
+    }
+
+    @Test("generation replacement during an entered fingerprint commit suppresses later stages")
+    func enteredCanonicalStageDoesNotStartLaterStagesAfterReplacement() async throws {
+        let owner = UUID()
+        let remote = Book(userId: owner, title: "Entered commit", formatType: .epub, fileURL: "Books/entered.epub")
+        let digest = String(repeating: "d", count: 64)
+        let fingerprint = BookFileFingerprint(bookID: remote.id, ownerID: owner, sha256: digest,
+            version: ManagedFileVersion(byteCount: 8, modificationDate: Date(), fileIdentifier: "entered", materializationRevision: UUID()))
+        let account = InboundAccountPermitProbe()
+        let stages = CommitStageProbe()
+        let books = StubBookStore()
+        let positions = StubPositionStore()
+        let metadata = StubMetadata()
+        let applier = ChangeApplier(bookStore: books, positionStore: positions,
+            highlightStore: StubHighlightStore(), bookmarkStore: StubBookmarkStore(), metadataStore: metadata,
+            currentUserId: { owner },
+            bookMaterializerWithAuthority: { _, _, _, captured in
+                #expect(captured.accountGeneration == 1)
+                return VerifiedDownloadedBook(book: remote, fingerprint: fingerprint)
+            },
+            isCurrentAccountPermit: { captured in let current = await account.currentGeneration()
+                return captured.ownerID == owner && captured.accountGeneration == current },
+            bookFingerprintPersister: { _, _, generation in
+                #expect(generation == 1)
+                await stages.record("entered-fingerprint-g1")
+                await account.advanceGeneration()
+                return true
+            },
+            activateBookWithAuthority: { _, _ in await stages.record("activation") },
+            bookAccountPermitLookup: { await account.permit(ownerID: owner) },
+            newBookServerAcceptancePersister: { _, _, _ in await stages.record("acceptance"); return true }
+        )
+        let payload = try SyncPayloadCodec.encodeBook(remote, r2Key: "owned/entered", position: Position(bookId: remote.id, locator: "epub-v1:entered", percentComplete: 0.8), fileHash: digest, fileSize: 8)
+        let result = await applier.apply([SyncChange(kind: SyncEntityKind.book.rawValue, id: remote.id, operationId: UUID(), payload: payload, updatedAt: Date(), deleted: false)], expectedUserId: owner)
+        #expect(result.applied == 0)
+        #expect(!result.errors.isEmpty)
+        #expect(try await books.book(remote.id) == remote)
+        #expect((await positions.snapshot()).isEmpty)
+        #expect((await metadata.cleaned()).isEmpty)
+        #expect(await stages.snapshot() == ["entered-fingerprint-g1"])
     }
 
     private enum SwiftDataTestFailure: Error { case invalidRemoteMetadata }

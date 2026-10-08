@@ -2,6 +2,16 @@ import Foundation
 
 
 
+/// Produces the persisted display title used by both imports and sample
+/// identity checks, including the importer's filename fallback.
+func bookDisplayTitle(metadataTitle: String?, filename: String) -> String {
+    if let metadataTitle { return metadataTitle }
+    let nameOnly = (filename as NSString).deletingPathExtension
+    let withSpaces = nameOnly.replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+    return withSpaces.isEmpty ? "Untitled" : withSpaces
+}
+
 struct BookImporter: Sendable {
     private static let importGate = BookImportGate()
     private static let sourceReservationGate = BookImportGate()
@@ -47,7 +57,18 @@ struct BookImporter: Sendable {
             rootURL: rootURL,
             bookStore: bookStore,
             persistence: fingerprintPersistence,
-            isTombstoned: isTombstoned
+            isTombstoned: isTombstoned,
+            currentGeneration: fingerprintAccountGeneration,
+            isRetired: materializationCoordinator.map { coordinator in
+                { @Sendable (book: Book, generation: UInt64) async -> Bool in
+                    coordinator.isBookRetiredForDeletion(ownerID: book.userId, generation: generation, bookID: book.id)
+                }
+            },
+            isSourceAvailable: materializationCoordinator.map { coordinator in
+                { @Sendable (book: Book) async -> Bool in
+                    await coordinator.isReadableSourceAvailable(for: book)
+                }
+            }
         )
         self.fingerprintPersistence = fingerprintPersistence
         self.fingerprintAccountGeneration = fingerprintAccountGeneration
@@ -169,7 +190,6 @@ struct BookImporter: Sendable {
         defer {
             if holdsSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
         }
-        try ensureBooksDirExists()
         let ext = sourceURL.pathExtension.lowercased()
         guard let format = BookFormat(rawValue: ext) else {
             throw BookFileStorage.StorageError.unsupportedFormat(ext: ext)
@@ -204,6 +224,7 @@ struct BookImporter: Sendable {
                 readableByteCount: selected.byteCount,
                 cacheState: .hit
             )
+            try validateReturnedRegistration(book: existing, token: nil, ownerID: ownerId, generation: accountGeneration)
             return SourceReadableBookRegistration(book: existing, selectedContentHash: selected.sha256, state: .managed)
         }
 
@@ -227,15 +248,17 @@ struct BookImporter: Sendable {
         }
         var bookDirectory = booksDirURL.appendingPathComponent(bookID.uuidString, isDirectory: true)
         let destinationURL = bookDirectory.appendingPathComponent(sourceURL.lastPathComponent)
+        let destinationRelativePath = try ManagedRelativePath.make(root: rootURL, target: destinationURL)
+        try ensureBooksDirExists()
         var book = Book(
             id: bookID,
             userId: ownerId,
-            title: metadata.title ?? titleFallback(from: sourceURL.lastPathComponent),
+            title: bookDisplayTitle(metadataTitle: metadata.title, filename: sourceURL.lastPathComponent),
             author: metadata.author,
             formatType: format,
             addedAt: Date(),
             openedAt: nil,
-            fileURL: relativePath(of: destinationURL),
+            fileURL: destinationRelativePath,
             coverPath: nil
         )
 
@@ -265,12 +288,16 @@ struct BookImporter: Sendable {
         var token = BookMaterializationToken(ownerID: ownerId, accountGeneration: accountGeneration, bookID: bookID, attemptID: attemptID)
         let ownedDirectory = rootURL.appendingPathComponent("Imports", isDirectory: true).appendingPathComponent(token.attemptID.uuidString, isDirectory: true)
         let ownedURL = ownedDirectory.appendingPathComponent("source.\(ext)")
+        let ownedSourceRelativePath = ownedSource
+            ? try ManagedRelativePath.make(root: rootURL, target: ownedURL)
+            : nil
         let cleanup = ownedSource ? OwnedImportSourceCleanup(attemptDirectory: ownedDirectory) : nil
         var preserveOwnedDirectory = false
         defer {
-            if ownedSource && !preserveOwnedDirectory { try? fileManager.removeItem(at: ownedDirectory) }
+            if ownedSource && !preserveOwnedDirectory { removeManagedArtifact(at: ownedDirectory) }
         }
         let materializationURL: URL
+        let materializationRelativePath: String?
         let sourceVersion: ManagedFileVersion
         let bookmark: Data?
         if ownedSource {
@@ -284,10 +311,11 @@ struct BookImporter: Sendable {
                     throw BookFileStorage.StorageError.sourceUnreadable
                 }
                 materializationURL = ownedURL
+                materializationRelativePath = ownedSourceRelativePath
                 sourceVersion = stagedVersion
                 bookmark = nil
             } catch {
-                try? fileManager.removeItem(at: ownedDirectory)
+                removeManagedArtifact(at: ownedDirectory)
                 if let storageError = error as? BookFileStorage.StorageError { throw storageError }
                 throw BookFileStorage.StorageError.sourceUnreadable
             }
@@ -298,13 +326,14 @@ struct BookImporter: Sendable {
                 throw BookFileStorage.StorageError.sourceUnreadable
             }
             materializationURL = sourceURL
+            materializationRelativePath = nil
             sourceVersion = selected.version
         }
         var job = PendingBookMaterialization(
             token: token,
             sourceKind: ownedSource ? .ownedStaging : .securityScopedOriginal,
             sourceBookmark: bookmark,
-            ownedSourceRelativePath: ownedSource ? "Imports/\(token.attemptID.uuidString)/source.\(ext)" : nil,
+            ownedSourceRelativePath: materializationRelativePath,
             sourceVersion: sourceVersion,
             expectedSHA256: selected.sha256.lowercased(),
             expectedByteCount: selected.byteCount,
@@ -324,6 +353,7 @@ struct BookImporter: Sendable {
         var admission: BookImportMaterializationAdmission?
         let reservation: BookRegistration
         do {
+            let candidate = try await fingerprintService.matchingCandidate(ownerID: ownerId, byteCount: selected.byteCount, sha256: selected.sha256)
             // A sibling may have reserved the same deterministic metadata ID
             // while this source was being hashed or staged. Recheck under the
             // short reservation gate before attempting the persistence CAS.
@@ -335,12 +365,12 @@ struct BookImporter: Sendable {
                 book = Book(
                     id: bookID,
                     userId: ownerId,
-                    title: metadata.title ?? titleFallback(from: sourceURL.lastPathComponent),
+                    title: bookDisplayTitle(metadataTitle: metadata.title, filename: sourceURL.lastPathComponent),
                     author: metadata.author,
                     formatType: format,
                     addedAt: Date(),
                     openedAt: nil,
-                    fileURL: relativePath(of: destinationURL),
+                    fileURL: try ManagedRelativePath.make(root: rootURL, target: destinationURL),
                     coverPath: nil
                 )
                 token = BookMaterializationToken(ownerID: ownerId, accountGeneration: accountGeneration, bookID: bookID, attemptID: attemptID)
@@ -364,7 +394,8 @@ struct BookImporter: Sendable {
             ) else { throw BookFileStorage.StorageError.sourceUnreadable }
             admission = admitted
             do {
-                reservation = try await fingerprintPersistence.reserveRegistration(book: book, job: job, candidate: nil)
+                let excluded = try await metadataClosedPendingBookIDs(ownerID: ownerId, sha256: selected.sha256)
+                reservation = try await fingerprintPersistence.reserveRegistration(book: book, job: job, candidate: candidate.flatMap { excluded.contains($0.bookID) ? nil : $0 }, excludedBookIDs: excluded)
             } catch BookImportPersistenceError.bookIDOccupied where deterministicID != nil {
                 admission?.release()
                 bookID = UUID()
@@ -373,12 +404,12 @@ struct BookImporter: Sendable {
                 book = Book(
                     id: bookID,
                     userId: ownerId,
-                    title: metadata.title ?? titleFallback(from: sourceURL.lastPathComponent),
+                    title: bookDisplayTitle(metadataTitle: metadata.title, filename: sourceURL.lastPathComponent),
                     author: metadata.author,
                     formatType: format,
                     addedAt: Date(),
                     openedAt: nil,
-                    fileURL: relativePath(of: destinationURL),
+                    fileURL: try ManagedRelativePath.make(root: rootURL, target: destinationURL),
                     coverPath: nil
                 )
                 token = BookMaterializationToken(ownerID: ownerId, accountGeneration: accountGeneration, bookID: bookID, attemptID: attemptID)
@@ -400,7 +431,8 @@ struct BookImporter: Sendable {
                     bookID: book.id
                 ) else { throw BookFileStorage.StorageError.sourceUnreadable }
                 admission = retryAdmission
-                reservation = try await fingerprintPersistence.reserveRegistration(book: book, job: job, candidate: nil)
+                let excluded = try await metadataClosedPendingBookIDs(ownerID: ownerId, sha256: selected.sha256)
+                reservation = try await fingerprintPersistence.reserveRegistration(book: book, job: job, candidate: candidate.flatMap { excluded.contains($0.bookID) ? nil : $0 }, excludedBookIDs: excluded)
             }
             await Self.sourceReservationGate.release()
         } catch {
@@ -418,7 +450,9 @@ struct BookImporter: Sendable {
             cacheState: .miss
         )
         defer { admission?.release() }
-        switch reservation.disposition {
+        try validateReturnedRegistration(book: reservation.book, token: reservation.token, ownerID: ownerId, generation: accountGeneration)
+        do {
+            switch reservation.disposition {
         case .registered:
             guard let registeredToken = reservation.token else { throw BookFileStorage.StorageError.sourceUnreadable }
             try await materializationCoordinator.registerReadableSource(
@@ -482,10 +516,15 @@ struct BookImporter: Sendable {
                 ownerId: ownerId,
                 expectedContentHash: selected.sha256,
                 sourceKind: ownedSource ? .ownedStaging : .securityScopedOriginal,
-                ownedSourceRelativePath: ownedSource ? relativePath(of: materializationURL) : nil
+                ownedSourceRelativePath: materializationRelativePath
             )
             return SourceReadableBookRegistration(book: managed, selectedContentHash: selected.sha256, state: .managed)
         }
+        } catch {
+            try validateReturnedRegistration(book: reservation.book, token: reservation.token, ownerID: ownerId, generation: accountGeneration)
+            throw error
+        }
+        try validateReturnedRegistration(book: reservation.book, token: reservation.token, ownerID: ownerId, generation: accountGeneration)
     }
 
     private func scheduleSourceReadableMaterialization(
@@ -527,15 +566,25 @@ struct BookImporter: Sendable {
         }
     }
 
+    private func validateReturnedRegistration(book: Book, token: BookMaterializationToken?, ownerID: UserID, generation: UInt64?) throws {
+        guard book.userId == ownerID else { throw BookFileStorage.StorageError.sourceUnreadable }
+        if let token {
+            guard token.ownerID == ownerID, token.bookID == book.id,
+                  generation == nil || token.accountGeneration == generation else { throw BookFileStorage.StorageError.sourceUnreadable }
+        }
+        if let generation, materializationCoordinator?.isBookRetiredForDeletion(ownerID: ownerID, generation: generation, bookID: book.id) == true {
+            throw BookImportFailure.deletionInProgress
+        }
+    }
+
     private func importBookWhileHoldingGate(
         from sourceURL: URL,
         ownerId: UserID,
         expectedContentHash: String?,
         sourceKind: BookSourceKind = .securityScopedOriginal,
-        ownedSourceRelativePath: String? = nil
+        ownedSourceRelativePath: String? = nil,
+        forcedBookID: BookID? = nil
     ) async throws -> Book {
-        try ensureBooksDirExists()
-
         let ext = sourceURL.pathExtension.lowercased()
         guard let format = BookFormat(rawValue: ext) else {
             throw BookFileStorage.StorageError.unsupportedFormat(ext: ext)
@@ -580,6 +629,7 @@ struct BookImporter: Sendable {
                 "book_id": existing.id.uuidString,
                 "format": format.rawValue,
             ])
+            try validateReturnedRegistration(book: existing, token: nil, ownerID: ownerId, generation: await fingerprintAccountGeneration())
             return existing
         }
 
@@ -591,7 +641,9 @@ struct BookImporter: Sendable {
             format: format
         )
         let bookId: BookID
-        if let deterministicID,
+        if let forcedBookID {
+            bookId = forcedBookID
+        } else if let deterministicID,
            let isTombstoned,
            await isTombstoned(deterministicID) {
             // A deleted logical book ID is never reused. Re-importing the
@@ -623,6 +675,8 @@ struct BookImporter: Sendable {
         )
         let filename = sourceURL.lastPathComponent
         let destURL = bookDir.appendingPathComponent(filename)
+        let managedDestinationPath = try ManagedRelativePath.make(root: rootURL, target: destURL)
+        try ensureBooksDirExists()
 
         let importGeneration: UInt64?
         if let capturedAccountGeneration {
@@ -637,18 +691,27 @@ struct BookImporter: Sendable {
             let book = Book(
                 id: bookId,
                 userId: ownerId,
-                title: metadata.title ?? titleFallback(from: filename),
+                title: bookDisplayTitle(metadataTitle: metadata.title, filename: filename),
                 author: metadata.author,
                 formatType: format,
                 addedAt: Date(),
                 openedAt: nil,
-                fileURL: relativePath(of: destURL),
+                fileURL: managedDestinationPath,
                 coverPath: nil
             )
             let token = BookMaterializationToken(ownerID: ownerId, accountGeneration: generation, bookID: bookId, attemptID: UUID())
             let stagingRelativePath = "Imports/\(token.attemptID.uuidString)/content.partial"
             let ownedAttemptDirectory = rootURL.appendingPathComponent("Imports", isDirectory: true)
                 .appendingPathComponent(token.attemptID.uuidString, isDirectory: true)
+            let validatedOwnedAttemptSourcePath: String?
+            if case .ownedStaging = sourceKind {
+                validatedOwnedAttemptSourcePath = try ManagedRelativePath.make(
+                    root: rootURL,
+                    target: ownedAttemptDirectory.appendingPathComponent("source.\(format.rawValue)")
+                )
+            } else {
+                validatedOwnedAttemptSourcePath = nil
+            }
             let ownedAttemptCleanup: OwnedImportSourceCleanup?
             if case .ownedStaging = sourceKind {
                 ownedAttemptCleanup = OwnedImportSourceCleanup(attemptDirectory: ownedAttemptDirectory)
@@ -660,10 +723,10 @@ struct BookImporter: Sendable {
             let retryDirectoryOwnership = OwnedImportSourceDirectoryOwnership()
             defer {
                 if case .ownedStaging = sourceKind, !preserveOwnedAttempt {
-                    try? fileManager.removeItem(at: ownedAttemptDirectory)
+                    removeManagedArtifact(at: ownedAttemptDirectory)
                 }
                 for directory in uncommittedRetryDirectories where !retryDirectoryOwnership.wasTransferred(directory) {
-                    try? fileManager.removeItem(at: directory)
+                    removeManagedArtifact(at: directory)
                 }
             }
             let materializationSourceURL: URL
@@ -682,7 +745,7 @@ struct BookImporter: Sendable {
                 }
                 materializationSourceURL = ownedURL
                 sourceVersion = ownedVersion
-                materializationOwnedSourcePath = "Imports/\(token.attemptID.uuidString)/source.\(format.rawValue)"
+                materializationOwnedSourcePath = validatedOwnedAttemptSourcePath
                 bookmark = nil
             } else {
                 do {
@@ -723,20 +786,23 @@ struct BookImporter: Sendable {
             await Self.sourceReservationGate.acquire()
             let reservation: BookRegistration
             do {
-                reservation = try await fingerprintPersistence.reserveRegistration(book: book, job: job, candidate: nil)
+                let candidate = try await fingerprintService.matchingCandidate(ownerID: ownerId, byteCount: selectedSource.byteCount, sha256: selectedSource.sha256)
+                let excluded = try await metadataClosedPendingBookIDs(ownerID: ownerId, sha256: selectedSource.sha256)
+                reservation = try await fingerprintPersistence.reserveRegistration(book: book, job: job, candidate: candidate.flatMap { excluded.contains($0.bookID) ? nil : $0 }, excludedBookIDs: excluded)
                 await Self.sourceReservationGate.release()
-                } catch BookImportPersistenceError.bookIDOccupied where deterministicID != nil {
+            } catch BookImportPersistenceError.bookIDOccupied where deterministicID != nil && forcedBookID == nil {
                 await Self.sourceReservationGate.release()
                 // A source-readable registration may have won the same
                 // deterministic metadata identity while this durable import
-                // was preparing. Re-probe once; the canonical row will now
-                // force the usual random-ID rotation.
+                // was preparing, or a permanent native deny record survives
+                // after the canonical row disappeared. Rotate explicitly once.
                 return try await importBookWhileHoldingGate(
                     from: sourceURL,
                     ownerId: ownerId,
                     expectedContentHash: expectedContentHash,
                     sourceKind: sourceKind,
-                    ownedSourceRelativePath: ownedSourceRelativePath
+                    ownedSourceRelativePath: ownedSourceRelativePath,
+                    forcedBookID: UUID()
                 )
             } catch {
                 await Self.sourceReservationGate.release()
@@ -752,7 +818,9 @@ struct BookImporter: Sendable {
                 cacheState: .miss
             )
             var registration = reservation
-            switch reservation.disposition {
+            try validateReturnedRegistration(book: reservation.book, token: reservation.token, ownerID: ownerId, generation: generation)
+            do {
+                switch reservation.disposition {
             case .registered:
                 guard let registeredToken = reservation.token else { throw BookFileStorage.StorageError.sourceUnreadable }
                 if case .ownedStaging = sourceKind { preserveOwnedAttempt = true }
@@ -810,10 +878,11 @@ struct BookImporter: Sendable {
                 if case .ownedStaging = sourceKind {
                     let retryDirectory = rootURL.appendingPathComponent("Imports", isDirectory: true)
                         .appendingPathComponent(retryToken.attemptID.uuidString, isDirectory: true)
+                    let retryURL = retryDirectory.appendingPathComponent("source.\(format.rawValue)")
+                    let validatedRetrySourcePath = try ManagedRelativePath.make(root: rootURL, target: retryURL)
                     uncommittedRetryDirectories.append(retryDirectory)
                     retryOwnedDirectory = retryDirectory
                     retryOwnedCleanup = OwnedImportSourceCleanup(attemptDirectory: retryDirectory)
-                    let retryURL = retryDirectory.appendingPathComponent("source.\(format.rawValue)")
                     try fileManager.createDirectory(at: retryDirectory, withIntermediateDirectories: true)
                     let retrySelected = BookFingerprintService.SelectedSource(
                         sha256: selectedSource.sha256,
@@ -830,7 +899,7 @@ struct BookImporter: Sendable {
                     }
                     retrySourceURL = retryURL
                     retrySourceVersion = retryVersion
-                    retryOwnedSourcePath = "Imports/\(retryToken.attemptID.uuidString)/source.\(format.rawValue)"
+                    retryOwnedSourcePath = validatedRetrySourcePath
                 }
                 let retryJob = PendingBookMaterialization(
                     token: retryToken,
@@ -892,6 +961,7 @@ struct BookImporter: Sendable {
                     retiredAttempt: RetiredBookMaterializationAttempt(token: retiredJob.token),
                     sourceURL: retrySourceURL,
                     publishRegistration: true,
+                    requiresSecurityScope: sourceKind == .securityScopedOriginal,
                     onSourceOwnerReleased: retryOwnedCleanup.map { cleanup in
                         { @Sendable in cleanup.sourceOwnerDidRelease() }
                     },
@@ -916,6 +986,11 @@ struct BookImporter: Sendable {
                 registrationAdmission = nil
                 _ = try await materializationCoordinator.materialize(book: reservation.book, token: retriedToken, sourceURL: sourceURL, publishRegistration: true, admission: admission)
             }
+            } catch {
+                try validateReturnedRegistration(book: reservation.book, token: reservation.token, ownerID: ownerId, generation: generation)
+                throw error
+            }
+            try validateReturnedRegistration(book: reservation.book, token: reservation.token, ownerID: ownerId, generation: generation)
 
             var readyBook = registration.book
             let readyURL = rootURL.appendingPathComponent(readyBook.fileURL)
@@ -943,19 +1018,23 @@ struct BookImporter: Sendable {
             return readyBook
         }
 
+        let destinationRelativePath = managedDestinationPath
         try fileManager.createDirectory(
             at: bookDir,
             withIntermediateDirectories: true
         )
         let stagingURL = bookDir.appendingPathComponent(".\(filename).importing-\(UUID().uuidString)")
         do {
+            _ = try ManagedRelativePath.make(root: rootURL, target: stagingURL)
             try await fingerprintService.copySelectedSource(at: sourceURL, to: stagingURL, selected: selectedSource)
             if fileManager.fileExists(atPath: destURL.path) {
+                _ = try ManagedRelativePath.make(root: rootURL, target: destURL)
                 try fileManager.removeItem(at: destURL)
             }
+            _ = try ManagedRelativePath.make(root: rootURL, target: destURL)
             try fileManager.moveItem(at: stagingURL, to: destURL)
         } catch {
-            try? fileManager.removeItem(at: stagingURL)
+            removeManagedArtifact(at: stagingURL)
             throw BookFileStorage.StorageError.copyFailed(underlying: error)
         }
 
@@ -964,8 +1043,9 @@ struct BookImporter: Sendable {
             if let png = await extractor.extractCover(from: destURL) {
                 let coverURL = bookDir.appendingPathComponent("cover.png")
                 do {
+                    let validatedCoverPath = try ManagedRelativePath.make(root: rootURL, target: coverURL)
                     try png.write(to: coverURL, options: .atomic)
-                    coverPath = relativePath(of: coverURL)
+                    coverPath = validatedCoverPath
                 } catch {
                     Log.event(
                         "cover.write.failed",
@@ -982,12 +1062,12 @@ struct BookImporter: Sendable {
         let book = Book(
             id: bookId,
             userId: ownerId,
-            title: metadata.title ?? titleFallback(from: filename),
+            title: bookDisplayTitle(metadataTitle: metadata.title, filename: filename),
             author: metadata.author,
             formatType: format,
             addedAt: Date(),
             openedAt: nil,
-            fileURL: relativePath(of: destURL),
+            fileURL: destinationRelativePath,
             coverPath: coverPath
         )
         try await bookStore.upsert(book)
@@ -1037,13 +1117,15 @@ struct BookImporter: Sendable {
         // Attempt-namespaced files ensure a late extractor cannot overwrite a
         // cover already referenced by a newer content attempt.
         let coverURL = coverDirectory.appendingPathComponent("cover-\(token.attemptID.uuidString).png")
+        var coverWasWritten = false
         do {
+            let coverPath = try ManagedRelativePath.make(root: rootURL, target: coverURL)
             try FileManager.default.createDirectory(at: coverDirectory, withIntermediateDirectories: true)
             try png.write(to: coverURL, options: .atomic)
-            let coverPath = relativePath(of: coverURL)
+            coverWasWritten = true
             guard let fingerprintPersistence,
                   try await fingerprintPersistence.patchCover(bookID: book.id, token: token, relativePath: coverPath) else {
-                try? FileManager.default.removeItem(at: coverURL)
+                removeManagedArtifact(at: coverURL)
                 return nil
             }
             importInstrumentation.record(.coverPublished, attemptID: token.attemptID)
@@ -1055,11 +1137,25 @@ struct BookImporter: Sendable {
                 fileURL: book.fileURL, coverPath: coverPath
             )
         } catch {
-            try? FileManager.default.removeItem(at: coverURL)
+            if coverWasWritten { removeManagedArtifact(at: coverURL) }
             Log.event("cover.write.failed", level: .info, data: ["book": book.id.uuidString, "error": String(describing: error)])
             await materializationCoordinator.publishCoverFailed(bookID: book.id, token: token)
             return nil
         }
+    }
+
+    /// A durable delete may precede its native-row reconciliation. Its old
+    /// attempt is cleanup provenance, never a contender for a fresh import.
+    private func metadataClosedPendingBookIDs(ownerID: UserID, sha256: String) async throws -> Set<BookID> {
+        guard let fingerprintPersistence, let isTombstoned else { return [] }
+        var excluded = Set<BookID>()
+        for pending in try await fingerprintPersistence.pendingMaterializationsForDeletionCleanup(ownerID: ownerID) {
+            if pending.expectedSHA256.caseInsensitiveCompare(sha256) == .orderedSame,
+               await isTombstoned(pending.token.bookID) {
+                excluded.insert(pending.token.bookID)
+            }
+        }
+        return excluded
     }
 
     private func ensureBooksDirExists() throws {
@@ -1071,20 +1167,64 @@ struct BookImporter: Sendable {
         }
     }
 
-    private func relativePath(of url: URL) -> String {
-        let root = rootURL.standardizedFileURL.path
-        let target = url.standardizedFileURL.path
-        if target.hasPrefix(root + "/") {
-            return String(target.dropFirst(root.count + 1))
-        }
-        return target
+    private func removeManagedArtifact(at url: URL) {
+        guard (try? ManagedRelativePath.make(root: rootURL, target: url)) != nil else { return }
+        try? fileManager.removeItem(at: url)
     }
 
-    private func titleFallback(from filename: String) -> String {
-        let nameOnly = (filename as NSString).deletingPathExtension
-        let withSpaces = nameOnly.replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: "-", with: " ")
-        return withSpaces.isEmpty ? "Untitled" : withSpaces
+}
+
+enum ManagedRelativePath {
+    enum PathError: Error { case invalidFileURL, traversal, outsideRoot, rootTarget }
+
+    static func make(root: URL, target: URL) throws -> String {
+        let rootPath = try canonicalPath(root)
+        let targetPath = try canonicalPath(target)
+        guard targetPath != rootPath else { throw PathError.rootTarget }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard targetPath.hasPrefix(prefix) else { throw PathError.outsideRoot }
+        let relative = String(targetPath.dropFirst(prefix.count))
+        guard !relative.isEmpty, !relative.hasPrefix("/"),
+              !relative.split(separator: "/").contains("..") else { throw PathError.traversal }
+        return relative
+    }
+
+    private static func canonicalPath(_ url: URL) throws -> String {
+        guard url.isFileURL, url.path.hasPrefix("/") else { throw PathError.invalidFileURL }
+        let parts = url.path.split(separator: "/", omittingEmptySubsequences: true)
+        guard !parts.contains("..") else { throw PathError.traversal }
+        var existing = URL(fileURLWithPath: "/", isDirectory: true)
+        var missing: [String] = []
+        var didFindMissing = false
+        for part in parts {
+            if didFindMissing {
+                missing.append(String(part))
+                continue
+            }
+            let next = existing.appendingPathComponent(String(part))
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: next.path)
+                if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+                    let resolved = next.resolvingSymlinksInPath()
+                    guard FileManager.default.fileExists(atPath: resolved.path) else { throw PathError.outsideRoot }
+                }
+                existing = next
+            } catch let error as NSError where Self.isMissingPathError(error) {
+                missing.append(String(part))
+                didFindMissing = true
+            } catch {
+                throw error
+            }
+        }
+        var resolved = existing.resolvingSymlinksInPath().standardizedFileURL
+        for part in missing { resolved.appendPathComponent(part) }
+        return resolved.standardizedFileURL.path
+    }
+
+    private static func isMissingPathError(_ error: NSError) -> Bool {
+        (error.domain == NSCocoaErrorDomain &&
+            (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError)) ||
+        (error.domain == NSPOSIXErrorDomain && error.code == 2)
     }
 }
 

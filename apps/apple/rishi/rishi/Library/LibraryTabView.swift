@@ -113,7 +113,8 @@ struct LibraryTabView: View {
             currentAccountIdentity: dependencies.currentAccountIdentity,
             onBookDeleted: { bookId in
                 try await dependencies.syncEngine.markBookDeleted(bookId)
-            }
+            },
+            syncEngine: dependencies.syncEngine
         ))
     }
 
@@ -280,7 +281,7 @@ struct LibraryTabView: View {
 #endif
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
-          
+
                 path: bindableRouter.path,
                 importCoordinator: dependencies.importCoordinator,
                 onOpenBook: { book in _ = openBook(book) },
@@ -364,21 +365,21 @@ struct LibraryTabView: View {
                 )
             }
             .task {
-         
+
                 for await result in Transaction.currentEntitlements {
                     guard case .verified(let transaction) = result else {
-                        
+
                         continue
                     }
                     let _ = try? await VerifyEndPont(body: .init(transactionId: transaction.id))
                         .send(using: dependencies.settings.workerClient)
-                    
-                    
-                    
-                    
+
+
+
+
                 }
             }
-            
+
             .task(id: libraryLoadTaskID) {
                 await performInitialLibraryLoad()
             }

@@ -5,6 +5,7 @@ public protocol BookImportingStorage: Sendable {
     func importBook(from sourceURL: URL, ownerId: UserID, expectedContentHash: String?, accountGeneration: UInt64) async throws -> Book
     func registerSourceReadable(from sourceURL: URL, ownerId: UserID, accountGeneration: UInt64) async throws -> SourceReadableBookRegistration
     func registerOwnedSourceReadable(from sourceURL: URL, ownerId: UserID, accountGeneration: UInt64) async throws -> SourceReadableBookRegistration
+    func checkedValidateSourceReadableRegistration(_ registration: SourceReadableBookRegistration, ownerId: UserID, accountGeneration: UInt64) async throws
     func validateSourceReadableRegistration(_ registration: SourceReadableBookRegistration, ownerId: UserID, accountGeneration: UInt64) async -> Bool
 }
 
@@ -27,6 +28,10 @@ public extension BookImportingStorage {
         try await registerSourceReadable(from: sourceURL, ownerId: ownerId, accountGeneration: accountGeneration)
     }
 
+    func checkedValidateSourceReadableRegistration(_ registration: SourceReadableBookRegistration, ownerId: UserID, accountGeneration: UInt64) async throws {
+        guard await validateSourceReadableRegistration(registration, ownerId: ownerId, accountGeneration: accountGeneration) else { throw BookFileStorage.StorageError.sourceUnreadable }
+    }
+
     func validateSourceReadableRegistration(_ registration: SourceReadableBookRegistration, ownerId: UserID, accountGeneration: UInt64) async -> Bool {
         registration.book.userId == ownerId
     }
@@ -44,11 +49,13 @@ public actor ImportCoordinator {
         public let url: URL
         public let book: Book?
         public let error: String?
+        public let failureReason: BookImportFailure?
 
-        public init(url: URL, book: Book?, error: String?) {
+        public init(url: URL, book: Book?, error: String?, failureReason: BookImportFailure? = nil) {
             self.url = url
             self.book = book
             self.error = error
+            self.failureReason = failureReason
         }
     }
 
@@ -139,9 +146,7 @@ public actor ImportCoordinator {
               lifecycle?.admits(ownerID: ownerId, generation: accountGeneration) ?? true else {
             throw BookFileStorage.StorageError.sourceUnreadable
         }
-        guard await storage.validateSourceReadableRegistration(registration, ownerId: ownerId, accountGeneration: accountGeneration) else {
-            throw BookFileStorage.StorageError.sourceUnreadable
-        }
+        try await storage.checkedValidateSourceReadableRegistration(registration, ownerId: ownerId, accountGeneration: accountGeneration)
         scheduleBookImported(registration, ownerID: ownerId, generation: accountGeneration)
         return registration
     }
@@ -232,8 +237,8 @@ public actor ImportCoordinator {
                   lifecycle?.admits(ownerID: ownerID, generation: generation) ?? true else {
                 throw BookFileStorage.StorageError.sourceUnreadable
             }
-            guard await storage.validateSourceReadableRegistration(registration, ownerId: ownerID, accountGeneration: generation),
-                  await currentUserId() == ownerID,
+            try await storage.checkedValidateSourceReadableRegistration(registration, ownerId: ownerID, accountGeneration: generation)
+            guard await currentUserId() == ownerID,
                   lifecycle?.admits(ownerID: ownerID, generation: generation) ?? true else {
                 throw BookFileStorage.StorageError.sourceUnreadable
             }
@@ -242,7 +247,7 @@ public actor ImportCoordinator {
             return ImportOutcome(url: url, book: registration.book, error: nil)
         } catch {
             Log.error("library.import.registration.failed", error: error)
-            return ImportOutcome(url: url, book: nil, error: "\(error)")
+            return ImportOutcome(url: url, book: nil, error: "\(error)", failureReason: error as? BookImportFailure)
         }
     }
 
@@ -254,7 +259,7 @@ public actor ImportCoordinator {
         Task.detached(priority: .utility) {
             guard await currentUserId() == ownerID,
                   lifecycle?.admits(ownerID: ownerID, generation: generation) ?? true,
-                  await storage.validateSourceReadableRegistration(registration, ownerId: ownerID, accountGeneration: generation) else { return }
+                  (try? await storage.checkedValidateSourceReadableRegistration(registration, ownerId: ownerID, accountGeneration: generation)) != nil else { return }
             await onBookImported(registration.book.id)
         }
     }

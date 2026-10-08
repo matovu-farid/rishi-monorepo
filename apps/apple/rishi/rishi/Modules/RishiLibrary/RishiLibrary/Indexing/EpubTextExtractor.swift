@@ -29,6 +29,7 @@ public struct EpubTextExtractor: PerBookTextExtractor {
         from fileURL: URL
     ) async throws -> [(page: Int, text: String)] {
         do {
+            try Task.checkCancellation()
             let archive = try await Archive(url: fileURL, accessMode: .read)
 
             guard let containerEntry = try await archive.get("META-INF/container.xml") else {
@@ -51,11 +52,13 @@ public struct EpubTextExtractor: PerBookTextExtractor {
             var result: [(page: Int, text: String)] = []
             // 1-based reading-order position becomes our "page" integer per OQ-1.
             for (index, itemId) in spineIds.enumerated() {
+                try Task.checkCancellation()
                 let position = index + 1
                 guard let href = manifest[itemId] else { continue }
                 let resourcePath = opfDir.isEmpty ? href : "\(opfDir)/\(href)"
                 guard let entry = try await archive.get(resourcePath) else { continue }
                 let data = try await Self.readData(from: archive, entry: entry)
+                try Task.checkCancellation()
                 guard let raw = String(data: data, encoding: .utf8) else { continue }
                 let stripped = Self.stripHTML(raw)
                 let chunks = ParagraphChunker.chunk(stripped)
@@ -63,8 +66,12 @@ public struct EpubTextExtractor: PerBookTextExtractor {
                     result.append((page: position, text: chunk))
                 }
             }
+            try Task.checkCancellation()
             return result
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            guard !Task.isCancelled else { throw CancellationError() }
             Log.event(
                 "rag.index.epub_extract.failed",
                 level: .info,
@@ -171,10 +178,13 @@ public struct EpubTextExtractor: PerBookTextExtractor {
     // MARK: - ZIP read helper (mirrors EpubMetadataExtractor / EpubCoverExtractor)
 
     private static func readData(from archive: Archive, entry: Entry) async throws -> Data {
+        try Task.checkCancellation()
         let collector = DataCollector()
         _ = try await archive.extract(entry) { @Sendable chunk in
+            try Task.checkCancellation()
             await collector.append(chunk)
         }
+        try Task.checkCancellation()
         return await collector.value
     }
 

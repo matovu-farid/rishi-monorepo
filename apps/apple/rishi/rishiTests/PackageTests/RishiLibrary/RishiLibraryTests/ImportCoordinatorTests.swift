@@ -78,6 +78,27 @@ struct ImportCoordinatorTests {
         return dir
     }
 
+    private actor RetiringValidationStorage: BookImportingStorage {
+        let book: Book
+        init(book: Book) { self.book = book }
+        func importBook(from sourceURL: URL, ownerId: UserID, expectedContentHash: String?) async throws -> Book { book }
+        func checkedValidateSourceReadableRegistration(_ registration: SourceReadableBookRegistration, ownerId: UserID, accountGeneration: UInt64) async throws {
+            throw BookImportFailure.deletionInProgress
+        }
+    }
+
+    @Test("checked final validation preserves a typed retirement failure")
+    func finalValidationKeepsRetirementReason() async throws {
+        let owner = UUID()
+        let book = Book(userId: owner, title: "Retiring", formatType: .epub, fileURL: "Books/retiring.epub")
+        let coordinator = ImportCoordinator(storage: RetiringValidationStorage(book: book), currentUserId: { owner })
+        let outcome = await coordinator.registerSourceReadableBooks([URL(fileURLWithPath: "/tmp/retiring.epub")])
+        #expect(outcome.count == 1)
+        #expect(outcome.first?.book == nil)
+        #expect(outcome.first?.failureReason == .deletionInProgress)
+        #expect(outcome.first?.error != nil)
+    }
+
     @Test("filterSupported keeps only known extensions (case-insensitive)")
     func filtersExtensions() {
         let urls = [

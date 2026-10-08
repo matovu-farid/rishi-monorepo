@@ -56,18 +56,52 @@ public enum SyncMetadataStoreBootstrap {
 /// SwiftData-backed implementation of `SyncMetadataStore`.
 public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     private let container: ModelContainer
+    private let bookIdentityGate = BookIdentityMutationGate()
 
     public init(container: ModelContainer) {
         self.container = container
     }
 
+    public func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await bookIdentityGate.withBook(id) {
+            guard try await !self.isTombstone(entityId: id, kind: .book) else { throw SyncMetadataError.bookIdentityClosed(id) }
+            return try await operation()
+        }
+    }
+
+    public func applyLocalBookTombstone(_ id: UUID, mutation: @escaping @Sendable () async throws -> Void) async throws {
+        try await bookIdentityGate.withBook(id) {
+            if try await !self.isTombstone(entityId: id, kind: .book) {
+                try await self.markTombstoneUngated(entityId: id, kind: .book)
+            }
+            do { try await mutation() }
+            catch {
+                Log.error("sync.book.delete.canonical_failed", error: error)
+                throw SyncMetadataError.savedBookTombstone(id)
+            }
+        }
+    }
+
+    public func applyBookTombstoneIfUnchanged(_ id: UUID, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?, mutation: @escaping @Sendable () async throws -> Void) async throws -> Bool {
+        try await bookIdentityGate.withBook(id) {
+            guard try await self.dirtyAt(entityId: id, kind: .book) == expectedDirtyAt else { return false }
+            try await mutation()
+            return try await self.acknowledgeTombstoneIfUnchangedUngated(entityId: id, kind: .book, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag)
+        }
+    }
+
     public func markDirty(entityId: UUID, kind: SyncEntityKind) async throws {
+        _ = try await markDirtyIfAdmitted(entityId: entityId, kind: kind)
+    }
+
+    public func markDirtyIfAdmitted(entityId: UUID, kind: SyncEntityKind) async throws -> SyncDirtyMarkDisposition {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)
-        try await MainActor.run {
+        return try await MainActor.run { () throws -> SyncDirtyMarkDisposition in
             let context = ModelContext(container)
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
+                if kind == .book, row.tombstone { return row.dirty ? .pending : .ignoredClosedBook }
                 row.entityType = type
                 row.dirty = true
                 row.dirtyAt = Date()
@@ -88,6 +122,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                 )
             }
             try context.save()
+            return .pending
         }
     }
 
@@ -98,6 +133,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         try await MainActor.run {
             let context = ModelContext(container)
             if let row = try Self.fetchRow(entityId: id, kind: type, in: context) {
+                guard kind != .book || !row.tombstone else { return }
                 row.entityType = type
                 row.remoteEtag = remoteEtag
                 row.lastSyncedAt = lastSyncedAt
@@ -145,7 +181,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                 try context.save()
                 return true
             }
-            guard row.dirtyAt == expectedDirtyAt else { return false }
+            guard (kind != .book || !row.tombstone), row.dirtyAt == expectedDirtyAt else { return false }
             row.entityType = type
             row.remoteEtag = remoteEtag
             row.lastSyncedAt = lastSyncedAt
@@ -171,6 +207,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         return try await MainActor.run {
             let context = ModelContext(container)
             guard let row = try Self.fetchRow(entityId: id, kind: type, in: context),
+                  (kind != .book || !row.tombstone),
                   row.dirty,
                   row.dirtyAt == expectedDirtyAt,
                   row.operationId == expectedOperationId else { return false }
@@ -186,7 +223,14 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         }
     }
 
-    public func acknowledgeTombstoneIfUnchanged(
+    public func acknowledgeTombstoneIfUnchanged(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+        if kind == .book {
+            return try await bookIdentityGate.withBook(entityId) { try await self.acknowledgeTombstoneIfUnchangedUngated(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag) }
+        }
+        return try await acknowledgeTombstoneIfUnchangedUngated(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag)
+    }
+
+    private func acknowledgeTombstoneIfUnchangedUngated(
         entityId: UUID,
         kind: SyncEntityKind,
         expectedDirtyAt: Date?,
@@ -223,7 +267,14 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
         }
     }
 
-    public func acknowledgeTombstoneIfCurrent(
+    public func acknowledgeTombstoneIfCurrent(entityId: UUID, kind: SyncEntityKind, expectedDirtyAt: Date?, expectedOperationId: UUID, lastSyncedAt: Date, remoteEtag: String?) async throws -> Bool {
+        if kind == .book {
+            return try await bookIdentityGate.withBook(entityId) { try await self.acknowledgeTombstoneIfCurrentUngated(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, expectedOperationId: expectedOperationId, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag) }
+        }
+        return try await acknowledgeTombstoneIfCurrentUngated(entityId: entityId, kind: kind, expectedDirtyAt: expectedDirtyAt, expectedOperationId: expectedOperationId, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag)
+    }
+
+    private func acknowledgeTombstoneIfCurrentUngated(
         entityId: UUID,
         kind: SyncEntityKind,
         expectedDirtyAt: Date?,
@@ -349,7 +400,7 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
                 predicate: #Predicate { $0.entityId == key && $0.entityType == type }
             )
             for row in try context.fetch(descriptor) {
-                context.delete(row)
+                if kind != .book || !row.tombstone { context.delete(row) }
             }
             try context.save()
         }
@@ -358,6 +409,12 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     /// Clears account-scoped sync cursors and dirty flags during sign-out so
     /// the next account cannot inherit the previous account's high-water mark.
     public func resetAll() async throws {
+        try await bookIdentityGate.withExclusive {
+            try await self.resetAllUngated()
+        }
+    }
+
+    private func resetAllUngated() async throws {
         try await MainActor.run {
             let context = ModelContext(container)
             let metadataDescriptor = FetchDescriptor<SyncMetadataRow>()
@@ -377,6 +434,12 @@ public actor SwiftDataSyncMetadataStore: SyncMetadataStore {
     }
 
     public func markTombstone(entityId: UUID, kind: SyncEntityKind) async throws {
+        if kind == .book {
+            try await bookIdentityGate.withBook(entityId) { try await self.markTombstoneUngated(entityId: entityId, kind: kind) }
+        } else { try await markTombstoneUngated(entityId: entityId, kind: kind) }
+    }
+
+    private func markTombstoneUngated(entityId: UUID, kind: SyncEntityKind) async throws {
         let id = entityId.uuidString
         let type = kind.rawValue
         let key = Self.storageId(entityId: id, kind: type)

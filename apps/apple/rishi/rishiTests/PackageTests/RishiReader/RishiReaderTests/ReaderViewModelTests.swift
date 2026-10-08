@@ -2,6 +2,8 @@
 import Testing
 import Foundation
 import PDFKit
+import CoreGraphics
+import CoreText
 import ReadiumShared
 
 
@@ -12,6 +14,40 @@ struct ReaderViewModelTests {
 
     private func aliceURL() throws -> URL {
         try #require(PackageTestResourceBundle.bundle.url(forResource: "alice", withExtension: "epub"))
+    }
+
+    private func samplePDFURL() throws -> URL {
+        let url = URL.temporaryDirectory.appendingPathComponent("reader-navigation-\(UUID().uuidString).pdf")
+        var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let context = try #require(CGContext(url as CFURL, mediaBox: &bounds, nil))
+        context.beginPDFPage(nil)
+        // Indented first lines create paragraph boundaries. Most lines remain
+        // flush left so the paragraph grouper's modal margin stays at x=72.
+        for (index, text) in [
+            "The first paragraph describes a quiet garden.",
+            "Flowers bloom beside the garden path.",
+            "The second paragraph describes a sunny meadow.",
+            "Tall grasses sway beneath the clear sky.",
+            "The third paragraph describes a flowing river.",
+            "Water runs past the stones along its banks."
+        ].enumerated() {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(
+                string: text,
+                attributes: [.font: CTFontCreateWithName("Helvetica" as CFString, 12, nil)]
+            ))
+            let isIndentedFirstLine = index == 2 || index == 4
+            context.textPosition = CGPoint(x: isIndentedFirstLine ? 90 : 72, y: 720 - CGFloat(index) * 18)
+            CTLineDraw(line, context)
+        }
+        context.endPDFPage()
+        context.closePDF()
+        let document = try #require(PDFDocument(url: url))
+        let page = try #require(document.page(at: 0))
+        let text = try #require(page.string)
+        try #require(text.contains("The first paragraph"))
+        try #require(text.contains("The third paragraph"))
+        try #require(PDFReadAloudParagraphs.extract(from: page).count == 3)
+        return url
     }
 
     private func makeBook() -> Book {
@@ -525,7 +561,8 @@ struct ReaderViewModelTests {
 
     @Test("firstParagraphForPageEntryPrefetch extracts the first PDF sentence")
     func firstParagraphForPageEntryPrefetchUsesFirstPDFSentence() async throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try samplePDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
         let store = InMemoryPositionStore()
         let book = Book(
             userId: UUID(),
@@ -558,7 +595,8 @@ struct ReaderViewModelTests {
 
     @Test("PDF user navigation returns sentence-level passages")
     func pdfUserNavigationUsesSentencePassages() async throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try samplePDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
         let vm = ReaderViewModel(
             book: Book(
                 userId: UUID(),
@@ -586,7 +624,8 @@ struct ReaderViewModelTests {
 
     @Test("PDF voice context exposes the current page")
     func pdfVoiceContextExposesCurrentPage() async throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try samplePDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
         let vm = ReaderViewModel(
             book: Book(
                 userId: UUID(),
@@ -618,7 +657,8 @@ struct ReaderViewModelTests {
 
     @Test("PDF page-entry and navigation helpers safely fall back when content is unavailable")
     func pdfHelpersReturnSafeFallbackForUnavailableContent() async throws {
-        let url = try #require(PackageTestResourceBundle.bundle.url(forResource: "sample", withExtension: "pdf"))
+        let url = try samplePDFURL()
+        defer { try? FileManager.default.removeItem(at: url) }
         let vm = ReaderViewModel(
             book: Book(
                 userId: UUID(),

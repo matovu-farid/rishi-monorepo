@@ -60,6 +60,66 @@ struct IndexBuilderSuite {
         func inputs() -> [String] { state.withLock { $0 } }
     }
 
+    private static func waitUntil(_ predicate: @escaping @Sendable () async -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if await predicate() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await predicate()
+    }
+
+    private actor HeldPredictionEmbedder: BookEmbedder {
+        let gate: RishiSearchIndexingHookTests.RishiReaderLoadGate
+        private(set) var calls = 0
+
+        init(gate: RishiSearchIndexingHookTests.RishiReaderLoadGate) { self.gate = gate }
+
+        func embed(_ text: String) async throws -> [Float32] {
+            calls += 1
+            await gate.wait()
+            return try await IdentityEmbedder().embed(text)
+        }
+
+        func prewarm() async {}
+    }
+
+    @Test("cancellation drains the entered prediction and starts no later paragraph or persistence")
+    func cancellationStopsImmediatelyAfterEnteredPrediction() async throws {
+        let root = Self.makeTempRoot()
+        let bookID = UUID()
+        let gate = RishiSearchIndexingHookTests.RishiReaderLoadGate()
+        let embedder = HeldPredictionEmbedder(gate: gate)
+        let progress = ProgressBox()
+        let builder = IndexBuilder(rootURL: root, embedder: embedder,
+                                   progressUpdate: { id, status in progress.append(id, status) })
+        let finished = RishiSearchIndexingHookTests.CompletionRecorder()
+        let build = Task {
+            do {
+                try await builder.buildIndex(bookId: bookID, paragraphs: [(1, "alpha"), (2, "beta")])
+                Issue.record("Canceled indexing completed successfully")
+            } catch is CancellationError {
+                // Expected after the genuinely entered prediction unwinds.
+            } catch {
+                Issue.record("Unexpected indexing error: \(error)")
+            }
+            await finished.markCompleted()
+        }
+        #expect(await Self.waitUntil { await embedder.calls == 1 })
+        build.cancel()
+        #expect(await !finished.completed)
+        await gate.open()
+        #expect(await Self.waitUntil { await finished.completed })
+        await build.value
+        #expect(await embedder.calls == 1)
+        let locator = BookIndexLocator(rootURL: root)
+        #expect(!FileManager.default.fileExists(atPath: locator.vectorsURL(bookID).path))
+        let chunks = try ChunkStore(dbURL: locator.chunksDBURL(bookID))
+        #expect(try await chunks.lookup(chunkIds: [1, 2]).isEmpty)
+        #expect(!progress.snapshot().contains { $0.1 == .ready })
+        #expect(!progress.snapshot().contains { if case .failed = $0.1 { return true }; return false })
+    }
+
     // MARK: - Happy path
 
     @Test

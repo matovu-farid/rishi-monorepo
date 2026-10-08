@@ -385,7 +385,7 @@ struct ReaderDestination: View {
     @State private var vm: ReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
     private let readAloudHost = UUID()
-    @State private var syncBinding: ReaderPositionSyncBinding? = nil
+    @State private var sourceAttachment: ReaderSourceAttachment? = nil
     @State private var pendingNarrationUpgradePrompt: AIFeatureBlockReason?
     @State private var pendingNarrationUpgradeSessionToken: UUID?
     @State private var paywallRequestHandoff = ReaderPaywallRequestHandoff()
@@ -607,12 +607,21 @@ struct ReaderDestination: View {
                 .readerAttached,
                 bookID: vm.book.id
             )
-            sourceInvalidationCleanup.register {
-                _ = await dependencies.playbackOwner.stop(reader: vm)
-                await voiceEntry.endForReader()
-            }
         }
         .task {
+            sourceAttachment?.dispose()
+            let attachment = ReaderSourceAttachment(
+                viewModel: vm,
+                sourceLease: sourceLease,
+                syncEngine: dependencies.syncEngine,
+                playbackOwner: dependencies.playbackOwner,
+                voiceEntry: voiceEntry,
+                cleanup: sourceInvalidationCleanup
+            )
+            sourceAttachment = attachment
+            await attachment.registerCleanup()
+            guard !Task.isCancelled, sourceAttachment === attachment,
+                  !attachment.isDisposed else { return }
 #if targetEnvironment(macCatalyst)
             if let readerWindowCloseHandle {
                 let playbackOwner = dependencies.playbackOwner
@@ -642,71 +651,15 @@ struct ReaderDestination: View {
                 await scheduleReaderIndexBackfillIfNeeded()
             }
 
-            vm.onUserNavigation = { locator in
-                guard !sharedIsFollowingController && !sharedControlsLocked else {
-                    // A gesture which bypasses the reader chrome must not
-                    // leave a follower on a different page indefinitely.
-                    let previousNavigationRevision = sharedNavigationRevision
-                    sharedNavigationRevision &+= 1
-                    if let effect = sharedNavigationEffects.removeValue(forKey: previousNavigationRevision) {
-                        sharedNavigationEffects[sharedNavigationRevision] = effect
-                    }
-                    if let position = sharedNavigationRequest?.position {
-                        sharedNavigationRequest = SharedReaderNavigationRequest(
-                            revision: sharedNavigationRevision,
-                            position: position
-                        )
-                    }
-                    return
-                }
-                guard let readAloud else { return }
-                // Fence late Readium callbacks immediately. Resolving the
-                // navigation intent can await paragraph extraction, and an
-                // old `.playing` callback must not restore the old resume
-                // candidate during that interval.
-                readAloud.invalidateReadAloudPositionUpdates()
-                Task { @MainActor in
-                    readerTour?.userNavigated()
-                    let snapshot = readAloud.beginUserNavigationIntent()
-                    let destinationParagraphs = await vm.paragraphsForUserNavigationIntent(at: locator)
-                    guard let intent = readAloud.resolveUserNavigationIntent(
-                        snapshot: snapshot,
-                        destinationParagraphs: destinationParagraphs,
-                        destinationPage: locator.locations.page
-                    ) else {
-                        // Superseded by a newer swipe — do not stop; do not consume credit.
-                        return
-                    }
-                    switch intent {
-                    case .continuePlaying:
-                        readAloud.allowReadAloudPositionUpdates()
-                        return
-                    case .stopPlaying:
-                        vm.clearReadAloudResumeLocator()
-                        readAloud.invalidateReadAloudPositionUpdates()
-                        await readAloud.stop(preservingPosition: false)
-                    }
-                }
-            }
-            vm.onUserNavigationForTTSPagePrefetch = { [weak vm] locator in
-                guard let readAloud, readAloud.canPrefetchPageEntry else { return }
-                Task { @MainActor [weak vm, weak readAloud] in
-                    guard let vm else { return }
-                    guard let paragraph = await vm.firstParagraphForPageEntryPrefetch(at: locator) else { return }
-                    await readAloud?.prefetchFirstParagraph(paragraph)
-                }
-            }
-            vm.onExplicitPageForwardNavigation = { locator, id in
-                guard !sharedIsFollowingController && !sharedControlsLocked,
-                      let readAloud else { return }
-                readerTour?.userNavigated()
-                _ = readAloud.restartAtExplicitPage(locator, id: id)
-            }
-            syncBinding = ReaderPositionSyncBinding(
-                viewModel: vm,
-                syncEngine: dependencies.syncEngine,
-                sourceLease: sourceLease
-            )
+            attachment.installIfCurrent(sourceAttachment, navigation: .init(
+                readAloud: $readAloud,
+                readerTour: $readerTour,
+                isFollowingController: $sharedIsFollowingController,
+                controlsLocked: $sharedControlsLocked,
+                navigationRevision: $sharedNavigationRevision,
+                navigationEffects: $sharedNavigationEffects,
+                navigationRequest: $sharedNavigationRequest
+            ))
         }
         .task(id: sharedReadingJoin?.response.sessionId) {
             await runSharedReadingIntegration()
@@ -721,7 +674,8 @@ struct ReaderDestination: View {
         }
         .onDisappear {
             didScheduleReaderIndexBackfill = false
-            syncBinding = nil
+            sourceAttachment?.dispose()
+            sourceAttachment = nil
             readAloudStartTask?.cancel()
             readAloudStartTask = nil
             readAloudStartRequest = UUID()

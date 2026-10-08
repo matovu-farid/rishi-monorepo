@@ -11,6 +11,10 @@ public struct VerifiedManagedFile: Sendable, Equatable {
 }
 
 public struct BookFileStorage:Sendable {
+    public enum SampleRepairResult: Sendable {
+        case repaired(Book)
+        case alreadyManaged(Book)
+    }
     public enum StorageError: Error, Sendable {
         case sourceUnreadable
         case copyFailed(underlying: Error)
@@ -18,6 +22,7 @@ public struct BookFileStorage:Sendable {
         case bookNotFound
         case bookOwnerMismatch
         case staleDeletionCleanup
+        case sampleProvenanceUnavailable
     }
 
     private let rootURL: URL
@@ -30,7 +35,7 @@ public struct BookFileStorage:Sendable {
     private let fingerprintAccountGeneration: @Sendable () async -> UInt64?
     private let materializationCoordinator: BookMaterializationCoordinator?
     private let importInstrumentation: BookImportInstrumentation
-   
+
     private var fileManager: FileManager { .default }
     private let coverCache: CoverCache?
 
@@ -127,6 +132,135 @@ public struct BookFileStorage:Sendable {
         )
     }
 
+    public func repairMissingSample(
+        for book: Book,
+        from sourceURL: URL,
+        ownerID: UserID,
+        accountGeneration: UInt64
+    ) async throws -> SampleRepairResult {
+        guard book.formatType == .epub, book.userId == ownerID,
+              let persistence = fingerprintPersistence,
+              let coordinator = materializationCoordinator,
+              await fingerprintAccountGeneration() == accountGeneration,
+              let canonical = try await bookStore.book(book.id), canonical == book,
+              await isTombstoned?(book.id) != true else { throw StorageError.bookNotFound }
+        let existingFingerprint = try await persistence.sampleRepairFingerprint(bookID: book.id, ownerID: ownerID)
+        guard let existingFingerprint,
+              existingFingerprint.bookID == book.id,
+              existingFingerprint.ownerID == ownerID else { throw StorageError.sourceUnreadable }
+        let observedPrior = try await persistence.pendingMaterialization(bookID: book.id, ownerID: ownerID)
+        let observedPriorToken = observedPrior?.token
+        let revision = UUID()
+        let source = try await CoordinatedSourceProbe().probe(sourceURL, materializationRevision: revision)
+        guard source.sha256.caseInsensitiveCompare(existingFingerprint.sha256) == .orderedSame,
+              source.byteCount == existingFingerprint.version.byteCount,
+              await fingerprintAccountGeneration() == accountGeneration else { throw StorageError.sourceUnreadable }
+        let token = BookMaterializationToken(ownerID: ownerID, accountGeneration: accountGeneration, bookID: book.id, attemptID: UUID())
+        let job = PendingBookMaterialization(
+            token: token, sourceKind: .sampleRepair, sourceBookmark: nil,
+            ownedSourceRelativePath: nil, sourceVersion: source.version,
+            expectedSHA256: existingFingerprint.sha256, expectedByteCount: source.byteCount,
+            stagingRelativePath: "Imports/\(token.attemptID.uuidString)/content.partial",
+            destinationRelativePath: book.fileURL, phase: .registered
+        )
+        let managedURL = rootURL.appendingPathComponent(book.fileURL).standardizedFileURL
+        let currentVersion = try FileManagedFileVersionInspector().managedFileVersion(
+            at: managedURL, materializationRevision: existingFingerprint.version.materializationRevision
+        )
+        let request = SampleRepairReservationRequest(
+            expectedBook: book, expectedFingerprint: existingFingerprint,
+            canonicalManagedURL: managedURL, expectedManagedFileVersion: currentVersion,
+            expectedPriorPendingToken: observedPriorToken, job: job
+        )
+        switch try await coordinator.materializeReservedSampleRepair(request: request, sourceURL: sourceURL) {
+        case .alreadyManaged(let fingerprint):
+            guard fingerprint == existingFingerprint,
+                  await fingerprintAccountGeneration() == accountGeneration,
+                  await coordinator.publishReconciledManagedReady(book: book, generation: accountGeneration, fingerprint: fingerprint) else {
+                throw StorageError.sourceUnreadable
+            }
+            return .alreadyManaged(book)
+        case .repaired(let fingerprint):
+            guard fingerprint.sha256.caseInsensitiveCompare(existingFingerprint.sha256) == .orderedSame,
+                  await fingerprintAccountGeneration() == accountGeneration else { throw StorageError.sourceUnreadable }
+            return .repaired(book)
+        }
+    }
+
+    /// Installs bundled sample content, repairing an exact-provenance stale
+    /// EPUB row before ordinary import can assign the bytes a new identity.
+    public func installOrRepairSample(
+        from sourceURL: URL,
+        ownerID: UserID,
+        accountGeneration: UInt64
+    ) async throws -> Book {
+        if let fingerprintPersistence {
+            let source = try await CoordinatedSourceProbe().probe(
+                sourceURL,
+                materializationRevision: UUID(),
+                metadataExtractor: metadataExtractors[sourceURL.pathExtension.lowercased()]
+            )
+            let candidates = try await bookStore.books(for: ownerID)
+            let sampleMetadataID = DeterministicBookID.make(
+                title: bookDisplayTitle(metadataTitle: source.metadata.title, filename: sourceURL.lastPathComponent),
+                author: source.metadata.author,
+                format: .epub
+            )
+            for candidate in candidates where candidate.formatType == .epub {
+                guard await isTombstoned?(candidate.id) != true else { continue }
+                let saved = try await fingerprintPersistence.sampleRepairFingerprint(
+                    bookID: candidate.id, ownerID: ownerID
+                )
+                let provenanceMatches = saved?.sha256.caseInsensitiveCompare(source.sha256) == .orderedSame &&
+                    saved?.version.byteCount == source.byteCount
+                if provenanceMatches {
+                    switch try await repairMissingSample(
+                        for: candidate, from: sourceURL, ownerID: ownerID, accountGeneration: accountGeneration
+                    ) {
+                    case .repaired(let book), .alreadyManaged(let book): return book
+                    }
+                }
+                let candidateMetadataID = DeterministicBookID.make(
+                    title: candidate.title, author: candidate.author, format: candidate.formatType
+                )
+                if candidateMetadataID == sampleMetadataID,
+                   !(await isReadableSourceAvailable(
+                    for: candidate, ownerID: ownerID, accountGeneration: accountGeneration
+                   )) {
+                    throw StorageError.sampleProvenanceUnavailable
+                }
+            }
+        }
+        return try await importBook(from: sourceURL, ownerId: ownerID, expectedContentHash: nil, accountGeneration: accountGeneration)
+    }
+
+    public func isReadableSourceAvailable(for book: Book, ownerID: UserID, accountGeneration: UInt64) async -> Bool {
+        let currentGeneration = await fingerprintAccountGeneration()
+        guard book.userId == ownerID,
+              let canonical = try? await bookStore.book(book.id), canonical == book,
+              currentGeneration == nil || currentGeneration == accountGeneration,
+              await isTombstoned?(book.id) != true else { return false }
+        guard let url = validatedManagedBookURL(canonical),
+              fileManager.fileExists(atPath: url.path) else { return false }
+        guard let materializationCoordinator else { return true }
+        return await materializationCoordinator.isReadableSourceAvailable(for: canonical)
+    }
+
+    public func checkedValidateSourceReadableRegistration(_ registration: SourceReadableBookRegistration, ownerId: UserID, accountGeneration: UInt64) async throws {
+        guard registration.book.userId == ownerId,
+              registration.token == nil || (registration.token?.ownerID == ownerId && registration.token?.accountGeneration == accountGeneration) else { throw StorageError.sourceUnreadable }
+        let current = await fingerprintAccountGeneration()
+        guard current == nil || current == accountGeneration else { throw StorageError.sourceUnreadable }
+        func checkRetirement() throws {
+            if materializationCoordinator?.isBookRetiredForDeletion(ownerID: ownerId, generation: accountGeneration, bookID: registration.book.id) == true { throw BookImportFailure.deletionInProgress }
+        }
+        try checkRetirement()
+        let valid = await validateSourceReadableRegistration(registration, ownerId: ownerId, accountGeneration: accountGeneration)
+        guard await fingerprintAccountGeneration() == current else { throw StorageError.sourceUnreadable }
+        try checkRetirement()
+        guard valid else { throw StorageError.sourceUnreadable }
+    }
+
     public func validateSourceReadableRegistration(
         _ registration: SourceReadableBookRegistration,
         ownerId: UserID,
@@ -137,6 +271,7 @@ public struct BookFileStorage:Sendable {
               let canonical = try? await bookStore.book(book.id),
               canonical.userId == ownerId,
               canonical.fileURL == book.fileURL,
+              validatedManagedBookURL(canonical) != nil,
               await isTombstoned?(book.id) != true else { return false }
         if let currentGeneration = await fingerprintAccountGeneration(), currentGeneration != accountGeneration {
             return false
@@ -153,13 +288,27 @@ public struct BookFileStorage:Sendable {
                   await materializationCoordinator.isReadableSourceAvailable(for: canonical) else { return false }
             return true
         }
-        let managedURL = rootURL.appendingPathComponent(canonical.fileURL).standardizedFileURL
-        guard managedURL.path.hasPrefix(booksDirURL.standardizedFileURL.path + "/"),
+        guard let managedURL = validatedManagedBookURL(canonical),
               fileManager.fileExists(atPath: managedURL.path) else { return false }
         if let materializationCoordinator {
             return await materializationCoordinator.isReadableSourceAvailable(for: canonical)
         }
         return true
+    }
+
+    /// Persisted Book paths are untrusted input. Require a canonical managed
+    /// relative path below Books before any readability or fingerprint query.
+    private func validatedManagedBookURL(_ book: Book) -> URL? {
+        let relative = book.fileURL
+        guard !relative.isEmpty, !relative.hasPrefix("/"),
+              relative.split(separator: "/", omittingEmptySubsequences: false)
+                .allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+              relative.hasPrefix("Books/") else { return nil }
+        let target = rootURL.appendingPathComponent(relative)
+        guard let validated = try? ManagedRelativePath.make(root: rootURL, target: target),
+              validated == relative,
+              validated.hasPrefix("Books/") else { return nil }
+        return rootURL.appendingPathComponent(validated).standardizedFileURL
     }
 
     private func makeImporter(accountGeneration: UInt64?) -> BookImporter {
@@ -192,7 +341,7 @@ public struct BookFileStorage:Sendable {
             expectedContentHash: expectedContentHash
         )
     }
-   
+
 
     public func delete(_ book: Book) async throws {
         try await deleteMaterial(for: book)
@@ -255,6 +404,10 @@ public struct BookFileStorage:Sendable {
         }
 
         return { [self] in
+            if let fingerprintPersistence {
+                let current = try await fingerprintPersistence.pendingMaterializationForDeletionCleanup(bookID: bookID, ownerID: ownerID)
+                guard current?.token == pending?.token || current == nil else { throw StorageError.staleDeletionCleanup }
+            }
             try await removeManagedMaterial(forBookID: bookID)
             if let stagingDirectory, fileManager.fileExists(atPath: stagingDirectory.path) {
                 try fileManager.removeItem(at: stagingDirectory)
@@ -264,9 +417,16 @@ public struct BookFileStorage:Sendable {
                     bookID: bookID,
                     ownerID: ownerID,
                     expectedToken: pending.token
-                ) else { throw StorageError.staleDeletionCleanup }
+                ) else {
+                    guard try await fingerprintPersistence.pendingMaterializationForDeletionCleanup(bookID: bookID, ownerID: ownerID) == nil else { throw StorageError.staleDeletionCleanup }
+                    return
+                }
             }
         }
+    }
+
+    public func isPermanentlyDeleted(bookID: BookID, ownerID: UserID) async throws -> Bool {
+        try await fingerprintPersistence?.isBookPermanentlyDeleted(bookID: bookID, ownerID: ownerID) ?? false
     }
 
     private func removeManagedMaterial(forBookID bookID: BookID) async throws {
@@ -341,6 +501,140 @@ public struct BookFileStorage:Sendable {
             for: book.id,
             sourceFileURL: sourceFileURL
         )
+    }
+
+    /// Returns only artwork that already exists for the canonical library row.
+    /// This path never opens the book payload, invokes an extractor, or writes
+    /// to the cover cache.
+    public func existingArtworkURL(for book: Book) async throws -> URL? {
+        let canonical = try await validateArtworkBook(book)
+        let root = rootURL.resolvingSymlinksInPath().standardizedFileURL
+        let booksRoot = root.appendingPathComponent("Books", isDirectory: true)
+        let expectedBookDirectory = booksRoot.appendingPathComponent(book.id.uuidString, isDirectory: true)
+        let resolvedBooksRoot = booksRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedBookDirectory = expectedBookDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard resolvedBooksRoot.path == booksRoot.standardizedFileURL.path,
+              resolvedBookDirectory.path == expectedBookDirectory.standardizedFileURL.path,
+              Self.isContained(resolvedBookDirectory, in: resolvedBooksRoot),
+              Self.isContained(resolvedBookDirectory, in: root) else { throw StorageError.sourceUnreadable }
+
+        let bookSource = try Self.validatedRelativeURL(
+            canonical.fileURL, under: root, directory: expectedBookDirectory
+        )
+        let coverSource: URL?
+        if let coverPath = canonical.coverPath {
+            let candidate = try Self.validatedRelativeURL(coverPath, under: root, directory: expectedBookDirectory)
+            guard Self.isOwnedArtworkFilename(candidate.lastPathComponent),
+                  candidate.deletingLastPathComponent().standardizedFileURL == expectedBookDirectory.standardizedFileURL else {
+                throw StorageError.sourceUnreadable
+            }
+            try Self.rejectBookPayloadAlias(candidate, bookSource: bookSource)
+            coverSource = candidate
+        } else {
+            coverSource = nil
+        }
+
+        let cacheDirectory = root.appendingPathComponent("Caches", isDirectory: true)
+            .appendingPathComponent("book-covers", isDirectory: true)
+        let cacheURL = cacheDirectory.appendingPathComponent("\(book.id.uuidString).heic")
+        let sidecarURL = cacheDirectory.appendingPathComponent("\(book.id.uuidString).mtime")
+        let cacheNamespace = root.appendingPathComponent("Caches", isDirectory: true)
+        let resolvedCacheNamespace = cacheNamespace.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedCacheDirectory = cacheDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard resolvedCacheNamespace.path == cacheNamespace.standardizedFileURL.path,
+              resolvedCacheDirectory.path == cacheDirectory.standardizedFileURL.path,
+              Self.isContained(resolvedCacheDirectory, in: resolvedCacheNamespace),
+              Self.isContained(resolvedCacheDirectory, in: root) else { throw StorageError.sourceUnreadable }
+        try Self.validateResolvedPath(cacheURL, within: resolvedCacheDirectory)
+        try Self.validateResolvedPath(sidecarURL, within: resolvedCacheDirectory)
+        try Self.rejectBookPayloadAlias(cacheURL, bookSource: bookSource)
+        try Self.rejectBookPayloadAlias(sidecarURL, bookSource: bookSource)
+
+        var result: URL?
+        if let cache = coverCache {
+            if let coverSource,
+               await Self.fileExistsOffActor(path: coverSource.path) {
+                result = cache.cachedURLIfFresh(for: book.id, sourceFileURL: coverSource)
+                if result == nil { result = coverSource }
+            } else {
+                result = cache.cachedURLIfFresh(for: book.id, sourceFileURL: bookSource)
+            }
+        } else if let coverSource, await Self.fileExistsOffActor(path: coverSource.path) {
+            result = coverSource
+        }
+
+        if let candidate = result {
+            try Self.validateResolvedPath(candidate, within: resolvedCacheDirectory, allowRawBookImage: true, bookDirectory: resolvedBookDirectory)
+            if !(await Self.fileExistsOffActor(path: candidate.path)) { result = nil }
+        }
+        _ = try await validateArtworkBook(book)
+        return result
+    }
+
+    private func validateArtworkBook(_ book: Book) async throws -> Book {
+        guard let canonical = try await bookStore.book(book.id) else { throw StorageError.bookNotFound }
+        guard canonical.userId == book.userId else { throw StorageError.bookOwnerMismatch }
+        guard canonical == book, await isTombstoned?(book.id) != true else { throw StorageError.bookNotFound }
+        return canonical
+    }
+
+    private nonisolated static func validatedRelativeURL(_ path: String, under root: URL, directory: URL) throws -> URL {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~"),
+              !components.contains(".."), !components.contains(".") else { throw StorageError.sourceUnreadable }
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
+        guard isContained(resolvedDirectory, in: resolvedRoot) else { throw StorageError.sourceUnreadable }
+        let candidate = root.appendingPathComponent(path).standardizedFileURL
+        guard isContained(candidate, in: directory.standardizedFileURL) else { throw StorageError.sourceUnreadable }
+        try validateResolvedPath(candidate, within: resolvedDirectory)
+        return candidate
+    }
+
+    private nonisolated static func validateResolvedPath(
+        _ candidate: URL,
+        within namespace: URL,
+        allowRawBookImage: Bool = false,
+        bookDirectory: URL? = nil
+    ) throws {
+        let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+        let insideCache = isContained(resolved, in: namespace)
+        let insideBook = allowRawBookImage && bookDirectory.map { isContained(resolved, in: $0) } == true
+        guard insideCache || insideBook else { throw StorageError.sourceUnreadable }
+    }
+
+    private nonisolated static func isContained(_ candidate: URL, in directory: URL) -> Bool {
+        let candidatePath = candidate.standardizedFileURL.path
+        let directoryPath = directory.standardizedFileURL.path
+        return candidatePath == directoryPath || candidatePath.hasPrefix(directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/")
+    }
+
+    private nonisolated static func isOwnedArtworkFilename(_ name: String) -> Bool {
+        let url = URL(fileURLWithPath: name)
+        guard url.pathExtension.lowercased() == "png" else { return false }
+        if url.deletingPathExtension().lastPathComponent == "cover" { return true }
+        let prefix = "cover-"
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard stem.hasPrefix(prefix) else { return false }
+        return UUID(uuidString: String(stem.dropFirst(prefix.count))) != nil
+    }
+
+    private nonisolated static func rejectBookPayloadAlias(_ candidate: URL, bookSource: URL) throws {
+        let resolvedCandidate = candidate.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedSource = bookSource.resolvingSymlinksInPath().standardizedFileURL
+        guard candidate.standardizedFileURL != bookSource.standardizedFileURL,
+              resolvedCandidate != resolvedSource,
+              !sharesFileIdentity(candidate, bookSource) else { throw StorageError.sourceUnreadable }
+    }
+
+    private nonisolated static func sharesFileIdentity(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let lhsAttributes = try? FileManager.default.attributesOfItem(atPath: lhs.path),
+              let rhsAttributes = try? FileManager.default.attributesOfItem(atPath: rhs.path),
+              let lhsDevice = (lhsAttributes[.systemNumber] as? NSNumber)?.uint64Value,
+              let rhsDevice = (rhsAttributes[.systemNumber] as? NSNumber)?.uint64Value,
+              let lhsFile = (lhsAttributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+              let rhsFile = (rhsAttributes[.systemFileNumber] as? NSNumber)?.uint64Value else { return false }
+        return lhsDevice == rhsDevice && lhsFile == rhsFile
     }
 
     public func cachedCoverURL(for book: Book) async -> URL? {
@@ -447,7 +741,8 @@ public struct BookFileStorage:Sendable {
             rootURL: rootURL,
             bookStore: bookStore,
             persistence: fingerprintPersistence,
-            isTombstoned: isTombstoned
+            isTombstoned: isTombstoned,
+            currentGeneration: fingerprintAccountGeneration
         )
         return await service.verifyAndCacheManagedFile(
             for: book,
@@ -460,7 +755,7 @@ public struct BookFileStorage:Sendable {
     /// row has been registered. The persistence CAS rechecks ownership, path,
     /// current authorization, and the observed file version.
     @discardableResult
-    public func persistVerifiedFingerprint(_ fingerprint: BookFileFingerprint, for book: Book) async -> Bool {
+    public func persistVerifiedFingerprint(_ fingerprint: BookFileFingerprint, for book: Book, expectedGeneration: UInt64) async -> Bool {
         guard fingerprintPersistence != nil,
               fingerprint.bookID == book.id,
               fingerprint.ownerID == book.userId,
@@ -468,6 +763,7 @@ public struct BookFileStorage:Sendable {
               let persistence = fingerprintPersistence else { return false }
         return (try? await persistence.cacheManagedFingerprint(
             fingerprint,
+            expectedGeneration: expectedGeneration,
             expectedRelativePath: book.fileURL,
             expectedVersion: fingerprint.version
         )) == true

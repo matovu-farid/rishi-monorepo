@@ -2,6 +2,7 @@ import Foundation
 
 public enum BookSourceOwnerError: Error, Sendable {
     case securityScopeUnavailable
+    case readingAuthorityUnavailable
 }
 
 /// Waitable signal retained by lifecycle bookkeeping without retaining the
@@ -47,6 +48,11 @@ public final class BookSourceInvalidationSignal: @unchecked Sendable {
 
     public init() {}
 
+    public var isInvalidated: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return didInvalidate
+    }
+
     public var stream: AsyncStream<Void> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let id = UUID()
@@ -86,13 +92,14 @@ public struct ManagedBookSource: Sendable, Equatable {
     public let bookID: BookID
     public let url: URL
     public let fingerprint: BookFileFingerprint
-    public let accountGeneration: UInt64
+    public let readingPermit: BookReadingPermit
+    public var accountGeneration: UInt64 { readingPermit.accountGeneration }
 
-    public init(bookID: BookID, url: URL, fingerprint: BookFileFingerprint, accountGeneration: UInt64) {
+    public init(bookID: BookID, url: URL, fingerprint: BookFileFingerprint, readingPermit: BookReadingPermit) {
         self.bookID = bookID
         self.url = url
         self.fingerprint = fingerprint
-        self.accountGeneration = accountGeneration
+        self.readingPermit = readingPermit
     }
 }
 

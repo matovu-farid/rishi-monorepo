@@ -93,6 +93,10 @@ private actor SourceTestPersistence: BookImportPersistence {
         guard storedFingerprint?.bookID == bookID, storedFingerprint?.ownerID == ownerID else { return nil }
         return storedFingerprint
     }
+    func readingPermit(forManagedFingerprint fingerprint: BookFileFingerprint, expectedRelativePath: String, generation: UInt64) async throws -> BookReadingPermit? {
+        guard storedFingerprint == fingerprint else { return nil }
+        return BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: generation, bookID: fingerprint.bookID, contentRevision: fingerprint.version.materializationRevision)
+    }
     func reserveRegistration(book: Book, job: PendingBookMaterialization, candidate: BookImportCandidateSnapshot?) async throws -> BookRegistration { throw TestError.unused }
     func joinOrRetryPending(ownerID: UserID, sha256: String, newSource: PendingBookMaterialization, retiredAttempt: RetiredBookMaterializationAttempt?) async throws -> BookRegistration? { throw TestError.unused }
     func transition(token: BookMaterializationToken, from: BookMaterializationPhase, to: BookMaterializationPhase) async throws -> Bool { throw TestError.unused }
@@ -137,11 +141,11 @@ struct BookSourceRegistryTests {
         let registry = BookSourceRegistry(currentGeneration: { 7 }, currentOwnerID: { userID }, managedURL: { _ in nil })
         let firstURL = URL(fileURLWithPath: "/tmp/source-one.pdf")
         let secondURL = URL(fileURLWithPath: "/tmp/source-two.pdf")
-        try await registry.registerSource(for: book, url: firstURL, accountGeneration: 7, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+        try await registry.registerSource(for: book, url: firstURL, accountGeneration: 7, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 7, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
         let oldLease = try await registry.acquireReadableSource(for: book)
         let oldOwner = oldLease.owner
 
-        try await registry.registerSource(for: book, url: secondURL, accountGeneration: 7, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+        try await registry.registerSource(for: book, url: secondURL, accountGeneration: 7, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 7, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
         let newLease = try await registry.acquireReadableSource(for: book)
 
         #expect(oldLease.url == firstURL)
@@ -181,7 +185,7 @@ struct BookSourceRegistryTests {
         let userID = UUID()
         let book = Book(userId: userID, title: "Lease", formatType: .epub, fileURL: "Books/book.epub")
         let registry = BookSourceRegistry(currentGeneration: { 3 }, currentOwnerID: { userID }, managedURL: { _ in nil })
-        try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/source.epub"), accountGeneration: 3, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+        try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/source.epub"), accountGeneration: 3, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 3, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
         var lease: BookSourceLease? = try await registry.acquireReadableSource(for: book)
         let invalidation = try #require(lease).invalidation
         let invalidationObserved = Task {
@@ -203,7 +207,7 @@ struct BookSourceRegistryTests {
         let userID = UUID()
         let book = Book(userId: userID, title: "Lease", formatType: .pdf, fileURL: "Books/book.pdf")
         let registry = BookSourceRegistry(currentGeneration: { 4 }, currentOwnerID: { userID }, managedURL: { _ in nil })
-        try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/source.pdf"), accountGeneration: 4, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+        try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/source.pdf"), accountGeneration: 4, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 4, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
         var lease: BookSourceLease? = try await registry.acquireReadableSource(for: book)
         let invalidation = try #require(lease).invalidation
         let invalidationObserved = Task {
@@ -228,7 +232,7 @@ struct BookSourceRegistryTests {
         lifecycle.fenceAccount(ownerID: userID, generation: 5)
 
         await #expect(throws: BookSourceRegistryError.accountRevoked) {
-            try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/race.pdf"), accountGeneration: 5, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+            try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/race.pdf"), accountGeneration: 5, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 5, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
         }
     }
 
@@ -254,7 +258,7 @@ struct BookSourceRegistryTests {
         #expect(try await registry.managedSource(for: book) == nil)
         await #expect(throws: BookSourceRegistryError.unavailable) { try await registry.acquireReadableSource(for: book) }
         await #expect(throws: BookSourceRegistryError.accountRevoked) {
-            try await registry.registerSource(for: book, url: url, accountGeneration: 61, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+            try await registry.registerSource(for: book, url: url, accountGeneration: 61, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 61, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
         }
 
         lifecycle.activateAccount(ownerID: userID, generation: 61)
@@ -297,8 +301,8 @@ struct BookSourceRegistryTests {
         let userID = UUID()
         let book = Book(userId: userID, title: "Swap", formatType: .pdf, fileURL: "Books/swap.pdf")
         let registry = BookSourceRegistry(currentGeneration: { 8 }, currentOwnerID: { userID }, managedURL: { _ in nil })
-        let oldPermit = try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/old.pdf"), accountGeneration: 8, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
-        try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/new.pdf"), accountGeneration: 8, contentRevision: UUID(), requiresSecurityScope: false, observeChanges: false)
+        let oldPermit = try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/old.pdf"), accountGeneration: 8, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 8, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
+        try await registry.registerSource(for: book, url: URL(fileURLWithPath: "/tmp/new.pdf"), accountGeneration: 8, readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 8, bookID: book.id, contentRevision: UUID()), requiresSecurityScope: false, observeChanges: false)
 
         await registry.presenterInvalidated(bookID: book.id, permit: oldPermit, token: nil, changedURL: nil)
         let current = try await registry.acquireReadableSource(for: book)
@@ -369,13 +373,14 @@ struct BookSourceRegistryTests {
         let revision = UUID()
         let firstVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: revision))
         let gate = AsyncTestGate()
-        let persistence = SourceTestPersistence(fingerprint: nil, fingerprintGate: gate, gateFingerprintOnCall: 2)
+        let persistence = SourceTestPersistence(fingerprint: nil, fingerprintGate: gate, gateFingerprintOnCall: 3)
         let registry = BookSourceRegistry(persistence: persistence, currentGeneration: { 13 }, currentOwnerID: { userID }, managedURL: { _ in url })
         let waiter = Task { try await registry.awaitManagedSource(for: book) }
-        await gate.waitUntilEntered() // The waiter has been registered before its recheck.
+        await gate.waitUntilEntered() // Missing-fingerprint backfill precedes waiter registration.
+        #expect(await registry.hasManagedWaiterForTesting(ownerID: userID, generation: 13, bookID: bookID))
         let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "first", version: firstVersion)
         await persistence.replaceFingerprint(fingerprint)
-        let readySource = ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, accountGeneration: 13)
+        let readySource = ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: 13, bookID: bookID, contentRevision: fingerprint.version.materializationRevision))
         await registry.managedSourceBecameReady(readySource)
         await gate.open()
         #expect(try await waiter.value == readySource)
@@ -395,7 +400,8 @@ struct BookSourceRegistryTests {
         let oldVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: revision))
         let persistence = SourceTestPersistence(fingerprint: BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "old", version: oldVersion))
         let registry = BookSourceRegistry(persistence: persistence, currentGeneration: { 14 }, currentOwnerID: { userID }, managedURL: { _ in url })
-        let staleSource = ManagedBookSource(bookID: bookID, url: url, fingerprint: try #require(await persistence.fingerprint(bookID: bookID, ownerID: userID)), accountGeneration: 14)
+        let staleFingerprint = try #require(await persistence.fingerprint(bookID: bookID, ownerID: userID))
+        let staleSource = ManagedBookSource(bookID: bookID, url: url, fingerprint: staleFingerprint, readingPermit: BookReadingPermit(ownerID: staleFingerprint.ownerID, accountGeneration: 14, bookID: bookID, contentRevision: staleFingerprint.version.materializationRevision))
         try Data("after with different size".utf8).write(to: url)
 
         let completed = SourceCompletionProbe()
@@ -412,7 +418,7 @@ struct BookSourceRegistryTests {
         let currentVersion = try #require(try CoordinatedSourceProbe.version(at: url, revision: revision))
         let currentFingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "new", version: currentVersion)
         await persistence.replaceFingerprint(currentFingerprint)
-        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: currentFingerprint, accountGeneration: 14))
+        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: currentFingerprint, readingPermit: BookReadingPermit(ownerID: currentFingerprint.ownerID, accountGeneration: 14, bookID: bookID, contentRevision: currentFingerprint.version.materializationRevision)))
         let resolved = try await waiter.value
         #expect(resolved.fingerprint == currentFingerprint)
     }
@@ -432,7 +438,7 @@ struct BookSourceRegistryTests {
         let fingerprint = BookFileFingerprint(bookID: bookID, ownerID: userID, sha256: "valid", version: version)
         let registry = BookSourceRegistry(persistence: SourceTestPersistence(fingerprint: fingerprint), currentGeneration: { 15 }, currentOwnerID: { userID }, managedURL: { _ in url })
         let lifecycle = BookImportLifecycle(sourceRegistry: registry)
-        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, accountGeneration: 15))
+        await registry.managedSourceBecameReady(ManagedBookSource(bookID: bookID, url: url, fingerprint: fingerprint, readingPermit: BookReadingPermit(ownerID: fingerprint.ownerID, accountGeneration: 15, bookID: bookID, contentRevision: fingerprint.version.materializationRevision)))
 
         lifecycle.retireBook(ownerID: userID, generation: 15, bookID: bookID)
         #expect(try await registry.managedSource(for: book) == nil)
@@ -479,7 +485,7 @@ struct BookSourceRegistryTests {
             for: book,
             url: URL(fileURLWithPath: "/tmp/retried.epub"),
             accountGeneration: 29,
-            contentRevision: UUID(),
+            readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 29, bookID: book.id, contentRevision: UUID()),
             token: token,
             requiresSecurityScope: false,
             observeChanges: false
@@ -497,7 +503,7 @@ struct BookSourceRegistryTests {
             for: book,
             url: URL(fileURLWithPath: "/tmp/owned-source.epub"),
             accountGeneration: 41,
-            contentRevision: UUID(),
+            readingPermit: BookReadingPermit(ownerID: book.userId, accountGeneration: 41, bookID: book.id, contentRevision: UUID()),
             token: token,
             requiresSecurityScope: false,
             observeChanges: false

@@ -47,18 +47,19 @@ public struct PdfTextExtractor: PerBookTextExtractor {
     public func extractParagraphs(
         from fileURL: URL
     ) async throws -> [(page: Int, text: String)] {
+        try Task.checkCancellation()
         guard let document = PDFDocument(url: fileURL) else { return [] }
 
         // Phase 26 baseline path: chunk per page and emit as-is. When the
         // toggle is .disabled we MUST take this exact path to preserve
         // byte-stable output for already-indexed books.
         if footerPolicy == .disabled {
-            return Self.extractPhase26Baseline(document: document)
+            return try Self.extractPhase26Baseline(document: document)
         }
 
         // Phase 27 toggle-enabled path: build paragraphs + layout, run the
         // FooterMaskBuilder, and drop flagged paragraphs.
-        return Self.extractWithFooterDrop(document: document)
+        return try Self.extractWithFooterDrop(document: document)
     }
 
     // MARK: - Phase 26 byte-stable baseline
@@ -67,9 +68,10 @@ public struct PdfTextExtractor: PerBookTextExtractor {
     /// branch above can never accidentally inherit a Phase 27 code path.
     private static func extractPhase26Baseline(
         document: PDFDocument
-    ) -> [(page: Int, text: String)] {
+    ) throws -> [(page: Int, text: String)] {
         var result: [(page: Int, text: String)] = []
         for pageIndex in 0..<document.pageCount {
+            try Task.checkCancellation()
             guard let page = document.page(at: pageIndex) else { continue }
             let raw = page.string ?? ""
             let chunks = ParagraphChunker.chunk(raw)
@@ -87,7 +89,7 @@ public struct PdfTextExtractor: PerBookTextExtractor {
     /// masked paragraphs, and emits the survivors.
     private static func extractWithFooterDrop(
         document: PDFDocument
-    ) -> [(page: Int, text: String)] {
+    ) throws -> [(page: Int, text: String)] {
         // 1. Build the per-page chunk stream + the layout-aware view in one
         //    pass. The paragraph index inside `PageParagraphs` is the
         //    reading-order slot used as the mask key.
@@ -100,6 +102,7 @@ public struct PdfTextExtractor: PerBookTextExtractor {
         pageNumbers.reserveCapacity(document.pageCount)
 
         for pageIndex in 0..<document.pageCount {
+            try Task.checkCancellation()
             guard let page = document.page(at: pageIndex) else { continue }
             let pageNumber = pageIndex + 1
             let raw = page.string ?? ""
@@ -130,6 +133,7 @@ public struct PdfTextExtractor: PerBookTextExtractor {
         //    slot, mirroring electron's "preserve index slot" semantics.
         var result: [(page: Int, text: String)] = []
         for pageParagraphs in paragraphsByPage {
+            try Task.checkCancellation()
             let dropSet = mask[pageParagraphs.pageNumber] ?? []
             for paragraph in pageParagraphs.paragraphs {
                 if dropSet.contains(paragraph.index) { continue }

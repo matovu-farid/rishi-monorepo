@@ -308,22 +308,41 @@ struct ReaderDestinationView: View {
 @MainActor
 final class ReaderSourceInvalidationCleanup {
     typealias Action = @MainActor () async -> Void
+    struct Token: Hashable { fileprivate let id = UUID() }
+    enum RegistrationResult {
+        case registered(Token)
+        case invalidated
+        case disposed
+    }
 
-    private var actions: [Action] = []
+    private var actions: [(Token, Action)] = []
     private var isPerforming = false
     private var didFinish = false
+    private var isDisposed = false
     private var readinessWaiters: [CheckedContinuation<Void, Never>] = []
     private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func register(_ action: @escaping Action) {
-        guard !didFinish else {
-            Task { await action() }
-            return
-        }
-        actions.append(action)
-        let pending = readinessWaiters
-        readinessWaiters.removeAll()
-        pending.forEach { $0.resume() }
+    @discardableResult
+    func register(_ action: @escaping Action) -> RegistrationResult {
+        guard !isDisposed else { return .disposed }
+        guard !didFinish else { return .invalidated }
+        let token = Token()
+        actions.append((token, action))
+        resumeReadiness()
+        return .registered(token)
+    }
+
+    func unregister(_ token: Token) {
+        actions.removeAll { $0.0 == token }
+    }
+
+    /// Terminal departure releases pending captures, but never acknowledges
+    /// an executing cleanup until its awaited action has actually returned.
+    func dispose() {
+        guard !isDisposed else { return }
+        isDisposed = true
+        actions.removeAll()
+        resumeReadiness()
     }
 
     func perform() async {
@@ -333,22 +352,29 @@ final class ReaderSourceInvalidationCleanup {
             return
         }
         isPerforming = true
-        while true {
+        while !isDisposed {
             if actions.isEmpty {
                 await withCheckedContinuation { readinessWaiters.append($0) }
+                if isDisposed { break }
             }
-            let pending = actions
-            actions.removeAll()
-            for action in pending { await action() }
-            if actions.isEmpty {
-                didFinish = true
-                isPerforming = false
-                let waiters = finishWaiters
-                finishWaiters.removeAll()
-                waiters.forEach { $0.resume() }
-                return
+            // Take one action at a time so disposal can release the remainder.
+            while !actions.isEmpty && !isDisposed {
+                let (_, action) = actions.removeFirst()
+                await action()
             }
+            if actions.isEmpty { break }
         }
+        didFinish = true
+        isPerforming = false
+        let waiters = finishWaiters
+        finishWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    private func resumeReadiness() {
+        let waiters = readinessWaiters
+        readinessWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 }
 
@@ -362,6 +388,7 @@ private struct ReaderSourceLeaseHost<Content: View>: View {
     @State private var invalidationCleanup = ReaderSourceInvalidationCleanup()
 
     var body: some View {
+        let departingCleanup = invalidationCleanup
         Group {
             if let lease {
                 content(book, lease, invalidationCleanup)
@@ -381,9 +408,17 @@ private struct ReaderSourceLeaseHost<Content: View>: View {
             do {
                 lease = nil
                 errorMessage = nil
-                invalidationCleanup = ReaderSourceInvalidationCleanup()
-                lease = try await registry.acquireReadableSource(for: book)
+                invalidationCleanup.dispose()
+                let cleanup = ReaderSourceInvalidationCleanup()
+                invalidationCleanup = cleanup
+                let acquired = try await registry.acquireReadableSource(for: book)
+                guard !Task.isCancelled, invalidationCleanup === cleanup else {
+                    cleanup.dispose()
+                    return
+                }
+                lease = acquired
             } catch {
+                guard !Task.isCancelled else { return }
                 lease = nil
                 errorMessage = "The selected file may have moved or its access may have expired."
             }
@@ -400,6 +435,10 @@ private struct ReaderSourceLeaseHost<Content: View>: View {
                 errorMessage = "The file changed or became unavailable. Retry or reselect the book to continue."
                 break
             }
+        }
+        .onDisappear {
+            departingCleanup.dispose()
+            if invalidationCleanup === departingCleanup { lease = nil }
         }
     }
 

@@ -14,7 +14,21 @@ import Foundation
 /// write paths; on successful POST they call `markClean` with the server's
 /// accepted-at cursor. `ChangeApplier` (07-03) calls `markClean` immediately
 /// after applying a server-side change so we don't echo it back on push.
+public enum SyncDirtyMarkDisposition: Sendable, Equatable {
+    case pending
+    case ignoredClosedBook
+}
+
 public protocol SyncMetadataStore: Sendable {
+    func protectPositionPublication(_ id: UUID) async
+    func releasePositionPublication(_ id: UUID) async
+    func hasProtectedPositionPublication(_ id: UUID) async -> Bool
+    /// Retires a rejected mutation without promoting its rejected timestamp.
+    func retireRejectedPosition(entityId: UUID, expectedDirtyAt: Date?, expectedOperationId: UUID, previousLastSyncedAt: Date?) async throws -> Bool
+    func markDirtyIfAdmitted(entityId: UUID, kind: SyncEntityKind) async throws -> SyncDirtyMarkDisposition
+    func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T
+    func applyBookTombstoneIfUnchanged(_ id: UUID, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?, mutation: @escaping @Sendable () async throws -> Void) async throws -> Bool
+    func applyLocalBookTombstone(_ id: UUID, mutation: @escaping @Sendable () async throws -> Void) async throws
     /// Idempotent. Inserts the row if missing.
     func markDirty(entityId: UUID, kind: SyncEntityKind) async throws
 
@@ -89,8 +103,9 @@ public protocol SyncMetadataStore: Sendable {
     /// tombstones remain recorded after server acknowledgement.
     func isTombstone(entityId: UUID, kind: SyncEntityKind) async throws -> Bool
 
-    /// Timestamp captured when the local mutation was marked dirty. This is
-    /// the LWW timestamp sent to the Worker, rather than upload time.
+    /// Timestamp captured when the local mutation was marked dirty. For
+    /// positions this is a local pending revision; Position.updatedAt supplies
+    /// the saved movement time sent to the Worker.
     func dirtyAt(entityId: UUID, kind: SyncEntityKind) async throws -> Date?
 
     /// Stable identity for the currently pending local mutation. It must not
@@ -120,10 +135,54 @@ public protocol SyncMetadataStore: Sendable {
 }
 
 public enum SyncMetadataError: Error, Sendable, Equatable {
+    case bookIdentityClosed(UUID)
+    /// The durable delete exists even though its finite canonical mutation failed.
+    case savedBookTombstone(UUID)
     case missingPendingOperation(entityId: UUID, kind: SyncEntityKind)
 }
 
+// Compatibility stores serialize deterministically through this shared gate.
+// Native stores override both methods with their own gate and durable checks.
+private let compatibilityBookIdentityGate = BookIdentityMutationGate()
+
 public extension SyncMetadataStore {
+    func applyLocalBookTombstone(_ id: UUID, mutation: @escaping @Sendable () async throws -> Void) async throws {
+        try await compatibilityBookIdentityGate.withBook(id) {
+            if try await !self.isTombstone(entityId: id, kind: .book) {
+                try await self.markTombstone(entityId: id, kind: .book)
+            }
+            do { try await mutation() }
+            catch { throw SyncMetadataError.savedBookTombstone(id) }
+        }
+    }
+    func protectPositionPublication(_ id: UUID) async { await compatibilityBookIdentityGate.protectPosition(id) }
+    func releasePositionPublication(_ id: UUID) async { await compatibilityBookIdentityGate.releasePosition(id) }
+    func hasProtectedPositionPublication(_ id: UUID) async -> Bool { await compatibilityBookIdentityGate.positionIsProtected(id) }
+    func retireRejectedPosition(entityId: UUID, expectedDirtyAt: Date?, expectedOperationId: UUID, previousLastSyncedAt: Date?) async throws -> Bool {
+        try await markCleanIfCurrent(entityId: entityId, kind: .position, expectedDirtyAt: expectedDirtyAt, expectedOperationId: expectedOperationId, lastSyncedAt: previousLastSyncedAt ?? .distantPast, remoteEtag: nil)
+    }
+
+    func markDirtyIfAdmitted(entityId: UUID, kind: SyncEntityKind) async throws -> SyncDirtyMarkDisposition {
+        if kind == .book, try await isTombstone(entityId: entityId, kind: kind) {
+            return try await dirtyAt(entityId: entityId, kind: kind) == nil ? .ignoredClosedBook : .pending
+        }
+        try await markDirty(entityId: entityId, kind: kind)
+        return .pending
+    }
+
+    func withLiveBookIdentity<T: Sendable>(_ id: UUID, operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await compatibilityBookIdentityGate.withBook(id) {
+            guard try await !self.isTombstone(entityId: id, kind: .book) else { throw SyncMetadataError.bookIdentityClosed(id) }
+            return try await operation()
+        }
+    }
+    func applyBookTombstoneIfUnchanged(_ id: UUID, expectedDirtyAt: Date?, lastSyncedAt: Date, remoteEtag: String?, mutation: @escaping @Sendable () async throws -> Void) async throws -> Bool {
+        try await compatibilityBookIdentityGate.withBook(id) {
+            guard try await self.dirtyAt(entityId: id, kind: .book) == expectedDirtyAt else { return false }
+            try await mutation()
+            return try await self.acknowledgeTombstoneIfUnchanged(entityId: id, kind: .book, expectedDirtyAt: expectedDirtyAt, lastSyncedAt: lastSyncedAt, remoteEtag: remoteEtag)
+        }
+    }
     func resetAll() async throws {}
     func markTombstone(entityId: UUID, kind: SyncEntityKind) async throws {
         try await markDirty(entityId: entityId, kind: kind)

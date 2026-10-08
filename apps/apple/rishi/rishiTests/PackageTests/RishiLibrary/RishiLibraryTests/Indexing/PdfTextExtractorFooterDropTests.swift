@@ -28,6 +28,20 @@ import PDFKit
 @Suite("PdfTextExtractor footer-drop (27-06)", .serialized)
 struct PdfTextExtractorFooterDropTests {
 
+    @Test("PDF extraction propagates cancellation for both footer policies")
+    func cancellationStopsBothFooterPolicies() async throws {
+        for policy in [FooterDropPolicy.disabled, .enabled] {
+            let gate = RishiSearchIndexingHookTests.RishiReaderLoadGate()
+            let task = Task {
+                await gate.wait()
+                return try await PdfTextExtractor(footerPolicy: policy).extractParagraphs(from: URL(fileURLWithPath: "/tmp/canceled-fixture.pdf"))
+            }
+            task.cancel()
+            await gate.open()
+            await #expect(throws: CancellationError.self) { try await task.value }
+        }
+    }
+
     // MARK: - Fixture helpers
 
     private static let pageSize = CGSize(width: 612, height: 792) // US Letter

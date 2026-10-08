@@ -120,7 +120,7 @@ struct OutboundDrainer: Sendable {
                 }
             }
             let eligible = classifications.compactMap { item, decision -> SyncQueueItem? in
-                decision == .eligible ? item : nil
+                (decision == .eligible || decision == .discard) ? item : nil
             }.sorted { left, right in
                 let leftDependency = left.kind == .book && dependencyIDs.contains(left.entityId)
                 let rightDependency = right.kind == .book && dependencyIDs.contains(right.entityId)
@@ -160,11 +160,12 @@ struct OutboundDrainer: Sendable {
                     result.errors.append("account switched during outbound sync")
                     return result
                 }
-                if let book = try await bookStore.book(item.entityId) {
+                if try await metadataStore.isTombstone(entityId: item.entityId, kind: .book) {
+                    // Acknowledgement can race queue admission/classification.
+                    // Drop clean resident work; genuine pending deletes upload.
+                    if try await bookUploader.uploadTombstone(item.entityId) { result.booksUploaded += 1 }
+                } else if let book = try await bookStore.book(item.entityId) {
                     try await bookUploader.upload(book)
-                    result.booksUploaded += 1
-                } else if try await metadataStore.isTombstone(entityId: item.entityId, kind: .book) {
-                    try await bookUploader.uploadTombstone(item.entityId)
                     result.booksUploaded += 1
                 } else {
                     // Local row gone — drop the dirty mark.

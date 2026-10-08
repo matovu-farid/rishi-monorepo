@@ -48,13 +48,16 @@ struct ReaderNavigatorCoordinatorFollowTests {
     func userPageTurnDuringFollowingForwardsNavigation() throws {
         let viewModel = makeViewModel()
         let coordinator = ReaderNavigatorCoordinator(viewModel: viewModel)
+        // Readium's first location establishes the reader position. The next
+        // unmatched callback is the actual user turn while following.
+        coordinator.handleLocationChange(try makeLocator(progression: 0.50))
         let recorder = Recorder()
         viewModel.onUserNavigation = { recorder.locators.append($0) }
-
         coordinator.isFollowingReadAloud = true
         coordinator.handleLocationChange(try makeLocator(progression: 0.66))
 
         #expect(recorder.locators.count == 1)
+        #expect(recorder.locators.first?.locations.progression == 0.66)
     }
 
     @Test("A registered Readium auto-follow location does not stop playback")

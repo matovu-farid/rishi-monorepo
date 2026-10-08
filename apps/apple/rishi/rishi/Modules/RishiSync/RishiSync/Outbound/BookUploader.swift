@@ -4,10 +4,12 @@ import CryptoKit
 public struct BookUploadSource: Sendable {
     public let url: URL
     public let fingerprint: BookFileFingerprint
+    public let readingPermit: BookReadingPermit
 
-    public init(url: URL, fingerprint: BookFileFingerprint) {
+    public init(url: URL, fingerprint: BookFileFingerprint, readingPermit: BookReadingPermit) {
         self.url = url
         self.fingerprint = fingerprint
+        self.readingPermit = readingPermit
     }
 }
 
@@ -43,8 +45,7 @@ public final class BookUploader: Sendable {
     private let urlSession: URLSession
     private let userIdProvider: @Sendable () async -> String?
     private let managedSourceProvider: @Sendable (Book) async throws -> BookUploadSource?
-    private let currentGeneration: @Sendable () async -> UInt64?
-    private let persistServerAcceptance: @Sendable (Book, UInt64, BookFileFingerprint, BookServerAcceptance) async -> Bool
+    private let persistServerAcceptance: @Sendable (BookReadingPermit, BookFileFingerprint, BookServerAcceptance) async -> Bool
 
     public init(
         workerClient: WorkerClient,
@@ -53,8 +54,7 @@ public final class BookUploader: Sendable {
         urlSession: URLSession = .shared,
         userIdProvider: @escaping @Sendable () async -> String?,
         managedSourceProvider: @escaping @Sendable (Book) async throws -> BookUploadSource? = { _ in nil },
-        currentGeneration: @escaping @Sendable () async -> UInt64? = { nil },
-        persistServerAcceptance: @escaping @Sendable (Book, UInt64, BookFileFingerprint, BookServerAcceptance) async -> Bool = { _, _, _, _ in false }
+        persistServerAcceptance: @escaping @Sendable (BookReadingPermit, BookFileFingerprint, BookServerAcceptance) async -> Bool = { _, _, _ in false }
     ) {
         self.workerClient = workerClient
         self.metadataStore = metadataStore
@@ -62,7 +62,6 @@ public final class BookUploader: Sendable {
         self.urlSession = urlSession
         self.userIdProvider = userIdProvider
         self.managedSourceProvider = managedSourceProvider
-        self.currentGeneration = currentGeneration
         self.persistServerAcceptance = persistServerAcceptance
     }
 
@@ -79,7 +78,9 @@ public final class BookUploader: Sendable {
 
         guard let managedSource = try await managedSourceProvider(book),
               managedSource.fingerprint.bookID == book.id,
-              managedSource.fingerprint.ownerID == book.userId else {
+              managedSource.fingerprint.ownerID == book.userId,
+              managedSource.readingPermit.bookID == book.id,
+              managedSource.readingPermit.ownerID == book.userId else {
             throw UploadError.bytesUnreadable(fileStorage.absoluteFileURL(for: book))
         }
 
@@ -177,15 +178,12 @@ public final class BookUploader: Sendable {
         // Persist readiness before clearing the durable queue entry. If this
         // CAS fails (including an unavailable account generation), the dirty
         // book remains eligible for retry and dependents stay gated.
-        guard let generation = await currentGeneration() else {
-            throw UploadError.presignedRequestFailed("account generation unavailable after server acceptance")
-        }
         let acceptance = BookServerAcceptance(
             sha256: fileHash,
             acceptedOperationID: operationId,
             acceptedAt: response.acceptedAt
         )
-        guard await persistServerAcceptance(book, generation, managedSource.fingerprint, acceptance) else {
+        guard await persistServerAcceptance(managedSource.readingPermit, managedSource.fingerprint, acceptance) else {
             throw UploadError.presignedRequestFailed("could not persist book server acceptance")
         }
 
@@ -209,9 +207,17 @@ public final class BookUploader: Sendable {
     /// Pushes a metadata-only deletion for a book whose local row/file has
     /// already been removed. The worker keeps the remote tombstone so other
     /// devices converge on the deletion.
-    public func uploadTombstone(_ id: BookID) async throws {
+    @discardableResult
+    public func uploadTombstone(_ id: BookID) async throws -> Bool {
         let expectedDirtyAt = try await metadataStore.dirtyAt(entityId: id, kind: .book)
-        let operationId = try await metadataStore.ensureOperationId(entityId: id, kind: .book)
+        if expectedDirtyAt == nil, try await metadataStore.isTombstone(entityId: id, kind: .book) { return false }
+        let operationId: UUID
+        do { operationId = try await metadataStore.ensureOperationId(entityId: id, kind: .book) }
+        catch SyncMetadataError.missingPendingOperation {
+            if try await metadataStore.isTombstone(entityId: id, kind: .book),
+               try await metadataStore.dirtyAt(entityId: id, kind: .book) == nil { return false }
+            throw SyncMetadataError.missingPendingOperation(entityId: id, kind: .book)
+        }
         let response = try await workerClient.send(
             SyncPushEndpoint(body: .init(changes: [SyncChange(
                 kind: SyncEntityKind.book.rawValue,
@@ -237,8 +243,11 @@ public final class BookUploader: Sendable {
             lastSyncedAt: response.acceptedAt,
             remoteEtag: nil
         ) else {
+            if try await metadataStore.isTombstone(entityId: id, kind: .book),
+               try await metadataStore.dirtyAt(entityId: id, kind: .book) == nil { return true }
             throw UploadError.presignedRequestFailed("local book deletion changed during upload")
         }
+        return true
     }
 
     // MARK: - Helpers

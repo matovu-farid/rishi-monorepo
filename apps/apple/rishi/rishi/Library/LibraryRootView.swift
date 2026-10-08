@@ -19,7 +19,7 @@ public struct LibraryRootView: View {
 
     public let onShowSettings: (() -> Void)
     public let onShowChats: (() -> Void)?
-    
+
     private var importTip = ImportBooksTip()
 
     public let onImported:
@@ -76,7 +76,7 @@ public struct LibraryRootView: View {
     }
 
     init(
-      
+
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
         onShowSettings: @escaping (() -> Void),
@@ -89,7 +89,7 @@ public struct LibraryRootView: View {
         closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil,
         onShowChats: (() -> Void)? = nil
     ) {
- 
+
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
@@ -104,7 +104,7 @@ public struct LibraryRootView: View {
     }
 
     init(
-     
+
         path: Binding<NavigationPath>,
         importCoordinator: ImportCoordinator,
         onOpenBook: @escaping (Book) -> Void,
@@ -118,7 +118,7 @@ public struct LibraryRootView: View {
         closeReaderBeforeBookDeletion: (@MainActor (Book) async -> Void)? = nil,
         onShowChats: (() -> Void)? = nil
     ) {
-       
+
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
@@ -135,7 +135,7 @@ public struct LibraryRootView: View {
     public var body: some View {
         @Bindable var vm = vm
         let content = libraryContent(vm: vm)
-       
+
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
 
             Task {
@@ -191,7 +191,10 @@ public struct LibraryRootView: View {
             vm.onManagedBookReady = nil
             if let sharePackageService {
                 vm.onManagedBookReady = { bookID in
-                    Task { await sharePackageService.prewarm(bookIDs: [bookID]) }
+                    Task {
+                        guard vm.books.contains(where: { $0.id == bookID }) else { return }
+                        await sharePackageService.prewarm(bookIDs: [bookID])
+                    }
                 }
             }
             await vm.observeImportEvents()
@@ -221,8 +224,8 @@ public struct LibraryRootView: View {
         }
     }
 
-    
-    
+
+
     @ViewBuilder
     private func libraryContent(vm: LibraryViewModel) -> some View {
         @Bindable var vm = vm
@@ -234,10 +237,12 @@ public struct LibraryRootView: View {
             coverURL: { book in vm.coverURLs[book.id] },
             onOpen: onOpenBook,
             onDelete: { book in
-                Task { await vm.delete(book, closePresentedReader: closeReaderBeforeBookDeletion) }
+                guard let deletion = vm.beginDeletion(book) else { return }
+                selectedBookIDs.remove(book.id)
+                Task { await vm.completeDeletion(deletion, closePresentedReader: closeReaderBeforeBookDeletion) }
             },
             selectionMode: selectionMode,
-            selectedBookIDs: selectedBookIDs,
+            selectedBookIDs: eligibleSelectedBookIDs,
             onBeginSelection: { book in
                 selectionMode = true
                 selectedBookIDs.insert(book.id)
@@ -378,10 +383,10 @@ public struct LibraryRootView: View {
     private func sharingToolbar(vm: LibraryViewModel) -> some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             if selectionMode {
-                Button("Share \(selectedBookIDs.count)") {
-                    beginShare(ids: Array(selectedBookIDs), kind: .selection)
+                Button("Share \(eligibleSelectedBookIDs.count)") {
+                    beginShare(ids: Array(eligibleSelectedBookIDs), kind: .selection)
                 }
-                .disabled(selectedBookIDs.isEmpty || sharePackageService == nil)
+                .disabled(eligibleSelectedBookIDs.isEmpty || sharePackageService == nil)
             } else {
                 Button {
                     beginShare(ids: vm.books.map(\.id), kind: .library)
@@ -401,9 +406,9 @@ public struct LibraryRootView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Start reading") {
-                    beginSharedReading(ids: Array(selectedBookIDs), books: vm.books)
+                    beginSharedReading(ids: Array(eligibleSelectedBookIDs), books: vm.books)
                 }
-                .disabled(selectedBookIDs.count != 1 || sharedReadingAPI == nil)
+                .disabled(eligibleSelectedBookIDs.count != 1 || sharedReadingAPI == nil)
             }
         }
     }
@@ -423,7 +428,13 @@ public struct LibraryRootView: View {
         }
     }
 
+    private var eligibleSelectedBookIDs: Set<BookID> {
+        selectedBookIDs.intersection(Set(vm.books.map(\.id)))
+    }
+
     private func beginShare(ids: [BookID], kind: ShareKind) {
+        let visibleIDs = Set(vm.books.map(\.id))
+        let ids = ids.filter { visibleIDs.contains($0) }
         guard !ids.isEmpty, sharePackageService != nil else { return }
         shareBookIDs = ids
         shareKind = kind
@@ -431,6 +442,8 @@ public struct LibraryRootView: View {
     }
 
     private func beginSharedReading(ids: [BookID], books: [Book]) {
+        let visibleIDs = Set(vm.books.map(\.id))
+        let ids = ids.filter { visibleIDs.contains($0) }
         guard ids.count == 1, let id = ids.first, let book = books.first(where: { $0.id == id }), sharedReadingAPI != nil else { return }
         if router.hasActiveSharedReader {
             pendingSharedReadingBook = book
@@ -441,6 +454,7 @@ public struct LibraryRootView: View {
     }
 
     private func presentSharedReadingComposer(for book: Book) {
+        guard vm.books.contains(where: { $0.id == book.id }) else { return }
         pendingCreatorInvitation = nil
         sharedReadingBook = book
         showSharedReadingComposer = true
@@ -606,11 +620,11 @@ struct ImportBooksTip: Tip {
     var title: Text {
         Text("Bring your library with you")
     }
-    
+
     var message: Text? {
         Text("Import your EPUB and PDF books to read, listen, and chat with them in one place.")
     }
-    
+
     var image: Image? {
         Image(systemName: "square.and.arrow.down")
     }

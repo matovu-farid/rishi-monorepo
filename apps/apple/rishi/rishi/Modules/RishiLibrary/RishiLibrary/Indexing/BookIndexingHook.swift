@@ -16,6 +16,29 @@ import Foundation
 ///     written by `IndexBuilder` (Plan 25-05).
 ///   - Re-running for the same `book.id` is idempotent (the builder wipes
 ///     and rewrites).
+public struct BookIndexingIdentity: Sendable, Hashable {
+    public let ownerID: UserID
+    public let generation: UInt64
+    public let bookID: BookID
+
+    public init(ownerID: UserID, generation: UInt64, bookID: BookID) {
+        self.ownerID = ownerID
+        self.generation = generation
+        self.bookID = bookID
+    }
+}
+
+/// Immutable account authority plus the exact source retained by an index writer.
+public struct BookIndexingSource: Sendable {
+    public let identity: BookIndexingIdentity
+    public let lease: BookSourceLease
+
+    public init(identity: BookIndexingIdentity, lease: BookSourceLease) {
+        self.identity = identity
+        self.lease = lease
+    }
+}
+
 public protocol BookIndexingHook: Sendable {
     /// Fire-and-forget: chunk + embed + persist the book's RAG index.
     /// Never throws — failures surface via the index.status.json sidecar.
