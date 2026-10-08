@@ -43,6 +43,7 @@ const env = {
   apple_dev: {} as R2Bucket,
   DB: dbBinding,
   CF_VERSION_METADATA: { id: "test", tag: "test", timestamp: "2026-09-16T00:00:00Z" },
+  ENVIRONMENT: "production",
   PUBLIC_API_URL: "https://api.fidexa.org",
   PUBLIC_WEB_URL: "https://rishi.fidexa.org",
   SHARING_WORKER_WS_URL: "wss://sharing.fidexa.org",

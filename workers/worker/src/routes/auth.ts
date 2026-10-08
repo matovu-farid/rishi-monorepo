@@ -14,7 +14,7 @@ import { createDb, WorkerDb } from "../db/drizzle";
 import { allowancePeriod, appleUsers, retainedAppleEntitlement, retainedAppleTransaction, restoredAppleEntitlement } from "../db/schema";
 import { encryptSiwaRefreshToken } from "../siwa-token-crypto";
 import { mintAppleClientSecret } from "../auth-apple-secret";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from "jose";
 import {
   AppleBucket,
   verifySignedTransaction,
@@ -385,51 +385,99 @@ authRoutes.post("/apple", async (c) => {
   }
 });
 authRoutes.post("/refresh", async (c) => {
-  const db = createDb(c.env.DB);
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid refresh request" }, 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body) ||
+      !("refreshToken" in body) || typeof body.refreshToken !== "string" ||
+      body.refreshToken.trim().length === 0) {
+    return c.json({ error: "Invalid refresh request" }, 400);
+  }
+  const refreshToken = body.refreshToken;
+  const temporarilyUnavailable = () => c.json({
+    error: "Refresh is temporarily unavailable",
+    code: "REFRESH_TEMPORARILY_UNAVAILABLE",
+  }, 503);
+  if (typeof c.env.ACCESS_TOKEN_SECRET !== "string" ||
+      c.env.ACCESS_TOKEN_SECRET.trim().length === 0 ||
+      typeof c.env.REFRESH_TOKEN_SECRET !== "string" ||
+      c.env.REFRESH_TOKEN_SECRET.trim().length === 0) {
+    return temporarilyUnavailable();
+  }
 
-  const { refreshToken } = await c.req.json<{
-    refreshToken: string;
-  }>();
+  type RefreshFailure = {
+    readonly _tag: "InvalidRefreshToken" | "RefreshAccountUnavailable" | "RefreshUnavailable";
+  };
+  const unavailable: RefreshFailure = { _tag: "RefreshUnavailable" };
 
   const result = await Effect.runPromiseExit(
     Effect.gen(function* () {
-      const payload = yield* verifyRefreshToken(c.env, refreshToken);
+      const payload = yield* verifyRefreshToken(c.env, refreshToken).pipe(
+        Effect.mapError((failure): RefreshFailure => {
+          // Effect.tryPromise retains the original jose exception in .error.
+          // Only credential failures at this verification boundary are final.
+          const error = failure.error;
+          const invalid = error instanceof joseErrors.JWTExpired ||
+            error instanceof joseErrors.JWTClaimValidationFailed ||
+            error instanceof joseErrors.JWTInvalid ||
+            error instanceof joseErrors.JWSInvalid ||
+            error instanceof joseErrors.JWSSignatureVerificationFailed ||
+            error instanceof joseErrors.JOSEAlgNotAllowed;
+          return invalid ? { _tag: "InvalidRefreshToken" } : unavailable;
+        }),
+      );
+      if (typeof payload.userId !== "string" || payload.userId.trim().length === 0) {
+        return yield* Effect.fail<RefreshFailure>({ _tag: "InvalidRefreshToken" });
+      }
 
+      const db = yield* Effect.try(() => createDb(c.env.DB)).pipe(
+        Effect.mapError(() => unavailable),
+      );
       const existingUser = yield* Effect.tryPromise(() =>
         db.query.user.findFirst({
           where: { id: payload.userId },
         }),
-      );
+      ).pipe(Effect.mapError(() => unavailable));
 
       if (!existingUser) {
-        return yield* Effect.fail(new Error("User not found"));
+        return yield* Effect.fail<RefreshFailure>({ _tag: "RefreshAccountUnavailable" });
       }
 
       const accessToken = yield* signAccessToken(c.env, {
         userId: existingUser.id,
-      });
+      }).pipe(Effect.mapError(() => unavailable));
 
       const newRefreshToken = yield* signRefreshToken(c.env, {
         userId: existingUser.id,
-      });
+      }).pipe(Effect.mapError(() => unavailable));
 
       return {
         accessToken,
         refreshToken: newRefreshToken,
+        userId: existingUser.id,
       };
-    }),
+    }).pipe(Effect.match({
+      onSuccess: (tokens) => c.json(tokens),
+      onFailure: (failure) => {
+        if (failure._tag === "InvalidRefreshToken") {
+          return c.json({ error: "Invalid refresh token", code: "INVALID_REFRESH_TOKEN" }, 401);
+        }
+        if (failure._tag === "RefreshAccountUnavailable") {
+          return c.json({ error: "Refresh account unavailable", code: "REFRESH_ACCOUNT_UNAVAILABLE" }, 401);
+        }
+        return temporarilyUnavailable();
+      },
+    })),
   );
 
+  // Defects/interruption are infrastructure failures, never invalid credentials.
   if (result._tag === "Failure") {
-    return c.json(
-      {
-        error: "Invalid refresh token",
-      },
-      401,
-    );
+    return temporarilyUnavailable();
   }
-
-  return c.json(result.value);
+  return result.value;
 });
 
 authRoutes.post("/verify", async (c) => {
